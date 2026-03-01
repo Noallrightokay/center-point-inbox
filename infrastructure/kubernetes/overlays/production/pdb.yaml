@@ -1,0 +1,41 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway-pdb
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-service-pdb
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: merger-service-pdb
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/name: merger-service
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: merger-service

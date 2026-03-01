@@ -1,0 +1,201 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "src/backend/**"
+      - "database/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/backend/**"
+      - "database/**"
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-build:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore CenterPointInbox.sln
+
+      - name: Build in Release mode
+        run: dotnet build CenterPointInbox.sln --configuration Release --no-restore
+
+      - name: Check formatting
+        run: dotnet format CenterPointInbox.sln --verify-no-changes --verbosity diagnostic
+
+  test:
+    name: Test
+    needs: lint-and-build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: centerpoint_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U testuser -d centerpoint_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        ports:
+          - 5672:5672
+          - 15672:15672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_running"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ConnectionStrings__PostgreSQL: "Host=localhost;Port=5432;Database=centerpoint_test;Username=testuser;Password=testpassword"
+      ConnectionStrings__Redis: "localhost:6379"
+      ConnectionStrings__RabbitMQ: "amqp://guest:guest@localhost:5672"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore CenterPointInbox.sln
+
+      - name: Run unit tests with coverage
+        run: |
+          dotnet test CenterPointInbox.sln \
+            --configuration Release \
+            --no-restore \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./test-results \
+            --logger "trx;LogFileName=test-results.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: ./test-results/**/*.trx
+          retention-days: 30
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: ./test-results/**/coverage.cobertura.xml
+          retention-days: 30
+
+      - name: Generate coverage summary
+        if: github.event_name == 'pull_request'
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: ./test-results/**/coverage.cobertura.xml
+          badge: true
+          format: markdown
+          output: both
+          thresholds: "60 80"
+
+  security-scan:
+    name: Security Scan
+    needs: lint-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore CenterPointInbox.sln
+
+      - name: Check for vulnerable packages
+        run: |
+          echo "::group::Vulnerable Package Report"
+          dotnet list CenterPointInbox.sln package --vulnerable --include-transitive 2>&1 | tee vulnerable-packages.txt
+          echo "::endgroup::"
+
+          if grep -q "has the following vulnerable packages" vulnerable-packages.txt; then
+            echo "::warning::Vulnerable packages detected. Review the report above."
+            echo "VULNERABLE_PACKAGES_FOUND=true" >> "$GITHUB_ENV"
+          else
+            echo "No vulnerable packages found."
+          fi
+
+      - name: Upload vulnerability report
+        uses: actions/upload-artifact@v4
+        if: env.VULNERABLE_PACKAGES_FOUND == 'true'
+        with:
+          name: vulnerable-packages-report
+          path: vulnerable-packages.txt
+          retention-days: 90
+
+      - name: Run security analysis with dotnet-security-guard
+        run: |
+          dotnet tool install --global security-scan
+          security-scan CenterPointInbox.sln --excl-proj=**/*Tests* 2>&1 | tee security-scan-results.txt || true
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-results
+          path: security-scan-results.txt
+          retention-days: 90

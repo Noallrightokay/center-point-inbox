@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* AMEX Dark Theme — Default */
+    --background: 230 25% 7%;
+    --foreground: 0 0% 93%;
+
+    --card: 230 20% 10%;
+    --card-foreground: 0 0% 93%;
+
+    --popover: 230 20% 12%;
+    --popover-foreground: 0 0% 93%;
+
+    /* Primary — AMEX Gold */
+    --primary: 38 36% 53%;
+    --primary-foreground: 230 25% 7%;
+
+    /* Secondary — Charcoal */
+    --secondary: 240 14% 16%;
+    --secondary-foreground: 0 0% 85%;
+
+    /* Muted */
+    --muted: 240 12% 14%;
+    --muted-foreground: 230 10% 55%;
+
+    /* Accent */
+    --accent: 240 14% 18%;
+    --accent-foreground: 0 0% 90%;
+
+    /* Destructive */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Border / Input / Ring */
+    --border: 240 10% 18%;
+    --input: 240 10% 18%;
+    --ring: 38 36% 53%;
+
+    /* Sidebar */
+    --sidebar-bg: 230 25% 5%;
+    --sidebar-foreground: 0 0% 85%;
+    --sidebar-border: 240 10% 15%;
+    --sidebar-active: 38 36% 53%;
+    --sidebar-active-foreground: 230 25% 7%;
+
+    /* Status */
+    --success: 152 69% 41%;
+    --warning: 38 92% 50%;
+    --info: 217 91% 60%;
+
+    /* Radius */
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: rgba(180, 151, 90, 0.3);
+    color: white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .gold-text {
+    background: linear-gradient(135deg, #B4975A 0%, #D4B87A 50%, #C9A96E 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .gold-border {
+    border-image: linear-gradient(135deg, #B4975A 0%, #D4B87A 50%, #C9A96E 100%) 1;
+  }
+
+  .glass {
+    background: rgba(26, 26, 46, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .glass-light {
+    background: rgba(34, 34, 59, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+}

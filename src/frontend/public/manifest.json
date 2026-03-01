@@ -1,0 +1,41 @@
+{
+  "name": "Center Point Inbox",
+  "short_name": "CenterPoint",
+  "description": "Premium unified inbox. Connect any email. AI-powered intelligence. Enterprise-grade security.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0A0A",
+  "theme_color": "#0A0A0A",
+  "scope": "/",
+  "categories": ["productivity", "business", "email"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Compose",
+      "url": "/dashboard?compose=true",
+      "description": "Write a new email"
+    },
+    {
+      "name": "Settings",
+      "url": "/dashboard/settings",
+      "description": "Manage accounts and preferences"
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}

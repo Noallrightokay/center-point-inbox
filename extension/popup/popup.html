@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Center Point Inbox</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 380px;
+      min-height: 500px;
+      background: #0A0A0A;
+      color: #EDEDED;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(145deg, #22223B, #1A1A2E);
+    }
+    .logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #B4975A, #D4B87A);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #0A0A0A;
+      font-size: 14px;
+    }
+    .header-text h1 { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+    .header-text p { font-size: 11px; color: #6B6B84; margin-top: 2px; }
+    .search-bar {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .search-bar input {
+      width: 100%;
+      height: 36px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 0 12px 0 36px;
+      color: #EDEDED;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .search-bar input:focus { border-color: rgba(180,151,90,0.5); }
+    .search-bar input::placeholder { color: #55556C; }
+    .inbox-list { overflow-y: auto; max-height: 360px; }
+    .email-item {
+      display: flex;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .email-item:hover { background: rgba(255,255,255,0.03); }
+    .email-item.unread { border-left: 3px solid #B4975A; }
+    .email-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(180,151,90,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #B4975A;
+      font-weight: 600;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .email-content { flex: 1; min-width: 0; }
+    .email-from { font-size: 12px; font-weight: 600; color: #EDEDED; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .email-subject { font-size: 12px; color: #ADADBD; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .email-snippet { font-size: 11px; color: #55556C; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .email-meta { flex-shrink: 0; text-align: right; }
+    .email-time { font-size: 10px; color: #55556C; }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 600; margin-top: 4px; }
+    .badge-gold { background: rgba(180,151,90,0.2); color: #D4B87A; }
+    .footer {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      flex: 1;
+      height: 36px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #B4975A, #D4B87A);
+      color: #0A0A0A;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-ghost {
+      background: rgba(255,255,255,0.05);
+      color: #ADADBD;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,0.08); color: #EDEDED; }
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 0;
+      color: #6B6B84;
+      font-size: 12px;
+    }
+    .spinner {
+      width: 24px; height: 24px;
+      border: 2px solid rgba(180,151,90,0.2);
+      border-top-color: #B4975A;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .login-prompt {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      text-align: center;
+    }
+    .login-prompt h2 { font-size: 16px; margin-bottom: 8px; }
+    .login-prompt p { font-size: 12px; color: #6B6B84; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">CP</div>
+    <div class="header-text">
+      <h1>Center Point Inbox</h1>
+      <p>Unified inbox</p>
+    </div>
+  </div>
+
+  <div id="content">
+    <div class="loading">
+      <div class="spinner"></div>
+      <span>Loading...</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button class="btn btn-ghost" id="openAppBtn">Open App</button>
+    <button class="btn btn-primary" id="composeBtn">Compose</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

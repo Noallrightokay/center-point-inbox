@@ -1,0 +1,252 @@
+{
+  "ReverseProxy": {
+    "Routes": {
+      "auth-route": {
+        "ClusterId": "auth-cluster",
+        "Match": {
+          "Path": "/api/auth/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/auth" },
+          { "PathPrefix": "/api/auth" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "auth"
+        }
+      },
+      "google-provider-route": {
+        "ClusterId": "google-provider-cluster",
+        "Match": {
+          "Path": "/api/files/google/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/files/google" },
+          { "PathPrefix": "/api/files/google" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        }
+      },
+      "microsoft-provider-route": {
+        "ClusterId": "microsoft-provider-cluster",
+        "Match": {
+          "Path": "/api/files/microsoft/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/files/microsoft" },
+          { "PathPrefix": "/api/files/microsoft" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        }
+      },
+      "files-route": {
+        "ClusterId": "merger-cluster",
+        "Match": {
+          "Path": "/api/files/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/files" },
+          { "PathPrefix": "/api/files" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        },
+        "Order": 100
+      },
+      "translate-route": {
+        "ClusterId": "merger-cluster",
+        "Match": {
+          "Path": "/api/translate/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/translate" },
+          { "PathPrefix": "/api/translate" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        }
+      },
+      "ai-route": {
+        "ClusterId": "ai-assistant-cluster",
+        "Match": {
+          "Path": "/api/ai/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/ai" },
+          { "PathPrefix": "/api/ai" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "ai"
+        }
+      },
+      "audit-route": {
+        "ClusterId": "audit-dlp-cluster",
+        "Match": {
+          "Path": "/api/audit/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/audit" },
+          { "PathPrefix": "/api/audit" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        }
+      },
+      "admin-route": {
+        "ClusterId": "audit-dlp-cluster",
+        "Match": {
+          "Path": "/api/admin/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/admin" },
+          { "PathPrefix": "/api/admin" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "admin"
+        }
+      },
+      "email-route": {
+        "ClusterId": "email-cluster",
+        "Match": {
+          "Path": "/api/email/{**catch-all}"
+        },
+        "Transforms": [
+          { "PathRemovePrefix": "/api/email" },
+          { "PathPrefix": "/api/email" }
+        ],
+        "Metadata": {
+          "RateLimitPolicy": "default"
+        }
+      }
+    },
+    "Clusters": {
+      "auth-cluster": {
+        "Destinations": {
+          "auth-service": {
+            "Address": "http://auth-service:5001"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:00:30"
+        }
+      },
+      "google-provider-cluster": {
+        "Destinations": {
+          "google-provider": {
+            "Address": "http://google-provider:5002"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:01:00"
+        }
+      },
+      "microsoft-provider-cluster": {
+        "Destinations": {
+          "microsoft-provider": {
+            "Address": "http://microsoft-provider:5003"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:01:00"
+        }
+      },
+      "merger-cluster": {
+        "Destinations": {
+          "merger-service": {
+            "Address": "http://merger-service:5004"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:01:00"
+        }
+      },
+      "ai-assistant-cluster": {
+        "Destinations": {
+          "ai-assistant": {
+            "Address": "http://ai-assistant:5006"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:02:00"
+        }
+      },
+      "audit-dlp-cluster": {
+        "Destinations": {
+          "audit-dlp": {
+            "Address": "http://audit-dlp:5007"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:00:30"
+        }
+      },
+      "email-cluster": {
+        "Destinations": {
+          "email-service": {
+            "Address": "http://email-service:5008"
+          }
+        },
+        "HealthCheck": {
+          "Active": {
+            "Enabled": true,
+            "Interval": "00:00:30",
+            "Timeout": "00:00:10",
+            "Path": "/health/live"
+          }
+        },
+        "HttpRequest": {
+          "ActivityTimeout": "00:01:00"
+        }
+      }
+    }
+  }
+}

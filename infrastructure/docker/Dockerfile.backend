@@ -1,0 +1,80 @@
+# =============================================================================
+# Center Point Inbox - Multi-stage Dockerfile for all C# backend services
+# Usage: docker build --build-arg SERVICE_NAME=AuthService -f Dockerfile.backend ../..
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Accept the service name as a build argument
+ARG SERVICE_NAME
+RUN test -n "$SERVICE_NAME" || (echo "ERROR: SERVICE_NAME build arg is required" && exit 1)
+
+# Copy solution file and all .csproj files first for optimal layer caching.
+# This ensures that `dotnet restore` only re-runs when project references change,
+# not when source code changes.
+COPY CenterPointInbox.sln ./
+COPY src/backend/Shared/Shared.csproj src/backend/Shared/
+COPY src/backend/ApiGateway/ApiGateway.csproj src/backend/ApiGateway/
+COPY src/backend/AuthService/AuthService.csproj src/backend/AuthService/
+COPY src/backend/GoogleProviderService/GoogleProviderService.csproj src/backend/GoogleProviderService/
+COPY src/backend/MicrosoftProviderService/MicrosoftProviderService.csproj src/backend/MicrosoftProviderService/
+COPY src/backend/MergerService/MergerService.csproj src/backend/MergerService/
+COPY src/backend/TranslationWorker/TranslationWorker.csproj src/backend/TranslationWorker/
+COPY src/backend/AiAssistantService/AiAssistantService.csproj src/backend/AiAssistantService/
+COPY src/backend/AuditDlpService/AuditDlpService.csproj src/backend/AuditDlpService/
+COPY src/backend/EmailService/EmailService.csproj src/backend/EmailService/
+
+# Restore NuGet packages for the entire solution
+RUN dotnet restore CenterPointInbox.sln
+
+# Copy all backend source code
+COPY src/backend/ src/backend/
+
+# Publish the target service
+RUN dotnet publish "src/backend/${SERVICE_NAME}/${SERVICE_NAME}.csproj" \
+    -c Release \
+    -o /app/publish \
+    --no-restore
+
+# -----------------------------------------------------------------------------
+# Stage 2: Runtime
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+# Install curl for health checks
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Accept the service name to set the entrypoint DLL
+ARG SERVICE_NAME
+ENV SERVICE_DLL="${SERVICE_NAME}.dll"
+
+# ASP.NET Core listens on port 8080 by default in .NET 8
+ENV ASPNETCORE_URLS=http://+:8080
+ENV DOTNET_RUNNING_IN_CONTAINER=true
+
+# Copy published output from the build stage
+COPY --from=build /app/publish .
+
+# Copy the entrypoint script
+COPY infrastructure/docker/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Create and switch to a non-root user
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/false --create-home appuser
+USER appuser
+
+EXPOSE 8080
+
+# Health check: curl the liveness endpoint every 30 seconds
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health/live || exit 1
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

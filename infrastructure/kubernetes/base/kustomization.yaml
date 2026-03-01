@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: center-point-inbox
+
+commonLabels:
+  app.kubernetes.io/part-of: center-point-inbox
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  # Namespace
+  - namespace.yaml
+  # ConfigMap and Secret
+  - configmap.yaml
+  - secret.yaml
+  # Deployments
+  - api-gateway-deployment.yaml
+  - auth-service-deployment.yaml
+  - google-provider-deployment.yaml
+  - microsoft-provider-deployment.yaml
+  - merger-service-deployment.yaml
+  - translation-worker-deployment.yaml
+  - ai-assistant-deployment.yaml
+  - audit-dlp-deployment.yaml
+  - frontend-deployment.yaml
+  # Services
+  - api-gateway-service.yaml
+  - auth-service-service.yaml
+  - google-provider-service.yaml
+  - microsoft-provider-service.yaml
+  - merger-service-service.yaml
+  - ai-assistant-service.yaml
+  - audit-dlp-service.yaml
+  - frontend-service.yaml
+  # Ingress
+  - ingress.yaml
+  # Horizontal Pod Autoscalers
+  - hpa.yaml
+  # Network Policies
+  - networkpolicy.yaml

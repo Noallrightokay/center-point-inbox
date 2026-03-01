@@ -1,0 +1,127 @@
+---
+# Default deny all ingress traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Allow ingress to api-gateway from ingress controller
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-api-gateway
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Allow ingress to frontend from ingress controller
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-frontend
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Allow internal service-to-service communication within namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internal-communication
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: center-point-inbox
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: center-point-inbox
+---
+# Allow egress to external APIs (Google, Microsoft, OpenAI) and DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-external-apis
+  namespace: center-point-inbox
+  labels:
+    app.kubernetes.io/part-of: center-point-inbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: center-point-inbox
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS traffic to external APIs (Google, Microsoft, OpenAI)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow internal cluster communication (all TCP within namespace)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: center-point-inbox
+    # Allow communication to infrastructure services within the namespace
+    # (PostgreSQL, Redis, RabbitMQ, MinIO)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: center-point-inbox
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5672
+        - protocol: TCP
+          port: 9000

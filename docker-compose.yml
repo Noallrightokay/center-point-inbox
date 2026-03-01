@@ -1,0 +1,615 @@
+# =============================================================================
+# Center Point Inbox - Docker Compose (Local Development)
+# =============================================================================
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose up -d postgres     # Start only Postgres
+#   docker compose logs -f auth-service  # Follow logs for a service
+#   docker compose down -v            # Stop and remove volumes
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure: PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cpi-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: cpi_admin
+      POSTGRES_PASSWORD: cpi_dev_password_2024
+      POSTGRES_DB: center_point_inbox
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cpi_admin -d center_point_inbox"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: cpi-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass cpi_redis_password
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "cpi_redis_password", "ping"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: RabbitMQ
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: cpi-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: cpi_rabbit
+      RABBITMQ_DEFAULT_PASS: cpi_rabbit_password
+      RABBITMQ_DEFAULT_VHOST: center_point
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: MinIO (S3-compatible object storage)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: cpi-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: cpi_minio_admin
+      MINIO_ROOT_PASSWORD: cpi_minio_password
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      start_period: 15s
+      retries: 5
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: AuthService (port 5001)
+  # ---------------------------------------------------------------------------
+  auth-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: AuthService
+    container_name: cpi-auth-service
+    restart: unless-stopped
+    ports:
+      - "5001:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- Redis ---
+      Redis__ConnectionString: "redis:6379,password=cpi_redis_password,abortConnect=false"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      Jwt__AccessTokenExpirationMinutes: "60"
+      Jwt__RefreshTokenExpirationDays: "30"
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: ApiGateway (port 5000)
+  # ---------------------------------------------------------------------------
+  api-gateway:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: ApiGateway
+    container_name: cpi-api-gateway
+    restart: unless-stopped
+    ports:
+      - "5000:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- Redis ---
+      Redis__ConnectionString: "redis:6379,password=cpi_redis_password,abortConnect=false"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT (must match AuthService) ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Downstream Service URLs ---
+      Services__AuthService: http://auth-service:8080
+      Services__GoogleProviderService: http://google-provider:8080
+      Services__MicrosoftProviderService: http://microsoft-provider:8080
+      Services__MergerService: http://merger-service:8080
+      Services__AiAssistantService: http://ai-assistant:8080
+      Services__AuditDlpService: http://audit-dlp:8080
+      Services__EmailService: http://email-service:8080
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: GoogleProviderService (port 5002)
+  # ---------------------------------------------------------------------------
+  google-provider:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: GoogleProviderService
+    container_name: cpi-google-provider
+    restart: unless-stopped
+    ports:
+      - "5002:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Google OAuth (replace with real values) ---
+      Google__ClientId: YOUR_GOOGLE_CLIENT_ID
+      Google__ClientSecret: YOUR_GOOGLE_CLIENT_SECRET
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: MicrosoftProviderService (port 5003)
+  # ---------------------------------------------------------------------------
+  microsoft-provider:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: MicrosoftProviderService
+    container_name: cpi-microsoft-provider
+    restart: unless-stopped
+    ports:
+      - "5003:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Microsoft OAuth (replace with real values) ---
+      Microsoft__ClientId: YOUR_MICROSOFT_CLIENT_ID
+      Microsoft__ClientSecret: YOUR_MICROSOFT_CLIENT_SECRET
+      Microsoft__TenantId: YOUR_MICROSOFT_TENANT_ID
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: MergerService (port 5004)
+  # ---------------------------------------------------------------------------
+  merger-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: MergerService
+    container_name: cpi-merger-service
+    restart: unless-stopped
+    ports:
+      - "5004:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Upstream Provider URLs ---
+      Services__GoogleProviderService: http://google-provider:8080
+      Services__MicrosoftProviderService: http://microsoft-provider:8080
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      google-provider:
+        condition: service_healthy
+      microsoft-provider:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: TranslationWorker (no HTTP port)
+  # ---------------------------------------------------------------------------
+  translation-worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: TranslationWorker
+    container_name: cpi-translation-worker
+    restart: unless-stopped
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- MinIO / S3 ---
+      S3__Endpoint: http://minio:9000
+      S3__AccessKey: cpi_minio_admin
+      S3__SecretKey: cpi_minio_password
+      S3__BucketName: translations
+      S3__UseSSL: "false"
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      DOTNET_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f TranslationWorker.dll || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: AiAssistantService (port 5006)
+  # ---------------------------------------------------------------------------
+  ai-assistant:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: AiAssistantService
+    container_name: cpi-ai-assistant
+    restart: unless-stopped
+    ports:
+      - "5006:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- AI Provider (replace with real values) ---
+      OpenAI__ApiKey: YOUR_OPENAI_API_KEY
+      OpenAI__Model: gpt-4o
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: AuditDlpService (port 5007)
+  # ---------------------------------------------------------------------------
+  audit-dlp:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: AuditDlpService
+    container_name: cpi-audit-dlp
+    restart: unless-stopped
+    ports:
+      - "5007:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- RabbitMQ ---
+      RabbitMQ__Host: rabbitmq
+      RabbitMQ__Port: "5672"
+      RabbitMQ__Username: cpi_rabbit
+      RabbitMQ__Password: cpi_rabbit_password
+      RabbitMQ__VirtualHost: center_point
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: EmailService (port 5008)
+  # ---------------------------------------------------------------------------
+  email-service:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      args:
+        SERVICE_NAME: EmailService
+    container_name: cpi-email-service
+    restart: unless-stopped
+    ports:
+      - "5008:8080"
+    environment:
+      # --- Database ---
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=center_point_inbox;Username=cpi_admin;Password=cpi_dev_password_2024"
+      # --- Redis ---
+      Redis__ConnectionString: "redis:6379,password=cpi_redis_password,abortConnect=false"
+      # --- JWT ---
+      Jwt__Issuer: CenterPointInbox
+      Jwt__Audience: CenterPointInboxClient
+      Jwt__SigningKey: dev-jwt-signing-key-change-in-production-min-32-chars!!
+      Jwt__TokenEncryptionKey: dev-token-encryption-key-32ch!!
+      # --- Dependency wait ---
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # --- Service ---
+      ASPNETCORE_ENVIRONMENT: Development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+  # ---------------------------------------------------------------------------
+  # Service: Frontend (port 3000)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.frontend
+    container_name: cpi-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://localhost:5000
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    networks:
+      - center-point-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  center-point-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  rabbitmq-data:

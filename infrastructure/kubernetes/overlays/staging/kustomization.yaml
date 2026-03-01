@@ -1,0 +1,142 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: center-point-inbox
+
+commonLabels:
+  environment: staging
+
+resources:
+  - ../../base
+
+patches:
+  # --- Replica count overrides: 1 replica for all services in staging ---
+  - target:
+      kind: Deployment
+      name: api-gateway
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: auth-service
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: google-provider
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: microsoft-provider
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: merger-service
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: translation-worker
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: ai-assistant
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: audit-dlp
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # --- Reduced resource limits for staging ---
+  - target:
+      kind: Deployment
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+
+  # --- HPA adjustments for staging ---
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: api-gateway-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: merger-service-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  # --- Staging Ingress host ---
+  - target:
+      kind: Ingress
+      name: center-point-inbox-ingress
+    patch: |
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: staging.centerpointinbox.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.centerpointinbox.com
+
+  # --- Staging ConfigMap patches ---
+  - target:
+      kind: ConfigMap
+      name: center-point-inbox-config
+    patch: |
+      - op: replace
+        path: /data/ASPNETCORE_ENVIRONMENT
+        value: Staging
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: Debug
+      - op: replace
+        path: /data/CORS_ALLOWED_ORIGINS
+        value: "https://staging.centerpointinbox.com"
+      - op: replace
+        path: /data/JWT_ISSUER
+        value: "https://staging.centerpointinbox.com"

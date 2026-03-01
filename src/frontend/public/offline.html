@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Center Point — Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0A0A0A;
+      color: #EDEDED;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      text-align: center;
+      padding: 24px;
+    }
+    .container { max-width: 360px; }
+    .logo {
+      width: 56px; height: 56px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #B4975A, #D4B87A);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #0A0A0A;
+      font-weight: 800;
+      font-size: 20px;
+      margin: 0 auto 24px;
+    }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    p { color: #6B6B84; font-size: 14px; line-height: 1.5; }
+    button {
+      margin-top: 24px;
+      padding: 12px 32px;
+      border-radius: 10px;
+      border: none;
+      background: linear-gradient(135deg, #B4975A, #D4B87A);
+      color: #0A0A0A;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">CP</div>
+    <h1>You're offline</h1>
+    <p>Center Point Inbox requires an internet connection. Check your network and try again.</p>
+    <button onclick="location.reload()">Retry</button>
+  </div>
+</body>
+</html>

@@ -1,0 +1,326 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target deployment environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "Docker image tag to deploy"
+        required: false
+        type: string
+        default: "latest"
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    if: github.event.inputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.centerpoint-inbox.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.29.0"
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Verify cluster connectivity
+        run: kubectl cluster-info
+
+      - name: Set image tags in kustomization
+        run: |
+          cd infrastructure/kubernetes/overlays/staging
+          kustomize edit set image \
+            api-gateway=${{ env.IMAGE_PREFIX }}/ApiGateway:${{ github.event.inputs.image_tag }} \
+            auth-service=${{ env.IMAGE_PREFIX }}/AuthService:${{ github.event.inputs.image_tag }} \
+            google-provider=${{ env.IMAGE_PREFIX }}/GoogleProviderService:${{ github.event.inputs.image_tag }} \
+            microsoft-provider=${{ env.IMAGE_PREFIX }}/MicrosoftProviderService:${{ github.event.inputs.image_tag }} \
+            merger-service=${{ env.IMAGE_PREFIX }}/MergerService:${{ github.event.inputs.image_tag }} \
+            translation-worker=${{ env.IMAGE_PREFIX }}/TranslationWorker:${{ github.event.inputs.image_tag }} \
+            ai-assistant=${{ env.IMAGE_PREFIX }}/AiAssistantService:${{ github.event.inputs.image_tag }} \
+            audit-dlp=${{ env.IMAGE_PREFIX }}/AuditDlpService:${{ github.event.inputs.image_tag }} \
+            frontend=${{ env.IMAGE_PREFIX }}/frontend:${{ github.event.inputs.image_tag }}
+
+      - name: Apply kustomize overlay for staging
+        run: |
+          kubectl apply -k infrastructure/kubernetes/overlays/staging \
+            --namespace centerpoint-staging \
+            --prune \
+            --selector app.kubernetes.io/part-of=centerpoint-inbox
+
+      - name: Wait for rollout to complete
+        run: |
+          DEPLOYMENTS=$(kubectl get deployments -n centerpoint-staging \
+            -l app.kubernetes.io/part-of=centerpoint-inbox \
+            -o jsonpath='{.items[*].metadata.name}')
+
+          for deployment in $DEPLOYMENTS; do
+            echo "Waiting for deployment/$deployment rollout..."
+            kubectl rollout status deployment/"$deployment" \
+              -n centerpoint-staging \
+              --timeout=300s
+          done
+
+      - name: Run smoke tests
+        run: |
+          GATEWAY_URL=$(kubectl get service api-gateway \
+            -n centerpoint-staging \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Running smoke tests against: $GATEWAY_URL"
+
+          # Health check - API Gateway
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${GATEWAY_URL}/health" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 || echo "000")
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::API Gateway health check failed with status: $HTTP_STATUS"
+            exit 1
+          fi
+          echo "API Gateway health check passed (HTTP $HTTP_STATUS)"
+
+          # Health check - Auth Service
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${GATEWAY_URL}/api/auth/health" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 || echo "000")
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::Auth Service health check failed with status: $HTTP_STATUS"
+            exit 1
+          fi
+          echo "Auth Service health check passed (HTTP $HTTP_STATUS)"
+
+          echo "All smoke tests passed."
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          echo "## Staging Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Environment | staging |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image Tag | \`${{ github.event.inputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Triggered By | ${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-production:
+    name: Deploy to Production
+    if: github.event.inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://app.centerpoint-inbox.com
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.29.0"
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Verify cluster connectivity
+        run: kubectl cluster-info
+
+      - name: Capture current deployment state for rollback
+        id: rollback-info
+        run: |
+          DEPLOYMENTS=$(kubectl get deployments -n centerpoint-production \
+            -l app.kubernetes.io/part-of=centerpoint-inbox \
+            -o jsonpath='{.items[*].metadata.name}')
+
+          for deployment in $DEPLOYMENTS; do
+            CURRENT_IMAGE=$(kubectl get deployment "$deployment" \
+              -n centerpoint-production \
+              -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "none")
+            echo "Current image for $deployment: $CURRENT_IMAGE"
+          done
+
+          kubectl get deployments -n centerpoint-production \
+            -l app.kubernetes.io/part-of=centerpoint-inbox \
+            -o yaml > /tmp/rollback-manifests.yaml
+
+          echo "rollback_file=/tmp/rollback-manifests.yaml" >> "$GITHUB_OUTPUT"
+
+      - name: Set image tags in kustomization
+        run: |
+          cd infrastructure/kubernetes/overlays/production
+          kustomize edit set image \
+            api-gateway=${{ env.IMAGE_PREFIX }}/ApiGateway:${{ github.event.inputs.image_tag }} \
+            auth-service=${{ env.IMAGE_PREFIX }}/AuthService:${{ github.event.inputs.image_tag }} \
+            google-provider=${{ env.IMAGE_PREFIX }}/GoogleProviderService:${{ github.event.inputs.image_tag }} \
+            microsoft-provider=${{ env.IMAGE_PREFIX }}/MicrosoftProviderService:${{ github.event.inputs.image_tag }} \
+            merger-service=${{ env.IMAGE_PREFIX }}/MergerService:${{ github.event.inputs.image_tag }} \
+            translation-worker=${{ env.IMAGE_PREFIX }}/TranslationWorker:${{ github.event.inputs.image_tag }} \
+            ai-assistant=${{ env.IMAGE_PREFIX }}/AiAssistantService:${{ github.event.inputs.image_tag }} \
+            audit-dlp=${{ env.IMAGE_PREFIX }}/AuditDlpService:${{ github.event.inputs.image_tag }} \
+            frontend=${{ env.IMAGE_PREFIX }}/frontend:${{ github.event.inputs.image_tag }}
+
+      - name: Deploy green environment
+        id: deploy-green
+        run: |
+          # Apply the green deployment with updated images
+          kubectl apply -k infrastructure/kubernetes/overlays/production \
+            --namespace centerpoint-production \
+            --prune \
+            --selector app.kubernetes.io/part-of=centerpoint-inbox
+
+      - name: Wait for rollout to complete
+        id: rollout
+        run: |
+          DEPLOYMENTS=$(kubectl get deployments -n centerpoint-production \
+            -l app.kubernetes.io/part-of=centerpoint-inbox \
+            -o jsonpath='{.items[*].metadata.name}')
+
+          FAILED=false
+          for deployment in $DEPLOYMENTS; do
+            echo "Waiting for deployment/$deployment rollout..."
+            if ! kubectl rollout status deployment/"$deployment" \
+              -n centerpoint-production \
+              --timeout=600s; then
+              echo "::error::Rollout failed for deployment/$deployment"
+              FAILED=true
+            fi
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
+            echo "rollout_failed=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Run smoke tests
+        id: smoke-tests
+        run: |
+          GATEWAY_URL=$(kubectl get service api-gateway \
+            -n centerpoint-production \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+          echo "Running production smoke tests against: $GATEWAY_URL"
+
+          FAILED=false
+
+          # Health check - API Gateway
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${GATEWAY_URL}/health" \
+            --max-time 30 \
+            --retry 5 \
+            --retry-delay 10 || echo "000")
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::API Gateway health check failed with status: $HTTP_STATUS"
+            FAILED=true
+          else
+            echo "API Gateway health check passed (HTTP $HTTP_STATUS)"
+          fi
+
+          # Health check - Auth Service
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${GATEWAY_URL}/api/auth/health" \
+            --max-time 30 \
+            --retry 5 \
+            --retry-delay 10 || echo "000")
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::Auth Service health check failed with status: $HTTP_STATUS"
+            FAILED=true
+          else
+            echo "Auth Service health check passed (HTTP $HTTP_STATUS)"
+          fi
+
+          # Health check - Frontend
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://${GATEWAY_URL}/" \
+            --max-time 30 \
+            --retry 5 \
+            --retry-delay 10 || echo "000")
+
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::Frontend health check failed with status: $HTTP_STATUS"
+            FAILED=true
+          else
+            echo "Frontend health check passed (HTTP $HTTP_STATUS)"
+          fi
+
+          if [[ "$FAILED" == "true" ]]; then
+            echo "smoke_failed=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "All production smoke tests passed."
+
+      - name: Rollback on failure
+        if: failure() && (steps.rollout.outputs.rollout_failed == 'true' || steps.smoke-tests.outputs.smoke_failed == 'true')
+        run: |
+          echo "::warning::Deployment failed. Initiating rollback..."
+
+          DEPLOYMENTS=$(kubectl get deployments -n centerpoint-production \
+            -l app.kubernetes.io/part-of=centerpoint-inbox \
+            -o jsonpath='{.items[*].metadata.name}')
+
+          for deployment in $DEPLOYMENTS; do
+            echo "Rolling back deployment/$deployment..."
+            kubectl rollout undo deployment/"$deployment" -n centerpoint-production
+          done
+
+          echo "Waiting for rollback to complete..."
+          for deployment in $DEPLOYMENTS; do
+            kubectl rollout status deployment/"$deployment" \
+              -n centerpoint-production \
+              --timeout=300s
+          done
+
+          echo "::error::Production deployment rolled back due to failure."
+
+      - name: Create deployment summary
+        if: always()
+        run: |
+          echo "## Production Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Environment | production |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image Tag | \`${{ github.event.inputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Triggered By | ${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Rollout Status | ${{ steps.rollout.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Smoke Tests | ${{ steps.smoke-tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${{ steps.rollout.outcome }}" == "failure" || "${{ steps.smoke-tests.outcome }}" == "failure" ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> **Warning**: Deployment failed and was rolled back automatically." >> "$GITHUB_STEP_SUMMARY"
+          fi
