@@ -90,7 +90,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Navigation */}
         <nav className="flex-1 space-y-0.5 p-2">
           {NAV_ITEMS.map((item) => {
-            if (item.requiresAdmin && !isAdmin) return null;
+            if ("requiresAdmin" in item && item.requiresAdmin && !isAdmin) return null;
             const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
             const Icon = item.icon;
             return (

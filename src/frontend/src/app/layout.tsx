@@ -1,18 +1,30 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Playfair_Display } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const inter = Inter({
-  subsets: ["latin"],
+const inter = localFont({
+  src: [
+    {
+      path: "../fonts/Inter-VariableFont_opsz,wght.woff2",
+      style: "normal",
+    },
+  ],
   variable: "--font-inter",
   display: "swap",
+  fallback: ["system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
 });
 
-const playfair = Playfair_Display({
-  subsets: ["latin"],
+const playfair = localFont({
+  src: [
+    {
+      path: "../fonts/PlayfairDisplay-VariableFont_wght.ttf",
+      style: "normal",
+    },
+  ],
   variable: "--font-playfair",
   display: "swap",
+  fallback: ["Georgia", "Times New Roman", "serif"],
 });
 
 export const metadata: Metadata = {

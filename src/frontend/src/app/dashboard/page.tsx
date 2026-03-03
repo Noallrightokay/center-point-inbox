@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback } from "react";
 import {
   Search, SlidersHorizontal, Bot, ChevronLeft, ChevronRight,
-  Mail, Star, Clock, AlertTriangle, Paperclip, Filter,
+  Mail, Star, Clock, AlertTriangle, Paperclip, Filter, Inbox,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
