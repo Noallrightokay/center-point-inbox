@@ -1,141 +1,64 @@
 import { create } from "zustand";
-import { post } from "@/lib/api";
-import {
-  setToken,
-  clearToken,
-  parseJwt,
-  refreshToken as refreshAuthToken,
-  isAuthenticated as checkAuth,
-} from "@/lib/auth";
-import type { User, TokenResponse } from "@/types";
 
-// ---------------------------------------------------------------------------
-// Store shape
-// ---------------------------------------------------------------------------
+import { api } from "@/lib/api";
+import { clearToken, getToken, setToken } from "@/lib/token";
+import { parseRole, type Role } from "@/lib/enums";
+import type { AuthResponse, AuthUser } from "@/types";
 
-export interface AuthState {
-  /** The currently authenticated user, or null when logged out. */
-  user: User | null;
+type AuthPhase = "loading" | "authed" | "anon";
 
-  /** Whether the user holds a valid session. */
-  isAuthenticated: boolean;
-
-  /** True while an authentication operation (login, refresh) is in flight. */
-  isLoading: boolean;
-
-  /**
-   * Authenticate via an OAuth provider.
-   *
-   * @param provider  - `"google"` or `"microsoft"`
-   * @param code      - The authorization code returned by the OAuth flow
-   * @param redirectUri - The redirect URI used in the OAuth flow
-   */
-  login: (
-    provider: "google" | "microsoft",
-    code: string,
-    redirectUri: string,
-  ) => Promise<void>;
-
-  /** Log the user out, clearing all auth state. */
-  logout: () => Promise<void>;
-
-  /** Attempt a silent session refresh using the httpOnly refresh cookie. */
-  refreshSession: () => Promise<void>;
-
-  /** Manually set the user object (e.g. after fetching /me). */
-  setUser: (user: User) => void;
+interface AuthState {
+  user: AuthUser | null;
+  phase: AuthPhase;
+  /** Restore the session from a persisted token on app boot. */
+  bootstrap: () => Promise<void>;
+  setSession: (res: AuthResponse) => void;
+  logout: () => void;
 }
-
-// ---------------------------------------------------------------------------
-// Store implementation
-// ---------------------------------------------------------------------------
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  isAuthenticated: false,
-  isLoading: false,
+  phase: "loading",
 
-  login: async (
-    provider: "google" | "microsoft",
-    code: string,
-    redirectUri: string,
-  ) => {
-    set({ isLoading: true });
-
-    try {
-      const response = await post<TokenResponse>(
-        `/auth/oauth/${provider}/callback`,
-        { code, redirectUri },
-      );
-
-      setToken(response.accessToken);
-
-      const payload = parseJwt(response.accessToken);
-      const user: User = {
-        id: response.user?.id ?? payload?.sub ?? "",
-        email: response.user?.email ?? payload?.email ?? "",
-        name: response.user?.name ?? payload?.name ?? "",
-        avatarUrl: response.user?.avatarUrl ?? null,
-        provider: response.user?.provider ?? provider,
-        roles: response.user?.roles ?? payload?.roles ?? [],
-        organizationId: response.user?.organizationId ?? payload?.orgId ?? null,
-        createdAt: response.user?.createdAt ?? new Date().toISOString(),
-        updatedAt: response.user?.updatedAt ?? new Date().toISOString(),
-      };
-
-      set({ user, isAuthenticated: true, isLoading: false });
-    } catch (error) {
-      clearToken();
-      set({ user: null, isAuthenticated: false, isLoading: false });
-      throw error;
+  bootstrap: async () => {
+    if (!getToken()) {
+      set({ phase: "anon", user: null });
+      return;
     }
-  },
-
-  logout: async () => {
-    set({ isLoading: true });
-
     try {
-      await post("/auth/logout", {});
-    } catch {
-      // Best-effort logout — clear client state regardless.
-    } finally {
-      clearToken();
-      set({ user: null, isAuthenticated: false, isLoading: false });
-    }
-  },
-
-  refreshSession: async () => {
-    set({ isLoading: true });
-
-    try {
-      const newToken = await refreshAuthToken();
-
-      if (newToken && checkAuth()) {
-        const payload = parseJwt(newToken);
-        const user: User = {
-          id: payload?.sub ?? "",
-          email: payload?.email ?? "",
-          name: payload?.name ?? "",
-          avatarUrl: null,
-          provider: "google",
-          roles: payload?.roles ?? [],
-          organizationId: payload?.orgId ?? null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        set({ user, isAuthenticated: true, isLoading: false });
-      } else {
-        clearToken();
-        set({ user: null, isAuthenticated: false, isLoading: false });
-      }
+      const user = await api.me();
+      set({ user, phase: "authed" });
     } catch {
       clearToken();
-      set({ user: null, isAuthenticated: false, isLoading: false });
+      set({ user: null, phase: "anon" });
     }
   },
 
-  setUser: (user: User) => {
-    set({ user, isAuthenticated: true });
+  setSession: (res) => {
+    setToken(res.token);
+    set({ user: res.user, phase: "authed" });
+  },
+
+  logout: () => {
+    clearToken();
+    set({ user: null, phase: "anon" });
   },
 }));
+
+/** Role helpers derived from the current user. */
+export function useRole(): Role | null {
+  const user = useAuthStore((s) => s.user);
+  return user ? parseRole(user.role) : null;
+}
+
+export function roleOf(user: AuthUser | null): Role | null {
+  return user ? parseRole(user.role) : null;
+}
+
+export function canSeeCompliance(role: Role | null): boolean {
+  return role === "Admin" || role === "ComplianceOfficer";
+}
+
+export function isAdmin(role: Role | null): boolean {
+  return role === "Admin";
+}

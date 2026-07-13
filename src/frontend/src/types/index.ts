@@ -1,343 +1,288 @@
 // ==========================================================================
-// Center Point Inbox – TypeScript type definitions
+// Centra API DTOs.
 //
-// These types mirror the backend DTOs for type-safe communication between
-// the Next.js frontend and the Java/Spring Boot API.
+// Enum-typed fields arrive as integers OR strings on the wire, so they are
+// typed as `Wire` and normalised with the parsers in lib/enums.ts at the
+// point of use.
 // ==========================================================================
 
-// ---------------------------------------------------------------------------
-// Auth & User
-// ---------------------------------------------------------------------------
+/** An enum value as it arrives from the backend: integer index or string name. */
+export type Wire = number | string;
 
-export interface User {
+// --- Auth ------------------------------------------------------------------
+export interface AuthUser {
   id: string;
   email: string;
+  displayName: string;
+  role: Wire; // Admin | ComplianceOfficer | Member
+  createdAt?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  expiresAt: string;
+  user: AuthUser;
+}
+
+// --- Setup -----------------------------------------------------------------
+export interface SetupCheck {
   name: string;
-  avatarUrl: string | null;
-  provider: string;
-  roles: string[];
-  organizationId: string | null;
-  createdAt: string;
-  updatedAt: string;
+  ok: boolean;
+  detail?: string | null;
+  envHint?: string | null;
 }
 
-export interface TokenResponse {
-  accessToken: string;
-  refreshToken?: string;
-  expiresIn: number;
-  tokenType: string;
-  user?: User;
+export interface SetupStatus {
+  ready: boolean;
+  adminExists: boolean;
+  database: boolean;
+  redis: boolean;
+  ai: boolean;
+  gotenberg: boolean;
+  providers?: Record<string, boolean>;
+  checks?: SetupCheck[];
 }
 
-// ---------------------------------------------------------------------------
-// Unified File / Inbox
-// ---------------------------------------------------------------------------
-
-export type FileSource = "gmail" | "outlook" | "google_drive" | "onedrive";
-
-export type FileType =
-  | "email"
-  | "document"
-  | "spreadsheet"
-  | "presentation"
-  | "pdf"
-  | "image"
-  | "video"
-  | "audio"
-  | "archive"
-  | "other";
-
-export interface UnifiedFile {
-  id: string;
-  externalId: string;
-  source: FileSource;
-  fileType: FileType;
-  title: string;
-  snippet: string | null;
-  body: string | null;
-  from: string | null;
-  to: string[] | null;
-  cc: string[] | null;
-  bcc: string[] | null;
-  labels: string[];
-  isRead: boolean;
-  isStarred: boolean;
-  hasAttachments: boolean;
-  attachments: FileAttachment[];
-  detectedLanguage: string | null;
-  translatedTitle: string | null;
-  translatedBody: string | null;
-  threadId: string | null;
-  parentId: string | null;
-  mimeType: string | null;
-  size: number | null;
-  webUrl: string | null;
-  createdAt: string;
-  updatedAt: string;
-  receivedAt: string | null;
-}
-
-export interface FileAttachment {
-  id: string;
-  filename: string;
-  mimeType: string;
-  size: number;
-  downloadUrl: string | null;
-}
-
-export interface UnifiedFileFeed {
-  items: UnifiedFile[];
-  nextCursor: string | null;
-  hasMore: boolean;
-  totalCount: number;
-}
-
-export interface FileFeedQuery {
-  source?: FileSource;
-  fileType?: FileType;
-  search?: string;
-  label?: string;
-  isRead?: boolean;
-  isStarred?: boolean;
-  language?: string;
-  from?: string;
-  sortBy?: "date" | "relevance" | "size";
-  sortOrder?: "asc" | "desc";
-  cursor?: string;
-  limit?: number;
-}
-
-// ---------------------------------------------------------------------------
-// Translation
-// ---------------------------------------------------------------------------
-
-export type TranslationStatus =
-  | "pending"
-  | "processing"
-  | "completed"
-  | "failed";
-
-export interface TranslationJob {
-  id: string;
-  fileId: string;
-  sourceLanguage: string;
-  targetLanguage: string;
-  status: TranslationStatus;
-  translatedContent: string | null;
-  characterCount: number | null;
-  provider: string | null;
-  errorMessage: string | null;
-  createdAt: string;
-  completedAt: string | null;
-}
-
-export interface TranslationRequest {
-  fileId: string;
-  targetLanguage: string;
-  sourceLanguage?: string;
-  fieldsToTranslate?: string[];
-}
-
-// ---------------------------------------------------------------------------
-// AI / LLM
-// ---------------------------------------------------------------------------
-
-export interface AiQueryRequest {
-  query: string;
-  fileIds?: string[];
-  context?: string;
-  model?: string;
-  maxTokens?: number;
-  temperature?: number;
-}
-
-export interface AiQueryResponse {
-  id: string;
-  query: string;
-  response: string;
-  model: string;
-  tokensUsed: number;
-  sourceReferences: AiSourceReference[];
-  createdAt: string;
-}
-
-export interface AiSourceReference {
-  fileId: string;
-  fileTitle: string;
-  relevanceScore: number;
-  excerpt: string;
-}
-
-export interface SummarizeRequest {
-  fileId: string;
-  maxLength?: number;
-  language?: string;
-  format?: "brief" | "detailed" | "bullets";
-}
-
-export interface SummarizeResponse {
-  id: string;
-  fileId: string;
-  summary: string;
-  keyPoints: string[];
-  language: string;
-  model: string;
-  tokensUsed: number;
-  createdAt: string;
-}
-
+// --- Search ----------------------------------------------------------------
 export interface SearchRequest {
   query: string;
-  sources?: FileSource[];
-  fileTypes?: FileType[];
-  dateFrom?: string;
-  dateTo?: string;
-  language?: string;
-  limit?: number;
-  offset?: number;
+  provider?: Wire;
+  itemType?: Wire;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface SearchResultItem {
+  id: string;
+  provider: Wire;
+  itemType: Wire;
+  title: string;
+  snippet?: string | null;
+  webUrl?: string | null;
+  modifiedAt?: string | null;
+  connectionId?: string | null;
+  externalId?: string | null;
 }
 
 export interface SearchResponse {
-  results: SearchResult[];
-  totalCount: number;
+  results: SearchResultItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  aiSummary?: string | null;
+  tookMs?: number;
+}
+
+export interface SearchHistoryEntry {
   query: string;
-  searchTimeMs: number;
+  at?: string;
 }
 
-export interface SearchResult {
-  file: UnifiedFile;
-  relevanceScore: number;
-  highlights: SearchHighlight[];
-}
-
-export interface SearchHighlight {
-  field: string;
-  fragments: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Audit & Compliance
-// ---------------------------------------------------------------------------
-
-export type AuditAction =
-  | "login"
-  | "logout"
-  | "file_access"
-  | "file_download"
-  | "file_translate"
-  | "ai_query"
-  | "ai_summarize"
-  | "admin_action"
-  | "dlp_violation"
-  | "export"
-  | "share";
-
-export interface AuditLog {
+// --- Connections -----------------------------------------------------------
+export interface Connection {
   id: string;
-  userId: string;
-  userEmail: string;
-  action: AuditAction;
-  resourceType: string;
-  resourceId: string | null;
-  details: Record<string, unknown>;
-  ipAddress: string;
-  userAgent: string;
+  provider: Wire;
+  accountEmail: string;
+  status: Wire; // Active | Expired | Error | Revoked
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  displayName?: string | null;
+}
+
+export interface ConnectionStart {
+  authorizationUrl: string;
+  state: string;
+}
+
+export interface SyncStatusEntry {
+  connectionId: string;
+  status: Wire; // Idle | Running | Completed | Failed
+  itemsIndexed?: number;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: string | null;
+}
+
+// --- Documents -------------------------------------------------------------
+export interface CentraDocument {
+  id: string;
+  title: string;
+  format: Wire;
+  content?: string;
+  version: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// --- Files -----------------------------------------------------------------
+export interface RemoteFile {
+  externalId: string;
+  name: string;
+  size?: number | null;
+  modifiedAt?: string | null;
+  mimeType?: string | null;
+  isGoogleNative?: boolean;
+  webUrl?: string | null;
+}
+
+// --- Email -----------------------------------------------------------------
+export interface EmailMessage {
+  id: string;
+  from: string;
+  subject: string;
+  snippet?: string | null;
+  receivedAt?: string | null;
+  webUrl?: string | null;
+}
+
+// --- Translation -----------------------------------------------------------
+export interface TranslationMatrix {
+  sources: string[];
+  targets: string[];
+  /** matrix[sourceFormat][targetFormat] = supported */
+  supported: Record<string, Record<string, boolean>>;
+  gotenbergAvailable: boolean;
+}
+
+export interface TranslationJob {
+  id: string;
+  status: Wire; // Queued | Processing | Completed | Failed
+  targetFormat: Wire;
+  sourceLabel?: string | null;
+  connectionId?: string | null;
+  sourceExternalId?: string | null;
+  nativeDocumentId?: string | null;
+  outputDocumentId?: string | null;
+  durationMs?: number | null;
+  error?: string | null;
+  createdAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface CreateTranslationJob {
+  connectionId?: string;
+  sourceExternalId?: string;
+  nativeDocumentId?: string;
+  targetFormat: string;
+}
+
+export interface FormatPreference {
+  id: string;
+  sourceFormat: Wire;
+  provider?: Wire | null; // null => "Anywhere"
+  targetFormat: Wire;
+  autoApply: boolean;
+}
+
+// --- Scheduled exports -----------------------------------------------------
+export interface ScheduledExport {
+  id: string;
+  documentId: string;
+  targetFormat: Wire;
+  cadence: Wire;
+  enabled: boolean;
+  consecutiveFailures: number;
+  lastRunAt?: string | null;
+  nextRunAt?: string | null;
+}
+
+// --- AI --------------------------------------------------------------------
+export interface AiStatus {
+  configured: boolean;
+  model?: string | null;
+  provider?: string | null;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface ExtractedEntity {
+  type: Wire; // person | organization | date | location | amount
+  value: string;
+}
+
+// --- Compliance / DLP ------------------------------------------------------
+export interface ComplianceDashboard {
+  users: number;
+  activeConnections: number;
+  indexedItems: number;
+  dlpViolations30d: number;
+  auditChainIntact: boolean;
+  activeProfile: string;
+}
+
+export interface DlpProfile {
+  id: string;
+  name: string;
+}
+
+export interface DlpMatch {
+  rule: string;
+  severity: Wire;
+  action: string;
+  count: number;
+  redactedSample?: string | null;
+}
+
+export interface DlpScanResult {
+  matches: DlpMatch[];
+  redactedContent: string;
+  profile: string;
+}
+
+export interface ComplianceReport {
+  byRule: { rule: string; count: number }[];
+  byAction: { action: string; count: number }[];
+  chainIntact: boolean;
+  from?: string;
+  to?: string;
+}
+
+// --- Audit -----------------------------------------------------------------
+export interface AuditEntry {
+  id: string;
   timestamp: string;
-  organizationId: string | null;
+  category: string;
+  action: string;
+  detail?: string | null;
+  userId?: string | null;
+  userEmail?: string | null;
+  hash: string;
 }
 
-export interface AuditLogList {
-  items: AuditLog[];
-  totalCount: number;
+export interface AuditPage {
+  entries: AuditEntry[];
   page: number;
   pageSize: number;
-  totalPages: number;
+  total: number;
 }
 
-export type DlpSeverity = "low" | "medium" | "high" | "critical";
-
-export type DlpStatus = "open" | "acknowledged" | "resolved" | "false_positive";
-
-export interface DlpViolation {
-  id: string;
-  fileId: string;
-  fileTitle: string;
-  userId: string;
-  userEmail: string;
-  violationType: string;
-  severity: DlpSeverity;
-  status: DlpStatus;
-  description: string;
-  detectedPatterns: string[];
-  remediationAction: string | null;
-  detectedAt: string;
-  resolvedAt: string | null;
-  resolvedBy: string | null;
-  organizationId: string | null;
+export interface AuditVerifyResult {
+  intact: boolean;
+  checkedCount?: number;
+  brokenAt?: string | null;
+  message?: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Admin Dashboard
-// ---------------------------------------------------------------------------
-
-export interface AdminDashboard {
-  totalUsers: number;
-  activeUsers: number;
-  totalFiles: number;
-  totalTranslations: number;
-  totalAiQueries: number;
-  storageUsedBytes: number;
-  dlpViolationsOpen: number;
-  recentActivity: AuditLog[];
-  usageBySource: Record<FileSource, number>;
-  usageByDay: DailyUsage[];
-  topLanguages: LanguageUsage[];
+// --- Admin metrics ---------------------------------------------------------
+export interface AdminMetrics {
+  memoryUsedBytes: number;
+  memoryTotalBytes?: number;
+  threads: number;
+  requestCount: number;
+  avgResponseMs: number;
+  errorRate: number;
+  topEndpoints: { endpoint: string; count: number; avgMs?: number }[];
+  entityCounts: Record<string, number>;
 }
 
-export interface DailyUsage {
-  date: string;
-  fileAccesses: number;
-  translations: number;
-  aiQueries: number;
-}
-
-export interface LanguageUsage {
-  language: string;
-  translationCount: number;
-  percentage: number;
-}
-
-// ---------------------------------------------------------------------------
-// Common / Shared
-// ---------------------------------------------------------------------------
-
-export interface PaginatedResponse<T> {
-  items: T[];
-  totalCount: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}
-
-export interface ApiError {
+// --- Errors ----------------------------------------------------------------
+export interface ApiErrorBody {
+  error: string;
   status: number;
-  message: string;
-  errors?: FieldError[];
-  timestamp: string;
-  path: string;
-}
-
-export interface FieldError {
-  field: string;
-  message: string;
-  rejectedValue?: unknown;
-}
-
-export type SortOrder = "asc" | "desc";
-
-export interface PaginationParams {
-  page?: number;
-  pageSize?: number;
-  sortBy?: string;
-  sortOrder?: SortOrder;
+  traceId?: string;
 }

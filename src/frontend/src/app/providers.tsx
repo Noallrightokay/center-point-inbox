@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "./toast-provider";
 
@@ -8,23 +8,18 @@ function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 60 * 1000,
+        staleTime: 30 * 1000,
         retry: (failureCount, error) => {
-          if (
-            error &&
-            typeof error === "object" &&
-            "status" in error &&
-            (error as { status: number }).status === 401
-          ) {
-            return false;
-          }
-          return failureCount < 3;
+          const status =
+            error && typeof error === "object" && "status" in error
+              ? (error as { status?: number }).status
+              : undefined;
+          if (status === 401 || status === 403 || status === 404) return false;
+          return failureCount < 2;
         },
         refetchOnWindowFocus: false,
       },
-      mutations: {
-        retry: false,
-      },
+      mutations: { retry: false },
     },
   });
 }
@@ -32,24 +27,9 @@ function makeQueryClient(): QueryClient {
 let browserQueryClient: QueryClient | undefined;
 
 function getQueryClient(): QueryClient {
-  if (typeof window === "undefined") {
-    return makeQueryClient();
-  }
-  if (!browserQueryClient) {
-    browserQueryClient = makeQueryClient();
-  }
+  if (typeof window === "undefined") return makeQueryClient();
+  if (!browserQueryClient) browserQueryClient = makeQueryClient();
   return browserQueryClient;
-}
-
-function ServiceWorkerRegistration() {
-  useEffect(() => {
-    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
-        // SW registration failed — non-critical
-      });
-    }
-  }, []);
-  return null;
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -57,7 +37,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ServiceWorkerRegistration />
       <ToastProvider>{children}</ToastProvider>
     </QueryClientProvider>
   );
