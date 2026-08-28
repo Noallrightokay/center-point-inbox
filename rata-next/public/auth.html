@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<title>RATA — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RATA">
+<style>
+:root{
+  --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --tint-mid:#5C7FFF; --glacier:#8FAAFF; --wash:#D9E2FF;
+  --slate:#5C6B85; --faint:#93A0B8; --card:#FFFFFF; --fill:#E8ECF4;
+  --red:#E5484D; --green:#12B76A;
+  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,sans-serif;
+  --disp:'Sora',var(--sans);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;position:relative;overflow-x:hidden}
+body::before{content:'';position:fixed;top:-300px;left:-220px;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.25),transparent 62%)}
+body::after{content:'';position:fixed;bottom:-340px;right:-240px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(143,170,255,.14),transparent 62%)}
+.card{position:relative;z-index:1;width:min(460px,100%);background:var(--paper);border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.55);padding:34px 34px 28px}
+.logo{display:flex;align-items:center;gap:11px;margin-bottom:8px}
+.logo b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:23px;letter-spacing:.04em;color:var(--ink)}
+.mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+.tag{font-size:12.5px;color:var(--faint);margin-bottom:22px}
+.mode-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 11px;border-radius:999px;margin-bottom:16px}
+.mode-badge.cloud{background:rgba(18,183,106,.12);color:var(--green)}
+.mode-badge.local{background:var(--wash);color:var(--tint)}
+.tabs{display:flex;background:var(--fill);border-radius:11px;padding:3px;gap:2px;margin-bottom:20px}
+.tabs button{flex:1;padding:9px;border-radius:9px;border:none;background:none;font-family:var(--sans);font-weight:600;font-size:13.5px;color:var(--slate);cursor:pointer}
+.tabs button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 4px rgba(10,14,26,.12)}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--slate);margin:13px 0 6px}
+input[type=email],input[type=password],input[type=text],input[type=tel]{width:100%;border:none;background:var(--fill);border-radius:11px;padding:12px 14px;font-family:var(--sans);font-size:15px;outline:none;transition:box-shadow .15s;color:var(--ink)}
+input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
+.err{display:none;background:rgba(229,72,77,.1);color:var(--red);font-size:13px;font-weight:500;padding:10px 14px;border-radius:10px;margin-top:14px}
+.err.show{display:block}
+.ok{display:none;background:rgba(18,183,106,.12);color:var(--green);font-size:13px;font-weight:500;padding:10px 14px;border-radius:10px;margin-top:14px}
+.ok.show{display:block}
+.go{padding:13px 20px;border:none;border-radius:12px;background:var(--tint);color:#fff;font-family:var(--sans);font-weight:600;font-size:15px;cursor:pointer;box-shadow:0 4px 16px rgba(46,92,255,.35);transition:filter .15s}
+.go:hover{filter:brightness(1.06)}
+.go:disabled{opacity:.6;cursor:wait}
+.ghostbtn{padding:13px 18px;border:none;border-radius:12px;background:var(--fill);color:var(--ink);font-family:var(--sans);font-weight:600;font-size:14px;cursor:pointer}
+.navrow{display:flex;gap:10px;margin-top:22px}
+.navrow .go{flex:1}
+.steps{display:flex;align-items:center;gap:8px;margin:2px 0 6px}
+.dot{width:26px;height:26px;border-radius:50%;background:var(--fill);color:var(--slate);display:grid;place-items:center;font-size:12px;font-weight:700;font-family:'Fredoka',var(--sans)}
+.dot.on{background:var(--tint);color:#fff}
+.dot.done{background:var(--wash);color:var(--tint)}
+.bar{flex:1;height:2px;background:var(--fill);border-radius:2px}
+.bar.done{background:var(--tint)}
+.step-title{font-family:'Fredoka',var(--disp);font-weight:600;font-size:17px;letter-spacing:.02em;margin-top:14px}
+.step-sub{font-size:12.5px;color:var(--faint);margin-top:2px}
+.step{display:none}
+.step.on{display:block}
+.conn-row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:12px;padding:12px 14px;margin-top:10px;box-shadow:0 1px 3px rgba(10,14,26,.07)}
+.conn-ic{width:34px;height:34px;flex-shrink:0}
+.conn-ic svg{width:100%;height:100%;display:block}
+.conn-row .t{flex:1;min-width:0}
+.conn-row .t b{font-size:13.5px;display:block}
+.conn-row .t span{font-size:11.5px;color:var(--faint)}
+.conn-row input{margin-top:6px;padding:9px 12px;font-size:13.5px}
+.switch{width:46px;height:28px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0;border:none;cursor:pointer}
+.switch::after{content:'';position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.32,.72,.35,1)}
+.switch.on{background:var(--green)}
+.switch.on::after{transform:translateX(18px)}
+.livechip{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;background:rgba(18,183,106,.12);color:var(--green)}
+.soonchip{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;background:var(--fill);color:var(--faint)}
+.foot{margin-top:20px;padding-top:15px;border-top:1px solid rgba(10,14,26,.07);font-size:11.5px;color:var(--faint);line-height:1.55}
+.foot a{color:var(--tint);text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <img class="mk" src="icons/mark-256.png" alt="" width="36" height="36">
+    <b>RATA</b>
+  </div>
+  <div class="tag">Every message. Every language. One inbox.</div>
+  <span class="mode-badge local" id="mode-badge">● This device — local accounts</span>
+
+  <div class="tabs">
+    <button id="tab-login" class="on">Log in</button>
+    <button id="tab-signup">Create account</button>
+  </div>
+
+  <!-- LOGIN -->
+  <form id="login-form" novalidate>
+    <label for="l-email">Email</label>
+    <input type="email" id="l-email" autocomplete="email" placeholder="you@company.com">
+    <label for="l-pw">Password</label>
+    <input type="password" id="l-pw" autocomplete="current-password" placeholder="••••••••">
+    <div class="err" id="l-err"></div>
+    <div class="ok" id="l-ok"></div>
+    <div class="navrow"><button class="go" id="l-go" type="submit">Log in</button></div>
+    <div style="margin-top:12px;text-align:center"><button type="button" id="forgot" style="border:none;background:none;font-family:var(--sans);color:var(--tint);font-weight:600;font-size:13px;cursor:pointer">Forgot password?</button></div>
+  </form>
+
+  <!-- PASSWORD RECOVERY (arrives via email link) -->
+  <div id="recover" style="display:none">
+    <div class="step-title">Set a new password</div>
+    <div class="step-sub">You're verified via your email link. Choose a new password for your account.</div>
+    <label for="r-pw">New password</label>
+    <input type="password" id="r-pw" autocomplete="new-password" placeholder="At least 8 characters">
+    <label for="r-pw2">Confirm new password</label>
+    <input type="password" id="r-pw2" autocomplete="new-password" placeholder="••••••••">
+    <div class="err" id="r-err"></div>
+    <div class="ok" id="r-ok"></div>
+    <div class="navrow"><button class="go" id="r-go" type="button">Update password</button></div>
+  </div>
+
+  <!-- SIGNUP WIZARD -->
+  <div id="signup" style="display:none">
+    <div class="steps">
+      <span class="dot on" id="d1">1</span><span class="bar" id="b1"></span>
+      <span class="dot" id="d2">2</span><span class="bar" id="b2"></span>
+      <span class="dot" id="d3">3</span>
+    </div>
+
+    <div class="step on" id="step1">
+      <div class="step-title">Your account</div>
+      <div class="step-sub">The email and password you'll sign in with.</div>
+      <label for="s-email">Email</label>
+      <input type="email" id="s-email" autocomplete="email" placeholder="you@company.com">
+      <label for="s-pw">Password</label>
+      <input type="password" id="s-pw" autocomplete="new-password" placeholder="At least 8 characters">
+      <label for="s-pw2">Confirm password</label>
+      <input type="password" id="s-pw2" autocomplete="new-password" placeholder="••••••••">
+    </div>
+
+    <div class="step" id="step2">
+      <div class="step-title">Who are you here?</div>
+      <div class="step-sub">Your display name is what you choose it to be — it's how you appear on every message you send.</div>
+      <label for="s-name">Display name</label>
+      <input type="text" id="s-name" autocomplete="nickname" placeholder="The name you go by">
+      <label for="s-org">Company or team <span style="font-weight:400;color:var(--faint)">(optional)</span></label>
+      <input type="text" id="s-org" autocomplete="organization" placeholder="e.g. The Sherwood Group">
+    </div>
+
+    <div class="step" id="step3">
+      <div class="step-title">Link your accounts</div>
+      <div class="step-sub">Connect the places your messages live. Your real inboxes transfer over right after you finish.</div>
+
+      <div class="conn-row">
+        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#fff" stroke="rgba(10,14,26,.1)"/><path transform="translate(8 8)" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z" fill="#EA4335"/></svg></span>
+        <div class="t"><b>Google — Gmail <span class="livechip">LIVE</span></b><span>One-tap Google sign-in after signup pulls your real inbox in.</span></div>
+        <button type="button" class="switch" id="c-gmail" role="switch" aria-checked="false" aria-label="Connect Gmail"></button>
+      </div>
+
+      <div class="conn-row">
+        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#0F6CBD"/><text x="20" y="27" text-anchor="middle" fill="#fff" font-size="19" font-weight="700" font-family="Sora,sans-serif">M</text></svg></span>
+        <div class="t"><b>Microsoft — Outlook &amp; OneDrive <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>We'll thread this address; live sync arrives with the RATA backend.</span>
+          <input type="email" id="c-ms" placeholder="you@outlook.com"></div>
+      </div>
+
+      <div class="conn-row">
+        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#fff" stroke="rgba(10,14,26,.1)"/><g transform="translate(8 8) scale(0.1954)"><path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z" fill="#E01E5A"/><path d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/><path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z" fill="#36C5F0"/><path d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/><path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z" fill="#2EB67D"/><path d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/><path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z" fill="#ECB22C"/><path d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22C"/></g></svg></span>
+        <div class="t"><b>Slack <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>Your workspace handle, threaded into People from day one.</span>
+          <input type="text" id="c-slack" placeholder="@yourhandle"></div>
+      </div>
+
+      <div class="conn-row">
+        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#5865F2"/><path transform="translate(8 8)" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" fill="#fff"/></svg></span>
+        <div class="t"><b>Discord <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>DMs thread by person once the bridge goes live.</span>
+          <input type="text" id="c-discord" placeholder="@yourhandle"></div>
+      </div>
+
+      <div class="conn-row">
+        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><defs><linearGradient id="smsg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5AF575"/><stop offset="1" stop-color="#13BD2C"/></linearGradient></defs><rect width="40" height="40" rx="9" fill="url(#smsg2)"/><path d="M20 10.5c-5.8 0-10.5 3.9-10.5 8.7 0 2.8 1.6 5.2 4 6.8-.2 1.2-.9 2.4-1.9 3.3-.25.23 0 .62.32.56 2-.36 3.68-1.06 4.98-2.06 1 .25 2.03.37 3.1.37 5.8 0 10.5-3.9 10.5-8.7s-4.7-8.9-10.5-8.9z" fill="#fff"/></svg></span>
+        <div class="t"><b>Texts <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>Your number, ready for the SMS bridge.</span>
+          <input type="tel" id="c-phone" placeholder="+1 555 555 5555"></div>
+      </div>
+    </div>
+
+    <div class="err" id="s-err"></div>
+    <div class="ok" id="s-ok"></div>
+    <div class="navrow">
+      <button class="ghostbtn" id="s-back" type="button" style="display:none">← Back</button>
+      <button class="go" id="s-next" type="button">Continue →</button>
+    </div>
+  </div>
+
+  <div class="foot" id="foot">
+    When the site's database is connected (edit <b>config.js</b> — see DEPLOY.md), every account created here registers to your real Supabase database and works across devices. Without it, accounts are secured on this device only (PBKDF2-hashed).
+    <a href="index.html">← Back to site</a>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+'use strict';
+const $=s=>document.querySelector(s);
+const CFG=Object.assign({},window.RATA_CONFIG||{},JSON.parse(localStorage.getItem('centra_deploy_cfg')||'{}'));
+const CLOUD=!!(CFG.supabaseUrl&&CFG.supabaseKey);
+let SBP=null;
+function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+async function supa(){
+  if(!CLOUD)return null;
+  /* Self-hosted SDK — see the note in app.html. */
+  if(!SBP){if(!window.supabase)await loadScript('vendor/supabase-js-2.112.4.js');SBP=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseKey)}
+  return SBP;
+}
+if(CLOUD){const b=$('#mode-badge');b.className='mode-badge cloud';b.textContent='● Cloud accounts active — database connected'}
+
+let mode=new URLSearchParams(location.search).get('mode')==='signup'?'signup':'login';
+function setMode(m){
+  mode=m;
+  $('#tab-login').classList.toggle('on',m==='login');
+  $('#tab-signup').classList.toggle('on',m==='signup');
+  $('#login-form').style.display=m==='login'?'block':'none';
+  $('#signup').style.display=m==='signup'?'block':'none';
+  hideMsgs();
+}
+$('#tab-login').onclick=()=>setMode('login');
+$('#tab-signup').onclick=()=>setMode('signup');
+
+const enc=s=>new TextEncoder().encode(s);
+const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b)));
+async function pbkdf2(pw,salt,iter){
+  const km=await crypto.subtle.importKey('raw',enc(pw),'PBKDF2',false,['deriveBits']);
+  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc(salt),iterations:iter,hash:'SHA-256'},km,256);
+  return b64(bits);
+}
+const accounts=()=>JSON.parse(localStorage.getItem('centra_accounts')||'{}');
+function err(el,m){$(el).textContent=m;$(el).classList.add('show')}
+function hideMsgs(){['#l-err','#l-ok','#s-err','#s-ok'].forEach(x=>{const n=$(x);if(n)n.classList.remove('show')})}
+function session(s){localStorage.setItem('centra_session',JSON.stringify(s));location.replace('app.html')}
+
+$('#login-form').addEventListener('submit',async e=>{
+  e.preventDefault();hideMsgs();
+  const email=$('#l-email').value.trim().toLowerCase(),pw=$('#l-pw').value;
+  if(!/.+@.+\..+/.test(email)){err('#l-err','Enter a valid email address.');return}
+  const go=$('#l-go');go.disabled=true;
+  try{
+    if(CLOUD){
+      const sb=await supa();
+      const {data,error}=await sb.auth.signInWithPassword({email,password:pw});
+      if(error){err('#l-err',error.message);return}
+      session({uid:data.session.user.id,email,mode:'supabase'});
+    }else{
+      const a=accounts()[email];
+      if(!a){err('#l-err','No account found for that email on this device.');return}
+      const h=await pbkdf2(pw,a.salt,a.iter);
+      if(h!==a.hash){err('#l-err','Incorrect password.');return}
+      session({uid:'local_'+b64(enc(email)).replace(/[^a-zA-Z0-9]/g,''),email,mode:'local'});
+    }
+  }catch(ex){err('#l-err','Something went wrong — '+(ex.message||'try again.'))}
+  finally{go.disabled=false}
+});
+
+let step=1;
+function renderStep(){
+  [1,2,3].forEach(n=>{
+    $('#step'+n).classList.toggle('on',n===step);
+    $('#d'+n).className='dot '+(n===step?'on':n<step?'done':'');
+    if(n<3)$('#b'+n).className='bar '+(n<step?'done':'');
+  });
+  $('#s-back').style.display=step>1?'block':'none';
+  $('#s-next').textContent=step<3?'Continue →':'Create my account';
+  hideMsgs();
+}
+function validateStep(){
+  if(step===1){
+    const email=$('#s-email').value.trim().toLowerCase(),pw=$('#s-pw').value;
+    if(!/.+@.+\..+/.test(email)){err('#s-err','Enter a valid email address.');return false}
+    if(pw.length<8){err('#s-err','Password must be at least 8 characters.');return false}
+    if(pw!==$('#s-pw2').value){err('#s-err','Passwords do not match.');return false}
+    if(!CLOUD&&accounts()[email]){err('#s-err','An account with that email already exists on this device.');return false}
+  }
+  if(step===2){
+    if(!$('#s-name').value.trim()){err('#s-err','Choose a display name — it can be anything you like.');return false}
+  }
+  return true;
+}
+$('#s-back').onclick=()=>{if(step>1){step--;renderStep()}};
+$('#c-gmail').onclick=()=>{const s=$('#c-gmail');s.classList.toggle('on');s.setAttribute('aria-checked',String(s.classList.contains('on')))};
+
+function stashOnboarding(email){
+  const payload={
+    email,
+    name:$('#s-name').value.trim(),
+    org:$('#s-org').value.trim(),
+    connect:{
+      gmail:$('#c-gmail').classList.contains('on'),
+      ms:$('#c-ms').value.trim(),
+      slack:$('#c-slack').value.trim(),
+      discord:$('#c-discord').value.trim(),
+      phone:$('#c-phone').value.trim()
+    },
+    ts:Date.now()
+  };
+  localStorage.setItem('rata_onboard',JSON.stringify(payload));
+}
+
+$('#s-next').onclick=async()=>{
+  if(!validateStep())return;
+  if(step<3){step++;renderStep();return}
+  const email=$('#s-email').value.trim().toLowerCase(),pw=$('#s-pw').value;
+  const go=$('#s-next');go.disabled=true;
+  try{
+    stashOnboarding(email);
+    if(CLOUD){
+      const sb=await supa();
+      const {data,error}=await sb.auth.signUp({email,password:pw});
+      if(error){err('#s-err',/already|registered|exists/i.test(error.message)?'That email already has a RATA account. Log in instead.':error.message);return}
+      if(data.user&&Array.isArray(data.user.identities)&&data.user.identities.length===0){err('#s-err','That email already has a RATA account. Log in instead.');return}
+      if(data.session){session({uid:data.session.user.id,email,mode:'supabase'})}
+      else{$('#s-ok').textContent='Account created — check your email to confirm, then log in. Your setup is saved and will apply on first sign-in.';$('#s-ok').classList.add('show')}
+    }else{
+      const acc=accounts();
+      const salt=b64(crypto.getRandomValues(new Uint8Array(16)));
+      const iter=310000;
+      acc[email]={salt,iter,hash:await pbkdf2(pw,salt,iter),created:Date.now()};
+      localStorage.setItem('centra_accounts',JSON.stringify(acc));
+      session({uid:'local_'+b64(enc(email)).replace(/[^a-zA-Z0-9]/g,''),email,mode:'local'});
+    }
+  }catch(ex){err('#s-err','Something went wrong — '+(ex.message||'try again.'))}
+  finally{go.disabled=false}
+};
+
+$('#forgot').onclick=async()=>{
+  hideMsgs();
+  const email=$('#l-email').value.trim().toLowerCase();
+  if(!/.+@.+\..+/.test(email)){err('#l-err','Type your email above first, then tap Forgot password.');return}
+  if(!CLOUD){err('#l-err','Device accounts can\u2019t be recovered by email. If you\u2019re locked out, create a new account \u2014 cloud accounts (with the database connected) support real email recovery.');return}
+  try{
+    const sb=await supa();
+    const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
+    if(error){err('#l-err',error.message);return}
+    $('#l-ok').textContent='Recovery link sent — check your email. The link brings you back here to set a new password.';
+    $('#l-ok').classList.add('show');
+  }catch(ex){err('#l-err','Could not send the recovery email — '+(ex.message||'try again.'))}
+};
+
+/* Recovery landing: Supabase redirects here with a recovery session */
+(async()=>{
+  if(!CLOUD)return;
+  const frag=location.hash||'';
+  if(!/type=recovery/.test(frag))return;
+  document.querySelector('.tabs').style.display='none';
+  $('#login-form').style.display='none';
+  $('#signup').style.display='none';
+  $('#recover').style.display='block';
+  const sb=await supa();
+  $('#r-go').onclick=async()=>{
+    ['#r-err','#r-ok'].forEach(x=>$(x).classList.remove('show'));
+    const pw=$('#r-pw').value;
+    if(pw.length<8){err('#r-err','Password must be at least 8 characters.');return}
+    if(pw!==$('#r-pw2').value){err('#r-err','Passwords do not match.');return}
+    const {data,error}=await sb.auth.updateUser({password:pw});
+    if(error){err('#r-err',error.message);return}
+    $('#r-ok').textContent='Password updated — signing you in…';$('#r-ok').classList.add('show');
+    const {data:{session:s}}=await sb.auth.getSession();
+    if(s)setTimeout(()=>session({uid:s.user.id,email:(s.user.email||'').toLowerCase(),mode:'supabase'}),700);
+  };
+})();
+
+setMode(mode);renderStep();
+</script>
+<script>
+if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
+</script>
+</body>
+</html>
