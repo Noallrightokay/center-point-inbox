@@ -6,13 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "vendor:libs": "node scripts/vendor-libs.mjs"
+    "vendor:libs": "node scripts/vendor-libs.mjs",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
     "@supabase/supabase-js": "^2.45.0",
-    "imapflow": "^1.0.164"
+    "imapflow": "^1.0.164",
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
   }
 }

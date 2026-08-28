@@ -1,0 +1,82 @@
+name: RATA CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "rata-next/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rata-next/**"
+
+concurrency:
+  group: rata-next-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: rata-next
+
+jobs:
+  # Build and test share a job: the suite runs against `next start`, so it needs
+  # the production build anyway. Splitting them would mean building twice.
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: rata-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build Next.js application
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+      # Covers the config route's refusal to publish a service_role key, the
+      # OAuth state/cookie binding, the two-file Bridge, and the in-house
+      # engine precache including an offline conversion.
+      - name: Run tests
+        run: npm test
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: rata-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Threshold is `critical`, not `high`, and that is deliberate rather than
+      # lax: Next 14.2.35 pins postcss 8.4.31 transitively, and the only fix npm
+      # offers is Next 16 — a major upgrade with breaking changes that does not
+      # belong to a routine CI run. Anything critical must still fail the build.
+      # Revisit the threshold when RATA moves to Next 16.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=critical
