@@ -150,8 +150,18 @@ center-point-inbox/
 ├── database/migrations/   # PostgreSQL schema & seed data
 ├── infrastructure/        # Dockerfiles, Kubernetes manifests, CI/CD
 ├── docker-compose.yml     # Full-stack orchestration
+├── .mcp.json              # Hostinger MCP servers for Claude Code
 └── .env.example           # Environment variable template
 ```
+
+---
+
+## Managing the Hostinger Deployment
+
+`.mcp.json` wires up the Hostinger MCP servers (hosting, domains, DNS, billing,
+VPS, e-commerce) so Claude Code can manage the deployment from this repo. Set
+`HOSTINGER_API_TOKEN` and see [docs/hostinger-mcp.md](docs/hostinger-mcp.md) for
+setup.
 
 ---
 
