@@ -2213,7 +2213,7 @@ function googleOAuth(hint){
   });
 }
 async function googleAddAccount(){
-  if(!cfg().googleClientId){toast('The site needs its Google Client ID in config.js first');return}
+  if(!cfg().googleClientId){toast('Gmail needs GOOGLE_CLIENT_ID set in the site\u2019s environment settings');return}
   try{
     const token=await googleOAuth();
     const prof=await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile',{headers:{Authorization:'Bearer '+token}})).json();
@@ -2667,7 +2667,7 @@ function showWelcome(ob){
     if(cfg().googleClientId){
       rows.push('<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Gmail</b><span>Real inbox — transfers now with one Google sign-in.</span></div><button class="btn primary" id="w-gmail">Transfer inbox</button></div>');
     }else{
-      rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Gmail</b><span>Requested — the site needs its Google Client ID in config.js to sync.</span></div></div>');
+      rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Gmail</b><span>Requested — GOOGLE_CLIENT_ID must be set in the site\u2019s environment settings to sync.</span></div></div>');
     }
   }
   if(ob.connect.ms)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Microsoft — '+esc(ob.connect.ms)+'</b><span>Linked to your profile. Live Outlook/OneDrive sync arrives with the RATA backend.</span></div></div>');
