@@ -43,13 +43,24 @@ the single most common cause of "Microsoft token exchange failed".
 
 → set `SLACK_CLIENT_ID` + `SLACK_CLIENT_SECRET`.
 
-## iCloud Mail — no setup required
+## iCloud Mail and Gmail over IMAP — no setup required
 
-Apple publishes no OAuth for Mail. The sanctioned mechanism is an **app-specific
-password** from appleid.apple.com — a revocable per-app token. There are no
-environment variables and no developer account to register: each user adds their own
-iCloud address and app-specific password in Settings, and RATA verifies it by
-opening a real IMAP connection to `imap.mail.me.com` before storing anything.
+Two providers link with an **app-specific password** instead of OAuth. Both need no
+environment variables, no developer account, and no work from you — each user adds
+their own address and password in Settings, and RATA verifies it by opening a real
+IMAP connection before storing anything.
+
+| Provider | Host | Where the user gets the password |
+|---|---|---|
+| iCloud Mail | `imap.mail.me.com` | appleid.apple.com → Sign-In and Security → App-Specific Passwords |
+| Gmail | `imap.gmail.com` | myaccount.google.com/apppasswords (requires 2-Step Verification) |
+
+Apple offers no OAuth for Mail at all, so IMAP is the only route. Gmail *does* offer
+OAuth, and it is the nicer experience — but `gmail.readonly` is a **restricted** scope:
+opening one-click Gmail beyond ~100 test users requires Google verification plus a
+third-party CASA security assessment, renewed annually at real cost. The IMAP link
+needs none of that, so it is what lets ordinary users connect Gmail today. Ship both:
+OAuth for those you can add as test users, IMAP for everyone else.
 
 Because the password is stored (it has to be — IMAP re-authenticates on every sync),
 read the credential-storage note at the bottom of this file before enabling iCloud
@@ -88,8 +99,10 @@ app.html → /api/link/{provider}/state   (authenticated: Supabase JWT in the he
 Both `/start` and `/callback` require the cookie to match the state in the URL,
 and both enforce the 10-minute TTL. The cookie is cleared however the flow ends.
 
-iCloud skips the OAuth legs: `POST /api/link/apple` verifies and stores the
-app-specific password directly, then `/api/sync/apple` connects over IMAP.
+IMAP providers skip the OAuth legs entirely: `POST /api/link/imap/{provider}`
+verifies the credentials against the real mail host and stores them, then
+`/api/sync/imap/{provider}` connects and returns normalized messages. `{provider}`
+is `apple` or `gmail`; both share one implementation in `lib/imap.js`.
 
 ## Known limits
 

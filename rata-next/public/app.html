@@ -766,10 +766,12 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
             <button class="btn primary" data-addlink="google">＋ Google</button>
             <button class="btn" data-addlink="ms">＋ Microsoft · live</button>
             <button class="btn" data-addlink="slack">＋ Slack · live</button>
+            <button class="btn" data-addlink="imap:gmail">＋ Gmail · app password</button>
+            <button class="btn" data-addlink="imap:apple">＋ iCloud · app password</button>
             <button class="btn" data-addlink="discord">＋ Discord</button>
             <button class="btn" data-addlink="phone">＋ Phone</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
@@ -1109,7 +1111,7 @@ function renderSources(){renderDigest();
   if(!S.linked.length){el.innerHTML='';return}
   el.innerHTML='<div class="src-row">'+S.linked.map(l=>{
     const live=l.status==='live';
-    const syncable=l.type==='google'||l.type==='ms'||l.type==='slack';
+    const syncable=SYNCABLE.includes(l.type);
     return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="${syncable?'Tap to sync now':'Awaiting backend bridge'}">
       <span class="src-dot ${live?'on':''}"></span>${esc(l.label)}
       <span class="src-meta">${l.lastSync?rel(l.lastSync)+' ago':(syncable?'never synced':'pending')}</span>
@@ -1118,19 +1120,19 @@ function renderSources(){renderDigest();
   el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>{
     const l=S.linked.find(x=>x.id===b.dataset.src);if(!l)return;
     if(l.type==='google')gmailSyncAccount(l);
-    else if(l.type==='ms')serverSync('ms');
-    else if(l.type==='slack')serverSync('slack');
+    else if(SYNCABLE.includes(l.type))serverSync(l.type);
   });
 }
 function renderSyncAll(){renderSources();
   const b=$('#sync-all');if(!b)return;
   const gs=S.linked.filter(l=>l.type==='google');
-  b.style.display=S.linked.some(l=>['google','ms','slack'].includes(l.type))?'':'none';
+  b.style.display=S.linked.some(l=>SYNCABLE.includes(l.type))?'':'none';
   b.onclick=async()=>{
     b.disabled=true;
     for(const l of gs){await gmailSyncAccount(l)}
-    if(S.linked.some(l=>l.type==='ms'))await serverSync('ms');
-    if(S.linked.some(l=>l.type==='slack'))await serverSync('slack');
+    for(const t of ['ms','slack','gmail_imap','apple']){
+      if(S.linked.some(l=>l.type===t))await serverSync(t);
+    }
     b.disabled=false;
   };
 }
@@ -1573,20 +1575,21 @@ function renderEco(){
      note:'Tokens are per-account, revocable anytime from your Google/Microsoft security page.'},
     {name:'Google Workspace',types:['google'],icon:ICONS.conn_gmail||'G',
      desc:'Gmail live sync + real sending, and the Bridge delivers files Google Drive auto-converts into Docs and Sheets.',
-     actions:[['Sign in with Google','google',1],['Open Bridge','bridge',0]],
-     note:'OAuth consent screen on every new account — token-scoped to read + send mail only.'},
+     actions:[['Sign in with Google','google',1],['Link Gmail by app password','imap:gmail',0],['Open Bridge','bridge',0]],
+     note:'One-click OAuth needs a Google client ID, and public use needs Google verification. The app-password IMAP link works today with neither.'},
     {name:'Microsoft Office',types:['ms'],icon:ICONS.conn_outlook||'M',
      desc:'Outlook live sync via Microsoft Graph, and the Bridge delivers real .docx / .xlsx for Word and Excel.',
      actions:[['Sign in with Microsoft','ms',1],['Open Bridge','bridge',0]],
      note:'Microsoft consent screen · tokens held server-side, auto-refreshed, revocable at account.microsoft.com.'},
     {name:'Apple',types:[],icon:'',
      desc:'The Bridge delivers files Pages and Numbers open natively — Apple\u2019s own formats are sealed, so this is how everyone interops with Apple, including Microsoft.',
-     actions:[['Open Bridge','bridge',1]],
-     note:'iCloud Mail sign-in (app-specific password over IMAP) arrives with the RATA backend\u2019s IMAP bridge.'}
+     actions:[['Link iCloud Mail','imap:apple',1],['Open Bridge','bridge',0]],
+     note:'iCloud Mail signs in with an app-specific password over IMAP \u2014 Apple publishes no OAuth for Mail.'}
   ].map(ecoCard).join('');
   g.querySelectorAll('[data-eco-act]').forEach(b=>b.onclick=()=>{
     const act=b.dataset.ecoAct;
     if(act==='google')googleAddAccount();
+    else if(act.startsWith('imap:'))document.querySelector('[data-addlink="'+act+'"]')?.click();
     else if(act==='ms')linkProviderLive('ms');
     else if(act==='bridge'){go('docs');setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)}
   });
@@ -1862,9 +1865,9 @@ function renderLinked(){
   if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No linked accounts yet</b><span>Link Google to transfer a real Gmail inbox in, or add the handles you use elsewhere.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${LINK_META[l.type][0]} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}</span></div>${['google','ms','slack'].includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${LINK_META[l.type][0]} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}</span></div>${SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
-  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(l.type==='ms')serverSync('ms');else if(l.type==='slack')serverSync('slack')});
+  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(SYNCABLE.includes(l.type))serverSync(l.type)});
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
@@ -1874,20 +1877,59 @@ $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   if(t==='google'){googleAddAccount();return}
   if(t==='ms'){linkProviderLive('ms');return}
   if(t==='slack'){linkProviderLive('slack');return}
+  const im=t.startsWith('imap:')?IMAP_LINK[t.slice(5)]:null;
   lfType=t;
-  $('#lf-title').textContent='Link '+LF_COPY[t][0];
-  $('#lf-sub').textContent='Verified format required — this becomes part of your RATA identity.';
-  $('#lf-input').placeholder=LF_COPY[t][1];$('#lf-input').value='';
+  if(im){
+    $('#lf-title').textContent='Link '+im.label;
+    $('#lf-sub').textContent='App-specific password — create one at '+im.help+'. Your normal password will not work.';
+    $('#lf-input').placeholder=im.ph;
+    $('#lf-pass').style.display='';$('#lf-pass').value='';
+  }else{
+    $('#lf-title').textContent='Link '+LF_COPY[t][0];
+    $('#lf-sub').textContent='Verified format required — this becomes part of your RATA identity.';
+    $('#lf-input').placeholder=LF_COPY[t][1];
+    $('#lf-pass').style.display='none';
+  }
+  $('#lf-input').value='';
   $('#linkform').style.display='flex';$('#lf-input').focus();
 });
 $('#lf-cancel').onclick=()=>{$('#linkform').style.display='none'};
-$('#lf-save').onclick=()=>{
+$('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
+  if(lfType&&lfType.startsWith('imap:')){await imapLink(lfType.slice(5),v,$('#lf-pass').value);return}
   if(!validLink(lfType,v)){toast('That format doesn\u2019t look right \u2014 check and try again');return}
   const l=addLinked(lfType,v);
   if(l){$('#linkform').style.display='none';renderLinked();renderConn();toast(LINK_META[lfType][0]+' linked \u2014 live in your inbox')}
 };
 $('#lf-input').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+$('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+
+/* The server proves the credentials against the real IMAP host before storing
+   them, so a wrong password fails here rather than as an inbox that never fills. */
+async function imapLink(key,email,pass){
+  const im=IMAP_LINK[key];if(!im)return;
+  if(!/.+@.+\..+/.test(email)){toast('Enter your '+im.label+' address');return}
+  if(pass.replace(/\s+/g,'').length<8){toast('Paste the app-specific password from '+im.help);return}
+  const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
+  try{
+    const res=await apiFetch('/api/link/imap/'+key,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,appPassword:pass})});
+    if(!res.ok){toast(res.error||'Could not link '+im.label);return}
+    $('#lf-pass').value='';
+    let l=linkedFind(im.type,res.label)||addLinked(im.type,res.label);
+    if(l){l.status='live';save()}
+    $('#linkform').style.display='none';
+    renderLinked();renderConn();
+    await audit('imap.link',im.label+' linked — '+res.label);
+    toast(im.label+' linked — pulling messages…');
+    await serverSync(im.type);
+  }catch(e){
+    toast(e.message==='cloud-account-required'
+      ?'Linking mail needs a cloud account (sign up with the database connected)'
+      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+  }finally{btn.disabled=false;btn.textContent='Link'}
+}
 function renderPlan(){
   const c=cfg(),plan=S.settings.plan||'free';
   const badge=$('#plan-badge'),line=$('#plan-line');
@@ -2110,7 +2152,12 @@ let gTokens={};
 function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 
 /* ---- linked accounts registry ---- */
-const LINK_META={google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS']};
+const LINK_META={google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS'],gmail_imap:['Gmail — app password (IMAP)'],apple:['iCloud Mail — app password (IMAP)']};
+/* Mail linked over IMAP rather than OAuth. Apple publishes no OAuth for Mail;
+   Gmail's read scopes are restricted, so one-click Gmail needs Google verification
+   and an annual CASA assessment. An app-specific password needs neither. */
+const IMAP_LINK={gmail:{type:'gmail_imap',label:'Gmail',ph:'you@gmail.com',help:'myaccount.google.com/apppasswords — needs 2-Step Verification on'},apple:{type:'apple',label:'iCloud Mail',ph:'you@icloud.com',help:'appleid.apple.com → Sign-In and Security → App-Specific Passwords'}};
+const imapKeyFor=type=>Object.keys(IMAP_LINK).find(k=>IMAP_LINK[k].type===type)||null;
 function linkedFind(type,label){return S.linked.find(l=>l.type===type&&l.label.toLowerCase()===label.toLowerCase())}
 function validLink(type,val){
   if(type==='ms')return /.+@.+\..+/.test(val);
@@ -2167,10 +2214,13 @@ async function linkProviderLive(p){
     toast(e.message==='cloud-account-required'?'Live linking needs a cloud account (sign up with the database connected)':'Live linking needs the RATA backend — deploy the Next.js build and see BACKEND-SETUP.md');
   }
 }
+/* OAuth providers sync at /api/sync/<type>; IMAP ones at /api/sync/imap/<key>. */
+function syncPathFor(type){const k=imapKeyFor(type);return k?'/api/sync/imap/'+k:'/api/sync/'+type}
+const SYNCABLE=['google','ms','slack','gmail_imap','apple'];
 async function serverSync(p){
   const newIds=[];
   try{
-    const res=await apiFetch('/api/sync/'+p);
+    const res=await apiFetch(syncPathFor(p));
     if(res.error){toast(res.error);return}
     let l=S.linked.find(x=>x.type===p&&x.label.toLowerCase()===String(res.label||'').toLowerCase());
     if(!l)l=addLinked(p,res.label);

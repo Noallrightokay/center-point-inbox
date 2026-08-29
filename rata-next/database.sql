@@ -87,7 +87,7 @@ create index if not exists subscriptions_status_idx
 -- ------------------------------------------------------------
 create table if not exists public.provider_tokens (
   user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null,               -- 'ms' | 'slack' | 'apple'
+  provider text not null,               -- 'ms' | 'slack' | 'apple' | 'gmail_imap'
   label text,
   access text,
   refresh text,
