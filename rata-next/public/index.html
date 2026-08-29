@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RATA">
+
+<meta name="description" content="Rata — texts, email, Slack, and Discord, translated automatically and unified into one inbox. Compliance built in.">
+<title>RATA — Every message. Every language. One inbox.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --tint-mid:#5C7FFF; --glacier:#8FAAFF; --wash:#D9E2FF;
+  --slate:#5C6B85; --faint:#93A0B8; --card:#FFFFFF;
+  --hair:rgba(10,14,26,.08);
+  --green:#12B76A; --amber:#F59E0B;
+  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,sans-serif;
+  --disp:'Sora',var(--sans);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{text-decoration:none;color:inherit}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:12px;font-weight:600;font-size:14.5px;transition:all .15s;border:none;cursor:pointer;font-family:var(--sans)}
+.btn.primary{background:var(--tint);color:#fff;box-shadow:0 4px 18px rgba(46,92,255,.35)}
+.btn.primary:hover{filter:brightness(1.07);transform:translateY(-1px)}
+.btn.ghost{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.25)}
+.btn.ghost:hover{border-color:rgba(255,255,255,.6)}
+.btn.light{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(10,14,26,.1)}
+
+/* nav */
+nav{position:sticky;top:0;z-index:50;background:rgba(10,14,26,.8);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px)}
+.nav-in{display:flex;align-items:center;gap:12px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;color:#fff}
+.logo b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:21px;letter-spacing:.04em}
+.nav-links{margin-left:auto;display:flex;gap:8px;align-items:center}
+.nav-links a.plain{color:rgba(255,255,255,.75);font-size:14px;font-weight:500;padding:8px 12px}
+.nav-links a.plain:hover{color:#fff}
+
+/* hero */
+.hero{background:var(--ink);color:#fff;padding:88px 0 110px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-320px;right:-260px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.28),transparent 62%)}
+.hero-in{position:relative;display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:center}
+.eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--glacier);font-weight:600;margin-bottom:18px}
+h1{font-family:'Fredoka',var(--disp);font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.16;letter-spacing:.02em;text-transform:uppercase}
+h1 .u{color:var(--tint-mid)}
+.hero p.sub{margin:22px 0 32px;font-size:17px;color:rgba(255,255,255,.68);max-width:480px}
+.hero-ctas{display:flex;gap:12px;flex-wrap:wrap}
+.hero-note{margin-top:16px;font-size:12.5px;color:rgba(255,255,255,.45)}
+
+/* hero mock */
+.mock{background:#121829;border:1px solid rgba(255,255,255,.08);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden}
+.mock-bar{display:flex;gap:6px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.06)}
+.mock-bar span{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.14)}
+.mock-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
+.mock-head b{font-family:var(--disp);font-size:14px}
+.mock-head .pill{margin-left:auto;background:var(--tint);color:#fff;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px}
+.mrow{display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start}
+.mav{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;font-weight:700;font-size:12px;color:#fff}
+.mrow .t{min-width:0}
+.mrow b{font-size:13px;display:block}
+.mrow span{font-size:12px;color:rgba(255,255,255,.5);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-top:5px;margin-right:4px}
+.tag.b{background:rgba(92,127,255,.2);color:#8FAAFF}
+.tag.w{background:rgba(217,226,255,.16);color:#D9E2FF}
+.mrow .when{margin-left:auto;font-size:10.5px;color:rgba(255,255,255,.35);flex-shrink:0}
+
+/* sections */
+section.feat{padding:84px 0}
+.kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tint);font-weight:600;margin-bottom:12px}
+h2{font-family:'Fredoka',var(--disp);font-weight:600;font-size:clamp(23px,2.9vw,32px);letter-spacing:.02em;line-height:1.25;text-transform:uppercase}
+.feat-sub{color:var(--slate);margin-top:12px;max-width:560px;font-size:15.5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:40px}
+.card{background:var(--card);border-radius:16px;padding:26px;box-shadow:0 1px 2px rgba(10,14,26,.05),0 8px 28px rgba(10,14,26,.06)}
+.card .ic{width:44px;height:44px;border-radius:12px;background:var(--wash);display:grid;place-items:center;margin-bottom:16px}
+.card b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:16.5px;display:block;margin-bottom:8px;letter-spacing:.02em}
+.card p{font-size:13.5px;color:var(--slate)}
+.card .mini{margin-top:14px;display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:10.5px;font-weight:600;background:var(--wash);color:var(--tint);padding:3px 9px;border-radius:999px}
+
+/* cta band */
+.band{background:var(--ink);color:#fff;border-radius:22px;padding:56px 48px;margin:20px 0 90px;display:flex;align-items:center;gap:32px;flex-wrap:wrap;position:relative;overflow:hidden}
+.band::after{content:'';position:absolute;right:-140px;bottom:-180px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.35),transparent 65%)}
+.band h2{color:#fff}
+.band p{color:rgba(255,255,255,.6);margin-top:8px;font-size:14.5px}
+.band .btn{position:relative;z-index:1}
+.band>div:first-child{flex:1;min-width:260px}
+
+footer{border-top:1px solid var(--hair);padding:28px 0 40px;color:var(--faint);font-size:13px;display:flex}
+footer .wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;width:100%}
+footer .sp{flex:1}
+
+@media (max-width:860px){
+  .hero-in{grid-template-columns:1fr}
+  .hero{padding:64px 0 80px}
+  .band{padding:40px 28px}
+}
+.mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-in">
+  <a class="logo" href="#">
+    <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
+    <b>RATA</b>
+  </a>
+  <div class="nav-links">
+    <a class="plain" href="#features">Features</a>
+    <a class="plain" href="#download">Download</a>
+    <a class="plain" href="#pricing">Pricing</a>
+    <a class="plain" href="auth.html">Log in</a>
+    <a class="btn primary" href="auth.html?mode=signup" style="padding:9px 18px">Create account</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap hero-in">
+  <div>
+    <div class="eyebrow">Self-hosted · Compliance-first</div>
+    <h1>Every message.<br>Every language.<br><span class="u">One inbox.</span></h1>
+    <p class="sub">Texts, email, Slack, and Discord — translated automatically and unified into a single stream, for teams that can't afford to miss a thing.</p>
+    <div class="hero-ctas">
+      <a class="btn primary" href="auth.html?mode=signup">Create your account</a>
+      <a class="btn ghost" href="#pricing">Get RATA Base — $8/mo</a>
+      <a class="btn light" href="#download">⬇ Download the app</a>
+    </div>
+    <div class="hero-note">Free to run · your data stays in your own storage · DLP and audit built in</div>
+  </div>
+  <div class="mock" aria-hidden="true">
+    <div class="mock-bar"><span></span><span></span><span></span></div>
+    <div class="mock-head">
+      <img class="mk" src="icons/mark-256.png" alt="" width="20" height="20">
+      <b>Messages</b><span style="font-size:11px;color:rgba(255,255,255,.45)">3 new · 1 translated from Spanish</span>
+      <span class="pill">3</span>
+    </div>
+    <div class="mrow"><div class="mav" style="background:linear-gradient(140deg,#2E5CFF,#5C7FFF)">LF</div><div class="t"><b>Lucía Ferrer</b><span>Is the money still available? I can send the documents…</span><div><span class="tag b">Text</span><span class="tag w">⇄ Spanish</span></div></div><div class="when">1h</div></div>
+    <div class="mrow"><div class="mav" style="background:linear-gradient(140deg,#1E46D9,#2E5CFF)">EM</div><div class="t"><b>Dr. Elena Marsh</b><span>Referral packet — imaging attached for the Tuesday review</span><div><span class="tag b">Email</span><span class="tag w">Work</span></div></div><div class="when">42m</div></div>
+    <div class="mrow" style="border:none"><div class="mav" style="background:linear-gradient(140deg,#5C7FFF,#8FAAFF)">PN</div><div class="t"><b>Priya Natarajan</b><span>BAA is countersigned — sending the executed copy now 👍</span><div><span class="tag b">Slack</span></div></div><div class="when">3h</div></div>
+  </div>
+</div></header>
+
+<section class="feat" id="features"><div class="wrap">
+  <div class="kicker">Why Rata</div>
+  <h2>The whole conversation, wherever it happens</h2>
+  <p class="feat-sub">People don't stay in one app — a deal starts in email, moves to text, closes in Slack. Rata threads it all by person, not by platform.</p>
+  <div class="cards">
+    <div class="card">
+      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></div>
+      <b>One unified stream</b>
+      <p>Email, texts, Slack, and Discord in a single inbox with a one-tap channel splitter. Open any person to see every conversation you've ever had with them — across every system.</p>
+      <div class="mini"><span class="chip">Email</span><span class="chip">Text</span><span class="chip">Slack</span><span class="chip">Discord</span></div>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg></div>
+      <b>Every language, automatic</b>
+      <p>Messages arrive translated with the original one tap away. A claimant writes in Spanish, you read it in English, nothing gets lost — and search matches both.</p>
+      <div class="mini"><span class="chip">⇄ Auto-translate</span><span class="chip">Show original</span></div>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <b>Compliance you can prove</b>
+      <p>Live DLP on every outbound message and file — HIPAA, SOC 2, GDPR profiles — plus a SHA-256 hash-chained audit log you can verify in one click.</p>
+      <div class="mini"><span class="chip">HIPAA · 17 rules</span><span class="chip">Tamper-evident</span></div>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></div>
+      <b>Create anywhere, deliver right</b>
+      <p>An app bridge opens Docs, Word, Sheets, Excel, or Pages in place — and Format Autopilot converts every file to whatever ecosystem the recipient actually uses.</p>
+      <div class="mini"><span class="chip">.gdoc → .docx</span><span class="chip">Autopilot</span></div>
+    </div>
+    <div class="card">
+      <div class="ic"><img class="mk" src="icons/mark-256.png" alt="" width="24" height="24"></div>
+      <b>Rata Assist</b>
+      <p>A briefing bot that reads your whole stream and surfaces the to-dos, open requests, and deadlines buried inside it — with optional AI-powered daily briefs.</p>
+      <div class="mini"><span class="chip">To-dos</span><span class="chip">Deadlines</span><span class="chip">AI brief ✦</span></div>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg></div>
+      <b>Yours, end to end</b>
+      <p>Self-hosted on your own domain, files in your own Drive, OneDrive, and Dropbox, accounts under your control. No middleman between you and your messages.</p>
+      <div class="mini"><span class="chip">Self-hosted</span><span class="chip">Your storage</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section class="feat" id="pricing" style="padding-top:0"><div class="wrap">
+  <div class="kicker">Pricing</div>
+  <h2>Simple. One plan to start.</h2>
+  <p class="feat-sub">Everything you've seen — unified inbox, translation, DLP, Assist, the app on every device. Annual saves you two months.</p>
+  <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+    <div class="card" style="border:2px solid var(--tint)">
+      <b>RATA Base</b>
+      <div style="font-family:'Fredoka',var(--disp);font-size:34px;font-weight:600;margin:6px 0 2px">$8<span style="font-size:15px;color:var(--slate)"> /month</span></div>
+      <p style="margin-bottom:4px">or <b style="display:inline;font-family:inherit;font-size:inherit">$79/year</b> — save 17%</p>
+      <p>Unified inbox across every channel · auto-translation · DLP &amp; audit chain · Rata Assist · app bridge · installs on every device.</p>
+      <div class="mini" style="margin-bottom:10px"><span class="chip" style="background:rgba(18,183,106,.12);color:#12B76A">Free during early access</span></div>
+      <div class="mini" style="margin-top:6px;gap:8px">
+        <a class="btn primary" id="buy-monthly" href="auth.html?mode=signup" style="padding:10px 18px">Get monthly — $8</a>
+        <a class="btn light" id="buy-annual" href="auth.html?mode=signup" style="padding:10px 18px">Get annual — $79</a>
+      </div>
+    </div>
+    <div class="card" style="opacity:.75">
+      <b>RATA Automations</b>
+      <div style="font-family:'Fredoka',var(--disp);font-size:22px;font-weight:600;margin:6px 0">Coming soon</div>
+      <p>Rules that act for you — auto-file, auto-reply, auto-route by person, channel, and language. Assist gets hands.</p>
+      <div class="mini" style="margin-top:16px"><span class="chip">Workflows</span><span class="chip">Triggers</span></div>
+    </div>
+    <div class="card" style="opacity:.75">
+      <b>RATA CRM</b>
+      <div style="font-family:'Fredoka',var(--disp);font-size:22px;font-weight:600;margin:6px 0">Coming soon</div>
+      <p>Pipeline, deals, and case tracking built on the People you already thread — every conversation attached automatically.</p>
+      <div class="mini" style="margin-top:16px"><span class="chip">Pipeline</span><span class="chip">Cases</span></div>
+    </div>
+  </div>
+  <div style="margin-top:14px;font-size:12.5px;color:var(--faint)">Payments processed securely by Stripe. Cancel anytime from your billing portal.</div>
+</div></section>
+
+<section class="feat" id="download" style="padding-top:0"><div class="wrap">
+  <div class="kicker">Get the app</div>
+  <h2>One install. Every device.</h2>
+  <p class="feat-sub">Rata installs straight from this site as a full app — icon, offline support, its own window. No app store required.</p>
+  <div class="cards">
+    <div class="card"><b>Windows &amp; desktop</b><p>Open this site in Chrome or Edge and hit install — Rata lands in your Start menu and taskbar like any desktop app.</p><div class="mini" style="margin-top:16px"><button class="btn primary js-install" style="display:none;padding:10px 18px">⬇ Install for desktop</button><span class="chip">Chrome</span><span class="chip">Edge</span></div></div>
+    <div class="card"><b>Android</b><p>In Chrome, tap Install when prompted (or menu → Install app). Rata installs as a real app with its own icon and splash screen.</p><div class="mini" style="margin-top:16px"><button class="btn primary js-install" style="display:none;padding:10px 18px">⬇ Install on Android</button><span class="chip">Chrome</span></div></div>
+    <div class="card"><b>iPhone &amp; iPad</b><p>Open in <b>Safari</b>, tap the Share button, then <b>Add to Home Screen</b>. Rata runs full-screen like a native app.</p><div class="mini" style="margin-top:16px"><span class="chip">Safari</span><span class="chip">Share → Add to Home Screen</span></div></div>
+  </div>
+  <div id="ios-hint" style="display:none;margin-top:18px;background:var(--wash);color:var(--tint);border-radius:14px;padding:16px 20px;font-size:14px;font-weight:500">On iPhone/iPad: open this page in <b>Safari</b> → tap <b>Share</b> (square with arrow) → <b>Add to Home Screen</b> → <b>Add</b>. Done — Rata is on your home screen.</div>
+</div></section>
+
+<div class="wrap">
+  <div class="band">
+    <div>
+      <h2>Stop losing threads.</h2>
+      <p>Create an account, connect your inbox, and let Assist find what needs you.</p>
+    </div>
+    <a class="btn primary" href="auth.html?mode=signup">Create your account</a>
+    <a class="btn ghost" href="#pricing">Get RATA Base</a>
+  </div>
+</div>
+
+<footer><div class="wrap">
+  <img class="mk" src="icons/mark-256.png" alt="" width="22" height="22">
+  <span><b style="font-family:'Fredoka',var(--disp);letter-spacing:.04em">RATA</b> · Every message. Every language. One inbox.</span>
+  <span class="sp"></span>
+  <span>© 2026 Rata</span>
+</div></footer>
+
+<script src="config.js"></script>
+<script>
+const RC=window.RATA_CONFIG||{};
+const STRIPE_LINKS={monthly:RC.stripeMonthly||'',annual:RC.stripeAnnual||''};
+if(STRIPE_LINKS.monthly)document.getElementById('buy-monthly').href=STRIPE_LINKS.monthly;
+if(STRIPE_LINKS.annual)document.getElementById('buy-annual').href=STRIPE_LINKS.annual;
+// If already signed in, upgrade CTAs to "Open console"
+try{
+  if(localStorage.getItem('centra_session')){
+    const nav=document.querySelector('nav a.btn.primary');
+    if(nav){nav.href='app.html';nav.textContent='Open console'}
+  }
+}catch(e){}
+</script>
+<script>
+if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
+let __dp=null;
+const __isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
+const __standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
+if(__isIOS&&!__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
+if(__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
+function installApp(){
+  if(__dp){__dp.prompt();__dp.userChoice.then(()=>{__dp=null});return}
+  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
+  else if(typeof toast==='function')toast('In Chrome or Edge: menu → Install Rata');else alert('In Chrome or Edge: browser menu → "Install Rata".');
+}
+document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.onclick=installApp));
+</script>
+</body>
+</html>
