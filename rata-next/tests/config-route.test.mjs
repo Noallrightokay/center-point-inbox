@@ -4,6 +4,7 @@
    stored mail credentials in provider_tokens. These tests exist mainly to keep
    that from ever regressing silently. */
 import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
+import { writeFile, rm } from 'node:fs/promises';
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -40,6 +41,25 @@ export default async function run(state) {
       check(cfg.supabaseKey === anon, 'anon key published as-is');
       check(cfg.stripeMonthly === 'https://buy.stripe.com/x";alert(1);//', 'quote/semicolon payload survived escaping intact, still parsed as one string');
     } finally { await s.stop(); }
+  }
+
+  /* Archive deploys are additive: a public/config.js from an earlier deployment
+     keeps being served after it is deleted from source, and Next serves public/
+     files for paths it owns. The middleware rewrite is what stops that stale
+     file from silently reverting the site to a hand-edited config. */
+  console.log('\n— a stale public/config.js must NOT shadow the route —');
+  {
+    const decoy = 'public/config.js';
+    await writeFile(decoy, 'window.RATA_CONFIG = { supabaseUrl: "STALE-LEFTOVER" };\n');
+    try {
+      const s = await startServer({ env: { SUPABASE_URL: 'https://fresh.supabase.co' } });
+      try {
+        const { cfg } = await load(s.url);
+        check(cfg.supabaseUrl === 'https://fresh.supabase.co',
+          `route won over the leftover file (got ${JSON.stringify(cfg.supabaseUrl)})`);
+        check(cfg.supabaseUrl !== 'STALE-LEFTOVER', 'the stale file was not served');
+      } finally { await s.stop(); }
+    } finally { await rm(decoy, { force: true }); }
   }
 
   console.log('\n— service_role key mispasted into the public variable: MUST be refused —');
