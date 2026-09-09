@@ -119,28 +119,27 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
 
   <!-- SIGNUP WIZARD -->
   <div id="signup" style="display:none">
-    <div class="steps">
+    <div class="steps" style="display:none">
       <span class="dot on" id="d1">1</span><span class="bar" id="b1"></span>
       <span class="dot" id="d2">2</span><span class="bar" id="b2"></span>
       <span class="dot" id="d3">3</span>
     </div>
 
     <div class="step on" id="step1">
-      <div class="step-title">Your account</div>
-      <div class="step-sub">The email and password you'll sign in with.</div>
+      <div class="step-title">Create your account</div>
+      <div class="step-sub">Takes about ten seconds. You can connect your email straight after.</div>
       <label for="s-email">Email</label>
       <input type="email" id="s-email" autocomplete="email" placeholder="you@company.com">
       <label for="s-pw">Password</label>
       <input type="password" id="s-pw" autocomplete="new-password" placeholder="At least 8 characters">
-      <label for="s-pw2">Confirm password</label>
-      <input type="password" id="s-pw2" autocomplete="new-password" placeholder="••••••••">
+      <label for="s-name">Your name</label>
+      <input type="text" id="s-name" autocomplete="name" placeholder="The name you go by">
+      <input type="hidden" id="s-pw2">
     </div>
 
     <div class="step" id="step2">
       <div class="step-title">Who are you here?</div>
       <div class="step-sub">Your display name is what you choose it to be — it's how you appear on every message you send.</div>
-      <label for="s-name">Display name</label>
-      <input type="text" id="s-name" autocomplete="nickname" placeholder="The name you go by">
       <label for="s-org">Company or team <span style="font-weight:400;color:var(--faint)">(optional)</span></label>
       <input type="text" id="s-org" autocomplete="organization" placeholder="e.g. The Sherwood Group">
     </div>
@@ -256,28 +255,26 @@ $('#login-form').addEventListener('submit',async e=>{
   finally{go.disabled=false}
 });
 
+/* One screen. The old wizard asked for a display name, a company and four
+   account handles before it would create anything — three screens of friction
+   in front of the one thing the person came to do. Connecting accounts belongs
+   after they are in and can see what it is for. */
 let step=1;
 function renderStep(){
-  [1,2,3].forEach(n=>{
-    $('#step'+n).classList.toggle('on',n===step);
-    $('#d'+n).className='dot '+(n===step?'on':n<step?'done':'');
-    if(n<3)$('#b'+n).className='bar '+(n<step?'done':'');
-  });
-  $('#s-back').style.display=step>1?'block':'none';
-  $('#s-next').textContent=step<3?'Continue →':'Create my account';
+  step=1;
+  $('#step1').classList.add('on');
+  $('#step2').classList.remove('on');
+  $('#step3').classList.remove('on');
+  $('#s-back').style.display='none';
+  $('#s-next').textContent='Create my account';
   hideMsgs();
 }
 function validateStep(){
-  if(step===1){
-    const email=$('#s-email').value.trim().toLowerCase(),pw=$('#s-pw').value;
-    if(!/.+@.+\..+/.test(email)){err('#s-err','Enter a valid email address.');return false}
-    if(pw.length<8){err('#s-err','Password must be at least 8 characters.');return false}
-    if(pw!==$('#s-pw2').value){err('#s-err','Passwords do not match.');return false}
-    if(!CLOUD&&accounts()[email]){err('#s-err','An account with that email already exists on this device.');return false}
-  }
-  if(step===2){
-    if(!$('#s-name').value.trim()){err('#s-err','Choose a display name — it can be anything you like.');return false}
-  }
+  const email=$('#s-email').value.trim().toLowerCase(),pw=$('#s-pw').value;
+  if(!/.+@.+\..+/.test(email)){err('#s-err','Please enter a valid email address.');return false}
+  if(pw.length<8){err('#s-err','Your password needs to be at least 8 characters.');return false}
+  if(!$('#s-name').value.trim()){err('#s-err','What should we call you?');return false}
+  if(!CLOUD&&accounts()[email]){err('#s-err','You already have an account with that email on this device — log in instead.');return false}
   return true;
 }
 $('#s-back').onclick=()=>{if(step>1){step--;renderStep()}};
@@ -302,7 +299,6 @@ function stashOnboarding(email){
 
 $('#s-next').onclick=async()=>{
   if(!validateStep())return;
-  if(step<3){step++;renderStep();return}
   const email=$('#s-email').value.trim().toLowerCase(),pw=$('#s-pw').value;
   const go=$('#s-next');go.disabled=true;
   try{
@@ -313,7 +309,7 @@ $('#s-next').onclick=async()=>{
       if(error){err('#s-err',/already|registered|exists/i.test(error.message)?'That email already has a RATA account. Log in instead.':error.message);return}
       if(data.user&&Array.isArray(data.user.identities)&&data.user.identities.length===0){err('#s-err','That email already has a RATA account. Log in instead.');return}
       if(data.session){session({uid:data.session.user.id,email,mode:'supabase'})}
-      else{$('#s-ok').textContent='Account created — check your email to confirm, then log in. Your setup is saved and will apply on first sign-in.';$('#s-ok').classList.add('show')}
+      else{$('#s-ok').textContent='Account created. Check your email for a confirmation link, then log in.';$('#s-ok').classList.add('show')}
     }else{
       const acc=accounts();
       const salt=b64(crypto.getRandomValues(new Uint8Array(16)));

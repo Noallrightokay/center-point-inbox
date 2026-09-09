@@ -48,14 +48,12 @@ export default async function run(state) {
     check(!/cloud accounts active/i.test(await page.textContent('#mode-badge')),
       `mode badge: "${(await page.textContent('#mode-badge')).trim()}"`);
 
+    /* Signup is one screen: email, password, name, done. */
     await page.fill('#s-email', 'owner@example.com');
     await page.fill('#s-pw', 'S3cure-pass-2026');
-    await page.fill('#s-pw2', 'S3cure-pass-2026');
-    await page.click('#s-next');
-    await page.waitForSelector('#s-name', { state: 'visible', timeout: 10000 });
     await page.fill('#s-name', 'Owner');
-    await page.click('#s-next');
-    await page.waitForSelector('#s-next', { timeout: 10000 });
+    check(await page.isHidden('#step2'), 'no second signup step to wade through');
+    check((await page.textContent('#s-next')).includes('Create'), `button says: "${(await page.textContent('#s-next')).trim()}"`);
     await page.click('#s-next');
     await page.waitForURL(/app\.html/, { timeout: 25000 });
     await page.waitForFunction(() => typeof S !== 'undefined' && !!S, null, { timeout: 25000 });
@@ -76,7 +74,8 @@ export default async function run(state) {
 
     /* ---- the Bridge keeps BOTH files ---- */
     console.log('\n— Format Bridge: conversion keeps the original —');
-    await page.evaluate(() => go('docs'));
+    /* Files moved behind "More"; reveal it the way a person would. */
+    await page.evaluate(() => { document.getElementById('nav-more')?.removeAttribute('hidden'); go('docs'); });
     await page.setInputFiles('#br-file', CSV);
     await page.waitForSelector('#br-loaded', { state: 'visible', timeout: 15000 });
     const dl = page.waitForEvent('download', { timeout: 30000 }).catch(() => null);
