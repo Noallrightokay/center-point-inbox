@@ -44,6 +44,27 @@ export default async function run(state) {
 
     /* ---- signup with nothing configured: RATA must still be usable ---- */
     console.log('\n— signup with no backend configured —');
+    /* A first-time visitor must land on the form they came for. Nearly all of
+       them are new, and the old default made them find a tab first. */
+    await page.goto(s.url + '/auth.html');
+    check(await page.isVisible('#s-email'), 'a new visitor lands on the signup form');
+    check(await page.isHidden('#login-form'), 'the login form is not what greets them');
+    check((await page.getAttribute('#tab-signup', 'class') || '').includes('on'),
+      'the Create account tab is the one highlighted');
+    check(!(await page.isVisible('#l-email')) , 'no stray second email field on screen');
+
+    /* ?mode= still wins, so the sign-out link keeps working. */
+    await page.goto(s.url + '/auth.html?mode=login');
+    check(await page.isVisible('#l-email'), '?mode=login still opens Log in');
+
+    /* And the home page's "Log in" link must actually mean Log in, even for a
+       visitor this browser has never seen. */
+    await page.goto(s.url + '/index.html');
+    const loginHref = await page.getAttribute('a.plain:has-text("Log in")', 'href');
+    check(/mode=login/.test(loginHref || ''), `home page Log in link -> ${loginHref}`);
+    await page.goto(s.url + '/' + loginHref);
+    check(await page.isVisible('#l-email'), 'and following it opens the Log in form');
+
     await page.goto(s.url + '/auth.html?mode=signup');
     /* With no backend the badge must say the account is device-only, and must
        not claim it syncs — that promise is the one thing a user would act on. */
@@ -69,6 +90,16 @@ export default async function run(state) {
     check(sess.msgs === 0, `inbox starts empty: ${sess.msgs} messages`);
     check(sess.rail === 'owner@example.com', `boot ran to completion (#rail-acct = ${sess.rail})`);
 
+
+    /* Having signed in once, this browser is no longer a first-timer. Return to
+       the app afterwards — the suites below run against a booted app.html. */
+    await page.goto(s.url + '/auth.html');
+    check(await page.isVisible('#l-email'), 'a returning visitor opens on Log in instead');
+    await page.goto(s.url + '/app.html');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#rail-acct');
+      return !!el && el.textContent.trim().length > 0;
+    });
     if (await page.$('#welcome-ov.open')) {
       await page.click('#w-enter');
       await page.waitForSelector('#welcome-ov.open', { state: 'detached', timeout: 8000 }).catch(() => {});

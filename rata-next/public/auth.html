@@ -88,12 +88,12 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
   <span class="mode-badge local" id="mode-badge">● Saved on this device only</span>
 
   <div class="tabs">
-    <button id="tab-login" class="on">Log in</button>
-    <button id="tab-signup">Create account</button>
+    <button id="tab-login">Log in</button>
+    <button id="tab-signup" class="on">Create account</button>
   </div>
 
   <!-- LOGIN -->
-  <form id="login-form" novalidate>
+  <form id="login-form" novalidate style="display:none">
     <label for="l-email">Email</label>
     <input type="email" id="l-email" autocomplete="email" placeholder="you@company.com">
     <label for="l-pw">Password</label>
@@ -118,7 +118,7 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
   </div>
 
   <!-- SIGNUP WIZARD -->
-  <div id="signup" style="display:none">
+  <div id="signup">
     <div class="steps" style="display:none">
       <span class="dot on" id="d1">1</span><span class="bar" id="b1"></span>
       <span class="dot" id="d2">2</span><span class="bar" id="b2"></span>
@@ -209,7 +209,14 @@ async function supa(){
 }
 if(CLOUD){const b=$('#mode-badge');b.className='mode-badge cloud';b.textContent='● Works on all your devices'}
 
-let mode=new URLSearchParams(location.search).get('mode')==='signup'?'signup':'login';
+/* Nearly everyone arriving here is new, so the form they need is the one that
+   opens. A returning visitor who has signed in on this browser before gets Log
+   in instead, and ?mode= still wins over both — the sign-out link uses it. */
+const RETURNING='centra_seen';
+const qmode=new URLSearchParams(location.search).get('mode');
+let mode = qmode==='signup' ? 'signup'
+         : qmode==='login'  ? 'login'
+         : localStorage.getItem(RETURNING) ? 'login' : 'signup';
 function setMode(m){
   mode=m;
   $('#tab-login').classList.toggle('on',m==='login');
@@ -231,7 +238,7 @@ async function pbkdf2(pw,salt,iter){
 const accounts=()=>JSON.parse(localStorage.getItem('centra_accounts')||'{}');
 function err(el,m){$(el).textContent=m;$(el).classList.add('show')}
 function hideMsgs(){['#l-err','#l-ok','#s-err','#s-ok'].forEach(x=>{const n=$(x);if(n)n.classList.remove('show')})}
-function session(s){localStorage.setItem('centra_session',JSON.stringify(s));location.replace('app.html')}
+function session(s){localStorage.setItem('centra_session',JSON.stringify(s));try{localStorage.setItem(RETURNING,'1')}catch(e){}location.replace('app.html')}
 
 $('#login-form').addEventListener('submit',async e=>{
   e.preventDefault();hideMsgs();
