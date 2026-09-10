@@ -50,8 +50,11 @@ export async function startServer({ env = {} } = {}) {
   for (let i = 0; i < 90; i++) {
     if (proc.exitCode !== null) throw new Error(`server exited early (${proc.exitCode}) on ${port}:\n${log}`);
     try {
-      const r = await fetch(url + '/', { signal: AbortSignal.timeout(1500) });
-      if (r.ok || r.status === 404) return { url, port, proc, stop };
+      /* redirect:'manual' keeps readiness local: with REDIRECT_TO set, `/`
+         answers 308 and following it would make startup depend on the live
+         site being reachable. Any answer below 500 means Next is serving. */
+      const r = await fetch(url + '/', { redirect: 'manual', signal: AbortSignal.timeout(1500) });
+      if (r.status < 500) return { url, port, proc, stop };
     } catch { /* not up yet */ }
     await sleep(500);
   }

@@ -4,6 +4,7 @@ const SUITES = [
   ['config route',       './config-route.test.mjs'],
   ['OAuth state binding', './oauth-state.test.mjs'],
   ['IMAP mail link',     './imap-link.test.mjs'],
+  ['domain redirect',    './redirect.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 
