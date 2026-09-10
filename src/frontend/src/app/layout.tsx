@@ -15,45 +15,28 @@ const inter = localFont({
   fallback: ["system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
 });
 
-const playfair = localFont({
-  src: [
-    {
-      path: "../fonts/PlayfairDisplay-VariableFont_wght.ttf",
-      style: "normal",
-    },
-  ],
-  variable: "--font-playfair",
-  display: "swap",
-  fallback: ["Georgia", "Times New Roman", "serif"],
-});
-
 export const metadata: Metadata = {
-  title: "Center Point Inbox",
-  description:
-    "Premium unified inbox platform. Connect any email. AI-powered. Enterprise-grade security.",
-  keywords: [
-    "inbox",
-    "email",
-    "unified communications",
-    "AI assistant",
-    "enterprise",
-    "SaaS",
-  ],
-  authors: [{ name: "Center Point" }],
-  manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "Center Point",
+  title: {
+    default: "Centra",
+    template: "%s · Centra",
   },
+  description:
+    "Centra — a self-hosted universal email & document management platform. Search, translate, and govern everything in one place.",
+  applicationName: "Centra",
+  authors: [{ name: "Centra" }],
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: "#0A0A0A",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#111417" },
+    { media: "(prefers-color-scheme: light)", color: "#f5f7f8" },
+  ],
 };
+
+// Set the theme class before paint to avoid a flash of the wrong theme.
+const themeScript = `(function(){try{var t=localStorage.getItem('centra-theme');var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;var c=document.documentElement.classList;d?c.add('dark'):c.remove('dark');}catch(e){document.documentElement.classList.add('dark');}})();`;
 
 export default function RootLayout({
   children,
@@ -61,14 +44,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-        <link rel="apple-touch-icon" href="/icon-192.png" />
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body
-        className={`${inter.variable} ${playfair.variable} font-sans antialiased`}
-      >
+      <body className={`${inter.variable} font-sans antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

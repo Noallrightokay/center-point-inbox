@@ -3,56 +3,96 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light mode — soft off-white content surfaces on a near-white base. */
   :root {
-    /* AMEX Dark Theme — Default */
-    --background: 230 25% 7%;
-    --foreground: 0 0% 93%;
+    --background: 210 20% 97%;
+    --foreground: 206 24% 12%;
+    --surface: 0 0% 100%;
 
-    --card: 230 20% 10%;
-    --card-foreground: 0 0% 93%;
+    --card: 0 0% 100%;
+    --card-foreground: 206 24% 12%;
 
-    --popover: 230 20% 12%;
-    --popover-foreground: 0 0% 93%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 206 24% 12%;
 
-    /* Primary — AMEX Gold */
-    --primary: 38 36% 53%;
-    --primary-foreground: 230 25% 7%;
+    /* Deep teal accent — #0F766E */
+    --primary: 175 78% 26%;
+    --primary-foreground: 0 0% 100%;
 
-    /* Secondary — Charcoal */
-    --secondary: 240 14% 16%;
-    --secondary-foreground: 0 0% 85%;
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 206 22% 20%;
 
-    /* Muted */
-    --muted: 240 12% 14%;
-    --muted-foreground: 230 10% 55%;
+    --muted: 210 16% 94%;
+    --muted-foreground: 206 10% 42%;
 
-    /* Accent */
-    --accent: 240 14% 18%;
-    --accent-foreground: 0 0% 90%;
+    --accent: 175 60% 94%;
+    --accent-foreground: 175 78% 22%;
 
-    /* Destructive */
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 100%;
 
-    /* Border / Input / Ring */
-    --border: 240 10% 18%;
-    --input: 240 10% 18%;
-    --ring: 38 36% 53%;
+    --success: 152 60% 36%;
+    --success-foreground: 0 0% 100%;
 
-    /* Sidebar */
-    --sidebar-bg: 230 25% 5%;
-    --sidebar-foreground: 0 0% 85%;
-    --sidebar-border: 240 10% 15%;
-    --sidebar-active: 38 36% 53%;
-    --sidebar-active-foreground: 230 25% 7%;
+    --warning: 33 92% 44%;
+    --warning-foreground: 0 0% 100%;
 
-    /* Status */
-    --success: 152 69% 41%;
-    --warning: 38 92% 50%;
-    --info: 217 91% 60%;
+    --info: 214 84% 48%;
+    --info-foreground: 0 0% 100%;
 
-    /* Radius */
-    --radius: 0.75rem;
+    --border: 210 16% 88%;
+    --input: 210 16% 86%;
+    --ring: 175 78% 30%;
+
+    /* Left icon rail sits darker than content even in light mode. */
+    --rail: 206 22% 14%;
+    --rail-foreground: 210 14% 72%;
+
+    --radius: 6px;
+  }
+
+  /* Dark mode — near-black charcoal base (#111417). */
+  .dark {
+    --background: 206 15% 8%;
+    --foreground: 210 16% 92%;
+    --surface: 206 15% 11%;
+
+    --card: 206 15% 11%;
+    --card-foreground: 210 16% 92%;
+
+    --popover: 206 16% 12%;
+    --popover-foreground: 210 16% 92%;
+
+    --primary: 173 58% 39%;
+    --primary-foreground: 206 30% 8%;
+
+    --secondary: 206 12% 17%;
+    --secondary-foreground: 210 14% 82%;
+
+    --muted: 206 12% 15%;
+    --muted-foreground: 206 8% 56%;
+
+    --accent: 175 40% 18%;
+    --accent-foreground: 172 60% 72%;
+
+    --destructive: 0 66% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 52% 44%;
+    --success-foreground: 206 30% 8%;
+
+    --warning: 36 90% 54%;
+    --warning-foreground: 206 30% 8%;
+
+    --info: 210 82% 62%;
+    --info-foreground: 206 30% 8%;
+
+    --border: 206 12% 18%;
+    --input: 206 12% 20%;
+    --ring: 173 58% 42%;
+
+    --rail: 206 18% 6%;
+    --rail-foreground: 206 10% 60%;
   }
 }
 
@@ -61,35 +101,50 @@
     border-color: hsl(var(--border));
   }
 
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings: "cv02", "cv03", "cv04", "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   ::selection {
-    background-color: rgba(180, 151, 90, 0.3);
-    color: white;
+    background-color: hsl(var(--primary) / 0.25);
   }
 
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 10px;
+    height: 10px;
   }
 
   ::-webkit-scrollbar-track {
-    background: hsl(var(--background));
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: hsl(var(--border));
-    border-radius: 3px;
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground));
+    background: hsl(var(--muted-foreground) / 0.5);
+    background-clip: padding-box;
+  }
+
+  /* Kill Chrome autofill's yellow wash so inputs stay on-theme. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: hsl(var(--foreground));
+    -webkit-box-shadow: 0 0 0 1000px hsl(var(--surface)) inset;
+    caret-color: hsl(var(--foreground));
+    transition: background-color 9999s ease-in-out 0s;
   }
 }
 
@@ -98,39 +153,46 @@
     text-wrap: balance;
   }
 
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--border)) transparent;
-  }
-
   .scrollbar-none {
     scrollbar-width: none;
   }
-
   .scrollbar-none::-webkit-scrollbar {
     display: none;
   }
 
-  .gold-text {
-    background: linear-gradient(135deg, #B4975A 0%, #D4B87A 50%, #C9A96E 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+  /* Skeleton shimmer — subtle, no gradient noise. */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--foreground) / 0.05),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
   }
 
-  .gold-border {
-    border-image: linear-gradient(135deg, #B4975A 0%, #D4B87A 50%, #C9A96E 100%) 1;
+  .font-mono {
+    font-variant-ligatures: none;
   }
 
-  .glass {
-    background: rgba(26, 26, 46, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-  }
-
-  .glass-light {
-    background: rgba(34, 34, 59, 0.6);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+  /* Query-term highlight injected client-side into search snippets. */
+  mark.q {
+    background-color: hsl(var(--primary) / 0.22);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
   }
 }
