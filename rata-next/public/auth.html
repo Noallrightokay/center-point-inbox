@@ -85,7 +85,7 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
     <b>RATA</b>
   </div>
   <div class="tag">Every message. Every language. One inbox.</div>
-  <span class="mode-badge local" id="mode-badge">● This device — local accounts</span>
+  <span class="mode-badge local" id="mode-badge">● Saved on this device only</span>
 
   <div class="tabs">
     <button id="tab-login" class="on">Log in</button>
@@ -188,7 +188,7 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
   </div>
 
   <div class="foot" id="foot">
-    When the site's database is connected (set <b>SUPABASE_URL</b> and <b>SUPABASE_ANON_KEY</b> in the site's environment — see DEPLOY.md), every account created here registers to your real Supabase database and works across devices. Without it, accounts are secured on this device only (PBKDF2-hashed).
+    Your account is stored securely and you can sign in from your phone, laptop or tablet with the same email and password. RATA never sees your mailbox password — you connect each inbox separately, and you can disconnect any of them at any time.
     <a href="index.html">← Back to site</a>
   </div>
 </div>
@@ -207,7 +207,7 @@ async function supa(){
   if(!SBP){if(!window.supabase)await loadScript('vendor/supabase-js-2.112.4.js');SBP=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseKey)}
   return SBP;
 }
-if(CLOUD){const b=$('#mode-badge');b.className='mode-badge cloud';b.textContent='● Cloud accounts active — database connected'}
+if(CLOUD){const b=$('#mode-badge');b.className='mode-badge cloud';b.textContent='● Works on all your devices'}
 
 let mode=new URLSearchParams(location.search).get('mode')==='signup'?'signup':'login';
 function setMode(m){

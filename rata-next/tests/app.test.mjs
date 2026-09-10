@@ -45,7 +45,9 @@ export default async function run(state) {
     /* ---- signup with nothing configured: RATA must still be usable ---- */
     console.log('\n— signup with no backend configured —');
     await page.goto(s.url + '/auth.html?mode=signup');
-    check(!/cloud accounts active/i.test(await page.textContent('#mode-badge')),
+    /* With no backend the badge must say the account is device-only, and must
+       not claim it syncs — that promise is the one thing a user would act on. */
+    check(!/all your devices/i.test(await page.textContent('#mode-badge')),
       `mode badge: "${(await page.textContent('#mode-badge')).trim()}"`);
 
     /* Signup is one screen: email, password, name, done. */
