@@ -226,6 +226,45 @@ export default async function run(state) {
     check(!!(await dl), 'converted file downloaded');
 
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
+    /* ---- the Business file library ---- */
+    console.log('\n— folders for files —');
+    await page.evaluate(() => { S.settings.plan = 'free'; save(); go('docs'); });
+    const free = await page.evaluate(() => ({
+      barShown: !document.querySelector('#folder-bar').hidden,
+      hint: document.querySelector('#folder-hint').textContent,
+      newBtn: document.querySelector('#folder-new').style.display,
+      chips: document.querySelectorAll('#folder-chips .pill').length,
+    }));
+    check(free.barShown, 'on a lesser plan the rail is still visible, not hidden');
+    check(/Business/.test(free.hint), `and says what it is: "${free.hint}"`);
+    check(free.newBtn === 'none' && free.chips === 0, 'but no folders to make or use');
+
+    await page.evaluate(() => { S.settings.plan = 'business'; save(); renderFolders(); renderDocs(); });
+    const biz = await page.evaluate(() => {
+      S.folders.push('Acme Ltd'); save(); renderFolders(); renderDocs();
+      const doc = S.documents[0];
+      fileInto(doc.id, 'Acme Ltd');
+      folderFilter = 'Acme Ltd'; renderFolders(); renderDocs();
+      const inFolder = document.querySelectorAll('#doc-grid .doc-card').length;
+      folderFilter = 'none'; renderFolders(); renderDocs();
+      const unfiled = document.querySelectorAll('#doc-grid .doc-card').length;
+      folderFilter = 'all'; renderFolders(); renderDocs();
+      return { inFolder, unfiled, total: S.documents.length, filed: doc.folder,
+               draggable: document.querySelector('#doc-grid .doc-card')?.getAttribute('draggable') };
+    });
+    check(biz.filed === 'Acme Ltd', `a file can be put in a folder: ${biz.filed}`);
+    check(biz.draggable === 'true', 'and files are draggable onto one');
+    check(biz.inFolder === 1, `the folder shows just its own: ${biz.inFolder}`);
+    check(biz.unfiled === biz.total - 1, `and Unfiled shows the rest: ${biz.unfiled} of ${biz.total}`);
+
+    /* Downgrading must never make a document unreachable. */
+    const after = await page.evaluate(() => {
+      S.settings.plan = 'free'; save(); renderFolders(); renderDocs();
+      return document.querySelectorAll('#doc-grid .doc-card').length;
+    });
+    check(after === biz.total, `dropping to the free plan hides no files: ${after} of ${biz.total} still listed`);
+    await page.evaluate(() => { S.settings.plan = 'free'; S.folders = []; S.documents.forEach(d => delete d.folder); save(); });
+
     console.log('\n— stored bytes —');
     const vault = await page.evaluate(async () => {
       const ids = S.documents.filter(d => d.hasFile).map(d => d.id);

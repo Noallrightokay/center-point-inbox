@@ -659,6 +659,13 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto}
 
     <!-- DOCUMENTS -->
     <section class="view" id="view-docs">
+      <div class="doc-toolbar" id="folder-bar" hidden>
+        <b style="font-size:12px;letter-spacing:.04em;color:var(--faint);text-transform:uppercase">Folders</b>
+        <span id="folder-chips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        <button class="btn" id="folder-new">＋ New folder</button>
+        <span style="flex:1"></span>
+        <span id="folder-hint" style="font-size:12px;color:var(--faint)"></span>
+      </div>
       <div class="doc-toolbar">
         <button class="pill on" data-df="all">All</button>
         <button class="pill" data-df="drive">Drive</button>
@@ -696,7 +703,7 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto}
     <section class="view" id="view-search">
       <div class="search-head">
         <div class="search-box">
-          <input id="search-input" type="text" placeholder="Search all messages, documents, people…" autocomplete="off">
+          <input id="search-input" type="text" placeholder="Search every inbox, file and person…" autocomplete="off">
           <button class="btn primary" id="search-go">Search</button>
         </div>
       </div>
@@ -996,6 +1003,7 @@ const seed=()=>({
   contacts:[],
   messages:[],
   documents:[],
+  folders:[],
   connections:{gmail:false,outlook:false,imap:false,slackc:false,smsc:false,discordc:false,drive:false,onedrive:false,dropbox:false},
   counters:{scans:0,warned:0,blocked:0,conversions:0,autopilot:0},
   audit:[]
@@ -1007,7 +1015,7 @@ function migrate(old){
   /* v5 turned the defaults off for new workspaces. An existing one keeps what
      its owner already switched on — silently disabling somebody's Slack feed
      because the default moved would be a bug, not a preference. */
-  if(old&&old.v>=3){old.v=5;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
+  if(old&&old.v>=3){old.v=5;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(!Array.isArray(old.folders))old.folders=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
   const fresh=seed();
   if(!old)return fresh;
   /* v1/v2 (emails[]) → v3: carry settings/audit/docs/counters, rebuild stream */
@@ -1091,7 +1099,7 @@ function go(v){
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
   if(v==='create')renderCreate();
-  if(v==='docs')renderDocs();
+  if(v==='docs'){renderFolders();renderDocs()}
   if(v==='plug')renderPlugins();
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
   if(v==='conn')renderConn();
@@ -1712,12 +1720,12 @@ function renderEco(){
   const g=$('#eco-grid');if(!g)return;
   g.innerHTML=[
     {name:'Email',types:['google','ms'],icon:ICONS.conn_gmail||'✉️',
-     desc:'Every mail account in one stream. Each account signs in with its own OAuth token — RATA never sees a password and can only read what you consent to.',
-     actions:[['Sign in with Google','google',1],['Sign in with Microsoft','ms',0]],
-     note:'Tokens are per-account, revocable anytime from your Google/Microsoft security page.'},
+     desc:'Every mail account in one stream — Gmail, Outlook, Yahoo, your work address, anything with IMAP. Each account is added separately and can be removed on its own.',
+     actions:[['Add any email account','mail',1],['Sign in with Google','google',0],['Sign in with Microsoft','ms',0]],
+     note:'App passwords are per-account and revocable from your provider at any time — revoking one stops RATA reading that mailbox immediately.'},
     {name:'Google Workspace',types:['google'],icon:ICONS.conn_gmail||'G',
      desc:'Gmail live sync + real sending, and the Bridge delivers files Google Drive auto-converts into Docs and Sheets.',
-     actions:[['Sign in with Google','google',1],['Link Gmail by app password','imap:gmail',0],['Open Bridge','bridge',0]],
+     actions:[['Sign in with Google','google',1],['Add Gmail by app password','mail',0],['Open Bridge','bridge',0]],
      note:'One-click OAuth needs a Google client ID, and public use needs Google verification. The app-password IMAP link works today with neither.'},
     {name:'Microsoft Office',types:['ms'],icon:ICONS.conn_outlook||'M',
      desc:'Outlook live sync via Microsoft Graph, and the Bridge delivers real .docx / .xlsx for Word and Excel.',
@@ -1725,17 +1733,21 @@ function renderEco(){
      note:'Microsoft consent screen · tokens held server-side, auto-refreshed, revocable at account.microsoft.com.'},
     {name:'Apple',types:[],icon:'',
      desc:'The Bridge delivers files Pages and Numbers open natively — Apple\u2019s own formats are sealed, so this is how everyone interops with Apple, including Microsoft.',
-     actions:[['Link iCloud Mail','imap:apple',1],['Open Bridge','bridge',0]],
+     actions:[['Add iCloud Mail','mail',1],['Open Bridge','bridge',0]],
      note:'iCloud Mail signs in with an app-specific password over IMAP \u2014 Apple publishes no OAuth for Mail.'}
   ].map(ecoCard).join('');
   g.querySelectorAll('[data-eco-act]').forEach(b=>b.onclick=()=>{
     const act=b.dataset.ecoAct;
     if(act==='google')googleAddAccount();
-    else if(act.startsWith('imap:'))document.querySelector('[data-addlink="'+act+'"]')?.click();
+    else if(act==='mail'){go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)}
     else if(act==='ms')linkProviderLive('ms');
     else if(act==='bridge'){go('docs');setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)}
   });
 }
+/* Which bridges are a view onto a connected account rather than a local
+   preference. Work/Personal split, job tags and Autopilot need nothing signed
+   in, so they stay free-standing switches. */
+const PLUGIN_ACCOUNT={slack:'slack',discord:'discord',sms:'phone'};
 function renderPlugins(){renderEco();
   $('#nc-plug').textContent=Object.values(S.plugins).filter(Boolean).length;
   $('#plug-grid').innerHTML=Object.entries(PLUGINS).map(([k,p])=>`
@@ -1749,6 +1761,17 @@ function renderPlugins(){renderEco();
     </div>`).join('');
   $$('#plug-grid .switch').forEach(sw=>sw.onclick=()=>{
     const k=sw.dataset.p;
+    /* A bridge with nothing behind it is a switch that does nothing: turning on
+       Slack without a Slack account would add an empty filter and imply RATA is
+       reading messages it cannot see. So switching one on sends you to sign in
+       to that service, and linking the account is what turns it on. */
+    const needs=PLUGIN_ACCOUNT[k];
+    if(!S.plugins[k]&&needs&&!S.linked.some(l=>l.type===needs)){
+      toast(`Sign in to ${PLUGINS[k].name.replace(/ Bridge$/,'')} first — then it switches itself on`);
+      go('conn');
+      setTimeout(()=>document.querySelector('[data-addlink="'+needs+'"]')?.click(),80);
+      return;
+    }
     S.plugins[k]=!S.plugins[k];save();
     audit('plugin.'+(S.plugins[k]?'enable':'disable'),PLUGINS[k].name);
     renderPlugins();
@@ -1771,6 +1794,14 @@ $('#job-add-btn').onclick=()=>{
 };
 
 /* ---------------- SEARCH ---------------- */
+/* One search box over every connected inbox. With several mailboxes the
+   answer "you have this email" is only half of it — which of your accounts it
+   is in decides where you go looking, so each hit names its mailbox. */
+function searchAcctName(m){
+  const l=m.acct?S.linked.find(x=>x.id===m.acct):null;
+  const label=l?l.label:(m.acctLabel||m.acct||'');
+  return label?' · <span class="badge">'+esc(label)+'</span>':'';
+}
 function doSearch(){
   const q=$('#search-input').value.trim();
   if(!q)return;
@@ -1789,11 +1820,11 @@ function doSearch(){
     if(c.id==='c8')continue;
     if((c.name+' '+(c.nick||'')+' '+c.addr+' '+(c.slack||'')+' '+(c.discord||'')+' '+(c.phone||'')).toLowerCase().includes(ql))hits.push({type:'person',ref:c});
   }
-  audit('search.run',`"${q}" — ${hits.length} results`);
+  audit('search.run',`"${q}" — ${hits.length} results across ${new Set(S.messages.map(m=>m.acct).filter(Boolean)).size||1} inbox(es)`);
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
   const rp=$('#res-pane');
   rp.innerHTML=hits.length?hits.map((h,i)=>h.type==='msg'
-    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${CHANNELS[h.ref.ch].label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}</div></div></div>`
+    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${CHANNELS[h.ref.ch].label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
     :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk([h.ref.addr,h.ref.phone,h.ref.slack,h.ref.discord].filter(Boolean).join(' · ')||'No handles')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
@@ -1841,21 +1872,96 @@ $('.doc-toolbar').addEventListener('click',e=>{
 });
 $('#doc-viewtoggle').onclick=()=>{docList=!docList;$('#doc-viewtoggle').textContent=docList?'Grid view':'List view';renderDocs()};
 const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOCX','PDF'],XLSX:['CSV','GSHEET','PDF'],GSHEET:['XLSX','CSV'],CSV:['XLSX','GSHEET'],MD:['PDF','DOCX'],TXT:['PDF','DOCX'],PAGES:['PDF','DOCX'],NUMBERS:['XLSX','PDF']};
+/* ---------------- THE FILE LIBRARY (Business) ----------------
+   A business keeps files by what they are for — this client, that quarter —
+   not by which cloud they happened to arrive from. Folders are that: a plain
+   set of names, one per file, with drag to move and a chip to filter.
+
+   It is the Business tier's feature. On a lesser plan the rail explains what
+   it is rather than hiding, because a feature nobody can see is a feature
+   nobody buys — but nothing is filed and no file is hidden, so downgrading
+   never puts a document out of reach. */
+let folderFilter='all';
+function hasFileLibrary(){return (S.settings.plan||'free')==='business'}
+
+function renderFolders(){
+  const bar=$('#folder-bar');if(!bar)return;
+  bar.hidden=false;
+  const chips=$('#folder-chips'),hint=$('#folder-hint'),mk=$('#folder-new');
+  if(!hasFileLibrary()){
+    chips.innerHTML='';
+    mk.style.display='none';
+    hint.textContent='Folders for your files come with RATA Business — upgrade in Settings.';
+    folderFilter='all';
+    return;
+  }
+  mk.style.display='';
+  hint.textContent=S.folders.length?'Drag a file onto a folder to file it.':'';
+  const counts=Object.fromEntries(S.folders.map(f=>[f,S.documents.filter(d=>d.folder===f).length]));
+  const loose=S.documents.filter(d=>!d.folder).length;
+  chips.innerHTML=`<button class="pill ${folderFilter==='all'?'on':''}" data-fold="all">All files · ${S.documents.length}</button>`
+    +`<button class="pill ${folderFilter==='none'?'on':''}" data-fold="none">Unfiled · ${loose}</button>`
+    +S.folders.map(f=>`<button class="pill ${folderFilter===f?'on':''}" data-fold="${esc(f)}" data-folder-drop="${esc(f)}">${esc(f)} · ${counts[f]||0}<span class="fx" data-foldrm="${esc(f)}" title="Delete folder" style="margin-left:8px;opacity:.55">✕</span></button>`).join('');
+  chips.querySelectorAll('[data-fold]').forEach(b=>{
+    b.onclick=e=>{
+      if(e.target.dataset.foldrm!==undefined)return;
+      folderFilter=b.dataset.fold;renderFolders();renderDocs();
+    };
+    const name=b.dataset.folderDrop;
+    if(!name)return;
+    b.ondragover=e=>{if(e.dataTransfer.types.includes('text/rata-doc')){e.preventDefault();b.classList.add('drop-live')}};
+    b.ondragleave=()=>b.classList.remove('drop-live');
+    b.ondrop=e=>{
+      b.classList.remove('drop-live');
+      const id=e.dataTransfer.getData('text/rata-doc');if(!id)return;
+      e.preventDefault();fileInto(id,name);
+    };
+  });
+  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=e=>{
+    e.stopPropagation();
+    const f=x.dataset.foldrm;
+    if(!confirm(`Delete the folder "${f}"? The files in it stay — they go back to Unfiled.`))return;
+    S.folders=S.folders.filter(n=>n!==f);
+    S.documents.forEach(d=>{if(d.folder===f)delete d.folder});
+    if(folderFilter===f)folderFilter='all';
+    save();audit('folder.delete',f);renderFolders();renderDocs();
+  });
+}
+
+function fileInto(docId,folder){
+  const d=S.documents.find(x=>x.id===docId);if(!d)return;
+  d.folder=folder;save();
+  audit('folder.file',`${d.name} → ${folder}`);
+  renderFolders();renderDocs();
+  toast(`${d.name} filed in ${folder}`);
+}
+
 function renderDocs(){
   const g=$('#doc-grid');
   g.classList.toggle('listmode',docList);
-  const pool=S.documents.filter(d=>docFilter==='all'||(docFilter==='rata'?d.origin==='rata':d.prov===docFilter)).sort((a,b)=>b.ts-a.ts);
+  let pool=S.documents.filter(d=>docFilter==='all'||(docFilter==='rata'?d.origin==='rata':d.prov===docFilter));
+  if(hasFileLibrary()&&folderFilter!=='all')pool=pool.filter(d=>folderFilter==='none'?!d.folder:d.folder===folderFilter);
+  pool=pool.sort((a,b)=>b.ts-a.ts);
   $('#nc-docs').textContent=S.documents.length;
-  if(!pool.length){g.innerHTML='<div class="empty"><b>No files yet</b>Create one in the Create tab, or they will appear as attachments arrive.</div>';return}
+  if(!pool.length){
+    g.innerHTML=(hasFileLibrary()&&folderFilter!=='all'&&S.documents.length)
+      ?`<div class="empty"><b>Nothing in ${folderFilter==='none'?'Unfiled':esc(folderFilter)}</b>Drag a file onto a folder to put it there.</div>`
+      :'<div class="empty"><b>No files yet</b>Create one in the Create tab, or they will appear as attachments arrive.</div>';
+    return}
   g.innerHTML=pool.map(d=>`
-    <div class="doc-card">
+    <div class="doc-card" data-doc="${d.id}" draggable="${hasFileLibrary()?'true':'false'}">
       <div class="doc-ic">${d.fmt}</div>
       <div class="doc-name">${esc(d.name)}</div>
-      <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}<span class="doc-sz">${d.size}</span></div>
+      <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}${d.folder?`<span class="badge job">📁 ${esc(d.folder)}</span>`:''}<span class="doc-sz">${d.size}</span></div>
       ${d.role==='converted'&&d.fromName?`<div class="doc-pairline">⇄ translated from <b>${esc(d.fromName)}</b>${d.lang?' · '+esc(d.lang):''}</div>`:''}
       ${d.role==='source'?`<div class="doc-pairline">⇄ original — kept alongside its conversion</div>`:''}
       <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}${(CONVERT_TO[d.fmt]||[]).map(t=>`<button class="cv" data-id="${d.id}" data-to="${t}">→ ${t}</button>`).join('')||''}</div>
     </div>`).join('');
+  if(hasFileLibrary()){
+    g.querySelectorAll('.doc-card[data-doc]').forEach(c=>{
+      c.ondragstart=e=>{e.dataTransfer.setData('text/rata-doc',c.dataset.doc);e.dataTransfer.effectAllowed='move'};
+    });
+  }
   g.querySelectorAll('.cv[data-bridge]').forEach(b=>b.onclick=()=>{
     const d=S.documents.find(x=>x.id===b.dataset.bridge);if(!d)return;
     bridgeInit();
@@ -2250,6 +2356,14 @@ $('#split-on').onclick=()=>setSplit(!splitOn);
 $('#split-off').onclick=()=>setSplit(false);
 $('#split-acct').onchange=e=>{splitAcct=e.target.value;renderSplit()};
 
+$('#folder-new').onclick=()=>{
+  const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);
+  if(!name)return;
+  if(S.folders.includes(name)){toast('You already have a folder with that name');return}
+  S.folders.push(name);save();audit('folder.create',name);
+  renderFolders();renderDocs();toast(`Folder "${name}" created`);
+};
+
 $('#compose-btn').onclick=openCompose;
 $('#cmp-close').onclick=closeCompose;
 ov.addEventListener('click',e=>{if(e.target===ov)closeCompose()});
@@ -2392,9 +2506,9 @@ function addLinked(type,label,extra){
   S.linked.push(l);
   if(type==='google')S.connections.gmail=true;
   if(type==='ms'){S.connections.outlook=true;S.connections.onedrive=true}
-  if(type==='slack')S.connections.slackc=true;
-  if(type==='discord')S.connections.discordc=true;
-  if(type==='phone')S.connections.smsc=true;
+  if(type==='slack'){S.connections.slackc=true;S.plugins.slack=true}
+  if(type==='discord'){S.connections.discordc=true;S.plugins.discord=true}
+  if(type==='phone'){S.connections.smsc=true;S.plugins.sms=true}
   save();audit('account.link',`${LINK_META[type][0]} — ${label}`);
   return l;
 }
@@ -2406,9 +2520,9 @@ async function removeLinked(id){
   const still=t=>S.linked.some(x=>x.type===t);
   if(l.type==='google'&&!still('google'))S.connections.gmail=false;
   if(l.type==='ms'&&!still('ms')){S.connections.outlook=false;S.connections.onedrive=false}
-  if(l.type==='slack'&&!still('slack'))S.connections.slackc=false;
-  if(l.type==='discord'&&!still('discord'))S.connections.discordc=false;
-  if(l.type==='phone'&&!still('phone'))S.connections.smsc=false;
+  if(l.type==='slack'&&!still('slack')){S.connections.slackc=false;S.plugins.slack=false}
+  if(l.type==='discord'&&!still('discord')){S.connections.discordc=false;S.plugins.discord=false}
+  if(l.type==='phone'&&!still('phone')){S.connections.smsc=false;S.plugins.sms=false}
   delete gTokens[id];
   save();await audit('account.unlink',`${LINK_META[l.type][0]} — ${l.label}`);
   renderLinked();renderConn();renderMailFilters();renderMail();
