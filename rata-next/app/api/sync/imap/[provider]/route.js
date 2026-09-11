@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../../lib/server';
 import { imapProvider, fetchInbox } from '../../../../../lib/imap';
+import { decryptSecret } from '../../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +17,10 @@ export async function GET(req, { params }) {
     .eq('user_id', user.id).eq('provider', def.token).maybeSingle();
   if (!row) return NextResponse.json({ error: `${def.label} isn’t linked yet — link it in Settings` });
 
-  const out = await fetchInbox(def, row.label, row.access);
+  const pass = decryptSecret(row.access, user.id, row.provider);
+  if (!pass) return NextResponse.json({ error: `${def.label} could not be unlocked — relink it in Accounts.` });
+
+  const out = await fetchInbox(def, row.label, pass);
   if (out.error) return NextResponse.json({ error: out.error });
   return NextResponse.json({ label: row.label, messages: out.messages });
 }

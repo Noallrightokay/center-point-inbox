@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { userFromRequest } from '../../../../lib/server';
 import { mailKey, smtpHostFor, SMTP_PORTS, isMailKey } from '../../../../lib/mail';
+import { decryptSecret } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,13 +37,16 @@ export async function POST(req) {
     return NextResponse.json({ error: `${from} is not linked — add it in Accounts first` });
   }
 
+  const pass = decryptSecret(row.access, user.id, row.provider);
+  if (!pass) return NextResponse.json({ error: `${from} could not be unlocked — relink it in Accounts.` });
+
   const host = smtpHostFor(row.extra?.host, from);
   let lastError = '';
 
   for (const { port, secure } of SMTP_PORTS) {
     const tx = nodemailer.createTransport({
       host, port, secure,
-      auth: { user: from, pass: row.access },
+      auth: { user: from, pass },
       connectionTimeout: 12000, greetingTimeout: 10000, socketTimeout: 20000,
     });
     try {

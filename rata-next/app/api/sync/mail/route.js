@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../lib/server';
 import { fetchInbox, isMailKey, mailKey, describe, candidateHosts } from '../../../../lib/mail';
+import { decryptSecret } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,11 @@ export async function GET(req) {
   const results = await Promise.all(mailboxes.map(async r => {
     const host = r.extra?.host || candidateHosts(r.label)[0];
     const label = r.extra?.provider_label || describe(r.label)?.label || host;
-    const out = await fetchInbox({ host, email: r.label, pass: r.access, label });
+    const pass = decryptSecret(r.access, user.id, r.provider);
+    /* An unreadable credential is a key problem, not a mail problem, and
+       saying "sync failed" would send the user looking in the wrong place. */
+    if (!pass) return { email: r.label, label, error: `${r.label} could not be unlocked — relink it in Accounts.` };
+    const out = await fetchInbox({ host, email: r.label, pass, label });
     return { email: r.label, label, ...out };
   }));
 

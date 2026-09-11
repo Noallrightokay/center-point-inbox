@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../../lib/server';
 import { imapProvider, verifyImap } from '../../../../../lib/imap';
+import { sealRow } from '../../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +27,16 @@ export async function POST(req, { params }) {
   const check = await verifyImap(def, email, pass);
   if (!check.ok) return NextResponse.json({ error: check.error });
 
-  const { error: e2 } = await sb.from('provider_tokens').upsert({
-    user_id: user.id, provider: def.token, label: email,
-    access: pass, refresh: null, expires_at: null,
-    updated_at: new Date().toISOString(),
-  });
+  let sealed;
+  try {
+    sealed = sealRow({
+      user_id: user.id, provider: def.token, label: email,
+      access: pass, refresh: null, expires_at: null,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (e) { return NextResponse.json({ error: e.message }); }
+
+  const { error: e2 } = await sb.from('provider_tokens').upsert(sealed);
   if (e2) return NextResponse.json({ error: 'Could not save the link — ' + e2.message });
 
   return NextResponse.json({ ok: true, label: email, provider });

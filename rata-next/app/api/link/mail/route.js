@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../lib/server';
 import { describe, verifyMail, mailKey } from '../../../../lib/mail';
 import { planForUser, countLinks, refusal } from '../../../../lib/plan';
+import { sealRow } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,16 +50,26 @@ export async function POST(req) {
      showing a server box there would send the user hunting for nothing. */
   if (!check.ok) return NextResponse.json({ error: check.error, needsHost: !host && !!info?.guessed });
 
-  const { error: e2 } = await sb.from('provider_tokens').upsert({
-    user_id: user.id,
-    provider: mailKey(email),
-    label: email,
-    access: pass,
-    refresh: null,
-    extra: { kind: 'mail', host: check.host, port: 993, provider_label: check.label },
-    expires_at: null,
-    updated_at: new Date().toISOString(),
-  });
+  let sealed;
+  try {
+    sealed = sealRow({
+      user_id: user.id,
+      provider: mailKey(email),
+      label: email,
+      access: pass,
+      refresh: null,
+      extra: { kind: 'mail', host: check.host, port: 993, provider_label: check.label },
+      expires_at: null,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    /* No encryption key configured. The password is proved good at this point,
+       which makes storing it in the clear the tempting thing to do — so this
+       refuses out loud instead. */
+    return NextResponse.json({ error: e.message });
+  }
+
+  const { error: e2 } = await sb.from('provider_tokens').upsert(sealed);
   if (e2) return NextResponse.json({ error: 'Could not save the link — ' + e2.message });
 
   return NextResponse.json({ ok: true, email, host: check.host, label: check.label, relinked: !!already });

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../lib/server';
+import { decryptSecret } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,8 @@ export async function GET(req) {
   const { data: row } = await sb.from('provider_tokens').select('*')
     .eq('user_id', user.id).eq('provider', 'slack').maybeSingle();
   if (!row) return NextResponse.json({ error: 'Slack isn\u2019t linked yet — link it in Settings' });
-  const token = row.access;
+  const token = decryptSecret(row.access, user.id, row.provider);
+  if (!token) return NextResponse.json({ error: 'The stored Slack token could not be unlocked — relink Slack in Accounts.' });
   const me = (row.extra && row.extra.authed_user) || '';
 
   const convs = await slack('conversations.list', token, { types: 'im,mpim,public_channel,private_channel', limit: '20', exclude_archived: 'true' });

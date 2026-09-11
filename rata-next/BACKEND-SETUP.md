@@ -5,13 +5,57 @@ inbox sync. Gmail is not covered here — it runs entirely in the browser and on
 needs `GOOGLE_CLIENT_ID` set in the environment (see DEPLOY.md).
 
 **Prerequisites:** a working Node.js Web App deploy with `APP_URL`, `SUPABASE_URL`,
-and `SUPABASE_SERVICE_ROLE_KEY` already set, and `database.sql` already run. All of
+`SUPABASE_SERVICE_ROLE_KEY` and `TOKEN_ENC_KEY` already set, and `database.sql`
+already run. All of
 that is DEPLOY.md steps 1–3 — do those first. If `/api/sync/ms` in a browser tab
 returns the landing page instead of JSON, stop and fix the deploy; nothing below
 will work until it returns JSON.
 
 Add the provider variables below in hPanel → your app → Environment, then redeploy.
 Each provider is independent — set up only the ones you want.
+
+---
+
+## TOKEN_ENC_KEY — required before any account can be linked
+
+RATA holds the thing that opens a user's mailbox: an app password, or an OAuth
+access and refresh token. Those are encrypted before they reach the database
+(AES-256-GCM, in `lib/secrets.js`), and the key lives in the environment rather
+than in the database, so reading the database is not enough to read the
+credentials in it.
+
+Generate one:
+
+```bash
+openssl rand -base64 32
+```
+
+Set it in hPanel → your app → Environment as `TOKEN_ENC_KEY`, then redeploy.
+**Set it before deploying the code that needs it** — a deployment without it
+refuses to store credentials rather than falling back to plaintext, so linking
+an account will fail with a message naming this variable.
+
+Rows written before this existed still work: unencrypted values are read as-is,
+and any write re-encrypts them. To convert them all in one pass:
+
+```bash
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... TOKEN_ENC_KEY=... \
+  node scripts/encrypt-existing.mjs --dry-run   # see what it would touch
+```
+
+Drop `--dry-run` to write. It is safe to run more than once.
+
+### Rotating the key
+
+Set the new key as `TOKEN_ENC_KEY`, move the current one to `TOKEN_ENC_KEY_OLD`,
+and redeploy. Existing rows keep opening under the old key while new writes use
+the new one; run `scripts/encrypt-existing.mjs` — it rewrites anything still on
+the old key — then remove `TOKEN_ENC_KEY_OLD`.
+
+**Losing the key is not recoverable.** Encrypted credentials cannot be read back
+without it, and every user has to relink their accounts. Keep it wherever you
+keep `SUPABASE_SERVICE_ROLE_KEY`, and do not rotate one expecting the other to
+cover for it.
 
 ---
 
@@ -106,14 +150,17 @@ is `apple` or `gmail`; both share one implementation in `lib/imap.js`.
 
 ## Known limits
 
-- **One account per provider, per user.** `provider_tokens` is keyed on
-  `(user_id, provider)`, so linking a second Microsoft account overwrites the first
-  rather than adding it. The UI's "add another" affordance does not yet reflect this.
-- **Credentials are stored as plaintext columns** in `provider_tokens` — OAuth
-  refresh tokens and iCloud app-specific passwords alike. The table has RLS enabled
-  with no policies, so only the service-role key can read it, and Supabase encrypts
-  at rest. But anyone holding `SUPABASE_SERVICE_ROLE_KEY` can read every user's mail
-  credentials. Guard that key accordingly, and rotate it if it is ever exposed.
+- **One account per provider, per user — except mail.** `provider_tokens` is keyed
+  on `(user_id, provider)`. Mailboxes work around this by taking a key of their
+  own per address (`mail:<address>`), so a user may hold several; Microsoft and
+  Slack still overwrite rather than add.
+- **Credentials are encrypted with `TOKEN_ENC_KEY`** before they reach
+  `provider_tokens`, and each value is bound to the row that holds it, so a
+  ciphertext moved to another user's row will not open. The service-role key on
+  its own therefore no longer yields anyone's mail password — both it and
+  `TOKEN_ENC_KEY` are needed. They are still worth storing separately: an
+  attacker holding both is back to holding everything. What is not encrypted is
+  the `label` column, which is the mailbox address.
 - **Discord**: their API does not permit reading user DMs via OAuth — by policy. A
   bot-based bridge for servers you own is the viable path (future build).
 - **SMS**: needs a telephony provider (Twilio) — planned, not free.

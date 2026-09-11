@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin, appUrl, LINK_COOKIE, clearLinkCookie, sameState, stateExpired } from '../../../../../lib/server';
+import { sealRow } from '../../../../../lib/secrets';
 
 export async function GET(req, { params }) {
   const { provider } = await params;
@@ -44,12 +45,12 @@ export async function GET(req, { params }) {
         headers: { Authorization: 'Bearer ' + tok.access_token },
       })).json();
       const label = (me.mail || me.userPrincipalName || 'Microsoft account').toLowerCase();
-      await sb.from('provider_tokens').upsert({
+      await sb.from('provider_tokens').upsert(sealRow({
         user_id: st.user_id, provider: 'ms', label,
         access: tok.access_token, refresh: tok.refresh_token || null,
         expires_at: new Date(Date.now() + (tok.expires_in || 3600) * 1000).toISOString(),
         updated_at: new Date().toISOString(),
-      });
+      }));
       return ok(label);
     }
 
@@ -64,12 +65,12 @@ export async function GET(req, { params }) {
       })).json();
       if (!tok.ok || !tok.authed_user?.access_token) return fail(tok.error || 'Slack authorization failed');
       const label = ((tok.team && tok.team.name) ? tok.team.name + ' (Slack)' : 'Slack workspace');
-      await sb.from('provider_tokens').upsert({
+      await sb.from('provider_tokens').upsert(sealRow({
         user_id: st.user_id, provider: 'slack', label,
         access: tok.authed_user.access_token, refresh: null,
         extra: { authed_user: tok.authed_user.id, team: tok.team?.id || null },
         expires_at: null, updated_at: new Date().toISOString(),
-      });
+      }));
       return ok(label);
     }
   } catch (e) {
