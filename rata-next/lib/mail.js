@@ -68,6 +68,50 @@ export const NO_IMAP = {
 
 export const PORT = 993;
 
+/* ---------------------------------------------------------------------------
+   Sending.
+
+   Reading mail is IMAP; sending it is SMTP, and the same app password almost
+   always works for both. Most providers name their submission host by swapping
+   imap for smtp, so that is the rule, with a table for the ones that do not
+   follow it. Port 465 is implicit TLS and 587 is STARTTLS; providers differ, so
+   both are tried rather than asking the user which their host prefers.
+   --------------------------------------------------------------------------- */
+export const SMTP_HOSTS = {
+  'imap.gmail.com':        'smtp.gmail.com',
+  'imap.mail.me.com':      'smtp.mail.me.com',
+  'outlook.office365.com': 'smtp-mail.outlook.com',
+  'imap.mail.yahoo.com':   'smtp.mail.yahoo.com',
+  'imap.aol.com':          'smtp.aol.com',
+  'imap.zoho.com':         'smtp.zoho.com',
+  'imap.fastmail.com':     'smtp.fastmail.com',
+  'imap.gmx.com':          'mail.gmx.com',
+  'imap.gmx.net':          'mail.gmx.net',
+  'imap.mail.com':         'smtp.mail.com',
+  'imap.web.de':           'smtp.web.de',
+  'imap.yandex.com':       'smtp.yandex.com',
+  'imap.comcast.net':      'smtp.comcast.net',
+  'imap.mail.att.net':     'smtp.mail.att.net',
+  'imap.shaw.ca':          'smtp.shaw.ca',
+  'imap.bell.net':         'smtp.bell.net',
+  'imap.broadband.rogers.com': 'smtp.broadband.rogers.com',
+};
+
+export function smtpHostFor(imapHost, email) {
+  if (imapHost && SMTP_HOSTS[imapHost]) return SMTP_HOSTS[imapHost];
+  if (imapHost && imapHost.startsWith('imap.')) return 'smtp.' + imapHost.slice(5);
+  if (imapHost) return imapHost;
+  return 'smtp.' + domainOf(email);
+}
+
+/* 465 first: implicit TLS is encrypted from the first byte, where 587 starts in
+   the clear and upgrades. If a host only offers 587 we still get there. */
+export const SMTP_PORTS = [
+  { port: 465, secure: true },
+  { port: 587, secure: false },
+];
+
+
 export function domainOf(email) {
   return String(email || '').trim().toLowerCase().split('@')[1] || '';
 }

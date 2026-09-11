@@ -142,6 +142,65 @@ export default async function run(state) {
     check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
     await page.evaluate(() => document.querySelector('#lf-cancel').click());
 
+    /* ---- two inboxes on one screen ---- */
+    console.log('\n— two inboxes side by side —');
+    /* Two mailboxes and a message in each, so the panes have something to
+       distinguish. Linking for real needs a mail server; the UI under test is
+       what happens once two accounts exist. */
+    await page.evaluate(() => {
+      const a = addLinked('mail', 'work@example.com', { host: 'imap.example.com' });
+      const b = addLinked('mail', 'personal@example.net', { host: 'imap.example.net' });
+      S.messages.push(
+        { id: 'ta1', ch: 'email', prov: 'imap', acct: a.id, cid: null, fromName: 'Client', fromAddr: 'client@x.com',
+          subj: 'Signed contract', prev: 'attached', body: 'attached', ts: Date.now(), unread: true, starred: false, atts: [] },
+        { id: 'tb1', ch: 'email', prov: 'imap', acct: b.id, cid: null, fromName: 'Sister', fromAddr: 'sis@y.com',
+          subj: 'Holiday photos', prev: 'hi', body: 'hi', ts: Date.now() - 1000, unread: false, starred: false, atts: [] });
+      save(); renderMailFilters(); renderMail();
+    });
+
+    check(await page.isHidden('#split-pane'), 'the second inbox is not there until asked for');
+    await page.click('#split-on');
+    check(await page.isVisible('#split-pane'), 'the button opens it');
+    check(await page.isHidden('#mail-detail'), 'and the reading pane gives way rather than a third column');
+
+    const panes = await page.evaluate(() => ({
+      choices: [...document.querySelectorAll('#split-acct option')].map(o => o.textContent),
+      picked: document.querySelector('#split-acct').value,
+      left: document.querySelectorAll('#mail-scroll .mail-row').length,
+      right: document.querySelectorAll('#split-scroll .mail-row').length,
+      draggable: document.querySelector('#mail-scroll .mail-row')?.getAttribute('draggable'),
+    }));
+    check(panes.choices.length === 3, `the second pane can show: ${panes.choices.join(' / ')}`);
+    check(!!panes.picked, 'and defaults to an account rather than repeating the first pane');
+    check(panes.left > 0 && panes.right > 0, `both panes have messages: ${panes.left} | ${panes.right}`);
+    check(panes.draggable === 'true', 'rows become draggable in this mode');
+
+    /* Dropping a message on the other inbox opens a forward from that account —
+       it must never send by itself. */
+    const moved = await page.evaluate(() => {
+      const b = S.linked.find(l => l.label === 'personal@example.net');
+      transferMessage('ta1', b.id);
+      return {
+        composeOpen: document.querySelector('#compose-ov').classList.contains('open'),
+        from: document.querySelector('#cmp-from').selectedOptions[0]?.textContent || '',
+        subj: document.querySelector('#cmp-subj').value,
+        to: document.querySelector('#cmp-to').value,
+        body: document.querySelector('#cmp-body').value,
+      };
+    });
+    check(moved.composeOpen, 'the transfer opens the composer');
+    check(/personal@example\.net/.test(moved.from), `sending from the inbox it was dropped on: ${moved.from}`);
+    check(/^Fwd: Signed contract$/.test(moved.subj), `pre-filled as a forward: "${moved.subj}"`);
+    check(/Forwarded/.test(moved.body) && /Client/.test(moved.body), 'with the original quoted beneath');
+    check(moved.to === '', 'and no recipient assumed — a drag must not send mail on its own');
+
+    await page.evaluate(() => { document.querySelector('#cmp-cancel')?.click(); closeCompose(); setSplit(false); });
+    check(await page.isHidden('#split-pane'), 'closing returns to one inbox');
+    await page.evaluate(() => {
+      S.messages = S.messages.filter(m => !['ta1', 'tb1'].includes(m.id));
+      S.linked = []; save(); renderMailFilters(); renderMail();
+    });
+
     /* ---- the Bridge keeps BOTH files ---- */
     console.log('\n— Format Bridge: conversion keeps the original —');
     /* Files moved behind "More"; reveal it the way a person would. */

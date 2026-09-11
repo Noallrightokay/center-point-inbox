@@ -130,6 +130,9 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
    columns onto a laptop, and each inbox keeps the full width it needs to be
    readable. */
 .split-pane{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
+/* A class that sets display beats the browser's own [hidden] rule, so the
+   pane has to opt back out explicitly or it shows before it is asked for. */
+.split-pane[hidden]{display:none}
 .split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
 .split-head .sel{flex:1;min-width:0}
 body.split-on #mail-detail{display:none}
@@ -2210,9 +2213,13 @@ const ov=$('#compose-ov');
 let dlpTimer=null,lastFindings=[];
 function fillComposeFrom(){
   const sel=$('#cmp-from');
-  const gs=S.linked.filter(l=>l.type==='google');
-  sel.innerHTML=gs.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')+'<option value="local">Record only (no linked email)</option>';
-  if(gs.length)sel.value=gs[0].id;
+  /* Anything that can really send goes first, so the default is a real send
+     rather than a note to self. Mail accounts send over SMTP through the
+     server; Google accounts send through the Gmail API in the browser. */
+  const sendable=S.linked.filter(l=>l.type==='mail'||l.type==='google');
+  sel.innerHTML=sendable.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')
+    +'<option value="local">Record only (no linked email)</option>';
+  if(sendable.length)sel.value=sendable[0].id;
 }
 function b64url(str){
   return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -2280,24 +2287,31 @@ $('#cmp-send').onclick=async()=>{
   if(lastFindings.length){S.counters.warned++;await audit('dlp.warn',`Email to ${to} sent with ${lastFindings.length} warning(s)`)}
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===to.toLowerCase());
   const acctSel=prov;
-  const gAcct=S.linked.find(l=>l.id===acctSel&&l.type==='google');
+  const acct=S.linked.find(l=>l.id===acctSel);
+  const gAcct=acct&&acct.type==='google'?acct:null;
+  const mAcct=acct&&acct.type==='mail'?acct:null;
   let realSent=false;
-  if(gAcct){
+  if(gAcct||mAcct){
     if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
     const sb=$('#cmp-send');sb.disabled=true;sb.textContent='Sending…';
     try{
-      await gmailSend(gAcct,to,subj,body);
+      if(gAcct)await gmailSend(gAcct,to,subj,body);
+      else{
+        const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({from:mAcct.label,to,subject:subj,body})});
+        if(!r.ok)throw new Error(r.error||'send failed');
+      }
       realSent=true;
     }catch(e){
       sb.disabled=false;sb.textContent='Send';
-      toast('Gmail send failed — '+(e.message||'reconnect and try again'));
+      toast((gAcct?'Gmail send failed — ':'Send failed — ')+(e.message||'reconnect and try again'));
       return;
     }
     sb.disabled=false;sb.textContent='Send';
   }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:gAcct?'gmail':'local',acct:gAcct?gAcct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[],ctx:S.plugins.split?$('#cmp-ctx').value:undefined});
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:gAcct?'gmail':(mAcct?'imap':'local'),acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[],ctx:S.plugins.split?$('#cmp-ctx').value:undefined});
   save();
-  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${gAcct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
+  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent for real via '+gAcct.label):'Recorded — link a Google account to send real email');
