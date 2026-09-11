@@ -53,6 +53,19 @@ export default async function run(state) {
     } finally { await s.stop(); }
   }
 
+  console.log('\n— the image optimizer is closed —');
+  {
+    const s = await startServer();
+    try {
+      for (const u of ['/_next/image?url=%2Ffavicon.ico&w=64&q=75', '/_next/image']) {
+        const r = await fetch(s.url + u);
+        check(r.status === 404, `${u.split('?')[0]} -> ${r.status}`);
+      }
+      const ok = await fetch(s.url + '/app');
+      check(ok.status === 200, `and the app itself still serves -> ${ok.status}`);
+    } finally { await s.stop(); }
+  }
+
   console.log('\n— without REDIRECT_TO, the app serves normally —');
   {
     const s = await startServer();

@@ -126,6 +126,16 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 
 /* ---------- two-pane (messages / people) ---------- */
 .pane-view{flex-direction:row}
+/* Two inboxes at once. The reading pane gives way rather than squeezing three
+   columns onto a laptop, and each inbox keeps the full width it needs to be
+   readable. */
+.split-pane{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
+.split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
+.split-head .sel{flex:1;min-width:0}
+body.split-on #mail-detail{display:none}
+body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto}
+.drop-live{outline:2px dashed var(--tint);outline-offset:-6px;background:var(--tint-wash)}
+.mail-row[draggable=true]{cursor:grab}
 .side-list{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
 .chip-row{display:flex;gap:7px;padding:12px 16px;overflow-x:auto;scrollbar-width:none;flex-shrink:0}
 .chip-row::-webkit-scrollbar{display:none}
@@ -586,9 +596,16 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
         <div class="chip-row" id="cat-tabs"></div>
         <button class="btn" id="sync-all" style="display:none;margin:0 14px 8px;align-self:flex-start">⟳ Sync linked inboxes</button>
         <div class="chip-row" id="mail-filters"></div>
-        <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button></div>
+        <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button><button class="btn" id="split-on" title="Show two inboxes side by side">⫿⫿ Two inboxes</button></div>
         <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
+      </div>
+      <div class="split-pane" id="split-pane" hidden>
+        <div class="split-head">
+          <select class="sel" id="split-acct"></select>
+          <button class="btn" id="split-off" title="Back to one inbox">✕</button>
+        </div>
+        <div class="side-scroll" id="split-scroll"></div>
       </div>
       <div class="detail-pane" id="mail-detail"><div class="empty" style="padding-top:120px"><b>Nothing selected</b>Pick a message on the left to read it.</div></div>
     </section>
@@ -1190,8 +1207,9 @@ function categorize(m){
   if(m.cid)return 'people';
   return 'other';
 }
-function mailPool(){
+function mailPool(acctId){
   let pool=S.messages.filter(m=>channelEnabled(m.ch));
+  if(acctId)pool=pool.filter(m=>m.acct===acctId);
   if(chFilter!=='all')pool=pool.filter(m=>m.ch===chFilter);
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
@@ -1216,6 +1234,111 @@ function bulkRefresh(){
   $('#bulk-bar').classList.toggle('on',selecting);
   $('#view-inbox').classList.toggle('selecting',selecting);
 }
+/* One row, used by the single inbox and by both split panes. In split mode a
+   row is draggable: dropping it on the other inbox is how a message and its
+   files move between accounts. */
+/* ---------------- TWO INBOXES SIDE BY SIDE ----------------
+   One screen, two accounts, and a message dragged from one to the other opens
+   a forward from the account it was dropped on — files and all. That is the
+   move people otherwise do by downloading an attachment out of one mailbox and
+   uploading it into another. */
+let splitOn=false,splitAcct='';
+function mailAccounts(){return S.linked.filter(l=>l.type==='mail'||l.type==='google'||l.type==='ms'||l.type==='gmail_imap'||l.type==='apple')}
+function acctName(l){return l?l.label:'All inboxes'}
+
+function renderSplitPicker(){
+  const sel=$('#split-acct');if(!sel)return;
+  const accts=mailAccounts();
+  sel.innerHTML='<option value="">All inboxes</option>'+accts.map(l=>`<option value="${l.id}">${esc(l.label)}</option>`).join('');
+  /* Default the second pane to a different account than the first, since two
+     identical columns tell the user nothing. */
+  if(!splitAcct||!accts.some(l=>l.id===splitAcct)){
+    const first=mailFilter.startsWith('acct:')?mailFilter.slice(5):null;
+    const other=accts.find(l=>l.id!==first);
+    splitAcct=other?other.id:'';
+  }
+  sel.value=splitAcct;
+}
+
+function renderSplit(){
+  if(!splitOn)return;
+  const sc=$('#split-scroll');if(!sc)return;
+  const pool=mailPool(splitAcct||undefined);
+  sc.innerHTML=pool.length
+    ? pool.map(m=>mailRowHTML(m)).join('')
+    : `<div class="empty" style="padding:40px 20px"><b>Nothing here yet</b>${splitAcct?esc(acctName(S.linked.find(l=>l.id===splitAcct)))+' has no messages in RATA yet.':'Connect a second account to compare two inboxes.'}</div>`;
+  sc.querySelectorAll('.mail-row').forEach(r=>{
+    r.onclick=()=>openMail(r.dataset.id);
+    r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+  });
+}
+
+/* A drop target is the *other* inbox, so `target` is the account a dropped
+   message should be forwarded from. */
+function wireDrop(el,targetAcct){
+  if(!el)return;
+  el.ondragover=e=>{if(e.dataTransfer.types.includes('text/rata-msg')){e.preventDefault();el.classList.add('drop-live')}};
+  el.ondragleave=()=>el.classList.remove('drop-live');
+  el.ondrop=e=>{
+    el.classList.remove('drop-live');
+    const id=e.dataTransfer.getData('text/rata-msg');
+    if(!id)return;
+    e.preventDefault();
+    transferMessage(id,typeof targetAcct==='function'?targetAcct():targetAcct);
+  };
+}
+
+/* Carry a message across: open the composer already filled in as a forward,
+   sending from the account it landed on. The user still reads it and presses
+   send — a drag should never post mail on somebody's behalf. */
+function transferMessage(msgId,targetAcctId){
+  const m=S.messages.find(x=>x.id===msgId);
+  if(!m){toast('That message is no longer here');return}
+  if(m.acct&&targetAcctId&&m.acct===targetAcctId){toast('That message is already in this inbox');return}
+  openCompose();
+  const from=$('#cmp-from');
+  if(targetAcctId&&[...from.options].some(o=>o.value===targetAcctId))from.value=targetAcctId;
+  $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
+  $('#cmp-body').value=`\n\n---------- Forwarded ----------\nFrom: ${msgFrom(m)}\nDate: ${new Date(m.ts).toLocaleString()}\n\n${m.body||m.prev||''}`;
+  if(m.atts&&m.atts.length)toast(`Forwarding with ${m.atts.length} file${m.atts.length===1?'':'s'} — add the recipient and send`);
+  else toast('Add a recipient and send');
+  $('#cmp-to').focus();
+  audit('mail.transfer',`${m.subj||'(no subject)'} moved toward ${acctName(S.linked.find(l=>l.id===targetAcctId))}`);
+}
+
+function setSplit(on){
+  splitOn=on;
+  document.body.classList.toggle('split-on',on);
+  const pane=$('#split-pane');
+  if(pane)pane.hidden=!on;
+  const btn=$('#split-on');
+  if(btn)btn.classList.toggle('on',on);
+  if(on){renderSplitPicker();renderSplit()}
+  renderMail();
+}
+
+function mailRowHTML(m){
+  const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
+  return `
+    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
+      <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
+      <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
+      <div class="m-body">
+        <div class="m-line1"><span class="m-from">${esc(nm)}</span><span class="m-time">${rel(m.ts)}</span></div>
+        ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:''}
+        <div class="m-prev">${esc(m.prev)}</div>
+        <div class="m-meta">
+          <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:CHANNELS[m.ch].label}</span>
+          ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
+          ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
+          ${S.plugins.split?`<span class="badge ${ctx}">${ctx}</span>`:''}
+          ${S.plugins.jobs&&job?`<span class="badge job">${esc(job)}</span>`:''}
+          ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
+          ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
+        </div>
+      </div>
+    </div>`;
+}
 function renderMail(){
   const pool=mailPool(),sc=$('#mail-scroll');
   $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
@@ -1234,29 +1357,19 @@ function renderMail(){
     if(b)b.onclick=()=>{go('conn');document.getElementById('nav-more')?.removeAttribute('hidden')};
     return}
   bulkRefresh();
-  sc.innerHTML=pool.map(m=>{
-    const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
-    return `
-    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}">
-      <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
-      <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
-      <div class="m-body">
-        <div class="m-line1"><span class="m-from">${esc(nm)}</span><span class="m-time">${rel(m.ts)}</span></div>
-        ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:''}
-        <div class="m-prev">${esc(m.prev)}</div>
-        <div class="m-meta">
-          <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:CHANNELS[m.ch].label}</span>
-          ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
-          ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
-          ${S.plugins.split?`<span class="badge ${ctx}">${ctx}</span>`:''}
-          ${S.plugins.jobs&&job?`<span class="badge job">${esc(job)}</span>`:''}
-          ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
-          ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
-        </div>
-      </div>
-    </div>`}).join('');
+  sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('');
   sc.querySelectorAll('.selbox').forEach(cb=>cb.onclick=e=>{e.stopPropagation();const id=cb.dataset.sel;SEL.has(id)?SEL.delete(id):SEL.add(id);cb.classList.toggle('on');cb.textContent=SEL.has(id)?'✓':'';bulkRefresh()});
-  sc.querySelectorAll('.mail-row').forEach(r=>r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)});
+  sc.querySelectorAll('.mail-row').forEach(r=>{
+    r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)};
+    r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+  });
+  if(splitOn){
+    /* Each pane accepts what the other one drops. The left pane's account is
+       whichever chip is selected; with no chip it is the combined inbox and a
+       drop means "send from my first account". */
+    wireDrop(sc,()=>mailFilter.startsWith('acct:')?mailFilter.slice(5):(mailAccounts()[0]||{}).id);
+    wireDrop($('#split-scroll'),()=>splitAcct||(mailAccounts()[0]||{}).id);
+  }
   sc.querySelectorAll('.avatar[data-cid]').forEach(a=>a.onclick=e=>{e.stopPropagation();go('people');openPerson(a.dataset.cid)});
 }
 function openMail(id){
@@ -2125,6 +2238,11 @@ function openCompose(){
   $('#cmp-to').focus();
 }
 function closeCompose(){ov.classList.remove('open')}
+/* Two-inbox controls. */
+$('#split-on').onclick=()=>setSplit(!splitOn);
+$('#split-off').onclick=()=>setSplit(false);
+$('#split-acct').onchange=e=>{splitAcct=e.target.value;renderSplit()};
+
 $('#compose-btn').onclick=openCompose;
 $('#cmp-close').onclick=closeCompose;
 ov.addEventListener('click',e=>{if(e.target===ov)closeCompose()});
