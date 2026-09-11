@@ -764,16 +764,13 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
           <div class="sec-label">Linked accounts</div>
           <div id="linked-list"></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Link another account</b><span>Google links live from the browser. Microsoft and Slack link live through the RATA backend (Next.js deploy — see BACKEND-SETUP.md). Discord and phone link as identities for now.</span></div>
-            <button class="btn primary" data-addlink="google">＋ Google</button>
-            <button class="btn" data-addlink="ms">＋ Microsoft · live</button>
-            <button class="btn" data-addlink="slack">＋ Slack · live</button>
-            <button class="btn" data-addlink="imap:gmail">＋ Gmail · app password</button>
-            <button class="btn" data-addlink="imap:apple">＋ iCloud · app password</button>
+            <div class="grow"><b>Add an account</b><span id="quota-line">Email works with any provider — Gmail, Outlook, Yahoo, your work address, anything. Chat and phone are separate.</span></div>
+            <button class="btn primary" data-addlink="mail">＋ Email account</button>
+            <button class="btn" data-addlink="slack">＋ Slack</button>
             <button class="btn" data-addlink="discord">＋ Discord</button>
             <button class="btn" data-addlink="phone">＋ Phone</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
@@ -965,17 +962,21 @@ const PLUGINS={
 };
 
 /* ---------------- SEED DATA ---------------- */
+/* A new workspace starts with nothing switched on. Every source of messages
+   and every extra is something the user turns on deliberately, after signing
+   in to that service — so the app never shows a Slack filter to somebody who
+   has no Slack, and never implies it is reading mail it cannot see. */
 const seed=()=>({
-  v:4,
+  v:5,
   settings:{name:'Bear',api:'',profile:'HIPAA'},
   linked:[],
   rules:[],
-  plugins:{split:true,jobs:true,slack:true,sms:true,discord:true,autopilot:true},
+  plugins:{split:false,jobs:false,slack:false,sms:false,discord:false,autopilot:false},
   jobs:[],
   contacts:[],
   messages:[],
   documents:[],
-  connections:{gmail:true,outlook:true,imap:false,slackc:true,smsc:true,discordc:true,drive:true,onedrive:true,dropbox:true},
+  connections:{gmail:false,outlook:false,imap:false,slackc:false,smsc:false,discordc:false,drive:false,onedrive:false,dropbox:false},
   counters:{scans:0,warned:0,blocked:0,conversions:0,autopilot:0},
   audit:[]
 });
@@ -983,7 +984,10 @@ const seed=()=>({
 /* ---------------- STATE + MIGRATION ---------------- */
 let S=null;
 function migrate(old){
-  if(old&&old.v>=3){old.v=4;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
+  /* v5 turned the defaults off for new workspaces. An existing one keeps what
+     its owner already switched on — silently disabling somebody's Slack feed
+     because the default moved would be a bug, not a preference. */
+  if(old&&old.v>=3){old.v=5;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
   const fresh=seed();
   if(!old)return fresh;
   /* v1/v2 (emails[]) → v3: carry settings/audit/docs/counters, rebuild stream */
@@ -1884,10 +1888,10 @@ $('#cfg-sta').addEventListener('change',e=>{setCfg({stripeAnnual:e.target.value.
 $('#cfg-stp').addEventListener('change',e=>{setCfg({stripePortal:e.target.value.trim()});renderPlan();toast('Billing portal link saved')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
-  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No linked accounts yet</b><span>Link Google to transfer a real Gmail inbox in, or add the handles you use elsewhere.</span></div></div>';return}
+  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${LINK_META[l.type][0]} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}</span></div>${SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${esc(l.type==='mail'?(l.provLabel||'Email')+(l.host?' · '+l.host:''):LINK_META[l.type][0])} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
   el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(SYNCABLE.includes(l.type))serverSync(l.type)});
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
@@ -1901,7 +1905,16 @@ $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   if(t==='slack'){linkProviderLive('slack');return}
   const im=t.startsWith('imap:')?IMAP_LINK[t.slice(5)]:null;
   lfType=t;
-  if(im){
+  $('#lf-host').style.display='none';$('#lf-host').value='';
+  if(t==='mail'){
+    /* One form for every provider. The address decides the rest — which server
+       to reach and where that provider keeps its app-password screen — so the
+       user is not asked to know any of it. */
+    $('#lf-title').textContent='Add an email account';
+    $('#lf-sub').textContent='Your address and an app password for it. Most providers issue app passwords under their security settings; your normal password usually will not work.';
+    $('#lf-input').placeholder='you@anywhere.com';
+    $('#lf-pass').style.display='';$('#lf-pass').value='';
+  }else if(im){
     $('#lf-title').textContent='Link '+im.label;
     $('#lf-sub').textContent='App-specific password — create one at '+im.help+'. Your normal password will not work.';
     $('#lf-input').placeholder=im.ph;
@@ -1915,9 +1928,10 @@ $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   $('#lf-input').value='';
   $('#linkform').style.display='flex';$('#lf-input').focus();
 });
-$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none'};
+$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none'};
 $('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
+  if(lfType==='mail'){await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());return}
   if(lfType&&lfType.startsWith('imap:')){await imapLink(lfType.slice(5),v,$('#lf-pass').value);return}
   if(!validLink(lfType,v)){toast('That format doesn\u2019t look right \u2014 check and try again');return}
   const l=addLinked(lfType,v);
@@ -1925,6 +1939,59 @@ $('#lf-save').onclick=async()=>{
 };
 $('#lf-input').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
 $('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+
+/* Link a mailbox at any provider.
+
+   The server works out which mail host serves the address, proves the password
+   against it, and only then stores anything — so a typo fails here rather than
+   as an inbox that silently never fills. Two answers need handling beyond a
+   plain error: the plan being full (402), and the server not being findable,
+   which is the one case where we ask the user for it. */
+async function mailLink(email,pass,host){
+  if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
+  const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
+  try{
+    const res=await apiFetch('/api/link/mail',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,appPassword:pass,host:host||undefined})});
+    if(!res.ok){
+      if(res.needsHost){
+        $('#lf-host').style.display='';$('#lf-host').focus();
+        $('#lf-sub').textContent=res.error;
+      }else toast(res.error||'Could not link that mailbox');
+      return;
+    }
+    $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
+    let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
+    if(l){l.status='live';l.host=res.host;l.provLabel=res.label;save()}
+    $('#linkform').style.display='none';
+    renderLinked();renderConn();refreshQuota();
+    await audit('mail.link',res.email+' linked ('+res.label+')');
+    toast(res.email+' linked — pulling messages…');
+    await serverSync('mail');
+  }catch(e){
+    toast(e.message==='cloud-account-required'
+      ?'Linking mail needs a cloud account (sign up with the database connected)'
+      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+  }finally{btn.disabled=false;btn.textContent='Link'}
+}
+
+/* What the plan still allows, read from the server rather than guessed here —
+   the server is what enforces it, so this cannot drift out of agreement. A cap
+   the user only meets as a failing button is a cap that feels like a bug. */
+let QUOTA=null;
+async function refreshQuota(){
+  const line=$('#quota-line');if(!line)return;
+  try{
+    const q=await apiFetch('/api/links');
+    if(q.error)return;
+    QUOTA=q;
+    const m=`${q.used.mail} of ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
+    const c=q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`:'no chat workspaces';
+    line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(q.remaining.mail?'':' Upgrade in Settings to add another mailbox.');
+  }catch(e){/* signed in on this device only — the server has nothing to say */}
+}
 
 /* The server proves the credentials against the real IMAP host before storing
    them, so a wrong password fails here rather than as an inbox that never fills. */
@@ -2174,7 +2241,7 @@ let gTokens={};
 function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 
 /* ---- linked accounts registry ---- */
-const LINK_META={google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS'],gmail_imap:['Gmail — app password (IMAP)'],apple:['iCloud Mail — app password (IMAP)']};
+const LINK_META={mail:['Email'],google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS'],gmail_imap:['Gmail — app password (IMAP)'],apple:['iCloud Mail — app password (IMAP)']};
 /* Mail linked over IMAP rather than OAuth. Apple publishes no OAuth for Mail;
    Gmail's read scopes are restricted, so one-click Gmail needs Google verification
    and an annual CASA assessment. An app-specific password needs neither. */
@@ -2236,14 +2303,19 @@ async function linkProviderLive(p){
     toast(e.message==='cloud-account-required'?'Live linking needs a cloud account (sign up with the database connected)':'Live linking needs the RATA backend — deploy the Next.js build and see BACKEND-SETUP.md');
   }
 }
-/* OAuth providers sync at /api/sync/<type>; IMAP ones at /api/sync/imap/<key>. */
-function syncPathFor(type){const k=imapKeyFor(type);return k?'/api/sync/imap/'+k:'/api/sync/'+type}
-const SYNCABLE=['google','ms','slack','gmail_imap','apple'];
+/* Mailboxes sync together at /api/sync/mail; the older per-provider IMAP links
+   keep their own path so accounts linked before this change still work. */
+function syncPathFor(type){if(type==='mail')return '/api/sync/mail';const k=imapKeyFor(type);return k?'/api/sync/imap/'+k:'/api/sync/'+type}
+const SYNCABLE=['mail','google','ms','slack','gmail_imap','apple'];
 async function serverSync(p){
   const newIds=[];
   try{
     const res=await apiFetch(syncPathFor(p));
     if(res.error){toast(res.error);return}
+    /* /api/sync/mail answers for every mailbox at once, so the reply names the
+       accounts rather than one label. Each message already carries the address
+       it came from, which is what the combined inbox filters on. */
+    if(p==='mail'){await absorbMail(res);return}
     let l=S.linked.find(x=>x.type===p&&x.label.toLowerCase()===String(res.label||'').toLowerCase());
     if(!l)l=addLinked(p,res.label);
     if(!l)return;
@@ -2264,6 +2336,35 @@ async function serverSync(p){
   }catch(e){
     toast(e.message==='cloud-account-required'?'Live sync needs a cloud account':'Live sync needs the RATA backend — see BACKEND-SETUP.md');
   }
+}
+
+/* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
+   can be synced, removed, or filtered on its own, and a mailbox that failed
+   says so by name rather than sinking the whole refresh. */
+async function absorbMail(res){
+  const newIds=[];let added=0;
+  for(const a of (res.accounts||[])){
+    let l=linkedFind('mail',a.email)||addLinked('mail',a.email,{host:a.host||'',provLabel:a.label||''});
+    if(!l)continue;
+    l.status=a.error?'error':'live';
+    l.lastSync=Date.now();
+    if(a.error)l.lastError=a.error;else delete l.lastError;
+  }
+  for(const m of (res.messages||[])){
+    if(S.messages.some(x=>x.id===m.id))continue;
+    const owner=linkedFind('mail',m.acct||'');
+    const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
+    S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
+    added++;newIds.push(m.id);
+  }
+  save();
+  autoTranslateNew(newIds);
+  const failed=(res.partial||[]).map(f=>f.email);
+  await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
+  renderLinked();renderChSeg();renderMailFilters();renderMail();
+  toast(failed.length
+    ? `${failed.join(', ')} could not be reached — check the app password in Accounts`
+    : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
 }
 
 /* ---- Google: real OAuth per account ---- */
@@ -2815,6 +2916,12 @@ function showWelcome(ob){
   }
   $('#rail-acct').textContent=SESSION?SESSION.email:'—';
   $('#rail-prof').textContent=S.settings.profile;
+  /* What the plan allows is the server's answer, so ask it once on boot and
+     whenever a link changes — the Accounts screen states the allowance before
+     anyone runs into it. */
+  refreshQuota();
+  /* Mailboxes linked on another device belong here too. */
+  if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
   if(!S.audit.length){await audit('workspace.init','Rata standalone workspace created')}
   renderChSeg();renderMailFilters();renderMail();
   $('#nc-docs').textContent=S.documents.length;

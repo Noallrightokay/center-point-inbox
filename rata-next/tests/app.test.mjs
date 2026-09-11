@@ -105,6 +105,43 @@ export default async function run(state) {
       await page.waitForSelector('#welcome-ov.open', { state: 'detached', timeout: 8000 }).catch(() => {});
     }
 
+    /* ---- a new workspace arrives switched off ---- */
+    console.log('\n— nothing is connected until the user connects it —');
+    const fresh = await page.evaluate(() => ({
+      plugins: S.plugins, connections: S.connections, linked: S.linked.length,
+    }));
+    const onByDefault = [
+      ...Object.entries(fresh.plugins).filter(([, v]) => v).map(([k]) => 'plugin:' + k),
+      ...Object.entries(fresh.connections).filter(([, v]) => v).map(([k]) => 'connection:' + k),
+    ];
+    check(onByDefault.length === 0, onByDefault.length
+      ? `switched on without asking: ${onByDefault.join(', ')}`
+      : 'every plugin and connection starts off');
+    check(fresh.linked === 0, `no accounts assumed: ${fresh.linked} linked`);
+
+    /* ---- one mail form, any provider ---- */
+    console.log('\n— adding an email account —');
+    await page.click('[data-view="conn"], [data-view="set"]').catch(() => {});
+    const addButtons = await page.$$eval('[data-addlink]', bs => bs.map(b => b.dataset.addlink));
+    check(addButtons.includes('mail'), `add buttons: ${addButtons.join(', ')}`);
+    check(!addButtons.some(b => b.startsWith('imap:')),
+      'no per-provider Gmail/iCloud buttons left to choose between');
+
+    await page.evaluate(() => document.querySelector('[data-addlink="mail"]').click());
+    const form = await page.evaluate(() => ({
+      title: document.querySelector('#lf-title').textContent,
+      sub: document.querySelector('#lf-sub').textContent,
+      placeholder: document.querySelector('#lf-input').placeholder,
+      passShown: document.querySelector('#lf-pass').style.display !== 'none',
+      hostShown: document.querySelector('#lf-host').style.display !== 'none',
+    }));
+    check(/email account/i.test(form.title), `form title: "${form.title}"`);
+    check(form.placeholder === 'you@anywhere.com', `placeholder invites any provider: "${form.placeholder}"`);
+    check(form.passShown, 'it asks for an app password');
+    check(!form.hostShown, 'and does not ask for a server address unless it has to');
+    check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
+    await page.evaluate(() => document.querySelector('#lf-cancel').click());
+
     /* ---- the Bridge keeps BOTH files ---- */
     console.log('\n— Format Bridge: conversion keeps the original —');
     /* Files moved behind "More"; reveal it the way a person would. */
