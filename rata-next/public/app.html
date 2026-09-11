@@ -1102,7 +1102,7 @@ function go(v){
   if(v==='docs'){renderFolders();renderDocs()}
   if(v==='plug')renderPlugins();
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
-  if(v==='conn')renderConn();
+  if(v==='conn'){renderConn();refreshQuota()}
   if(v==='set')renderSettings();
   if(v==='search')setTimeout(()=>$('#search-input').focus(),50);
 }
@@ -2212,7 +2212,12 @@ async function refreshQuota(){
     const m=`${q.used.mail} of ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
     const c=q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`:'no chat workspaces';
     line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(q.remaining.mail?'':' Upgrade in Settings to add another mailbox.');
-  }catch(e){/* signed in on this device only — the server has nothing to say */}
+  }catch(e){
+    /* A device-only account has no server to ask, which is not an error — but
+       a cloud account that cannot reach it should not leave the generic blurb
+       standing as though the allowance were unlimited. */
+    if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now — your allowance still applies.';
+  }
 }
 
 /* The server proves the credentials against the real IMAP host before storing
