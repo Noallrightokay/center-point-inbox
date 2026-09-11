@@ -35,7 +35,7 @@ function redirectTarget(req) {
 // deploys are additive, so a file deleted from source keeps being served from
 // the previous deployment and would otherwise shadow the route, silently
 // reverting the site to a hand-edited config.
-export function middleware(req) {
+export default function proxy(req) {
   const moved = redirectTarget(req);
   if (moved) return NextResponse.redirect(moved, 308);
 

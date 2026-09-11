@@ -45,7 +45,7 @@ export default async function run(state) {
 
   /* Archive deploys are additive: a public/config.js from an earlier deployment
      keeps being served after it is deleted from source, and Next serves public/
-     files for paths it owns. The middleware rewrite is what stops that stale
+     files for paths it owns. The proxy rewrite is what stops that stale
      file from silently reverting the site to a hand-edited config. */
   console.log('\n— a stale public/config.js must NOT shadow the route —');
   {

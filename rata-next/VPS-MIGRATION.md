@@ -41,7 +41,9 @@ apt-get install -y nodejs git
 node -v            # expect v20.x
 ```
 
-RATA needs Node 20 or newer: `imapflow` and the Supabase SDK both require it.
+RATA needs Node 20.9 or newer — Next 16 sets that floor, and `imapflow` and the
+Supabase SDK want 20+ anyway. The managed deployment builds on Node 22; match it
+here unless you have a reason not to.
 
 ## 2. Get the code onto the box
 

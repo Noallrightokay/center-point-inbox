@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic';
    or gated behind restricted-scope verification (Gmail). The credentials are
    proved against the real IMAP server before anything is written. */
 export async function POST(req, { params }) {
-  const def = imapProvider(params.provider);
+  const { provider } = await params;
+  const def = imapProvider(provider);
   if (!def) return NextResponse.json({ error: 'Unknown mail provider' }, { status: 400 });
 
   const { user, sb, error } = await userFromRequest(req);
@@ -32,5 +33,5 @@ export async function POST(req, { params }) {
   });
   if (e2) return NextResponse.json({ error: 'Could not save the link — ' + e2.message });
 
-  return NextResponse.json({ ok: true, label: email, provider: params.provider });
+  return NextResponse.json({ ok: true, label: email, provider });
 }

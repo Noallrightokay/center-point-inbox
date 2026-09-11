@@ -29,10 +29,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: rata-next/package-lock.json
 
@@ -63,10 +63,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: rata-next/package-lock.json
 
@@ -75,9 +75,8 @@ jobs:
 
       # Any critical advisory fails the build unless it is named in
       # scripts/audit-gate.mjs with the reason it cannot reach this app and the
-      # test that keeps that true. That is stricter than a lowered threshold —
-      # which goes blind to every future critical — and honest about the two
-      # standing exceptions, both of which need Next 16 to clear properly.
+      # test that keeps that true. That list is currently empty and should stay
+      # so — Next 16 cleared the two entries it held.
       - name: Audit production dependencies
         run: node scripts/audit-gate.mjs
 

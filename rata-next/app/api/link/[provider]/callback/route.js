@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { admin, appUrl, LINK_COOKIE, clearLinkCookie, sameState, stateExpired } from '../../../../../lib/server';
 
 export async function GET(req, { params }) {
-  const provider = params.provider;
+  const { provider } = await params;
   const url = new URL(req.url);
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state') || '';

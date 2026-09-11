@@ -1,29 +1,20 @@
 /* Fail the build on a critical advisory that actually reaches this app.
 
    `npm audit` knows which packages are installed; it cannot know which of their
-   code paths a deployment runs. RATA's one standing critical is Next's image
-   optimizer, and this app disables that endpoint outright — next.config.js sets
-   images.unoptimized, no page renders <Image>, and /_next/image answers 404,
-   which the redirect suite asserts. The only version npm offers as a fix is
-   Next 16, a major upgrade.
+   code paths a deployment runs. So a critical that provably cannot reach RATA
+   may be named below with the reason and the test that keeps that reason true,
+   and anything critical that is not named fails the build. That is stricter
+   than lowering the threshold, which goes blind to every future critical.
 
-   So rather than lowering the threshold and going blind to every future
-   critical, each accepted advisory is named here with the reason it does not
-   apply and the test that keeps that true. Anything critical that is not on
-   this list fails the build, which is the behaviour we actually want. */
+   The list is empty, and should stay that way. It held two entries while RATA
+   was on Next 14 — an image-optimizer RCE and a Windows-only RCE — and the
+   Next 16 upgrade cleared both along with the other 25 advisories. An entry
+   here is a debt, not a resting place. */
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-const ACCEPTED = {
-  'GHSA-2xp9-vwfh-vxw4':
-    'Next image optimizer RCE via AVIF. The optimizer is disabled in ' +
-    'next.config.js (images.unoptimized) and /_next/image returns 404, ' +
-    'asserted by tests/redirect.test.mjs. Fix requires Next 16.',
-  'GHSA-p293-qw3h-jr36':
-    'Next RCE on Windows-hosted servers. RATA runs on Linux, on Hostinger ' +
-    'Node hosting and on a Ubuntu VPS. Fix requires Next 16.',
-};
+const ACCEPTED = {};
 
 const run = promisify(execFile);
 let report;

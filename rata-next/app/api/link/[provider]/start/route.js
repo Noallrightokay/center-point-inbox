@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { admin, appUrl, PROVIDERS, LINK_COOKIE, sameState, stateExpired } from '../../../../../lib/server';
 
 export async function GET(req, { params }) {
-  const provider = params.provider;
+  /* Next 16 hands route params as a promise — reading them synchronously
+     silently yields undefined rather than failing, so it must be awaited. */
+  const { provider } = await params;
   const state = new URL(req.url).searchParams.get('state') || '';
   const base = appUrl(req);
   const fail = m => NextResponse.redirect(`${base}/app.html?linkerr=${encodeURIComponent(m)}`);

@@ -5,7 +5,8 @@ import { imapProvider, fetchInbox } from '../../../../../lib/imap';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req, { params }) {
-  const def = imapProvider(params.provider);
+  const { provider } = await params;
+  const def = imapProvider(provider);
   if (!def) return NextResponse.json({ error: 'Unknown mail provider' }, { status: 400 });
 
   const { user, sb, error } = await userFromRequest(req);
