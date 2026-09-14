@@ -265,6 +265,19 @@ export default async function run(state) {
     const adobe = launcher.tiles.filter(t => /Acrobat|Fill|Express|Convert/.test(t.name)).map(t => t.name);
     check(adobe.length >= 3, `Adobe is covered: ${adobe.join(', ')}`);
     check(launcher.tiles.some(t => t.name === 'DocuSign'), 'and signing has somewhere to go');
+
+    /* Every tile carries the product's mark, not a letter on a square. */
+    const marks = await page.evaluate(() => ({
+      glyphs: document.querySelectorAll('.launch-tile .brand-glyph').length,
+      tiles: document.querySelectorAll('.launch-tile').length,
+      labelled: [...document.querySelectorAll('.launch-tile .brand-glyph')].every(g => !!g.getAttribute('aria-label')),
+      external: [...document.querySelectorAll('.launch-tile img, .launch-tile image')].length,
+      colours: new Set([...document.querySelectorAll('.launch-tile .brand-glyph')].map(g => g.getAttribute('fill'))).size,
+    }));
+    check(marks.glyphs === marks.tiles, `${marks.glyphs} of ${marks.tiles} tiles show the real mark`);
+    check(marks.external === 0, 'drawn inline, so nothing is fetched and they work offline');
+    check(marks.labelled, 'each mark names the product for a screen reader');
+    check(marks.colours >= 8, `in the vendors' own colours, not RATA's: ${marks.colours} distinct`);
     await page.evaluate(() => go('docs'));
 
     /* ---- the Business file library ---- */

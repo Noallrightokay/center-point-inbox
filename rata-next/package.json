@@ -9,7 +9,8 @@
     "start": "next start",
     "vendor:libs": "node scripts/vendor-libs.mjs",
     "test": "node tests/run.mjs",
-    "preview": "node scripts/build-preview.mjs"
+    "preview": "node scripts/build-preview.mjs",
+    "brand-icons": "node scripts/brand-icons.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -20,6 +21,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "playwright": "^1.56.1"
+    "playwright": "^1.56.1",
+    "simple-icons": "^16.31.0"
   }
 }
