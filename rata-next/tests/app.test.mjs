@@ -251,6 +251,55 @@ export default async function run(state) {
       S.linked = []; save(); renderMailFilters(); renderMail();
     });
 
+    /* ---- the Bridge keeps BOTH files ---- */
+    console.log('\n— Format Bridge: conversion keeps the original —');
+    /* Files moved behind "More"; reveal it the way a person would. */
+    await page.evaluate(() => { document.getElementById('nav-more')?.removeAttribute('hidden'); go('docs'); });
+    await page.setInputFiles('#br-file', CSV);
+    await page.waitForSelector('#br-loaded', { state: 'visible', timeout: 15000 });
+    const dl = page.waitForEvent('download', { timeout: 30000 }).catch(() => null);
+    await page.click('#br-save');
+    await page.waitForFunction(() => S.documents.length >= 2, null, { timeout: 45000 });
+
+    const pair = await page.evaluate(() => {
+      const src = S.documents.find(d => d.role === 'source');
+      const con = S.documents.find(d => d.role === 'converted');
+      return {
+        total: S.documents.length, srcName: src?.name, conName: con?.name,
+        linked: !!(src && con && src.pair === con.pair && con.from === src.id),
+        srcHasText: !!src?.content,
+      };
+    });
+    check(pair.total === 2, `two documents, not one: ${pair.total}`);
+    check(pair.linked, `original kept and linked: ${pair.srcName} -> ${pair.conName}`);
+    check(pair.srcHasText, 'original carries its extracted text into the workspace');
+    check(!!(await dl), 'converted file downloaded');
+
+    /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
+    /* ---- depth is part of the design, not decoration to be lost ---- */
+    console.log('\n— the interface has weight —');
+    const depth = await page.evaluate(() => {
+      const cs = el => el ? getComputedStyle(el) : null;
+      const compose = cs(document.querySelector('#compose-btn'));
+      const pillOn = cs(document.querySelector('#mail-filters .pill.on'));
+      const reduce = getComputedStyle(document.documentElement).getPropertyValue('--pop').trim();
+      return {
+        composeGradient: /gradient/.test(compose.backgroundImage),
+        composeGlow: compose.boxShadow,
+        composeRound: parseFloat(compose.borderRadius),
+        pillGradient: pillOn ? /gradient/.test(pillOn.backgroundImage) : null,
+        pillRound: pillOn ? parseFloat(pillOn.borderRadius) : null,
+        springy: reduce,
+      };
+    });
+    check(depth.composeGradient, 'the primary action is a gradient, not a flat fill');
+    check(/rgb/.test(depth.composeGlow) && !/^rgba?\(0, 0, 0/.test(depth.composeGlow),
+      `and glows in its own colour rather than grey: ${depth.composeGlow.split(') ')[0]})`);
+    check(depth.composeRound >= 20, `bubble-round: ${depth.composeRound}px`);
+    check(depth.pillGradient === true && depth.pillRound >= 20,
+      `selected filters are bubbles too: ${depth.pillRound}px, gradient ${depth.pillGradient}`);
+    check(/cubic-bezier/.test(depth.springy), `with an overshoot curve for the lift: ${depth.springy}`);
+
     /* ---- the New document page is a launcher, not an editor ---- */
     console.log('\n— making something new opens the app you already use —');
     await page.evaluate(() => go('create'));
