@@ -82,7 +82,7 @@ const BILLING = 'lk-billing', LEGAL = 'lk-legal', OLD = 'lk-old', SUPPORT = 'lk-
 
 const demo = {
   v: 5,
-  settings: { name: 'Sam Reyes', api: '', profile: 'HIPAA', plan: 'base', planSince: now - 86400000 * 40, org: 'Reyes & Co.' },
+  settings: { name: 'Sam Reyes', api: '', profile: 'HIPAA', plan: 'pro', planSince: now - 86400000 * 40, org: 'Reyes & Co.' },
   linked: [
     { id: WORK, type: 'mail', label: 'sam@reyesandco.com', status: 'live', addedAt: now - 86400000 * 12, lastSync: hrs(1), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
     { id: HOME, type: 'mail', label: 'sam.reyes@gmail.com', status: 'live', addedAt: now - 86400000 * 12, lastSync: hrs(2), host: 'imap.gmail.com', provLabel: 'Gmail' },
@@ -212,9 +212,9 @@ const harness = `
   <span class="pv-tag">Preview · not the live site</span>
   <span class="pv-sep"></span>
   <span class="pv-tag">Plan</span>
-  <button type="button" id="pv-free" data-plan="free">Free</button>
-  <button type="button" id="pv-base" data-plan="base">Base</button>
-  <button type="button" id="pv-business" data-plan="business">Business</button>
+  <button type="button" id="pv-base" data-plan="base">Base $8</button>
+  <button type="button" id="pv-pro" data-plan="pro">Pro $16</button>
+  <button type="button" id="pv-enterprise" data-plan="enterprise">Enterprise $72</button>
   <span class="pv-sep"></span>
   <button type="button" id="pv-reset">Reload demo</button>
   <button type="button" id="pv-hide" class="pv-hide" title="Hide this bar">✕</button>
@@ -243,7 +243,7 @@ const harness = `
       /* Repaint whatever the tier changes: the file library appears on
          Business, and the billing panel states the plan. */
       /* Function declarations do land on window, unlike let. */
-      ['renderFolders','renderDocs','renderPlan','renderSettings','renderAcctMenu'].forEach(function(fn){
+      ['renderFolders','renderDocs','renderPlan','renderSettings','renderAcctMenu','renderSplitLock','renderMail','renderSplit'].forEach(function(fn){
         try{ if(typeof window[fn]==='function')window[fn](); }catch(e){}
       });
       mark();

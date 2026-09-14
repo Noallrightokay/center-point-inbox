@@ -162,9 +162,25 @@ export default async function run(state) {
     });
     const together = await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length);
 
+    /* With no plan, side by side is visible but locked — the choice stays on
+       screen, which is how anyone learns the tier above exists. */
+    const locked = await page.evaluate(() => {
+      const b = document.querySelector('#inbox-mode [data-mode="split"]');
+      return { label: b.textContent.trim(), isLocked: b.classList.contains('locked'), why: b.title };
+    });
+    check(locked.isLocked, `without a plan it is offered but locked: "${locked.label}"`);
+    check(await page.isHidden('#main-head'),
+      'and no empty header bar sits under the switch while the inbox is whole');
+    check(/RATA Pro/.test(locked.why) && /\$16/.test(locked.why),
+      `and says what unlocks it: "${locked.why}"`);
+    await page.click('#inbox-mode [data-mode="split"]');
+    check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
+      'clicking it does not split — it explains instead');
+
+    await page.evaluate(() => { S.settings.plan = 'pro'; save(); renderSplitLock(); });
     const modes = await page.$$eval('#inbox-mode button', bs => bs.map(b => b.textContent.trim()));
     check(modes.join(' / ') === 'One inbox / Side by side',
-      `both layouts named up front: ${modes.join(' / ')}`);
+      `on Pro both layouts are named up front: ${modes.join(' / ')}`);
     check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
       'nothing is split until asked for');
 
@@ -342,18 +358,18 @@ export default async function run(state) {
 
     /* ---- the Business file library ---- */
     console.log('\n— folders for files —');
-    await page.evaluate(() => { S.settings.plan = 'free'; save(); go('docs'); });
+    await page.evaluate(() => { S.settings.plan = 'base'; save(); go('docs'); });
     const free = await page.evaluate(() => ({
       barShown: !document.querySelector('#folder-bar').hidden,
       hint: document.querySelector('#folder-hint').textContent,
       newBtn: document.querySelector('#folder-new').style.display,
       chips: document.querySelectorAll('#folder-chips .pill').length,
     }));
-    check(free.barShown, 'on a lesser plan the rail is still visible, not hidden');
-    check(/Business/.test(free.hint), `and says what it is: "${free.hint}"`);
+    check(free.barShown, 'on Base the rail is still visible, not hidden');
+    check(/RATA Pro/.test(free.hint) && /\$16/.test(free.hint), `and says what it is: "${free.hint}"`);
     check(free.newBtn === 'none' && free.chips === 0, 'but no folders to make or use');
 
-    await page.evaluate(() => { S.settings.plan = 'business'; save(); renderFolders(); renderDocs(); });
+    await page.evaluate(() => { S.settings.plan = 'pro'; save(); renderFolders(); renderDocs(); });
     const biz = await page.evaluate(() => {
       S.folders.push('Acme Ltd'); save(); renderFolders(); renderDocs();
       const doc = S.documents[0];
@@ -373,11 +389,11 @@ export default async function run(state) {
 
     /* Downgrading must never make a document unreachable. */
     const after = await page.evaluate(() => {
-      S.settings.plan = 'free'; save(); renderFolders(); renderDocs();
+      S.settings.plan = 'base'; save(); renderFolders(); renderDocs();
       return document.querySelectorAll('#doc-grid .doc-card').length;
     });
-    check(after === biz.total, `dropping to the free plan hides no files: ${after} of ${biz.total} still listed`);
-    await page.evaluate(() => { S.settings.plan = 'free'; S.folders = []; S.documents.forEach(d => delete d.folder); save(); });
+    check(after === biz.total, `dropping to Base hides no files: ${after} of ${biz.total} still listed`);
+    await page.evaluate(() => { S.settings.plan = 'base'; S.folders = []; S.documents.forEach(d => delete d.folder); save(); });
 
     console.log('\n— stored bytes —');
     const vault = await page.evaluate(async () => {

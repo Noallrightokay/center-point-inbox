@@ -7,7 +7,7 @@
    against a real server by the live checks. */
 import { startServer, makeChecker } from './helpers.mjs';
 import { describe, candidateHosts, mailKey, isMailKey, domainOf } from '../lib/mail.js';
-import { PLANS, bucketOf, countLinks, refusal } from '../lib/plan.js';
+import { PLANS, UNLIMITED, bucketOf, countLinks, refusal } from '../lib/plan.js';
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -47,18 +47,37 @@ export default async function run(state) {
     check(/^mail:[a-z0-9_]+$/.test(a), `and stay a single readable token: ${a}`);
   }
 
-  console.log('\n— what a plan includes —');
+  console.log('\n— what each plan includes —');
   {
-    check(PLANS.base.mail === 2 && PLANS.base.chat === 1, 'Base: 2 mailboxes, 1 chat workspace');
-    check(PLANS.business.files === true && PLANS.base.files === false, 'the file library is Business only');
+    check(PLANS.base.price === 8 && PLANS.pro.price === 16 && PLANS.enterprise.price === 72,
+      `the ladder: $${PLANS.base.price} / $${PLANS.pro.price} / $${PLANS.enterprise.price}`);
+    check(!('free' in PLANS), 'there is no free tier to fall back to');
+
+    check(PLANS.base.mail === 2, 'Base: two mailboxes');
+    check(PLANS.base.split === false, 'and one inbox — side by side is not part of it');
+    check(PLANS.base.translate && PLANS.base.convert,
+      'but translation and the Format Bridge are, because that is what Base is for');
+
+    check(PLANS.pro.mail === UNLIMITED, 'Pro: as many mailboxes as you have');
+    check(PLANS.pro.split && PLANS.pro.ai, 'with side by side and summaries');
+    check(!PLANS.pro.crm && !PLANS.pro.sms && !PLANS.pro.automations,
+      'and none of the team features');
+
+    check(PLANS.enterprise.crm && PLANS.enterprise.sms && PLANS.enterprise.automations,
+      'Enterprise: the CRM, texts and automations');
+
+    /* Each plan has to contain the one below it, or upgrading could take
+       something away. */
+    const strictly = ['split', 'translate', 'convert', 'ai', 'files', 'crm', 'sms', 'automations']
+      .every(f => !PLANS.base[f] || PLANS.pro[f]) &&
+      ['split', 'translate', 'convert', 'ai', 'files', 'crm', 'sms', 'automations']
+      .every(f => !PLANS.pro[f] || PLANS.enterprise[f]);
+    check(strictly, 'each plan contains the one below it — upgrading never takes anything away');
 
     check(bucketOf(mailKey('a@b.com')) === 'mail', 'a new mailbox draws on the mail allowance');
     check(bucketOf('gmail_imap') === 'mail' && bucketOf('apple') === 'mail',
-      'so do mailboxes linked before this change — upgrading must not drop them');
-    check(bucketOf('slack') === 'chat', 'Slack draws on the chat allowance');
-
-    const rows = [{ provider: mailKey('a@b.com') }, { provider: 'apple' }, { provider: 'slack' }];
-    const used = countLinks(rows);
+      'so do mailboxes linked before this change — changing plan must not drop them');
+    const used = countLinks([{ provider: mailKey('a@b.com') }, { provider: 'apple' }, { provider: 'slack' }]);
     check(used.mail === 2 && used.chat === 1, `counted separately: ${used.mail} mail, ${used.chat} chat`);
   }
 
@@ -67,11 +86,18 @@ export default async function run(state) {
     check(refusal('base', 'mail', 1) === null, 'one mailbox on Base: the second is allowed');
     const stop = refusal('base', 'mail', 2);
     check(!!stop, 'the third is refused');
-    check(/RATA Business/.test(stop) && /\d/.test(stop), `and the refusal names the way out: "${stop}"`);
+    check(/RATA Pro/.test(stop) && /\$16/.test(stop),
+      `and names the plan that lifts it, with its price: "${stop}"`);
 
-    const noChat = refusal('free', 'chat', 0);
-    check(/does not include/.test(noChat), `free preview, chat: "${noChat}"`);
-    check(refusal('business', 'mail', 2) === null, 'Business has room for more');
+    check(refusal('pro', 'mail', 500) === null, 'Pro does not run out of mailboxes');
+    check(refusal('enterprise', 'chat', 99) === null, 'nor Enterprise of chat workspaces');
+
+    const none = refusal(null, 'mail', 0);
+    check(/Choose a plan/.test(none) && /\$8/.test(none),
+      `an account with no plan is told the price, not handed a free tier: "${none}"`);
+
+    const noChat = refusal('base', 'chat', 0);
+    check(/does not include/.test(noChat) && /RATA Pro/.test(noChat), `Base, chat: "${noChat}"`);
   }
 
   console.log('\n— the endpoints exist and refuse strangers —');

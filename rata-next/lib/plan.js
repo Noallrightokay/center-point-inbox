@@ -1,49 +1,98 @@
 /* ---------------------------------------------------------------------------
-   What a plan includes.
+   What each plan includes.
 
-   A link is a live connection to somebody else's service — a mailbox, a Slack
-   workspace — and each one costs RATA a sync. So links are what the plans are
-   sold by, and the limits live here rather than being scattered through the UI:
-   the server refuses an over-limit link, and the client reads the same numbers
-   to explain the cap before the user hits it.
+   There is no free tier. An account without an active subscription is not on a
+   cheaper plan — it is unsubscribed, and the difference matters: it should be
+   told what RATA costs, not handed a stripped-down product and left to think
+   that is what RATA is.
 
-   Counting rule: mail accounts and chat links are counted separately, so
-   connecting a second mailbox never uses up the Slack allowance.
+   Three plans, and each one is defined by the thing it makes possible:
+
+     Base        two mailboxes in one inbox, translated, and the Format Bridge
+     Pro         as many mailboxes as you have, side by side, with summaries
+     Enterprise  the CRM, texts and automations on top
+
+   The limits live here and nowhere else. The server refuses an over-limit
+   link, and the client reads the same numbers to explain a cap before anyone
+   runs into it — so the two cannot drift apart.
    --------------------------------------------------------------------------- */
 
+export const UNLIMITED = Infinity;
+
 export const PLANS = {
-  free: {
-    label: 'Free preview',
-    mail: 1,
-    chat: 0,
-    files: false,        // the business file library
-    blurb: 'One mailbox, so you can see what RATA does with your own mail.',
-  },
   base: {
     label: 'RATA Base',
+    price: 8,
     mail: 2,
-    chat: 1,
+    chat: 0,
+    /* One inbox. Every mailbox lands in the same stream — which is the whole
+       point at this tier — but they cannot be put side by side. */
+    split: false,
+    translate: true,
+    convert: true,
+    ai: false,
     files: false,
-    blurb: 'Two mailboxes and one Slack workspace.',
+    crm: false,
+    sms: false,
+    automations: false,
+    blurb: 'Two mailboxes in one inbox, translated as they arrive, and any file converted to any format.',
   },
-  business: {
-    label: 'RATA Business',
-    mail: 10,
-    chat: 5,
+  pro: {
+    label: 'RATA Pro',
+    price: 16,
+    mail: UNLIMITED,
+    chat: 3,
+    split: true,
+    translate: true,
+    convert: true,
+    ai: true,
     files: true,
-    blurb: 'Ten mailboxes, five chat workspaces, and the shared file library.',
+    crm: false,
+    sms: false,
+    automations: false,
+    blurb: 'Everything in Base, with as many mailboxes as you have, inboxes side by side, and summaries of what arrived.',
+  },
+  enterprise: {
+    label: 'RATA Enterprise',
+    price: 72,
+    mail: UNLIMITED,
+    chat: UNLIMITED,
+    split: true,
+    translate: true,
+    convert: true,
+    ai: true,
+    files: true,
+    crm: true,
+    sms: true,
+    automations: true,
+    blurb: 'Everything in Pro, plus the CRM, texts, automations and a shared view across the team.',
   },
 };
 
+/* Not a plan. What an account is before it has one. */
+export const NO_PLAN = {
+  label: 'No plan yet',
+  price: 0,
+  mail: 0, chat: 0,
+  split: false, translate: false, convert: false, ai: false,
+  files: false, crm: false, sms: false, automations: false,
+  blurb: 'Choose a plan to connect a mailbox. RATA Base is $8 a month.',
+};
+
+export const ORDER = ['base', 'pro', 'enterprise'];
 export const CHAT_TYPES = ['slack', 'discord', 'phone'];
 
 export function planDef(plan) {
-  return PLANS[plan] || PLANS.free;
+  return PLANS[plan] || NO_PLAN;
+}
+
+export function has(plan, feature) {
+  return !!planDef(plan)[feature];
 }
 
 /* Which allowance a link draws from. Mail is mail whichever provider serves
-   it — the old per-provider tokens count too, or upgrading would silently
-   drop somebody's existing mailbox. */
+   it — the older per-provider tokens count too, or changing plan would
+   silently drop somebody's existing mailbox. */
 export function bucketOf(provider) {
   if (!provider) return null;
   if (provider.startsWith('mail:')) return 'mail';
@@ -61,33 +110,45 @@ export function countLinks(rows) {
   return n;
 }
 
+/* The next plan up that lifts this particular limit, or null at the top. */
+export function nextFor(plan, bucket) {
+  const from = ORDER.indexOf(plan);
+  const cap = planDef(plan)[bucket];
+  return ORDER.slice(from + 1).find(p => PLANS[p][bucket] > cap) || null;
+}
+
 /* Returns null when the link is allowed, or the sentence to show when it is
-   not. The message names the limit and the plan that lifts it, because "limit
-   reached" on its own tells the user nothing they can act on. */
+   not — naming the limit and what lifts it, because "limit reached" on its own
+   tells the user nothing they can act on. */
 export function refusal(plan, bucket, used) {
   const def = planDef(plan);
   const cap = def[bucket];
   if (used < cap) return null;
 
-  const what = bucket === 'mail' ? 'mailbox' : 'chat workspace';
-  const plural = bucket === 'mail' ? 'mailboxes' : 'chat workspaces';
-  const next = Object.entries(PLANS).find(([name, p]) => p[bucket] > cap && name !== plan);
+  const one = bucket === 'mail' ? 'mailbox' : 'chat workspace';
+  const many = bucket === 'mail' ? 'mailboxes' : 'chat workspaces';
 
-  if (cap === 0) {
-    return `${def.label} does not include ${plural}.` + (next ? ` ${PLANS[next[0]].label} includes ${PLANS[next[0]][bucket]}.` : '');
+  if (!PLANS[plan]) {
+    return `Choose a plan to connect a ${one}. RATA Base is $${PLANS.base.price} a month and includes ${PLANS.base.mail} ${many}.`;
   }
-  return `${def.label} includes ${cap} ${cap === 1 ? what : plural}, and ${cap === 1 ? 'it is' : 'they are'} in use.`
-    + (next ? ` ${PLANS[next[0]].label} includes ${PLANS[next[0]][bucket]} — upgrade in Settings to add another.` : '');
+
+  const up = nextFor(plan, bucket);
+  const lift = up
+    ? ` ${PLANS[up].label} ($${PLANS[up].price}/month) includes ${PLANS[up][bucket] === UNLIMITED ? 'as many as you have' : PLANS[up][bucket]} — upgrade in Settings.`
+    : '';
+
+  if (cap === 0) return `${def.label} does not include ${many}.${lift}`;
+  return `${def.label} includes ${cap} ${cap === 1 ? one : many}, and ${cap === 1 ? 'it is' : 'they are'} in use.${lift}`;
 }
 
 /* The user's plan, read from the subscriptions table the Stripe webhook
-   maintains. Anything not actively paid for is the free preview. */
+   maintains. No active subscription is no plan — not a lesser one. */
 export async function planForUser(sb, email) {
-  if (!sb || !email) return 'free';
+  if (!sb || !email) return null;
   const { data } = await sb.from('subscriptions')
     .select('plan,status').eq('email', String(email).toLowerCase()).maybeSingle();
-  if (!data) return 'free';
+  if (!data) return null;
   const live = ['active', 'trialing'].includes(String(data.status || '').toLowerCase());
-  if (!live) return 'free';
+  if (!live) return null;
   return PLANS[data.plan] ? data.plan : 'base';
 }

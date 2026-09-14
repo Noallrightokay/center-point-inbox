@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../lib/server';
 import { isMailKey } from '../../../lib/mail';
-import { planForUser, countLinks, planDef, bucketOf } from '../../../lib/plan';
+import { planForUser, countLinks, planDef, bucketOf, UNLIMITED } from '../../../lib/plan';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,12 +22,22 @@ export async function GET(req) {
   const def = planDef(plan);
   const used = countLinks(rows);
 
+  /* JSON has no Infinity, so an unlimited allowance travels as null and the
+     client reads that as "as many as you have" rather than as zero. */
+  const cap = n => (n === UNLIMITED ? null : n);
+
   return NextResponse.json({
     plan,
     planLabel: def.label,
-    limits: { mail: def.mail, chat: def.chat, files: def.files },
+    price: def.price,
+    limits: { mail: cap(def.mail), chat: cap(def.chat) },
+    features: { split: def.split, translate: def.translate, convert: def.convert,
+                ai: def.ai, files: def.files, crm: def.crm, sms: def.sms, automations: def.automations },
     used,
-    remaining: { mail: Math.max(0, def.mail - used.mail), chat: Math.max(0, def.chat - used.chat) },
+    remaining: {
+      mail: def.mail === UNLIMITED ? null : Math.max(0, def.mail - used.mail),
+      chat: def.chat === UNLIMITED ? null : Math.max(0, def.chat - used.chat),
+    },
     links: (rows || []).map(r => ({
       provider: r.provider,
       bucket: bucketOf(r.provider),

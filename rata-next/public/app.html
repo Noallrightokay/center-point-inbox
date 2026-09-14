@@ -236,6 +236,10 @@ body.split-on .side-list,body.split-on .split-pane{flex:1 1 0;min-width:330px}
   color:var(--slate);transition:var(--lift)}
 .inbox-mode button:hover{color:var(--ink)}
 .inbox-mode button.on{background:var(--grad-card);color:var(--tint);box-shadow:var(--sheen-soft),var(--edge)}
+/* Locked, not hidden: the choice stays on screen, which is how anyone finds
+   out the tier above exists. */
+.inbox-mode button.locked{color:var(--faint)}
+.inbox-mode button.locked:hover{color:var(--slate)}
 /* Side by side means two peers. The left pane drops the digest, the channel
    segments, the category tabs and the filter chips so it stops looking like
    the main event with a sidecar attached — each pane is then a mailbox with
@@ -248,6 +252,10 @@ body.split-on .side-list > #mail-filters,
 body.split-on .side-list > #sync-all{display:none}
 body.split-on .side-list > .sort-row{padding-top:8px}
 .split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
+/* A class that sets display beats the browser's own [hidden] rule, so the
+   header has to opt back out explicitly — otherwise an empty bar sits under
+   the mode switch whenever the inbox is not split. */
+.split-head[hidden]{display:none}
 .split-head .sel{flex:1;min-width:0}
 body.split-on #mail-detail{display:none}
 /* A flex child defaults to min-width:auto, so a long subject line would push
@@ -904,7 +912,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Upgrade to RATA Base</b><span>$8/month or $79/year — everything, on every device. Secure checkout by Stripe.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Monthly — $8</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Annual — $79</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — two mailboxes in one inbox. Pro $16 — as many as you have, side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Get Pro — $16</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Get Base — $8</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
         </div>
         <div class="comp-sec">
@@ -1097,7 +1105,7 @@ const PLUGINS={
    has no Slack, and never implies it is reading mail it cannot see. */
 const seed=()=>({
   v:5,
-  settings:{name:'Bear',api:'',profile:'HIPAA'},
+  settings:{name:'Bear',api:'',profile:'HIPAA',plan:null},
   linked:[],
   rules:[],
   plugins:{split:false,jobs:false,slack:false,sms:false,discord:false,autopilot:false},
@@ -1201,6 +1209,7 @@ function go(v){
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
   if(v==='create')renderCreate();
+  if(v==='inbox')renderSplitLock();
   if(v==='docs'){renderFolders();renderDocs()}
   if(v==='plug')renderPlugins();
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
@@ -1470,7 +1479,20 @@ function transferMessage(msgId,targetAcctId){
   audit('mail.transfer',`${m.subj||'(no subject)'} moved toward ${acctName(S.linked.find(l=>l.id===targetAcctId))}`);
 }
 
+/* Show the locked state rather than a dead button: the choice stays visible,
+   which is how anyone learns the tier above exists. */
+function renderSplitLock(){
+  const btn=document.querySelector('#inbox-mode [data-mode="split"]');
+  if(!btn)return;
+  const locked=!can('split');
+  btn.classList.toggle('locked',locked);
+  btn.title=locked?needPlan('split','Inboxes side by side'):'';
+  btn.textContent=locked?'Side by side · Pro':'Side by side';
+}
 function setSplit(on){
+  /* Base is one inbox by design — every mailbox in the same stream. Putting
+     them side by side is what Pro adds. */
+  if(on&&!can('split')){toast(needPlan('split','Inboxes side by side'));renderSplitLock();return}
   splitOn=on;
   document.body.classList.toggle('split-on',on);
   const head=$('#main-head');if(head)head.hidden=!on;
@@ -2026,17 +2048,36 @@ $('.doc-toolbar').addEventListener('click',e=>{
 });
 $('#doc-viewtoggle').onclick=()=>{docList=!docList;$('#doc-viewtoggle').textContent=docList?'Grid view':'List view';renderDocs()};
 const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOCX','PDF'],XLSX:['CSV','GSHEET','PDF'],GSHEET:['XLSX','CSV'],CSV:['XLSX','GSHEET'],MD:['PDF','DOCX'],TXT:['PDF','DOCX'],PAGES:['PDF','DOCX'],NUMBERS:['XLSX','PDF']};
-/* ---------------- THE FILE LIBRARY (Business) ----------------
+/* The plan ladder, mirroring lib/plan.js — the server enforces it, this
+   decides what to show. There is no free tier: an account with no plan is
+   unsubscribed, and is told the price rather than handed a lesser product. */
+const TIERS={
+  base:      {label:'RATA Base',      price:8,  mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false},
+  pro:       {label:'RATA Pro',       price:16, mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false},
+  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true},
+};
+const tier=()=>TIERS[S.settings.plan]||null;
+const tierLabel=()=>tier()?tier().label:'No plan yet';
+const can=f=>!!(tier()&&tier()[f]);
+/* What to say when something is held back, always naming the plan that has
+   it and what that costs. */
+function needPlan(feature,what){
+  const up=Object.keys(TIERS).find(k=>TIERS[k][feature]);
+  return up?`${what} comes with ${TIERS[up].label} — $${TIERS[up].price} a month. Upgrade in Settings.`
+           :`${what} is not part of your plan.`;
+}
+
+/* ---------------- THE FILE LIBRARY ----------------
    A business keeps files by what they are for — this client, that quarter —
    not by which cloud they happened to arrive from. Folders are that: a plain
    set of names, one per file, with drag to move and a chip to filter.
 
-   It is the Business tier's feature. On a lesser plan the rail explains what
-   it is rather than hiding, because a feature nobody can see is a feature
-   nobody buys — but nothing is filed and no file is hidden, so downgrading
-   never puts a document out of reach. */
+   It is a Pro feature. On Base the rail explains what it is rather than
+   hiding, because a feature nobody can see is a feature nobody buys — but
+   nothing is filed and no file is hidden, so moving down a plan never puts a
+   document out of reach. */
 let folderFilter='all';
-function hasFileLibrary(){return (S.settings.plan||'free')==='business'}
+function hasFileLibrary(){return can('files')}
 
 function renderFolders(){
   const bar=$('#folder-bar');if(!bar)return;
@@ -2045,7 +2086,7 @@ function renderFolders(){
   if(!hasFileLibrary()){
     chips.innerHTML='';
     mk.style.display='none';
-    hint.textContent='Folders for your files come with RATA Business — upgrade in Settings.';
+    hint.textContent=needPlan('files','Folders for your files');
     folderFilter='all';
     return;
   }
@@ -2363,9 +2404,14 @@ async function refreshQuota(){
     const q=await apiFetch('/api/links');
     if(q.error)return;
     QUOTA=q;
-    const m=`${q.used.mail} of ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
-    const c=q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`:'no chat workspaces';
-    line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(q.remaining.mail?'':' Upgrade in Settings to add another mailbox.');
+    const m=q.limits.mail===null
+      ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — as many as you have`
+      : `${q.used.mail} of ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
+    const c=q.limits.chat===null?'chat workspaces without limit'
+      :q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`
+      :'no chat workspaces';
+    const full=q.limits.mail!==null&&q.remaining.mail===0;
+    line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(full?' Upgrade in Settings to add another mailbox.':'');
   }catch(e){
     /* A device-only account has no server to ask, which is not an error — but
        a cloud account that cannot reach it should not leave the generic blurb
@@ -2401,10 +2447,13 @@ async function imapLink(key,email,pass){
   }finally{btn.disabled=false;btn.textContent='Link'}
 }
 function renderPlan(){
-  const c=cfg(),plan=S.settings.plan||'free';
+  const c=cfg(),t=tier();
   const badge=$('#plan-badge'),line=$('#plan-line');
-  if(plan==='base'){badge.textContent='RATA Base';badge.className='badge work';line.textContent='Active — thank you. Everything unlocked'+(S.settings.planSince?' since '+new Date(S.settings.planSince).toLocaleDateString():'')+'.'}
-  else{badge.textContent='Free preview';badge.className='badge personal';line.textContent='Full features in preview. Upgrade to keep everything after launch.'}
+  badge.textContent=tierLabel();
+  badge.className='badge '+(t?'work':'personal');
+  line.textContent=t
+    ?`$${t.price} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'as many mailboxes as you have':t.mail+' mailboxes'}`
+    :'No plan yet. RATA Base is $8 a month and includes two mailboxes in one inbox.';
   const m=$('#bill-monthly'),an=$('#bill-annual'),p=$('#bill-portal');
   m.style.display=c.stripeMonthly?'':'none';if(c.stripeMonthly)m.href=c.stripeMonthly;
   an.style.display=c.stripeAnnual?'':'none';if(c.stripeAnnual)an.href=c.stripeAnnual;
@@ -2630,7 +2679,7 @@ function renderAcctMenu(){
   $('#am-av').textContent=initials;
   $('#am-name').textContent=S.settings.name+(S.settings.org?' · '+S.settings.org:'');
   $('#am-email').textContent=SESSION?SESSION.email:'';
-  $('#am-plan').textContent='Plan: '+((S.settings.plan||'free')==='base'?'RATA Base':'Free preview')+(SESSION&&SESSION.mode==='supabase'?' · cloud account':' · this device');
+  $('#am-plan').textContent='Plan: '+tierLabel()+(SESSION&&SESSION.mode==='supabase'?' · cloud account':' · this device');
   const live=S.linked.filter(l=>l.status==='live').length;
   $('#am-links').textContent=S.linked.length?`${S.linked.length} linked account${S.linked.length===1?'':'s'} · ${live} live`:'No linked accounts yet';
 }
@@ -3275,10 +3324,11 @@ function showWelcome(ob){
   // Stripe checkout return
   const q=new URLSearchParams(location.search);
   if(q.get('checkout')==='success'){
-    S.settings.plan='base';S.settings.planSince=S.settings.planSince||Date.now();save();
-    await audit('billing.checkout','RATA Base checkout completed via Stripe');
+    S.settings.plan=q.get('plan')&&TIERS[q.get('plan')]?q.get('plan'):'base';
+    S.settings.planSince=S.settings.planSince||Date.now();save();
+    await audit('billing.checkout',tierLabel()+' checkout completed via Stripe');
     history.replaceState(null,'',location.pathname);
-    toast('Welcome to RATA Base — payment received');
+    toast('Welcome to '+tierLabel()+' — payment received');
   }
   // Onboarding: apply signup wizard choices + offer inbox transfer
   try{
@@ -3316,8 +3366,9 @@ function showWelcome(ob){
       if(sb){
         const {data}=await sb.from('subscriptions').select('plan,status').eq('email',SESSION.email.toLowerCase()).maybeSingle();
         if(data){
+          /* No active subscription means no plan at all — not a free tier. */
           const active=['active','trialing','past_due'].includes(data.status);
-          S.settings.plan=active?(data.plan||'base'):'free';save();
+          S.settings.plan=active?(data.plan||'base'):null;save();
         }
       }
     }catch(e){}
@@ -3328,6 +3379,7 @@ function showWelcome(ob){
      whenever a link changes — the Accounts screen states the allowance before
      anyone runs into it. */
   refreshQuota();
+  renderSplitLock();
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
   if(!S.audit.length){await audit('workspace.init','Rata standalone workspace created')}
