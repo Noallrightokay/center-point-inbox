@@ -125,6 +125,39 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .txt:focus{box-shadow:0 0 0 3px var(--tint-soft)}
 
 /* ---------- two-pane (messages / people) ---------- */
+/* ---- the launcher ----
+   Tiles, not cards: no shadow, no heavy border. They are doors to somewhere
+   else, and should read as quieter than the message list they sit beside. The
+   accent belongs to each vendor rather than to RATA, which is the honest
+   signal that these open somebody else's application. */
+.launch-wrap{max-width:900px;margin:0 auto;padding:28px 22px 80px;display:flex;flex-direction:column;gap:26px}
+.launch-head h2{margin:0 0 6px;font-size:22px;letter-spacing:-.01em;text-wrap:balance}
+.launch-head p{margin:0;max-width:62ch;color:var(--faint);line-height:1.6;font-size:14px}
+.launch-group{display:flex;flex-direction:column;gap:10px}
+.launch-group-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.launch-group-head b{font-size:14px}
+.launch-group-head span:last-child{font-size:12.5px;color:var(--faint)}
+.launch-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;align-self:center}
+.launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:9px}
+/* Name every cell. Placing only some of them leaves the rest to
+   auto-placement, which put the app's name in the arrow's column. */
+.launch-tile{display:grid;
+  grid-template-columns:auto 1fr auto;
+  grid-template-areas:"badge name go" "badge kind go";
+  column-gap:11px;row-gap:1px;align-items:center;
+  padding:12px 13px;border:1px solid var(--hair-2);border-radius:9px;
+  background:var(--card);text-decoration:none;color:inherit;transition:border-color .12s,background .12s}
+.launch-tile:hover{border-color:var(--tint);background:var(--tint-wash)}
+.launch-tile:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+.launch-badge{grid-area:badge;width:30px;height:30px;border-radius:7px;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.launch-name{grid-area:name;font-weight:600;font-size:14px;text-align:left}
+.launch-kind{grid-area:kind;font-size:11.5px;color:var(--faint);text-align:left}
+.launch-go{grid-area:go;color:var(--faint);font-size:13px}
+.launch-tile:hover .launch-go{color:var(--tint)}
+.launch-foot{font-size:13px;line-height:1.6;color:var(--faint);border-top:1px solid var(--hair-2);padding-top:16px;max-width:66ch}
+.linkish{background:none;border:0;padding:0;font:inherit;color:var(--tint);font-weight:600;cursor:pointer;text-decoration:underline}
+.linkish:hover{color:var(--tint-deep)}
 .pane-view{flex-direction:row}
 /* Two inboxes at once. The reading pane gives way rather than squeezing three
    columns onto a laptop, and each inbox keeps the full width it needs to be
@@ -564,7 +597,7 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0
     <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Files<span class="nav-count" id="nc-docs">0</span></button>
     <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>More</button>
     <div id="nav-more" hidden>
-      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Write something</button>
+      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New document</button>
       <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Search</button>
       <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg>Accounts</button>
       <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg>Extras<span class="nav-count" id="nc-plug">0</span></button>
@@ -628,34 +661,18 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0
 
     <!-- CREATE -->
     <section class="view" id="view-create">
-      <div class="create-wrap">
-        <div class="browser">
-          <div class="b-tabs" id="b-tabs"></div>
-          <div class="b-urlbar">
-            <div class="b-nav"><span>‹</span><span>›</span><span style="font-size:13px">⟳</span></div>
-            <div class="b-url" id="b-url"></div>
-            <a class="btn" id="b-real" target="_blank" rel="noopener">Open real app ↗</a>
-          </div>
-          <div class="b-frame" id="b-frame" data-skin="gdocs">
-            <div class="app-toolbar" id="app-toolbar"></div>
-            <input class="title" id="cr-title" type="text" placeholder="Untitled document">
-            <textarea id="cr-body" placeholder="Start writing…"></textarea>
-          </div>
+      <div class="launch-wrap">
+        <div class="launch-head">
+          <h2>Make something new</h2>
+          <p>RATA is not a word processor, and does not want to be. Open the app you already
+             use — it opens in its own tab, signed in as you — and what you send or receive
+             comes back to the inbox here.</p>
         </div>
-        <div class="create-card" style="margin-top:14px">
-          <div class="create-opts" style="border-top:none;padding-top:0">
-            <span class="opt-label">Save to</span>
-            <select class="sel" id="cr-dest"><option value="drive">Google Drive</option><option value="onedrive">OneDrive</option><option value="dropbox">Dropbox</option></select>
-            <span style="flex:1"></span>
-            <button class="btn primary" id="cr-save">Create file</button>
-          </div>
-          <div class="deliver-row">
-            <span class="opt-label">Create &amp; deliver to</span>
-            <select class="sel" id="cr-contact"></select>
-            <select class="sel" id="cr-channel"></select>
-            <button class="btn" id="cr-deliver">Create &amp; deliver</button>
-            <div class="autopilot-note" id="autopilot-note"></div>
-          </div>
+        <div id="launch-groups"></div>
+        <div class="launch-foot">
+          <b>Different formats, one inbox.</b> A file that arrives as .docx, .pages or .xlsx
+          can be turned into whichever format you need in <button class="linkish" data-goto="docs">Files → Format Bridge</button>,
+          and the original is kept beside the conversion rather than replaced.
         </div>
       </div>
     </section>
@@ -1091,7 +1108,7 @@ function channelEnabled(ch){return ch==='email'||(ch==='slack'&&S.plugins.slack)
 
 /* ---------------- NAV ---------------- */
 let currentView='inbox';
-const TITLES={inbox:['All channels','Messages'],people:['One thread per person','People'],create:['App bridge — create anywhere','Create'],search:['Everything, one query','Universal search'],docs:['All storage providers','Documents'],plug:['Extend the platform','Plugins'],comp:['DLP · Audit','Compliance'],conn:['Providers','Connections'],set:['Workspace','Settings']};
+const TITLES={inbox:['All channels','Messages'],people:['One thread per person','People'],create:['Opens in its own tab','New document'],search:['Everything, one query','Universal search'],docs:['All storage providers','Documents'],plug:['Extend the platform','Plugins'],comp:['DLP · Audit','Compliance'],conn:['Providers','Connections'],set:['Workspace','Settings']};
 function go(v){
   currentView=v;
   $$('.view').forEach(x=>x.classList.remove('active'));
@@ -1600,111 +1617,78 @@ function openPerson(cid,ch){
 }
 
 /* ---------------- CREATE — APP BRIDGE ---------------- */
-const APPS={
-  gdoc:{name:'Google Docs',eco:'google',type:'doc',host:'docs.google.com',path:'/document/create',real:'https://docs.new',accent:'#4285F4',skin:'gdocs'},
-  gsheet:{name:'Google Sheets',eco:'google',type:'sheet',host:'docs.google.com',path:'/spreadsheets/create',real:'https://sheets.new',accent:'#0F9D58',skin:'gsheets'},
-  word:{name:'Word',eco:'microsoft',type:'doc',host:'office.com',path:'/launch/word/new',real:'https://www.office.com/launch/word',accent:'#2B579A',skin:'word'},
-  excel:{name:'Excel',eco:'microsoft',type:'sheet',host:'office.com',path:'/launch/excel/new',real:'https://www.office.com/launch/excel',accent:'#217346',skin:'excel'},
-  pages:{name:'Pages',eco:'apple',type:'doc',host:'icloud.com',path:'/pages/new',real:'https://www.icloud.com/pages/',accent:'#FF9F0A',skin:'pages'},
-  numbers:{name:'Numbers',eco:'apple',type:'sheet',host:'icloud.com',path:'/numbers/new',real:'https://www.icloud.com/numbers/',accent:'#30D158',skin:'numbers'},
-  note:{name:'Rata Notes',eco:'plain',type:'note',host:'rata.local',path:'/notes/new',real:'',accent:'#2E5CFF',skin:'note'}
-};
-let curApp='gdoc';
-function appToolbar(a){
-  switch(a.skin){
-    case 'gdocs':return `<div class="menu-words"><span style="color:${a.accent};font-weight:700">Docs</span><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Tools</span></div>`;
-    case 'gsheets':return `<div class="menu-words"><span style="color:${a.accent};font-weight:700">Sheets</span><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Data</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    case 'word':return `<div class="ribbon" style="background:${a.accent}"><b>W</b> Word<span>Home</span><span>Insert</span><span>Layout</span><span>References</span><span>Review</span></div>`;
-    case 'excel':return `<div class="ribbon" style="background:${a.accent}"><b>X</b> Excel<span>Home</span><span>Formulas</span><span>Data</span><span>View</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    case 'pages':return `<div class="menu-words" style="justify-content:center"><span style="color:${a.accent};font-weight:700">Pages</span><span>Insert</span><span>Table</span><span>Chart</span><span>Text</span><span>Shape</span></div>`;
-    case 'numbers':return `<div class="menu-words" style="justify-content:center"><span style="color:${a.accent};font-weight:700">Numbers</span><span>Insert</span><span>Table</span><span>Chart</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    default:return `<div class="menu-words"><span style="color:var(--tint);font-weight:700">rata notes</span><span>Plain text · Markdown</span></div>`;
-  }
-}
+/* ---------------- MAKE SOMETHING NEW ----------------
+   RATA used to carry its own document editor: a mock browser frame around a
+   textarea that wrote a file into the workspace. It was the weakest thing in
+   the product — nobody wants a worse Google Docs — and it misrepresented what
+   RATA is for. RATA holds mail and files from several accounts at once,
+   translates, and converts between formats. Making the document is somebody
+   else's job, and the user already has an account with them.
+
+   So this page is a launcher. Every tile opens the real application in its own
+   tab, signed in as whoever the user already is there. Nothing is embedded: an
+   iframe of Google Docs would be blocked anyway, and pretending otherwise is
+   how the old page got into trouble. */
+const LAUNCH=[
+  {eco:'Google', accent:'#1a73e8', note:'Opens in your Google account.', apps:[
+    {name:'Docs',   kind:'Document',     url:'https://docs.new'},
+    {name:'Sheets', kind:'Spreadsheet',  url:'https://sheets.new'},
+    {name:'Slides', kind:'Presentation', url:'https://slides.new'},
+    {name:'Forms',  kind:'Form',         url:'https://forms.new'},
+    {name:'Drive',  kind:'All your files', url:'https://drive.google.com'},
+  ]},
+  {eco:'Microsoft', accent:'#2b579a', note:'Opens in Microsoft 365 on the web.', apps:[
+    {name:'Word',       kind:'Document',     url:'https://www.office.com/launch/word'},
+    {name:'Excel',      kind:'Spreadsheet',  url:'https://www.office.com/launch/excel'},
+    {name:'PowerPoint', kind:'Presentation', url:'https://www.office.com/launch/powerpoint'},
+    {name:'OneNote',    kind:'Notebook',     url:'https://www.office.com/launch/onenote'},
+    {name:'OneDrive',   kind:'All your files', url:'https://onedrive.live.com'},
+  ]},
+  {eco:'Adobe', accent:'#e34f26', note:'PDFs, signing and design.', apps:[
+    {name:'Acrobat',      kind:'Read & edit PDF', url:'https://acrobat.adobe.com'},
+    {name:'Fill & Sign',  kind:'Sign a PDF',      url:'https://acrobat.adobe.com/link/acrobat/fillsign'},
+    {name:'Convert',      kind:'To and from PDF', url:'https://www.adobe.com/acrobat/online/convert-pdf.html'},
+    {name:'Express',      kind:'Design',          url:'https://new.express.adobe.com'},
+  ]},
+  {eco:'Apple', accent:'#ff9f0a', note:'iCloud on the web — works from any browser.', apps:[
+    {name:'Pages',   kind:'Document',     url:'https://www.icloud.com/pages/'},
+    {name:'Numbers', kind:'Spreadsheet',  url:'https://www.icloud.com/numbers/'},
+    {name:'Keynote', kind:'Presentation', url:'https://www.icloud.com/keynote/'},
+  ]},
+  {eco:'Signing', accent:'#6b46c1', note:'Send something out for signature.', apps:[
+    {name:'DocuSign',     kind:'Send for signature', url:'https://app.docusign.com'},
+    {name:'Acrobat Sign', kind:'Send for signature', url:'https://sign.adobe.com'},
+  ]},
+];
+
 function renderCreate(){
-  const a=APPS[curApp];
-  $('#b-tabs').innerHTML=Object.entries(APPS).map(([k,ap])=>`<button class="b-tab ${k===curApp?'on':''}" data-a="${k}"><span class="b-dot" style="background:${ap.accent}"></span>${ap.name}</button>`).join('');
-  $$('#b-tabs .b-tab').forEach(t=>t.onclick=()=>{curApp=t.dataset.a;audit('bridge.open',APPS[curApp].name);renderCreate()});
-  $('#b-url').textContent='🔒 '+a.host+a.path;
-  const real=$('#b-real');
-  if(a.real){real.style.display='';real.href=a.real}else{real.style.display='none'}
-  const fr=$('#b-frame');fr.dataset.skin=a.skin;fr.classList.toggle('gridmode',a.type==='sheet');
-  $('#app-toolbar').innerHTML=appToolbar(a);
-  $('#cr-title').placeholder=a.type==='sheet'?'Untitled spreadsheet':a.type==='note'?'Untitled note':'Untitled document';
-  $('#cr-body').placeholder=a.type==='sheet'?'Name, Role, Rate\nJane Doe, Manager, 85\nJohn Smith, Analyst, 120':'Start writing…';
-  $('#cr-contact').innerHTML='<option value="">Choose a person…</option>'+S.contacts.filter(c=>c.id!=='c8').map(c=>`<option value="${c.id}">${esc(c.nick||c.name)}</option>`).join('');
-  updateDeliverUI();
+  const host=$('#launch-groups');if(!host)return;
+  host.innerHTML=LAUNCH.map(g=>`
+    <section class="launch-group">
+      <div class="launch-group-head">
+        <span class="launch-dot" style="background:${g.accent}"></span>
+        <b>${esc(g.eco)}</b>
+        <span>${esc(g.note)}</span>
+      </div>
+      <div class="launch-grid">
+        ${g.apps.map(a=>`
+          <a class="launch-tile" href="${a.url}" target="_blank" rel="noopener noreferrer"
+             data-launch="${esc(g.eco+' · '+a.name)}">
+            <span class="launch-badge" style="background:${g.accent}">${esc(a.name[0])}</span>
+            <span class="launch-name">${esc(a.name)}</span>
+            <span class="launch-kind">${esc(a.kind)}</span>
+            <span class="launch-go" aria-hidden="true">↗</span>
+          </a>`).join('')}
+      </div>
+    </section>`).join('');
+  /* A real link, so it opens in a tab and can be middle-clicked or copied like
+     any other. The audit entry is the only thing added on top. */
+  host.querySelectorAll('[data-launch]').forEach(t=>t.addEventListener('click',()=>{
+    audit('app.open',t.dataset.launch);
+  }));
+  const jump=document.querySelector('[data-goto]');
+  if(jump)jump.onclick=()=>{go(jump.dataset.goto);setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)};
 }
-function updateDeliverUI(){
-  const a=APPS[curApp];
-  const cid=$('#cr-contact').value,c=cid?contact(cid):null;
-  const chSel=$('#cr-channel');
-  if(c){
-    const opts=[['email','via Email']];
-    if(S.plugins.slack&&c.slack)opts.push(['slack','via Slack']);
-    if(S.plugins.sms&&c.phone)opts.push(['sms','via Text']);
-    if(S.plugins.discord&&c.discord)opts.push(['discord','via Discord']);
-    chSel.innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
-    const myFmt=ECOS[a.eco][a.type],theirFmt=ECOS[c.pref][a.type];
-    $('#autopilot-note').innerHTML=S.plugins.autopilot
-      ?(myFmt!==theirFmt
-        ?`<b>Format Autopilot:</b> you're working in ${a.name} (.${myFmt.toLowerCase()}); ${esc((c.nick||c.name).split(' ')[0])} receives <b>.${theirFmt.toLowerCase()}</b> (${ECOS[c.pref].label}) — converted on delivery.`
-        :`<b>Format Autopilot:</b> ${esc((c.nick||c.name).split(' ')[0])} already lives in ${ECOS[c.pref].label} — delivered as .${theirFmt.toLowerCase()}, no conversion needed.`)
-      :`Autopilot is off — delivered exactly as .${myFmt.toLowerCase()}. Turn it on in Plugins to auto-match each recipient.`;
-  }else{
-    chSel.innerHTML='<option>—</option>';
-    $('#autopilot-note').textContent='Pick a person and Rata will match the file to the ecosystem they work in.';
-  }
-}
-$('#cr-contact').addEventListener('change',updateDeliverUI);
-function sizeOf(text){const b=new Blob([text]).size;return b<1024?b+' B':(b/1024).toFixed(1)+' KB'}
-async function createFile(deliver){
-  const a=APPS[curApp];
-  const title=$('#cr-title').value.trim()||$('#cr-title').placeholder;
-  const body=$('#cr-body').value;
-  if(!body.trim()){toast('Write something first');return null}
-  const findings=runDLP(title+'\n'+body,S.settings.profile);
-  S.counters.scans++;
-  const blocks=findings.filter(f=>f.sev==='block');
-  if(deliver&&blocks.length){
-    S.counters.blocked++;save();
-    await audit('dlp.block',`File delivery blocked — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`);
-    toast('Delivery blocked by DLP — file contains '+blocks[0].name);
-    return null;
-  }
-  let eco=a.eco,fmt=ECOS[eco][a.type],convertedFor=null;
-  if(deliver){
-    const c=contact($('#cr-contact').value);
-    if(!c){toast('Pick a person to deliver to');return null}
-    if(S.plugins.autopilot&&c.pref!==eco){fmt=ECOS[c.pref][a.type];convertedFor=c;S.counters.autopilot++;S.counters.conversions++}
-  }
-  const extname=title.replace(/\.[a-z0-9]+$/i,'')+'.'+fmt.toLowerCase();
-  const doc={id:'d'+Date.now(),prov:$('#cr-dest').value,name:extname,fmt,size:sizeOf(body),ts:Date.now(),origin:'rata',app:a.name,content:body};
-  S.documents.unshift(doc);
-  save();
-  await audit('file.create',`${extname} in ${a.name} → ${doc.prov}${convertedFor?` · autopilot ${ECOS[eco][a.type]}→${fmt} for ${convertedFor.name}`:''}`);
-  return doc;
-}
-$('#cr-save').onclick=async()=>{
-  const doc=await createFile(false);
-  if(!doc)return;
-  toast(`Created ${doc.name} from ${APPS[curApp].name} → ${doc.prov}`);
-  $('#cr-title').value='';$('#cr-body').value='';
-  $('#nc-docs').textContent=S.documents.length;
-};
-$('#cr-deliver').onclick=async()=>{
-  const cid=$('#cr-contact').value;
-  if(!cid){toast('Pick a person to deliver to');return}
-  const c=contact(cid),ch=$('#cr-channel').value;
-  const doc=await createFile(true);
-  if(!doc)return;
-  S.messages.push({id:'x'+Date.now(),ch,prov:ch==='email'?'gmail':ch,cid:null,toId:cid,sent:true,subj:doc.name,prev:'Sent a file: '+doc.name,body:'Sent a file.',ts:Date.now(),unread:false,starred:false,atts:[{n:doc.name,f:doc.fmt,s:doc.size}]});
-  save();
-  await audit('file.deliver',`${doc.name} → ${c.name} via ${CHANNELS[ch].label}${S.plugins.autopilot?' (autopilot '+ECOS[c.pref].label+')':''}`);
-  toast(`Delivered to ${(c.nick||c.name).split(' ')[0]} as .${doc.fmt.toLowerCase()} via ${CHANNELS[ch].label}`);
-  $('#cr-title').value='';$('#cr-body').value='';
-  $('#nc-docs').textContent=S.documents.length;
-};
 
 /* ---------------- PLUGINS ---------------- */
 function ecoCard(o){

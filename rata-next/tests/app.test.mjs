@@ -240,6 +240,33 @@ export default async function run(state) {
     check(!!(await dl), 'converted file downloaded');
 
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
+    /* ---- the New document page is a launcher, not an editor ---- */
+    console.log('\n— making something new opens the app you already use —');
+    await page.evaluate(() => go('create'));
+    await page.waitForTimeout(200);
+    const launcher = await page.evaluate(() => ({
+      editor: !!document.querySelector('#cr-body, #b-frame, #app-toolbar'),
+      groups: [...document.querySelectorAll('.launch-group-head b')].map(b => b.textContent),
+      tiles: [...document.querySelectorAll('.launch-tile')].map(a => ({
+        name: a.querySelector('.launch-name').textContent,
+        href: a.getAttribute('href'),
+        target: a.getAttribute('target'),
+        rel: a.getAttribute('rel'),
+      })),
+    }));
+    check(!launcher.editor, 'RATA no longer carries a document editor of its own');
+    check(launcher.groups.join(', ') === 'Google, Microsoft, Adobe, Apple, Signing',
+      `grouped by whose app it is: ${launcher.groups.join(', ')}`);
+    check(launcher.tiles.length >= 18, `${launcher.tiles.length} apps to open`);
+    check(launcher.tiles.every(t => /^https:\/\//.test(t.href)),
+      'every tile is a real https link, so it can be middle-clicked or copied');
+    check(launcher.tiles.every(t => t.target === '_blank' && /noopener/.test(t.rel || '')),
+      'each opens in its own tab, with noopener');
+    const adobe = launcher.tiles.filter(t => /Acrobat|Fill|Express|Convert/.test(t.name)).map(t => t.name);
+    check(adobe.length >= 3, `Adobe is covered: ${adobe.join(', ')}`);
+    check(launcher.tiles.some(t => t.name === 'DocuSign'), 'and signing has somewhere to go');
+    await page.evaluate(() => go('docs'));
+
     /* ---- the Business file library ---- */
     console.log('\n— folders for files —');
     await page.evaluate(() => { S.settings.plan = 'free'; save(); go('docs'); });
