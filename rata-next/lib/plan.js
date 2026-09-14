@@ -8,9 +8,15 @@
 
    Three plans, and each one is defined by the thing it makes possible:
 
-     Base        two mailboxes in one inbox, translated, and the Format Bridge
-     Pro         as many mailboxes as you have, side by side, with summaries
+     Base        up to two mailboxes, arriving in one Center Point inbox,
+                 translated, with the Format Bridge
+     Pro         more than two mailboxes, and the option to put them side by
+                 side, with summaries
      Enterprise  the CRM, texts and automations on top
+
+   The Center Point inbox is not the limitation at the bottom of the ladder —
+   it is the product. Every mailbox lands in one place, on every plan. What
+   Pro adds is the choice to pull them apart again when that helps.
 
    The limits live here and nowhere else. The server refuses an over-limit
    link, and the client reads the same numbers to explain a cap before anyone
@@ -25,8 +31,8 @@ export const PLANS = {
     price: 8,
     mail: 2,
     chat: 0,
-    /* One inbox. Every mailbox lands in the same stream — which is the whole
-       point at this tier — but they cannot be put side by side. */
+    /* One Center Point inbox: both mailboxes in the same stream. Pulling them
+       apart into columns is what Pro adds. */
     split: false,
     translate: true,
     convert: true,
@@ -35,7 +41,7 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
-    blurb: 'Two mailboxes in one inbox, translated as they arrive, and any file converted to any format.',
+    blurb: 'Up to two mailboxes in one Center Point inbox, translated as they arrive, and any file converted to any format.',
   },
   pro: {
     label: 'RATA Pro',
@@ -50,7 +56,7 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
-    blurb: 'Everything in Base, with as many mailboxes as you have, inboxes side by side, and summaries of what arrived.',
+    blurb: 'Everything in Base, with more than two mailboxes, the option to view them side by side, and summaries of what arrived.',
   },
   enterprise: {
     label: 'RATA Enterprise',
@@ -129,16 +135,16 @@ export function refusal(plan, bucket, used) {
   const many = bucket === 'mail' ? 'mailboxes' : 'chat workspaces';
 
   if (!PLANS[plan]) {
-    return `Choose a plan to connect a ${one}. RATA Base is $${PLANS.base.price} a month and includes ${PLANS.base.mail} ${many}.`;
+    return `Choose a plan to connect a ${one}. RATA Base is $${PLANS.base.price} a month and includes up to ${PLANS.base.mail} ${many} in one Center Point inbox.`;
   }
 
   const up = nextFor(plan, bucket);
   const lift = up
-    ? ` ${PLANS[up].label} ($${PLANS[up].price}/month) includes ${PLANS[up][bucket] === UNLIMITED ? 'as many as you have' : PLANS[up][bucket]} — upgrade in Settings.`
+    ? ` ${PLANS[up].label} ($${PLANS[up].price}/month) includes ${PLANS[up][bucket] === UNLIMITED ? 'more than that' : PLANS[up][bucket]} — upgrade in Settings.`
     : '';
 
   if (cap === 0) return `${def.label} does not include ${many}.${lift}`;
-  return `${def.label} includes ${cap} ${cap === 1 ? one : many}, and ${cap === 1 ? 'it is' : 'they are'} in use.${lift}`;
+  return `${def.label} includes up to ${cap} ${cap === 1 ? one : many}, and ${cap === 1 ? 'it is' : 'they are'} in use.${lift}`;
 }
 
 /* The user's plan, read from the subscriptions table the Stripe webhook

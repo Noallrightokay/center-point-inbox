@@ -88,6 +88,11 @@ export default async function run(state) {
     check(!!stop, 'the third is refused');
     check(/RATA Pro/.test(stop) && /\$16/.test(stop),
       `and names the plan that lifts it, with its price: "${stop}"`);
+    check(/up to 2/.test(stop), 'Base is up to two mailboxes, stated as a ceiling not a quota');
+
+    const none0 = refusal(null, 'mail', 0);
+    check(/Center Point inbox/.test(none0),
+      'and the pitch names what the mailboxes arrive in');
 
     check(refusal('pro', 'mail', 500) === null, 'Pro does not run out of mailboxes');
     check(refusal('enterprise', 'chat', 99) === null, 'nor Enterprise of chat workspaces');

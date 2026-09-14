@@ -178,9 +178,12 @@ export default async function run(state) {
       'clicking it does not split — it explains instead');
 
     await page.evaluate(() => { S.settings.plan = 'pro'; save(); renderSplitLock(); });
-    const modes = await page.$$eval('#inbox-mode button', bs => bs.map(b => b.textContent.trim()));
-    check(modes.join(' / ') === 'One inbox / Side by side',
-      `on Pro both layouts are named up front: ${modes.join(' / ')}`);
+    const modes = await page.evaluate(() => [...document.querySelectorAll('#inbox-mode button')]
+      .map(b => ({ label: b.textContent.trim(), hint: b.title })));
+    check(modes.map(m => m.label).join(' / ') === 'Center Point / Side by side',
+      `on Pro both layouts are named up front: ${modes.map(m => m.label).join(' / ')}`);
+    check(/one inbox/i.test(modes[0].hint),
+      `and the Center Point name says what it does on hover: "${modes[0].hint}"`);
     check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
       'nothing is split until asked for');
 

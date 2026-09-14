@@ -719,7 +719,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
     <section class="view active pane-view" id="view-inbox">
       <div class="side-list">
         <div class="inbox-mode" id="inbox-mode" role="group" aria-label="Inbox layout">
-          <button type="button" data-mode="one" class="on">One inbox</button>
+          <button type="button" data-mode="one" class="on" title="Every mailbox in one inbox">Center Point</button>
           <button type="button" data-mode="split">Side by side</button>
         </div>
         <div class="split-head" id="main-head" hidden>
@@ -912,7 +912,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — two mailboxes in one inbox. Pro $16 — as many as you have, side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Get Pro — $16</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Get Base — $8</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — up to two mailboxes in one Center Point inbox. Pro $16 — more than two, and the option to view them side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Get Pro — $16</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Get Base — $8</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
         </div>
         <div class="comp-sec">
@@ -1488,6 +1488,8 @@ function renderSplitLock(){
   btn.classList.toggle('locked',locked);
   btn.title=locked?needPlan('split','Inboxes side by side'):'';
   btn.textContent=locked?'Side by side · Pro':'Side by side';
+  const one=document.querySelector('#inbox-mode [data-mode="one"]');
+  if(one)one.title='Every mailbox in one inbox — this is the Center Point inbox';
 }
 function setSplit(on){
   /* Base is one inbox by design — every mailbox in the same stream. Putting
@@ -2054,6 +2056,7 @@ const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOC
 const TIERS={
   base:      {label:'RATA Base',      price:8,  mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false},
   pro:       {label:'RATA Pro',       price:16, mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false},
+  /* mail:null means no ceiling — Base is the only plan that has one. */
   enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true},
 };
 const tier=()=>TIERS[S.settings.plan]||null;
@@ -2405,8 +2408,8 @@ async function refreshQuota(){
     if(q.error)return;
     QUOTA=q;
     const m=q.limits.mail===null
-      ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — as many as you have`
-      : `${q.used.mail} of ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
+      ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — no limit`
+      : `${q.used.mail} of up to ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
     const c=q.limits.chat===null?'chat workspaces without limit'
       :q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`
       :'no chat workspaces';
@@ -2452,8 +2455,8 @@ function renderPlan(){
   badge.textContent=tierLabel();
   badge.className='badge '+(t?'work':'personal');
   line.textContent=t
-    ?`$${t.price} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'as many mailboxes as you have':t.mail+' mailboxes'}`
-    :'No plan yet. RATA Base is $8 a month and includes two mailboxes in one inbox.';
+    ?`$${t.price} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
+    :'No plan yet. RATA Base is $8 a month: up to two mailboxes in one Center Point inbox.';
   const m=$('#bill-monthly'),an=$('#bill-annual'),p=$('#bill-portal');
   m.style.display=c.stripeMonthly?'':'none';if(c.stripeMonthly)m.href=c.stripeMonthly;
   an.style.display=c.stripeAnnual?'':'none';if(c.stripeAnnual)an.href=c.stripeAnnual;
