@@ -3368,11 +3368,18 @@ function showWelcome(ob){
       const sb=await supa();
       if(sb){
         const {data}=await sb.from('subscriptions').select('plan,status').eq('email',SESSION.email.toLowerCase()).maybeSingle();
-        if(data){
-          /* No active subscription means no plan at all — not a free tier. */
-          const active=['active','trialing','past_due'].includes(data.status);
-          S.settings.plan=active?(data.plan||'base'):null;save();
-        }
+        /* The table is the authority, including when it says nothing. Only
+           acting on a row that exists left a hole: the plan set optimistically
+           on return from checkout survived forever if no subscription was ever
+           recorded, so ?checkout=success&plan=enterprise unlocked the tier
+           gates indefinitely. Absence of a row is absence of a plan.
+
+           The mailbox limit was never at risk — the server reads this same
+           table and refuses an over-limit link regardless of what the browser
+           believes — but the interface should not claim a plan nobody has. */
+        const active=data&&['active','trialing','past_due'].includes(data.status);
+        S.settings.plan=active?(data.plan||'base'):null;
+        save();
       }
     }catch(e){}
   }

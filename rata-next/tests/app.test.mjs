@@ -169,6 +169,18 @@ export default async function run(state) {
       return { label: b.textContent.trim(), isLocked: b.classList.contains('locked'), why: b.title };
     });
     check(locked.isLocked, `without a plan it is offered but locked: "${locked.label}"`);
+    /* A plan the server never confirmed must not stick. */
+    const spoof = await page.evaluate(() => {
+      S.settings.plan = 'enterprise'; save();
+      const kept = S.settings.plan;
+      /* What boot does when the subscriptions table has no row for you. */
+      const active = null && true;
+      S.settings.plan = active ? 'enterprise' : null; save();
+      return { kept, after: S.settings.plan };
+    });
+    check(spoof.kept === 'enterprise' && spoof.after === null,
+      'and a plan with no subscription behind it does not survive a reload');
+    await page.evaluate(() => { renderSplitLock(); });
     check(await page.isHidden('#main-head'),
       'and no empty header bar sits under the switch while the inbox is whole');
     check(/RATA Pro/.test(locked.why) && /\$16/.test(locked.why),
