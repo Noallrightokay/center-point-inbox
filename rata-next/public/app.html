@@ -2664,6 +2664,70 @@ async function supa(){
   if(!SB){if(!window.supabase)await loadScript('vendor/supabase-js-2.112.4.js');SB=window.supabase.createClient(c.supabaseUrl,c.supabaseKey)}
   return SB;
 }
+/* ---------------- WHAT LEAVES THE DEVICE ----------------
+
+   RATA runs on the machine it was installed on. An account exists online so
+   you can sign in from more than one device and so billing has somewhere to
+   live — but the mail, the files and the people stay where they were read.
+
+   Only preferences travel. Mail is not uploaded because it does not need to
+   be: the mailbox is the source of truth, and every device fetches from it
+   directly, so a message shows up everywhere without RATA keeping a copy.
+   Files stay on the device that made them; a file that has travelled through
+   RATA arrives with the mail that carried it, wherever that is read.
+
+   The list below is the whole of it. If a field is not named here it never
+   leaves, which is why this is a list of what is allowed rather than a list
+   of what is stripped — a new field added to the workspace is private by
+   default rather than uploaded by oversight. */
+const CLOUD_FIELDS=['settings','plugins','connections','folders','rules','jobs','linked'];
+
+/* Per-device facts, even inside a field that does travel. An API key belongs
+   to the browser that holds it; when a mailbox last synced is true of one
+   machine and not another. */
+const CLOUD_STRIP={settings:['api'],linked:['lastSync','lastError','status']};
+
+function forCloud(st){
+  const out={v:st.v};
+  for(const f of CLOUD_FIELDS){
+    const v=st[f];
+    if(v===undefined)continue;
+    if(Array.isArray(v)){
+      out[f]=v.map(item=>{
+        if(!item||typeof item!=='object')return item;
+        const c={...item};
+        for(const k of (CLOUD_STRIP[f]||[]))delete c[k];
+        return c;
+      });
+    }else if(v&&typeof v==='object'){
+      const c={...v};
+      for(const k of (CLOUD_STRIP[f]||[]))delete c[k];
+      out[f]=c;
+    }else out[f]=v;
+  }
+  return out;
+}
+
+/* Preferences arrive from another device; everything read on this one stays.
+   A replace here would have wiped the local mailbox each time a second device
+   signed in. */
+function applyCloud(remote){
+  if(!remote||typeof remote!=='object')return;
+  for(const f of CLOUD_FIELDS){
+    const v=remote[f];
+    if(v===undefined)continue;
+    if(Array.isArray(v)){
+      if(f==='linked'){
+        /* Keep this device's sync state for mailboxes it already knows. */
+        const mine=Object.fromEntries((S.linked||[]).map(l=>[l.id,l]));
+        S.linked=v.map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError}:{status:'pending'}));
+      }else S[f]=v;
+    }else if(v&&typeof v==='object'){
+      S[f]=Object.assign({},S[f],v);
+    }else S[f]=v;
+  }
+}
+
 async function cloudPull(){
   if(!SESSION||SESSION.mode!=='supabase')return;
   try{
@@ -2671,9 +2735,10 @@ async function cloudPull(){
     const {data:{session}}=await sb.auth.getSession();
     if(!session){localStorage.removeItem('centra_session');location.replace('auth.html');return}
     const {data}=await sb.from('workspaces').select('data').eq('id',session.user.id).maybeSingle();
-    if(data&&data.data){S=migrate(data.data);localStorage.setItem(LS_KEY,JSON.stringify(S))}
+    if(data&&data.data){applyCloud(data.data);localStorage.setItem(LS_KEY,JSON.stringify(S))}
   }catch(e){console.warn('cloud pull failed',e)}
 }
+
 function scheduleCloudSync(){
   if(!SESSION||SESSION.mode!=='supabase')return;
   clearTimeout(syncT);
@@ -2681,7 +2746,9 @@ function scheduleCloudSync(){
     try{
       const sb=await supa();if(!sb)return;
       const {data:{session}}=await sb.auth.getSession();
-      if(session)await sb.from('workspaces').upsert({id:session.user.id,data:S,updated_at:new Date().toISOString()});
+      /* upsert replaces the whole row, so the first save after this change
+         also clears whatever an older version had uploaded. */
+      if(session)await sb.from('workspaces').upsert({id:session.user.id,data:forCloud(S),updated_at:new Date().toISOString()});
     }catch(e){console.warn('cloud sync failed',e)}
   },1500);
 }

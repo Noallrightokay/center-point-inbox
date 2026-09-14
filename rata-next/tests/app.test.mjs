@@ -142,6 +142,61 @@ export default async function run(state) {
     check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
     await page.evaluate(() => document.querySelector('#lf-cancel').click());
 
+    /* ---- what may leave the device ---- */
+    console.log('\n— the device keeps the mail —');
+    const privacy = await page.evaluate(() => {
+      /* A workspace with something of every kind in it. */
+      S.messages.push({ id: 'p1', ch: 'email', prov: 'imap', cid: null, fromName: 'Client',
+        fromAddr: 'client@example.com', subj: 'Contract terms', prev: 'as discussed',
+        body: 'The figure we agreed was 84,000.', ts: Date.now(), unread: true, starred: false, atts: [] });
+      S.contacts.push({ id: 'pc1', name: 'Real Person', addr: 'person@example.com', phone: '+1 555 0100', context: 'work' });
+      S.documents.push({ id: 'pd1', name: 'terms.txt', fmt: 'TXT', prov: 'rata', origin: 'rata',
+        size: '1 KB', ts: Date.now(), content: 'The figure we agreed was 84,000.' });
+      S.audit.push({ ts: Date.now(), what: 'mail.read', detail: 'client@example.com' });
+      S.settings.api = 'sk-ant-secret-key';
+      S.settings.name = 'Preference That Travels';
+      S.folders.push('A folder');
+      save();
+      const sent = forCloud(S);
+      return {
+        fields: Object.keys(sent).sort(),
+        json: JSON.stringify(sent),
+        localMessages: S.messages.length,
+      };
+    });
+
+    check(!privacy.fields.includes('messages'), `uploaded fields: ${privacy.fields.join(', ')}`);
+    check(!privacy.fields.includes('documents') && !privacy.fields.includes('contacts'),
+      'no documents and no contacts among them');
+    check(!privacy.fields.includes('audit') && !privacy.fields.includes('counters'),
+      'and no audit trail');
+
+    /* Field names are one thing; the bytes are the actual claim. */
+    for (const leak of ['84,000', 'Contract terms', 'client@example.com', 'Real Person', '+1 555 0100', 'sk-ant-secret-key']) {
+      check(!privacy.json.includes(leak), `not in the uploaded payload: ${JSON.stringify(leak)}`);
+    }
+    check(privacy.json.includes('Preference That Travels') && privacy.json.includes('A folder'),
+      'while preferences and folder names do travel, which is what an account is for');
+
+    /* Another device signing in must not wipe what this one has read. */
+    const afterPull = await page.evaluate(() => {
+      const before = S.messages.length;
+      applyCloud({ settings: { name: 'Renamed Elsewhere' }, folders: ['From another device'], plugins: { jobs: true } });
+      return { before, after: S.messages.length, name: S.settings.name, folders: S.folders.length, jobs: S.plugins.jobs };
+    });
+    check(afterPull.after === afterPull.before,
+      `a pull from another device leaves this one's mail alone: ${afterPull.before} → ${afterPull.after}`);
+    check(afterPull.name === 'Renamed Elsewhere' && afterPull.jobs === true,
+      'while preferences set elsewhere do arrive');
+
+    await page.evaluate(() => {
+      S.messages = S.messages.filter(m => m.id !== 'p1');
+      S.contacts = S.contacts.filter(c => c.id !== 'pc1');
+      S.documents = S.documents.filter(d => d.id !== 'pd1');
+      S.folders = []; S.audit = []; delete S.settings.api; S.plugins.jobs = false;
+      S.settings.name = 'Owner'; save();
+    });
+
     /* ---- as many inboxes on one screen as fit ---- */
     console.log('\n— inboxes side by side —');
     /* Four mailboxes with mail in each, which is the case this exists for:

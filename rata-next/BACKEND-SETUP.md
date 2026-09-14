@@ -148,6 +148,49 @@ verifies the credentials against the real mail host and stores them, then
 `/api/sync/imap/{provider}` connects and returns normalized messages. `{provider}`
 is `apple` or `gmail`; both share one implementation in `lib/imap.js`.
 
+## What is stored, and where
+
+RATA runs on the device it was installed on. The account exists online so you
+can sign in from more than one machine and so billing has somewhere to live.
+Almost nothing else travels.
+
+**On the server**
+
+| What | Where | Why it has to be there |
+|---|---|---|
+| Email address, password hash | Supabase auth | signing in |
+| Plan, status, Stripe customer id | `subscriptions` | entitlement, written by the Stripe webhook |
+| Mailbox credentials, encrypted | `provider_tokens` | the server performs the IMAP fetch, so it needs them; AES-256-GCM with the key outside the database, each value bound to its own row |
+| Preferences: name, plan, plugin switches, folder names, rules, job tags, which mailboxes are linked | `workspaces` | so a second device looks like the first |
+
+**On the device, and nowhere else**
+
+Messages and their content. Contacts. Document text and file bytes (IndexedDB).
+The audit chain. Counters. Any AI key, which lives in that browser's
+localStorage and is never uploaded.
+
+Mail is not uploaded because it does not need to be: the mailbox is the source
+of truth and every device fetches from it directly, so a message appears
+everywhere without RATA keeping a copy. A file made on one machine stays
+there; a file that travelled through RATA arrives with the mail that carried
+it, wherever that mail is read.
+
+`forCloud()` in app.html is the whole of it — an allow-list, so a field added
+to the workspace later is private unless somebody deliberately adds it.
+
+### What you can tell a customer
+
+> Your account login, your subscription, and the encrypted passwords for the
+> mailboxes you connect are stored on RATA's server. Your mail, your files and
+> your contacts stay on your device. Files live on the device that made them;
+> anything delivered through RATA travels with the mail. You can disconnect a
+> mailbox at any time, and revoke its password at your provider independently
+> of us.
+
+Do not claim RATA holds no credentials for other services. It holds the
+mailbox passwords, encrypted — it cannot read mail without them. Encrypted and
+revocable is a strong claim and a true one.
+
 ## Known limits
 
 - **One account per provider, per user — except mail.** `provider_tokens` is keyed
@@ -161,6 +204,10 @@ is `apple` or `gmail`; both share one implementation in `lib/imap.js`.
   `TOKEN_ENC_KEY` are needed. They are still worth storing separately: an
   attacker holding both is back to holding everything. What is not encrypted is
   the `label` column, which is the mailbox address.
+- **There is no deletion path.** Cancelling a subscription leaves the
+  `workspaces` and `provider_tokens` rows in place. Nothing deletes an account
+  and everything attached to it. That is the gap most likely to matter legally
+  and it is small to build.
 - **Discord**: their API does not permit reading user DMs via OAuth — by policy. A
   bot-based bridge for servers you own is the viable path (future build).
 - **SMS**: needs a telephony provider (Twilio) — planned, not free.
