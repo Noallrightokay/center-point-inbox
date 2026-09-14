@@ -6,6 +6,7 @@ const SUITES = [
   ['IMAP mail link',     './imap-link.test.mjs'],
   ['mail links & plans', './mail-links.test.mjs'],
   ['stored credentials', './secrets.test.mjs'],
+  ['Stripe webhook',     './stripe.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];

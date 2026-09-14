@@ -22,9 +22,12 @@ const PUBLIC_CONFIG = [
   ['supabaseUrl',    'SUPABASE_URL'],
   ['supabaseKey',    'SUPABASE_ANON_KEY'],
   ['googleClientId', 'GOOGLE_CLIENT_ID'],
-  ['stripeMonthly',  'STRIPE_MONTHLY'],
-  ['stripeAnnual',   'STRIPE_ANNUAL'],
-  ['stripePortal',   'STRIPE_PORTAL'],
+  /* One checkout link per plan. These are Stripe Payment Links — public URLs
+     by design, which is why they belong here and the signing secret does not. */
+  ['stripeBase',       'STRIPE_BASE'],
+  ['stripePro',        'STRIPE_PRO'],
+  ['stripeEnterprise', 'STRIPE_ENTERPRISE'],
+  ['stripePortal',     'STRIPE_PORTAL'],
 ];
 
 /* A service-role key in the public config would hand every visitor read/write

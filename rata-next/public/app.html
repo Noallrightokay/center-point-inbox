@@ -912,7 +912,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — up to two mailboxes in one Center Point inbox. Pro $16 — more than two, and the option to view them side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Get Pro — $16</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Get Base — $8</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — up to two mailboxes in one Center Point inbox. Pro $16 — more than two, and the option to view them side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
         </div>
         <div class="comp-sec">
@@ -920,8 +920,9 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
           <div class="set-row"><div class="grow"><b>Google OAuth Client ID</b><span>Enables the real Gmail plugin. Create at console.cloud.google.com → Credentials → OAuth client (Web), add this site as an authorized JavaScript origin.</span></div><input type="text" id="cfg-gcid" placeholder="1234567890-xxxx.apps.googleusercontent.com"></div>
           <div class="set-row"><div class="grow"><b>Supabase URL</b><span>Enables real cloud accounts + cross-device sync. Free at supabase.com.</span></div><input type="text" id="cfg-sburl" placeholder="https://xxxx.supabase.co"></div>
           <div class="set-row"><div class="grow"><b>Supabase anon key</b><span>Public anon key from your Supabase project settings.</span></div><input type="text" id="cfg-sbkey" placeholder="eyJhbGciOi…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — monthly</b><span>Create in Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stm" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — annual</b><span>Same, for the $79/year price.</span></div><input type="text" id="cfg-sta" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b>Stripe payment link — Base $8</b><span>Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stb" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b>Stripe payment link — Pro $16</b><span>Same, for the Pro price.</span></div><input type="text" id="cfg-stpr" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b>Stripe payment link — Enterprise $72</b><span>Same, for the Enterprise price.</span></div><input type="text" id="cfg-ste" placeholder="https://buy.stripe.com/…"></div>
           <div class="set-row"><div class="grow"><b>Stripe customer portal link</b><span>Stripe Dashboard → Settings → Billing → Customer portal → activate, copy the link.</span></div><input type="text" id="cfg-stp" placeholder="https://billing.stripe.com/p/login/…"></div>
           <div class="set-row"><div class="grow"><b>Anthropic API key</b><span>Powers real AI briefings in Rata Assist. Stored only in this browser — personal use only, never ship a key in a public product.</span></div><input type="text" id="cfg-akey" placeholder="sk-ant-…"></div>
         </div>
@@ -2290,8 +2291,9 @@ function renderSettings(){
   $('#cfg-sburl').value=c.supabaseUrl||'';
   $('#cfg-sbkey').value=c.supabaseKey||'';
   $('#cfg-akey').value=c.anthropicKey||'';
-  $('#cfg-stm').value=c.stripeMonthly||'';
-  $('#cfg-sta').value=c.stripeAnnual||'';
+  $('#cfg-stb').value=c.stripeBase||'';
+  $('#cfg-stpr').value=c.stripePro||'';
+  $('#cfg-ste').value=c.stripeEnterprise||'';
   $('#cfg-stp').value=c.stripePortal||'';
   renderPlan();
   renderLinked();
@@ -2303,8 +2305,9 @@ $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim
 $('#cfg-gcid').addEventListener('change',e=>{setCfg({googleClientId:e.target.value.trim()});toast('Google Client ID saved — Connect Gmail from Connections')});
 $('#cfg-sburl').addEventListener('change',e=>{setCfg({supabaseUrl:e.target.value.trim()});toast('Supabase URL saved')});
 $('#cfg-sbkey').addEventListener('change',e=>{setCfg({supabaseKey:e.target.value.trim()});toast('Supabase key saved — sign out and back in to activate cloud accounts')});
-$('#cfg-stm').addEventListener('change',e=>{setCfg({stripeMonthly:e.target.value.trim()});renderPlan();toast('Monthly checkout link saved')});
-$('#cfg-sta').addEventListener('change',e=>{setCfg({stripeAnnual:e.target.value.trim()});renderPlan();toast('Annual checkout link saved')});
+$('#cfg-stb').addEventListener('change',e=>{setCfg({stripeBase:e.target.value.trim()});renderPlan();toast('Base checkout link saved')});
+$('#cfg-stpr').addEventListener('change',e=>{setCfg({stripePro:e.target.value.trim()});renderPlan();toast('Pro checkout link saved')});
+$('#cfg-ste').addEventListener('change',e=>{setCfg({stripeEnterprise:e.target.value.trim()});renderPlan();toast('Enterprise checkout link saved')});
 $('#cfg-stp').addEventListener('change',e=>{setCfg({stripePortal:e.target.value.trim()});renderPlan();toast('Billing portal link saved')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
@@ -2457,10 +2460,16 @@ function renderPlan(){
   line.textContent=t
     ?`$${t.price} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
     :'No plan yet. RATA Base is $8 a month: up to two mailboxes in one Center Point inbox.';
-  const m=$('#bill-monthly'),an=$('#bill-annual'),p=$('#bill-portal');
-  m.style.display=c.stripeMonthly?'':'none';if(c.stripeMonthly)m.href=c.stripeMonthly;
-  an.style.display=c.stripeAnnual?'':'none';if(c.stripeAnnual)an.href=c.stripeAnnual;
-  $('#bill-nolinks').style.display=(c.stripeMonthly||c.stripeAnnual)?'none':'';
+  /* One button per plan that has a checkout link, and never one for the plan
+     they are already on — that is a paid-for confusion. */
+  const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};
+  const here=S.settings.plan;
+  $('#plan-buttons').innerHTML=Object.entries(TIERS)
+    .filter(([k])=>links[k]&&k!==here)
+    .map(([k,v],i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(links[k])}" target="_blank" rel="noopener">${here?'Switch to ':'Get '}${esc(v.label.replace('RATA ',''))} — $${v.price}</a>`)
+    .join('');
+  const p=$('#bill-portal');
+  $('#bill-nolinks').style.display=Object.values(links).some(Boolean)?'none':'';
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
 $('#cfg-akey').addEventListener('change',e=>{setCfg({anthropicKey:e.target.value.trim()});toast(e.target.value?'AI briefings enabled in Rata Assist':'AI key removed')});

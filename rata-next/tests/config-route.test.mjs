@@ -33,13 +33,13 @@ export default async function run(state) {
     const s = await startServer({ env: {
       SUPABASE_URL: 'https://demo.supabase.co',
       SUPABASE_ANON_KEY: anon,
-      STRIPE_MONTHLY: 'https://buy.stripe.com/x";alert(1);//',
+      STRIPE_PRO: 'https://buy.stripe.com/x";alert(1);//',
     }});
     try {
       const { cfg } = await load(s.url);
       check(cfg.supabaseUrl === 'https://demo.supabase.co', `supabaseUrl: ${cfg.supabaseUrl}`);
       check(cfg.supabaseKey === anon, 'anon key published as-is');
-      check(cfg.stripeMonthly === 'https://buy.stripe.com/x";alert(1);//', 'quote/semicolon payload survived escaping intact, still parsed as one string');
+      check(cfg.stripePro === 'https://buy.stripe.com/x";alert(1);//', 'quote/semicolon payload survived escaping intact, still parsed as one string');
     } finally { await s.stop(); }
   }
 
