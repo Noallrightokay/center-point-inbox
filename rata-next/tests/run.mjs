@@ -7,6 +7,7 @@ const SUITES = [
   ['mail links & plans', './mail-links.test.mjs'],
   ['stored credentials', './secrets.test.mjs'],
   ['Stripe webhook',     './stripe.test.mjs'],
+  ['account deletion',   './account-delete.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];

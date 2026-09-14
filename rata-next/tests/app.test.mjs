@@ -142,6 +142,29 @@ export default async function run(state) {
     check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
     await page.evaluate(() => document.querySelector('#lf-cancel').click());
 
+    /* ---- deleting the account ---- */
+    console.log('\n— deleting the account, and what that clears here ---');
+    await page.evaluate(() => go('set'));
+    check(await page.isHidden('#del-confirm'), 'the confirmation is not open until asked for');
+    await page.click('#btn-delete');
+    await page.waitForTimeout(400);
+    check(await page.isVisible('#del-confirm'), 'the danger step appears');
+    const warn = await page.textContent('#del-detail');
+    check(/device/i.test(warn) || /Removes/i.test(warn), `and states what goes: "${warn.slice(0, 74)}…"`);
+
+    /* The wrong address must not delete anything. */
+    await page.fill('#del-email', 'not-my-address@example.com');
+    await page.click('#del-go');
+    await page.waitForTimeout(400);
+    check(/app\.html/.test(page.url()), 'typing the wrong address deletes nothing');
+    check(await page.evaluate(() => !!localStorage.getItem('centra_session')),
+      'and the session is still there');
+
+    await page.click('#del-cancel');
+    check(await page.isHidden('#del-confirm'), 'and it can be backed out of');
+    /* These blocks share one page: leave it where the next one expects it. */
+    await page.evaluate(() => go('inbox'));
+
     /* ---- what may leave the device ---- */
     console.log('\n— the device keeps the mail —');
     const privacy = await page.evaluate(() => {

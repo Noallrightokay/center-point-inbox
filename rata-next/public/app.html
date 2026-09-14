@@ -896,6 +896,16 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Reset workspace</b><span>Wipes this workspace back to a blank slate</span></div><button class="btn danger" id="btn-reset">Reset</button></div>
+          <div class="set-row" style="flex-wrap:wrap;gap:8px">
+            <div class="grow"><b>Delete account</b><span id="del-what">Removes your login, your preferences, and the encrypted password for every mailbox you connected. Your mail stays at your provider.</span></div>
+            <button class="btn danger" id="btn-delete">Delete account</button>
+          </div>
+          <div class="set-row" id="del-confirm" style="display:none;flex-wrap:wrap;gap:8px">
+            <div class="grow"><b>This cannot be undone</b><span id="del-detail"></span></div>
+            <input type="text" id="del-email" placeholder="type your email address" autocomplete="off" style="min-width:230px">
+            <button class="btn danger" id="del-go">Delete permanently</button>
+            <button class="btn" id="del-cancel">Keep my account</button>
+          </div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Linked accounts</div>
@@ -2526,6 +2536,68 @@ $('#pw-change').onclick=async()=>{
     toast('Password updated');
   }finally{btn.disabled=false}
 };
+/* ---------------- DELETING THE ACCOUNT ----------------
+   The wording comes from the endpoint that does the work, so the warning
+   cannot drift from the behaviour. Two halves: the server clears what it
+   holds, and the browser clears what only it has — the workspace, the file
+   vault, the session. Neither half can do the other's. */
+async function openDelete(){
+  const box=$('#del-confirm'),detail=$('#del-detail');
+  box.style.display='flex';
+  $('#del-email').value='';$('#del-email').focus();
+  detail.textContent='Checking what this would remove…';
+  try{
+    const info=await apiFetch('/api/account');
+    if(info.error){detail.textContent=info.error;return}
+    if(info.blocked){detail.textContent=info.blocked;$('#del-go').disabled=true;return}
+    $('#del-go').disabled=false;
+    detail.textContent=`Removes ${info.removes.join(', ')}. Keeps ${info.keeps.join('; ')}.`
+      +(info.mailboxes?` ${info.mailboxes} mailbox${info.mailboxes===1?'':'es'} will be disconnected — revoke their app passwords at each provider too.`:'');
+  }catch(e){
+    /* A device-only account has no server side to ask or to clear. */
+    $('#del-go').disabled=false;
+    detail.textContent='This account exists only on this device. Deleting it clears the workspace, the files stored here, and the sign-in.';
+  }
+}
+
+async function wipeThisDevice(){
+  try{localStorage.removeItem(LS_KEY)}catch(e){}
+  try{localStorage.removeItem('centra_session')}catch(e){}
+  try{localStorage.removeItem(CFG_KEY)}catch(e){}
+  try{
+    const accts=JSON.parse(localStorage.getItem('centra_accounts')||'{}');
+    delete accts[SESSION.email];
+    localStorage.setItem('centra_accounts',JSON.stringify(accts));
+  }catch(e){}
+  /* The file vault is the one store the server has never seen, so nothing
+     else would ever remove it. */
+  try{await new Promise(res=>{const r=indexedDB.deleteDatabase('rata-files');r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
+}
+
+async function deleteAccount(){
+  const typed=$('#del-email').value.trim().toLowerCase();
+  if(typed!==String(SESSION.email||'').toLowerCase()){toast('Type your email address exactly to confirm');return}
+  const btn=$('#del-go');btn.disabled=true;btn.textContent='Deleting…';
+  try{
+    if(SESSION.mode==='supabase'){
+      const res=await apiFetch('/api/account',{method:'DELETE',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({confirm:typed})});
+      if(!res.ok){toast(res.error||'Could not delete the account');btn.disabled=false;btn.textContent='Delete permanently';return}
+    }
+    await wipeThisDevice();
+    /* Straight out, with no workspace left to render. */
+    location.replace('auth.html?mode=signup&deleted=1');
+  }catch(e){
+    btn.disabled=false;btn.textContent='Delete permanently';
+    toast('Could not delete the account — '+(e.message==='cloud-account-required'?'sign in again and retry':e.message));
+  }
+}
+
+$('#btn-delete').onclick=openDelete;
+$('#del-cancel').onclick=()=>{$('#del-confirm').style.display='none'};
+$('#del-go').onclick=deleteAccount;
+$('#del-email').addEventListener('keydown',e=>{if(e.key==='Enter')deleteAccount()});
+
 $('#btn-reset').onclick=()=>{
   if(!confirm('Wipe this workspace back to a blank slate? This cannot be undone.'))return;
   S=seed();save();

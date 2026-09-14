@@ -214,6 +214,11 @@ if(CLOUD){const b=$('#mode-badge');b.className='mode-badge cloud';b.textContent=
    in instead, and ?mode= still wins over both — the sign-out link uses it. */
 const RETURNING='centra_seen';
 const qmode=new URLSearchParams(location.search).get('mode');
+/* Arriving here from a deleted account: say so, or it looks like a bug. */
+if(new URLSearchParams(location.search).get('deleted')){
+  const b=$('#mode-badge');
+  if(b){b.className='mode-badge local';b.textContent='● Account deleted'}
+}
 let mode = qmode==='signup' ? 'signup'
          : qmode==='login'  ? 'login'
          : localStorage.getItem(RETURNING) ? 'login' : 'signup';
