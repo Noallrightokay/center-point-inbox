@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "vendor:libs": "node scripts/vendor-libs.mjs",
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs",
+    "preview": "node scripts/build-preview.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

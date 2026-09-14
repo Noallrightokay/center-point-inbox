@@ -136,7 +136,10 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
 .split-head .sel{flex:1;min-width:0}
 body.split-on #mail-detail{display:none}
-body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto}
+/* min-width:0 matters: a flex child defaults to min-width:auto, so a long
+   subject line pushes its pane past an equal share and squeezes the other
+   one off the screen. */
+body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0}
 .drop-live{outline:2px dashed var(--tint);outline-offset:-6px;background:var(--tint-wash)}
 .mail-row[draggable=true]{cursor:grab}
 .side-list{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}

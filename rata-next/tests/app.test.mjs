@@ -175,6 +175,20 @@ export default async function run(state) {
     check(panes.left > 0 && panes.right > 0, `both panes have messages: ${panes.left} | ${panes.right}`);
     check(panes.draggable === 'true', 'rows become draggable in this mode');
 
+    /* A flex child defaults to min-width:auto, so a long subject line pushed
+       the first pane past its share and squeezed the second off the screen.
+       Only looking at it caught that, so it gets an assertion. */
+    const width = await page.evaluate(() => {
+      const l = document.querySelector('.side-list').getBoundingClientRect();
+      const r = document.querySelector('#split-pane').getBoundingClientRect();
+      return { left: Math.round(l.width), right: Math.round(r.width),
+               overhang: Math.round(r.right - window.innerWidth),
+               sideways: document.body.scrollWidth > window.innerWidth };
+    });
+    check(Math.abs(width.left - width.right) <= 2, `panes share the width evenly: ${width.left} / ${width.right}`);
+    check(width.overhang <= 0, `the second inbox ends inside the window (overhang ${width.overhang}px)`);
+    check(!width.sideways, 'and the page does not scroll sideways');
+
     /* Dropping a message on the other inbox opens a forward from that account —
        it must never send by itself. */
     const moved = await page.evaluate(() => {
