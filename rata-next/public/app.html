@@ -222,6 +222,25 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 /* A class that sets display beats the browser's own [hidden] rule, so the
    pane has to opt back out explicitly or it shows before it is asked for. */
 .split-pane[hidden]{display:none}
+/* The layout switch. Two states, both named, neither hidden among the sort
+   controls where the old toggle lived and went unnoticed. */
+.inbox-mode{display:flex;gap:4px;margin:12px 14px 2px;padding:3px;border-radius:var(--r-bubble);
+  background:var(--fill-2);box-shadow:inset 0 1px 3px rgba(10,14,26,.08)}
+.inbox-mode button{flex:1;padding:7px 10px;border-radius:var(--r-bubble);font-size:12.5px;font-weight:600;
+  color:var(--slate);transition:var(--lift)}
+.inbox-mode button:hover{color:var(--ink)}
+.inbox-mode button.on{background:var(--grad-card);color:var(--tint);box-shadow:var(--sheen-soft),var(--edge)}
+/* Side by side means two peers. The left pane drops the digest, the channel
+   segments, the category tabs and the filter chips so it stops looking like
+   the main event with a sidecar attached — each pane is then a mailbox with
+   its own picker and its own list. */
+body.split-on .side-list > #digest,
+body.split-on .side-list > #sources,
+body.split-on .side-list > #ch-seg,
+body.split-on .side-list > #cat-tabs,
+body.split-on .side-list > #mail-filters,
+body.split-on .side-list > #sync-all{display:none}
+body.split-on .side-list > .sort-row{padding-top:8px}
 .split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
 .split-head .sel{flex:1;min-width:0}
 body.split-on #mail-detail{display:none}
@@ -685,13 +704,20 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0
     <!-- MESSAGES -->
     <section class="view active pane-view" id="view-inbox">
       <div class="side-list">
+        <div class="inbox-mode" id="inbox-mode" role="group" aria-label="Inbox layout">
+          <button type="button" data-mode="one" class="on">One inbox</button>
+          <button type="button" data-mode="split">Side by side</button>
+        </div>
+        <div class="split-head" id="main-head" hidden>
+          <select class="sel" id="main-acct" aria-label="Which inbox to show on the left"></select>
+        </div>
         <div id="digest"></div>
         <div id="sources"></div>
         <div class="seg-row" id="ch-seg"></div>
         <div class="chip-row" id="cat-tabs"></div>
         <button class="btn" id="sync-all" style="display:none;margin:0 14px 8px;align-self:flex-start">⟳ Sync linked inboxes</button>
         <div class="chip-row" id="mail-filters"></div>
-        <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button><button class="btn" id="split-on" title="Show two inboxes side by side">⫿⫿ Two inboxes</button></div>
+        <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button></div>
         <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
@@ -1329,22 +1355,26 @@ function bulkRefresh(){
    a forward from the account it was dropped on — files and all. That is the
    move people otherwise do by downloading an attachment out of one mailbox and
    uploading it into another. */
-let splitOn=false,splitAcct='';
+let splitOn=false,splitAcct='',mainAcct='';
 function mailAccounts(){return S.linked.filter(l=>l.type==='mail'||l.type==='google'||l.type==='ms'||l.type==='gmail_imap'||l.type==='apple')}
 function acctName(l){return l?l.label:'All inboxes'}
 
+function acctOptions(accts,val){
+  return '<option value="">All inboxes together</option>'
+    +accts.map(l=>`<option value="${l.id}" ${l.id===val?'selected':''}>${esc(l.label)}</option>`).join('');
+}
 function renderSplitPicker(){
-  const sel=$('#split-acct');if(!sel)return;
   const accts=mailAccounts();
-  sel.innerHTML='<option value="">All inboxes</option>'+accts.map(l=>`<option value="${l.id}">${esc(l.label)}</option>`).join('');
-  /* Default the second pane to a different account than the first, since two
-     identical columns tell the user nothing. */
-  if(!splitAcct||!accts.some(l=>l.id===splitAcct)){
-    const first=mailFilter.startsWith('acct:')?mailFilter.slice(5):null;
-    const other=accts.find(l=>l.id!==first);
+  /* Two panes showing the same thing teach nobody anything, so they open on
+     different accounts — the first two — and either can be changed after. */
+  if(!accts.some(l=>l.id===mainAcct))mainAcct=accts[0]?accts[0].id:'';
+  if(!accts.some(l=>l.id===splitAcct)||splitAcct===mainAcct){
+    const other=accts.find(l=>l.id!==mainAcct);
     splitAcct=other?other.id:'';
   }
-  sel.value=splitAcct;
+  const a=$('#main-acct'),b=$('#split-acct');
+  if(a)a.innerHTML=acctOptions(accts,mainAcct);
+  if(b)b.innerHTML=acctOptions(accts,splitAcct);
 }
 
 function renderSplit(){
@@ -1353,7 +1383,7 @@ function renderSplit(){
   const pool=mailPool(splitAcct||undefined);
   sc.innerHTML=pool.length
     ? pool.map(m=>mailRowHTML(m)).join('')
-    : `<div class="empty" style="padding:40px 20px"><b>Nothing here yet</b>${splitAcct?esc(acctName(S.linked.find(l=>l.id===splitAcct)))+' has no messages in RATA yet.':'Connect a second account to compare two inboxes.'}</div>`;
+    : `<div class="empty" style="padding:40px 20px"><b>Nothing here yet</b>${splitAcct?esc(acctName(S.linked.find(l=>l.id===splitAcct)))+' has no messages in RATA yet.':'Add a second account and it can sit beside the first.'}</div>`;
   sc.querySelectorAll('.mail-row').forEach(r=>{
     r.onclick=()=>openMail(r.dataset.id);
     r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
@@ -1396,12 +1426,12 @@ function transferMessage(msgId,targetAcctId){
 function setSplit(on){
   splitOn=on;
   document.body.classList.toggle('split-on',on);
-  const pane=$('#split-pane');
-  if(pane)pane.hidden=!on;
-  const btn=$('#split-on');
-  if(btn)btn.classList.toggle('on',on);
-  if(on){renderSplitPicker();renderSplit()}
+  const pane=$('#split-pane');if(pane)pane.hidden=!on;
+  const head=$('#main-head');if(head)head.hidden=!on;
+  $$('#inbox-mode button').forEach(b=>b.classList.toggle('on',(b.dataset.mode==='split')===on));
+  if(on)renderSplitPicker();
   renderMail();
+  if(on)renderSplit();
 }
 
 function mailRowHTML(m){
@@ -1427,7 +1457,9 @@ function mailRowHTML(m){
     </div>`;
 }
 function renderMail(){
-  const pool=mailPool(),sc=$('#mail-scroll');
+  /* Side by side, the left pane belongs to its own account; on its own it
+     follows the filter chips as before. */
+  const pool=mailPool(splitOn?(mainAcct||undefined):undefined),sc=$('#mail-scroll');
   $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
   if(!pool.length){
     const linked=S.linked.length;
@@ -2434,9 +2466,13 @@ function openCompose(){
 }
 function closeCompose(){ov.classList.remove('open')}
 /* Two-inbox controls. */
-$('#split-on').onclick=()=>setSplit(!splitOn);
+$$('#inbox-mode button').forEach(b=>b.onclick=()=>{
+  setSplit(b.dataset.mode==='split');
+  audit('inbox.layout',b.dataset.mode==='split'?'Side by side':'One inbox');
+});
 $('#split-off').onclick=()=>setSplit(false);
 $('#split-acct').onchange=e=>{splitAcct=e.target.value;renderSplit()};
+$('#main-acct').onchange=e=>{mainAcct=e.target.value;renderMail()};
 
 $('#folder-new').onclick=()=>{
   const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);

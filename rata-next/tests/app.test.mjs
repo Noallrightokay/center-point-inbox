@@ -159,20 +159,32 @@ export default async function run(state) {
     });
 
     check(await page.isHidden('#split-pane'), 'the second inbox is not there until asked for');
-    await page.click('#split-on');
-    check(await page.isVisible('#split-pane'), 'the button opens it');
+    const modes = await page.$$eval('#inbox-mode button', bs => bs.map(b => b.textContent.trim()));
+    check(modes.join(' / ') === 'One inbox / Side by side',
+      `both layouts are named and offered up front: ${modes.join(' / ')}`);
+    const combined = await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length);
+    await page.click('#inbox-mode [data-mode="split"]');
+    check(await page.isVisible('#split-pane'), 'choosing side by side opens the second inbox');
     check(await page.isHidden('#mail-detail'), 'and the reading pane gives way rather than a third column');
 
     const panes = await page.evaluate(() => ({
       choices: [...document.querySelectorAll('#split-acct option')].map(o => o.textContent),
-      picked: document.querySelector('#split-acct').value,
+      leftAcct: document.querySelector('#main-acct').selectedOptions[0]?.textContent,
+      rightAcct: document.querySelector('#split-acct').selectedOptions[0]?.textContent,
+      leftPicker: !document.querySelector('#main-head').hidden,
       left: document.querySelectorAll('#mail-scroll .mail-row').length,
       right: document.querySelectorAll('#split-scroll .mail-row').length,
       draggable: document.querySelector('#mail-scroll .mail-row')?.getAttribute('draggable'),
+      chromeHidden: getComputedStyle(document.querySelector('#digest')).display === 'none',
     }));
-    check(panes.choices.length === 3, `the second pane can show: ${panes.choices.join(' / ')}`);
-    check(!!panes.picked, 'and defaults to an account rather than repeating the first pane');
-    check(panes.left > 0 && panes.right > 0, `both panes have messages: ${panes.left} | ${panes.right}`);
+    check(panes.choices.length === 3, `either pane can show: ${panes.choices.join(' / ')}`);
+    check(panes.leftPicker, 'the left pane gets a picker of its own, not just the right');
+    check(panes.leftAcct !== panes.rightAcct,
+      `they open on different mailboxes: ${panes.leftAcct} | ${panes.rightAcct}`);
+    check(panes.chromeHidden, 'and the left pane drops its extra chrome so the two read as peers');
+    check(panes.left > 0 && panes.right > 0, `each has its own mail: ${panes.left} | ${panes.right}`);
+    check(panes.left + panes.right === combined,
+      `split apart, nothing is lost or doubled: ${panes.left} + ${panes.right} = ${combined} together`);
     check(panes.draggable === 'true', 'rows become draggable in this mode');
 
     /* A flex child defaults to min-width:auto, so a long subject line pushed
@@ -208,8 +220,11 @@ export default async function run(state) {
     check(/Forwarded/.test(moved.body) && /Client/.test(moved.body), 'with the original quoted beneath');
     check(moved.to === '', 'and no recipient assumed — a drag must not send mail on its own');
 
-    await page.evaluate(() => { document.querySelector('#cmp-cancel')?.click(); closeCompose(); setSplit(false); });
-    check(await page.isHidden('#split-pane'), 'closing returns to one inbox');
+    await page.evaluate(() => { document.querySelector('#cmp-cancel')?.click(); closeCompose(); });
+    await page.click('#inbox-mode [data-mode="one"]');
+    check(await page.isHidden('#split-pane'), 'and One inbox puts it back to a single stream');
+    check(await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length) === combined,
+      'with every message in it again');
     await page.evaluate(() => {
       S.messages = S.messages.filter(m => !['ta1', 'tb1'].includes(m.id));
       S.linked = []; save(); renderMailFilters(); renderMail();
