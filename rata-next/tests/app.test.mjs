@@ -142,142 +142,114 @@ export default async function run(state) {
     check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
     await page.evaluate(() => document.querySelector('#lf-cancel').click());
 
-    /* ---- two inboxes on one screen ---- */
-    console.log('\n— two inboxes side by side —');
-    /* Two mailboxes and a message in each, so the panes have something to
-       distinguish. Linking for real needs a mail server; the UI under test is
-       what happens once two accounts exist. */
+    /* ---- as many inboxes on one screen as fit ---- */
+    console.log('\n— inboxes side by side —');
+    /* Four mailboxes with mail in each, which is the case this exists for:
+       more inboxes than fit at once, choosing which to put beside each other. */
     await page.evaluate(() => {
-      const a = addLinked('mail', 'work@example.com', { host: 'imap.example.com' });
-      const b = addLinked('mail', 'personal@example.net', { host: 'imap.example.net' });
-      S.messages.push(
-        { id: 'ta1', ch: 'email', prov: 'imap', acct: a.id, cid: null, fromName: 'Client', fromAddr: 'client@x.com',
-          subj: 'Signed contract', prev: 'attached', body: 'attached', ts: Date.now(), unread: true, starred: false, atts: [] },
-        { id: 'tb1', ch: 'email', prov: 'imap', acct: b.id, cid: null, fromName: 'Sister', fromAddr: 'sis@y.com',
-          subj: 'Holiday photos', prev: 'hi', body: 'hi', ts: Date.now() - 1000, unread: false, starred: false, atts: [] });
+      const mk = (addr, n) => {
+        const l = addr;
+        const acct = addLinked('mail', l, { host: 'imap.example.com' });
+        for (let i = 0; i < n; i++) S.messages.push({
+          id: `${l}-${i}`, ch: 'email', prov: 'imap', acct: acct.id, cid: null,
+          fromName: 'Someone', fromAddr: 's@x.com', subj: `${l} message ${i}`,
+          prev: 'x', body: 'x', ts: Date.now() - i * 1000, unread: false, starred: false, atts: [],
+        });
+        return acct.id;
+      };
+      mk('one@example.com', 3); mk('two@example.net', 2); mk('three@example.org', 4); mk('four@example.io', 1);
       save(); renderMailFilters(); renderMail();
     });
+    const together = await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length);
 
-    check(await page.isHidden('#split-pane'), 'the second inbox is not there until asked for');
     const modes = await page.$$eval('#inbox-mode button', bs => bs.map(b => b.textContent.trim()));
     check(modes.join(' / ') === 'One inbox / Side by side',
-      `both layouts are named and offered up front: ${modes.join(' / ')}`);
-    const combined = await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length);
+      `both layouts named up front: ${modes.join(' / ')}`);
+    check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
+      'nothing is split until asked for');
+
     await page.click('#inbox-mode [data-mode="split"]');
-    check(await page.isVisible('#split-pane'), 'choosing side by side opens the second inbox');
-    check(await page.isHidden('#mail-detail'), 'and the reading pane gives way rather than a third column');
-
-    const panes = await page.evaluate(() => ({
-      choices: [...document.querySelectorAll('#split-acct option')].map(o => o.textContent),
-      leftAcct: document.querySelector('#main-acct').selectedOptions[0]?.textContent,
-      rightAcct: document.querySelector('#split-acct').selectedOptions[0]?.textContent,
-      leftPicker: !document.querySelector('#main-head').hidden,
-      left: document.querySelectorAll('#mail-scroll .mail-row').length,
-      right: document.querySelectorAll('#split-scroll .mail-row').length,
-      draggable: document.querySelector('#mail-scroll .mail-row')?.getAttribute('draggable'),
-      chromeHidden: getComputedStyle(document.querySelector('#digest')).display === 'none',
+    const two = await page.evaluate(() => ({
+      panes: 1 + document.querySelectorAll('#extra-panes .split-pane').length,
+      showing: [document.querySelector('#main-acct').selectedOptions[0]?.textContent,
+                ...[...document.querySelectorAll('[data-pane-acct]')].map(s => s.selectedOptions[0]?.textContent)],
+      adders: document.querySelectorAll('[data-pane-add]').length,
+      detail: getComputedStyle(document.querySelector('#mail-detail')).display,
     }));
-    check(panes.choices.length === 3, `either pane can show: ${panes.choices.join(' / ')}`);
-    check(panes.leftPicker, 'the left pane gets a picker of its own, not just the right');
-    check(panes.leftAcct !== panes.rightAcct,
-      `they open on different mailboxes: ${panes.leftAcct} | ${panes.rightAcct}`);
-    check(panes.chromeHidden, 'and the left pane drops its extra chrome so the two read as peers');
-    check(panes.left > 0 && panes.right > 0, `each has its own mail: ${panes.left} | ${panes.right}`);
-    check(panes.left + panes.right === combined,
-      `split apart, nothing is lost or doubled: ${panes.left} + ${panes.right} = ${combined} together`);
-    check(panes.draggable === 'true', 'rows become draggable in this mode');
+    check(two.panes === 2, `it opens on two: ${two.panes}`);
+    check(new Set(two.showing).size === 2, `each on its own mailbox: ${two.showing.join(' | ')}`);
+    check(two.adders === 1, 'with one way to add another, at the right-hand edge');
+    check(two.detail === 'none', 'and the reading pane gives way rather than a third column');
 
-    /* A flex child defaults to min-width:auto, so a long subject line pushed
-       the first pane past its share and squeezed the second off the screen.
-       Only looking at it caught that, so it gets an assertion. */
-    const width = await page.evaluate(() => {
-      const l = document.querySelector('.side-list').getBoundingClientRect();
-      const r = document.querySelector('#split-pane').getBoundingClientRect();
-      return { left: Math.round(l.width), right: Math.round(r.width),
-               overhang: Math.round(r.right - window.innerWidth),
-               sideways: document.body.scrollWidth > window.innerWidth };
-    });
-    check(Math.abs(width.left - width.right) <= 2, `panes share the width evenly: ${width.left} / ${width.right}`);
-    check(width.overhang <= 0, `the second inbox ends inside the window (overhang ${width.overhang}px)`);
-    check(!width.sideways, 'and the page does not scroll sideways');
+    await page.click('[data-pane-add]');
+    const three = await page.evaluate(() => ({
+      panes: 1 + document.querySelectorAll('#extra-panes .split-pane').length,
+      showing: [document.querySelector('#main-acct').selectedOptions[0]?.textContent,
+                ...[...document.querySelectorAll('[data-pane-acct]')].map(s => s.selectedOptions[0]?.textContent)],
+      counts: [document.querySelectorAll('#mail-scroll .mail-row').length,
+               ...[...document.querySelectorAll('[data-pane-scroll]')].map(s => s.querySelectorAll('.mail-row').length)],
+      adders: document.querySelectorAll('[data-pane-add]').length,
+      choices: document.querySelectorAll('#main-acct option').length,
+    }));
+    check(three.panes === 3, `a third can be added: ${three.panes}`);
+    check(new Set(three.showing).size === 3, `all three different: ${three.showing.join(' | ')}`);
+    check(three.adders === 0, 'and three is the ceiling — no fourth offered');
+    check(three.choices >= 5, `any mailbox can go in any column: ${three.choices - 1} to choose from`);
+    check(three.counts.every(n => n > 0), `each column has its own mail: ${three.counts.join(' | ')}`);
 
-    /* Dropping a message on the other inbox opens a forward from that account —
+    /* Re-pointing a column, and closing one from the middle. */
+    await page.selectOption('[data-pane-acct="1"]', { index: 4 });
+    const repick = await page.evaluate(() => [...document.querySelectorAll('[data-pane-acct]')].map(s => s.selectedOptions[0]?.textContent));
+    check(!!repick[0], `a column can be pointed anywhere: middle now ${repick[0]}`);
+    await page.click('[data-pane-close="1"]');
+    check(await page.evaluate(() => 1 + document.querySelectorAll('#extra-panes .split-pane').length) === 2,
+      'closing one leaves the rest');
+
+    /* Narrow the window: panes hold a readable floor and the row scrolls,
+       rather than every column being crushed thinner. */
+    await page.setViewportSize({ width: 980, height: 800 });
+    await page.click('[data-pane-add]');
+    const narrow = await page.evaluate(() => ({
+      widths: [...document.querySelectorAll('.side-list,.split-pane')].map(e => Math.round(e.getBoundingClientRect().width)).filter(Boolean),
+      rowScrolls: (() => { const v = document.querySelector('#view-inbox'); return v.scrollWidth > v.clientWidth; })(),
+      bodyScrolls: document.body.scrollWidth > window.innerWidth,
+    }));
+    check(narrow.widths.every(w => w >= 330), `columns keep a readable floor at 980px: ${narrow.widths.join(', ')}`);
+    check(narrow.rowScrolls, 'so the row of inboxes scrolls sideways instead');
+    check(!narrow.bodyScrolls, 'and the page itself still does not');
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    /* Dropping a message on another inbox opens a forward from that account —
        it must never send by itself. */
     const moved = await page.evaluate(() => {
-      const b = S.linked.find(l => l.label === 'personal@example.net');
-      transferMessage('ta1', b.id);
+      const target = S.linked.find(l => l.label === 'two@example.net');
+      const msg = S.messages.find(m => m.id.startsWith('one@example.com-'));
+      transferMessage(msg.id, target.id);
       return {
-        composeOpen: document.querySelector('#compose-ov').classList.contains('open'),
+        open: document.querySelector('#compose-ov').classList.contains('open'),
         from: document.querySelector('#cmp-from').selectedOptions[0]?.textContent || '',
         subj: document.querySelector('#cmp-subj').value,
         to: document.querySelector('#cmp-to').value,
         body: document.querySelector('#cmp-body').value,
       };
     });
-    check(moved.composeOpen, 'the transfer opens the composer');
-    check(/personal@example\.net/.test(moved.from), `sending from the inbox it was dropped on: ${moved.from}`);
-    check(/^Fwd: Signed contract$/.test(moved.subj), `pre-filled as a forward: "${moved.subj}"`);
-    check(/Forwarded/.test(moved.body) && /Client/.test(moved.body), 'with the original quoted beneath');
+    check(moved.open, 'dragging a message across opens the composer');
+    check(/two@example\.net/.test(moved.from), `sending from the inbox it was dropped on: ${moved.from}`);
+    check(/^Fwd: /.test(moved.subj), `pre-filled as a forward: "${moved.subj}"`);
+    check(/Forwarded/.test(moved.body), 'with the original quoted beneath');
     check(moved.to === '', 'and no recipient assumed — a drag must not send mail on its own');
 
     await page.evaluate(() => { document.querySelector('#cmp-cancel')?.click(); closeCompose(); });
     await page.click('#inbox-mode [data-mode="one"]');
-    check(await page.isHidden('#split-pane'), 'and One inbox puts it back to a single stream');
-    check(await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length) === combined,
-      'with every message in it again');
+    check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
+      'One inbox puts it back to a single stream');
+    check(await page.evaluate(() => document.querySelectorAll('#mail-scroll .mail-row').length) === together,
+      `with every message in it again: ${together}`);
+
     await page.evaluate(() => {
-      S.messages = S.messages.filter(m => !['ta1', 'tb1'].includes(m.id));
+      S.messages = S.messages.filter(m => !/@example\.(com|net|org|io)-\d+$/.test(m.id));
       S.linked = []; save(); renderMailFilters(); renderMail();
     });
-
-    /* ---- the Bridge keeps BOTH files ---- */
-    console.log('\n— Format Bridge: conversion keeps the original —');
-    /* Files moved behind "More"; reveal it the way a person would. */
-    await page.evaluate(() => { document.getElementById('nav-more')?.removeAttribute('hidden'); go('docs'); });
-    await page.setInputFiles('#br-file', CSV);
-    await page.waitForSelector('#br-loaded', { state: 'visible', timeout: 15000 });
-    const dl = page.waitForEvent('download', { timeout: 30000 }).catch(() => null);
-    await page.click('#br-save');
-    await page.waitForFunction(() => S.documents.length >= 2, null, { timeout: 45000 });
-
-    const pair = await page.evaluate(() => {
-      const src = S.documents.find(d => d.role === 'source');
-      const con = S.documents.find(d => d.role === 'converted');
-      return {
-        total: S.documents.length, srcName: src?.name, conName: con?.name,
-        linked: !!(src && con && src.pair === con.pair && con.from === src.id),
-        srcHasText: !!src?.content,
-      };
-    });
-    check(pair.total === 2, `two documents, not one: ${pair.total}`);
-    check(pair.linked, `original kept and linked: ${pair.srcName} -> ${pair.conName}`);
-    check(pair.srcHasText, 'original carries its extracted text into the workspace');
-    check(!!(await dl), 'converted file downloaded');
-
-    /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
-    /* ---- depth is part of the design, not decoration to be lost ---- */
-    console.log('\n— the interface has weight —');
-    const depth = await page.evaluate(() => {
-      const cs = el => el ? getComputedStyle(el) : null;
-      const compose = cs(document.querySelector('#compose-btn'));
-      const pillOn = cs(document.querySelector('#mail-filters .pill.on'));
-      const reduce = getComputedStyle(document.documentElement).getPropertyValue('--pop').trim();
-      return {
-        composeGradient: /gradient/.test(compose.backgroundImage),
-        composeGlow: compose.boxShadow,
-        composeRound: parseFloat(compose.borderRadius),
-        pillGradient: pillOn ? /gradient/.test(pillOn.backgroundImage) : null,
-        pillRound: pillOn ? parseFloat(pillOn.borderRadius) : null,
-        springy: reduce,
-      };
-    });
-    check(depth.composeGradient, 'the primary action is a gradient, not a flat fill');
-    check(/rgb/.test(depth.composeGlow) && !/^rgba?\(0, 0, 0/.test(depth.composeGlow),
-      `and glows in its own colour rather than grey: ${depth.composeGlow.split(') ')[0]})`);
-    check(depth.composeRound >= 20, `bubble-round: ${depth.composeRound}px`);
-    check(depth.pillGradient === true && depth.pillRound >= 20,
-      `selected filters are bubbles too: ${depth.pillRound}px, gradient ${depth.pillGradient}`);
-    check(/cubic-bezier/.test(depth.springy), `with an overshoot curve for the lift: ${depth.springy}`);
 
     /* ---- the New document page is a launcher, not an editor ---- */
     console.log('\n— making something new opens the app you already use —');

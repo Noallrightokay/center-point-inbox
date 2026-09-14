@@ -74,7 +74,11 @@ const UID = 'preview-user';
 const now = Date.now();
 const hrs = n => now - n * 3600000;
 
+/* Six mailboxes, because that is the case the side-by-side view exists for:
+   a Business account with more inboxes than fit on screen at once, choosing
+   which two or three to put beside each other. */
 const WORK = 'lk-work', HOME = 'lk-home';
+const BILLING = 'lk-billing', LEGAL = 'lk-legal', OLD = 'lk-old', SUPPORT = 'lk-support';
 
 const demo = {
   v: 5,
@@ -82,6 +86,10 @@ const demo = {
   linked: [
     { id: WORK, type: 'mail', label: 'sam@reyesandco.com', status: 'live', addedAt: now - 86400000 * 12, lastSync: hrs(1), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
     { id: HOME, type: 'mail', label: 'sam.reyes@gmail.com', status: 'live', addedAt: now - 86400000 * 12, lastSync: hrs(2), host: 'imap.gmail.com', provLabel: 'Gmail' },
+    { id: BILLING, type: 'mail', label: 'billing@reyesandco.com', status: 'live', addedAt: now - 86400000 * 9, lastSync: hrs(3), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
+    { id: LEGAL, type: 'mail', label: 'contracts@reyesandco.com', status: 'live', addedAt: now - 86400000 * 9, lastSync: hrs(4), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
+    { id: SUPPORT, type: 'mail', label: 'hello@reyesandco.com', status: 'live', addedAt: now - 86400000 * 7, lastSync: hrs(2), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
+    { id: OLD, type: 'mail', label: 's.reyes@outlook.com', status: 'live', addedAt: now - 86400000 * 30, lastSync: hrs(20), host: 'outlook.office365.com', provLabel: 'Outlook' },
   ],
   rules: [],
   plugins: { split: false, jobs: false, slack: false, sms: false, discord: false, autopilot: false },
@@ -109,6 +117,28 @@ const demo = {
     { id: 'm6', ch: 'email', prov: 'imap', acct: HOME, real: true, cid: null, fromName: 'Shaw', fromAddr: 'billing@shaw.ca',
       subj: 'Your September statement', prev: 'Your statement is ready to view. Balance $114.20.',
       body: 'Your statement is ready to view.\n\nBalance: $114.20', ts: hrs(48), unread: false, starred: false, atts: [] },
+
+    { id: 'm7', ch: 'email', prov: 'imap', acct: BILLING, real: true, cid: null, fromName: 'Stripe', fromAddr: 'receipts@stripe.com',
+      subj: 'Payout of $6,142.00 is on its way', prev: 'Your payout will arrive in 1–2 business days.',
+      body: 'Your payout of $6,142.00 will arrive in 1–2 business days.', ts: hrs(4), unread: true, starred: false, atts: [] },
+    { id: 'm8', ch: 'email', prov: 'imap', acct: BILLING, real: true, cid: null, fromName: 'Priya Anand', fromAddr: 'priya@anandbooks.ca',
+      subj: 'August reconciliation is done', prev: 'Two receipts missing — I have listed them.',
+      body: 'August is reconciled. Two receipts missing, listed in the attachment.', ts: hrs(22), unread: false, starred: false, atts: [{ n: 'missing-receipts.xlsx' }] },
+    { id: 'm9', ch: 'email', prov: 'imap', acct: LEGAL, real: true, cid: 'c1', fromName: 'Dana Whitfield', fromAddr: 'dana@brightpathdental.com',
+      subj: 'Renewal terms — redline attached', prev: 'Our counsel marked up clause 7. Nothing dramatic.',
+      body: 'Our counsel marked up clause 7. Nothing dramatic — take a look.', ts: hrs(7), unread: true, starred: false, atts: [{ n: 'renewal-redline.docx' }] },
+    { id: 'm10', ch: 'email', prov: 'imap', acct: LEGAL, real: true, cid: null, fromName: 'Northgate Property', fromAddr: 'legal@northgateproperty.com',
+      subj: 'Lease addendum for signature', prev: 'Please return signed by the 28th.',
+      body: 'Please return the addendum signed by the 28th.', ts: hrs(29), unread: false, starred: true, atts: [{ n: 'addendum.pdf' }] },
+    { id: 'm11', ch: 'email', prov: 'imap', acct: SUPPORT, real: true, cid: null, fromName: 'Toni Alvarez', fromAddr: 'toni@wavecrest.co',
+      subj: 'Can you take on a small job in October?', prev: 'Two rooms, nothing structural. Budget is modest.',
+      body: 'Two rooms, nothing structural. Budget is modest but the timeline is easy.', ts: hrs(6), unread: true, starred: false, atts: [] },
+    { id: 'm12', ch: 'email', prov: 'imap', acct: SUPPORT, real: true, cid: null, fromName: 'Ken Obi', fromAddr: 'ken@obidesign.studio',
+      subj: 'Re: quote request', prev: 'Thanks — the numbers work. When can you start?',
+      body: 'Thanks, the numbers work. When can you start?', ts: hrs(33), unread: false, starred: false, atts: [] },
+    { id: 'm13', ch: 'email', prov: 'imap', acct: OLD, real: true, cid: null, fromName: 'LinkedIn', fromAddr: 'no-reply@linkedin.com',
+      subj: 'You appeared in 14 searches this week', prev: 'See who is looking at your profile.',
+      body: 'See who is looking at your profile.', ts: hrs(52), unread: false, starred: false, atts: [] },
   ],
   documents: [
     { id: 'd1', name: 'lease-countersigned.pdf', fmt: 'PDF', prov: 'rata', origin: 'rata', size: '184 KB', ts: hrs(2), folder: 'Brightpath Dental', content: '' },

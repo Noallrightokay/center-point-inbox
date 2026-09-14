@@ -218,6 +218,12 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 /* Two inboxes at once. The reading pane gives way rather than squeezing three
    columns onto a laptop, and each inbox keeps the full width it needs to be
    readable. */
+/* Any number of inboxes beside the first. Each keeps a floor of 330px so a
+   message stays readable; past that the row scrolls sideways rather than
+   crushing every pane thinner. */
+.extra-panes{display:contents}
+body.split-on #view-inbox{overflow-x:auto;overflow-y:hidden}
+body.split-on .side-list,body.split-on .split-pane{flex:1 1 0;min-width:330px}
 .split-pane{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
 /* A class that sets display beats the browser's own [hidden] rule, so the
    pane has to opt back out explicitly or it shows before it is asked for. */
@@ -244,10 +250,10 @@ body.split-on .side-list > .sort-row{padding-top:8px}
 .split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
 .split-head .sel{flex:1;min-width:0}
 body.split-on #mail-detail{display:none}
-/* min-width:0 matters: a flex child defaults to min-width:auto, so a long
-   subject line pushes its pane past an equal share and squeezes the other
-   one off the screen. */
-body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0}
+/* A flex child defaults to min-width:auto, so a long subject line would push
+   its pane past an equal share; the floor above replaces that with a
+   deliberate one, and the row scrolls when the floors do not fit. */
+body.split-on .side-list,body.split-on .split-pane{width:auto}
 .drop-live{outline:2px dashed var(--tint);outline-offset:-6px;background:var(--tint-wash)}
 .mail-row[draggable=true]{cursor:grab}
 .side-list{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
@@ -709,7 +715,7 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0
           <button type="button" data-mode="split">Side by side</button>
         </div>
         <div class="split-head" id="main-head" hidden>
-          <select class="sel" id="main-acct" aria-label="Which inbox to show on the left"></select>
+          <select class="sel" id="main-acct" aria-label="Which inbox to show here"></select>
         </div>
         <div id="digest"></div>
         <div id="sources"></div>
@@ -721,13 +727,7 @@ body.split-on .side-list,body.split-on .split-pane{flex:1;width:auto;min-width:0
         <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
-      <div class="split-pane" id="split-pane" hidden>
-        <div class="split-head">
-          <select class="sel" id="split-acct"></select>
-          <button class="btn" id="split-off" title="Back to one inbox">✕</button>
-        </div>
-        <div class="side-scroll" id="split-scroll"></div>
-      </div>
+      <div class="extra-panes" id="extra-panes"></div>
       <div class="detail-pane" id="mail-detail"><div class="empty" style="padding-top:120px"><b>Nothing selected</b>Pick a message on the left to read it.</div></div>
     </section>
 
@@ -1355,42 +1355,89 @@ function bulkRefresh(){
    a forward from the account it was dropped on — files and all. That is the
    move people otherwise do by downloading an attachment out of one mailbox and
    uploading it into another. */
-let splitOn=false,splitAcct='',mainAcct='';
+/* Which inboxes are open, in order. panes[0] is the left column — the one
+   that keeps the filter chips and the digest when it is on its own — and the
+   rest are generated beside it. Three is the ceiling: a fourth column of mail
+   on a laptop is narrower than the subject lines in it. */
+let splitOn=false,panes=[];
+const PANE_MAX=3;
 function mailAccounts(){return S.linked.filter(l=>l.type==='mail'||l.type==='google'||l.type==='ms'||l.type==='gmail_imap'||l.type==='apple')}
-function acctName(l){return l?l.label:'All inboxes'}
+function acctName(l){return l?l.label:'All inboxes together'}
+function paneAcct(i){return panes[i]||''}
 
 function acctOptions(accts,val){
   return '<option value="">All inboxes together</option>'
     +accts.map(l=>`<option value="${l.id}" ${l.id===val?'selected':''}>${esc(l.label)}</option>`).join('');
 }
-function renderSplitPicker(){
+
+/* Open on different mailboxes: identical columns teach nobody anything. With
+   one account there is nothing to sit beside, so the first pane shows
+   everything together. */
+function seedPanes(n){
   const accts=mailAccounts();
-  /* Two panes showing the same thing teach nobody anything, so they open on
-     different accounts — the first two — and either can be changed after. */
-  if(!accts.some(l=>l.id===mainAcct))mainAcct=accts[0]?accts[0].id:'';
-  if(!accts.some(l=>l.id===splitAcct)||splitAcct===mainAcct){
-    const other=accts.find(l=>l.id!==mainAcct);
-    splitAcct=other?other.id:'';
-  }
-  const a=$('#main-acct'),b=$('#split-acct');
-  if(a)a.innerHTML=acctOptions(accts,mainAcct);
-  if(b)b.innerHTML=acctOptions(accts,splitAcct);
+  const want=Math.max(2,Math.min(n||2,PANE_MAX,Math.max(2,accts.length)));
+  const out=[];
+  for(let i=0;i<want;i++)out.push(accts[i]?accts[i].id:'');
+  return out;
+}
+
+function paneHTML(i){
+  const accts=mailAccounts();
+  const last=i===panes.length-1;
+  return `<div class="split-pane" data-pane="${i}">
+    <div class="split-head">
+      <select class="sel" data-pane-acct="${i}" aria-label="Which inbox to show in column ${i+1}">${acctOptions(accts,paneAcct(i))}</select>
+      ${last&&panes.length<PANE_MAX&&accts.length>panes.length?`<button class="btn" data-pane-add="1" title="Show another inbox beside this one">＋ Inbox</button>`:''}
+      <button class="btn" data-pane-close="${i}" title="Close this inbox">✕</button>
+    </div>
+    <div class="side-scroll" data-pane-scroll="${i}"></div>
+  </div>`;
 }
 
 function renderSplit(){
-  if(!splitOn)return;
-  const sc=$('#split-scroll');if(!sc)return;
-  const pool=mailPool(splitAcct||undefined);
-  sc.innerHTML=pool.length
-    ? pool.map(m=>mailRowHTML(m)).join('')
-    : `<div class="empty" style="padding:40px 20px"><b>Nothing here yet</b>${splitAcct?esc(acctName(S.linked.find(l=>l.id===splitAcct)))+' has no messages in RATA yet.':'Add a second account and it can sit beside the first.'}</div>`;
-  sc.querySelectorAll('.mail-row').forEach(r=>{
-    r.onclick=()=>openMail(r.dataset.id);
-    r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+  const host=$('#extra-panes');if(!host)return;
+  if(!splitOn){host.innerHTML='';return}
+
+  /* The left column is pane 0 and lives in the markup; the rest are drawn. */
+  const a=$('#main-acct');
+  if(a)a.innerHTML=acctOptions(mailAccounts(),paneAcct(0));
+
+  host.innerHTML=panes.slice(1).map((_,k)=>paneHTML(k+1)).join('');
+
+  panes.slice(1).forEach((_,k)=>{
+    const i=k+1;
+    const sc=host.querySelector(`[data-pane-scroll="${i}"]`);
+    const pool=mailPool(paneAcct(i)||undefined);
+    sc.innerHTML=pool.length
+      ? pool.map(m=>mailRowHTML(m)).join('')
+      : `<div class="empty" style="padding:40px 18px"><b>Nothing here yet</b>${paneAcct(i)?esc(acctName(S.linked.find(l=>l.id===paneAcct(i))))+' has no messages in RATA yet.':'Every inbox, and none of them has mail yet.'}</div>`;
+    sc.querySelectorAll('.mail-row').forEach(r=>{
+      r.onclick=()=>openMail(r.dataset.id);
+      r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+    });
+    wireDrop(sc,()=>paneAcct(i)||(mailAccounts()[0]||{}).id);
   });
+
+  host.querySelectorAll('[data-pane-acct]').forEach(sel=>sel.onchange=()=>{
+    panes[+sel.dataset.paneAcct]=sel.value;renderSplit();
+  });
+  host.querySelectorAll('[data-pane-close]').forEach(b=>b.onclick=()=>{
+    panes.splice(+b.dataset.paneClose,1);
+    if(panes.length<2)setSplit(false);else renderSplit();
+  });
+  host.querySelectorAll('[data-pane-add]').forEach(b=>b.onclick=addPane);
 }
 
-/* A drop target is the *other* inbox, so `target` is the account a dropped
+function addPane(){
+  const accts=mailAccounts();
+  if(panes.length>=PANE_MAX)return;
+  const free=accts.find(l=>!panes.includes(l.id));
+  panes.push(free?free.id:'');
+  audit('inbox.layout',`${panes.length} inboxes side by side`);
+  renderSplit();
+}
+
+/* A drop target is another inbox, so `target` is the account a dropped
    message should be forwarded from. */
 function wireDrop(el,targetAcct){
   if(!el)return;
@@ -1426,13 +1473,13 @@ function transferMessage(msgId,targetAcctId){
 function setSplit(on){
   splitOn=on;
   document.body.classList.toggle('split-on',on);
-  const pane=$('#split-pane');if(pane)pane.hidden=!on;
   const head=$('#main-head');if(head)head.hidden=!on;
   $$('#inbox-mode button').forEach(b=>b.classList.toggle('on',(b.dataset.mode==='split')===on));
-  if(on)renderSplitPicker();
+  if(on&&panes.length<2)panes=seedPanes(2);
   renderMail();
-  if(on)renderSplit();
+  renderSplit();
 }
+
 
 function mailRowHTML(m){
   const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
@@ -1459,7 +1506,7 @@ function mailRowHTML(m){
 function renderMail(){
   /* Side by side, the left pane belongs to its own account; on its own it
      follows the filter chips as before. */
-  const pool=mailPool(splitOn?(mainAcct||undefined):undefined),sc=$('#mail-scroll');
+  const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
   $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
   if(!pool.length){
     const linked=S.linked.length;
@@ -1483,11 +1530,9 @@ function renderMail(){
     r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
   });
   if(splitOn){
-    /* Each pane accepts what the other one drops. The left pane's account is
-       whichever chip is selected; with no chip it is the combined inbox and a
-       drop means "send from my first account". */
-    wireDrop(sc,()=>mailFilter.startsWith('acct:')?mailFilter.slice(5):(mailAccounts()[0]||{}).id);
-    wireDrop($('#split-scroll'),()=>splitAcct||(mailAccounts()[0]||{}).id);
+    /* Every pane accepts what another drops on it, and forwards from its own
+       account. */
+    wireDrop(sc,()=>paneAcct(0)||(mailAccounts()[0]||{}).id);
   }
   sc.querySelectorAll('.avatar[data-cid]').forEach(a=>a.onclick=e=>{e.stopPropagation();go('people');openPerson(a.dataset.cid)});
 }
@@ -2470,9 +2515,8 @@ $$('#inbox-mode button').forEach(b=>b.onclick=()=>{
   setSplit(b.dataset.mode==='split');
   audit('inbox.layout',b.dataset.mode==='split'?'Side by side':'One inbox');
 });
-$('#split-off').onclick=()=>setSplit(false);
-$('#split-acct').onchange=e=>{splitAcct=e.target.value;renderSplit()};
-$('#main-acct').onchange=e=>{mainAcct=e.target.value;renderMail()};
+$('#main-acct').onchange=e=>{panes[0]=e.target.value;renderMail()};
+
 
 $('#folder-new').onclick=()=>{
   const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);
@@ -2695,7 +2739,7 @@ async function serverSync(p){
     save();
     autoTranslateNew(newIds);
     await audit(p+'.sync',`${res.label} — ${added} real messages pulled via RATA backend`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();
+    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
     toast(res.label+(added?` synced — ${added} new message${added===1?'':'s'}`:' is up to date'));
   }catch(e){
     toast(e.message==='cloud-account-required'?'Live sync needs a cloud account':'Live sync needs the RATA backend — see BACKEND-SETUP.md');
@@ -2725,7 +2769,7 @@ async function absorbMail(res){
   autoTranslateNew(newIds);
   const failed=(res.partial||[]).map(f=>f.email);
   await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
-  renderLinked();renderChSeg();renderMailFilters();renderMail();
+  renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
   toast(failed.length
     ? `${failed.join(', ')} could not be reached — check the app password in Accounts`
     : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
@@ -2802,7 +2846,7 @@ async function gmailSyncAccount(l){
     save();
     autoTranslateNew(newIds);
     await audit('gmail.sync',`${l.label} — ${added} real messages pulled`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();
+    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
     toast(added?`${l.label} synced — ${added} new message${added===1?'':'s'}`:l.label+' is up to date');
   }catch(e){toast('Sync failed for '+l.label+' — reconnect and try again');console.error(e)}
 }
