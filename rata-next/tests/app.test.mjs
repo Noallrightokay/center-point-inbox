@@ -240,6 +240,30 @@ export default async function run(state) {
     check(!!(await dl), 'converted file downloaded');
 
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
+    /* ---- depth is part of the design, not decoration to be lost ---- */
+    console.log('\n— the interface has weight —');
+    const depth = await page.evaluate(() => {
+      const cs = el => el ? getComputedStyle(el) : null;
+      const compose = cs(document.querySelector('#compose-btn'));
+      const pillOn = cs(document.querySelector('#mail-filters .pill.on'));
+      const reduce = getComputedStyle(document.documentElement).getPropertyValue('--pop').trim();
+      return {
+        composeGradient: /gradient/.test(compose.backgroundImage),
+        composeGlow: compose.boxShadow,
+        composeRound: parseFloat(compose.borderRadius),
+        pillGradient: pillOn ? /gradient/.test(pillOn.backgroundImage) : null,
+        pillRound: pillOn ? parseFloat(pillOn.borderRadius) : null,
+        springy: reduce,
+      };
+    });
+    check(depth.composeGradient, 'the primary action is a gradient, not a flat fill');
+    check(/rgb/.test(depth.composeGlow) && !/^rgba?\(0, 0, 0/.test(depth.composeGlow),
+      `and glows in its own colour rather than grey: ${depth.composeGlow.split(') ')[0]})`);
+    check(depth.composeRound >= 20, `bubble-round: ${depth.composeRound}px`);
+    check(depth.pillGradient === true && depth.pillRound >= 20,
+      `selected filters are bubbles too: ${depth.pillRound}px, gradient ${depth.pillGradient}`);
+    check(/cubic-bezier/.test(depth.springy), `with an overshoot curve for the lift: ${depth.springy}`);
+
     /* ---- the New document page is a launcher, not an editor ---- */
     console.log('\n— making something new opens the app you already use —');
     await page.evaluate(() => go('create'));
