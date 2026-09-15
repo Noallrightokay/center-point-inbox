@@ -10,13 +10,14 @@
    tested at all — they depend on controlling the clock. */
 import { createHmac } from 'node:crypto';
 import { startServer, makeChecker } from './helpers.mjs';
-import { verifySignature, planForPrice, rowForEvent, LIVE_STATUSES } from '../lib/stripe.js';
+import { verifySignature, planForPrice, rowForEvent, domainAddonsOf, LIVE_STATUSES } from '../lib/stripe.js';
 
 const SECRET = 'whsec_test_secret_value';
 const ENV = {
   STRIPE_PRICE_BASE: 'price_base_123',
   STRIPE_PRICE_PRO: 'price_pro_456',
   STRIPE_PRICE_ENTERPRISE: 'price_ent_789',
+  STRIPE_PRICE_DOMAIN: 'price_dom_000',
 };
 
 const sign = (body, secret = SECRET, t = Math.floor(Date.now() / 1000)) =>
@@ -102,6 +103,34 @@ export default async function run(state) {
     }, ENV);
     check(failed.status === 'past_due' && LIVE_STATUSES.includes(failed.status),
       'a card that failed this morning stays entitled while Stripe retries it');
+
+    /* The add-on makes a subscription carry two lines, and Stripe promises
+       nothing about their order. Reading items.data[0] was safe with one line
+       and silently wrong with two: an add-on listed first would read as no
+       plan at all and clear it — downgrading a paying customer for buying
+       something extra. */
+    const bothWaysRound = [
+      [{ price: { id: ENV.STRIPE_PRICE_DOMAIN }, quantity: 2 }, { price: { id: ENV.STRIPE_PRICE_PRO }, quantity: 1 }],
+      [{ price: { id: ENV.STRIPE_PRICE_PRO }, quantity: 1 }, { price: { id: ENV.STRIPE_PRICE_DOMAIN }, quantity: 2 }],
+    ];
+    for (const [i, items] of bothWaysRound.entries()) {
+      const r = rowForEvent({ type: 'customer.subscription.updated',
+        data: { object: { customer: 'cus_ABC123', status: 'active', items: { data: items } } } }, ENV);
+      check(r.plan === 'pro' && r.domain_addons === 2,
+        `${i ? 'plan first' : 'add-on first'}: plan=${r.plan}, domains=${r.domain_addons}`);
+    }
+
+    check(domainAddonsOf({ items: { data: [{ price: { id: ENV.STRIPE_PRICE_PRO }, quantity: 1 }] } }, ENV) === 0,
+      'a subscription with no add-on line buys no domains');
+    check(domainAddonsOf({ items: { data: [{ price: { id: ENV.STRIPE_PRICE_DOMAIN }, quantity: 3 }] } }, {}) === 0,
+      'and with the add-on price unconfigured, nothing is granted by accident');
+
+    /* Removing the extra domain sends a quantity of nothing, which has to be
+       written, not skipped — otherwise it stays entitled after the money stops. */
+    const dropped = rowForEvent({ type: 'customer.subscription.updated',
+      data: { object: { customer: 'cus_ABC123', status: 'active',
+        items: { data: [{ price: { id: ENV.STRIPE_PRICE_PRO }, quantity: 1 }] } } } }, ENV);
+    check(dropped.domain_addons === 0, 'dropping the add-on records zero rather than leaving the old count');
 
     check(rowForEvent({ type: 'invoice.created', data: { object: {} } }, ENV) === null,
       'events that change nothing are ignored rather than acted on');

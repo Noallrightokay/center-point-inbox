@@ -2065,11 +2065,16 @@ const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOC
    decides what to show. There is no free tier: an account with no plan is
    unsubscribed, and is told the price rather than handed a lesser product. */
 const TIERS={
-  base:      {label:'RATA Base',      price:8,  mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false},
-  pro:       {label:'RATA Pro',       price:16, mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false},
-  /* mail:null means no ceiling — Base is the only plan that has one. */
-  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true},
+  base:      {label:'RATA Base',      price:8,  mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
+  pro:       {label:'RATA Pro',       price:16, mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
+  /* mail:null means no ceiling — Base is the only plan that has one.
+     ratamail is addresses RATA hosts at mailrata.org; domains is mail on a
+     domain the customer owns, which Pro buys at $1.50 a month each and
+     Enterprise includes without limit. */
+  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true, ratamail:null,domains:null},
 };
+const DOMAIN_ADDON_PRICE=1.50;
+const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
 const tier=()=>TIERS[S.settings.plan]||null;
 const tierLabel=()=>tier()?tier().label:'No plan yet';
 const can=f=>!!(tier()&&tier()[f]);

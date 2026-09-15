@@ -8,7 +8,7 @@
 import { startServer, makeChecker } from './helpers.mjs';
 import { describe, candidateHosts, discoverHosts, mailHostForMx, mailKey, isMailKey, domainOf, checkHost, isAuthFailure } from '../lib/mail.js';
 import { allowed, failed, succeeded, reset, LINK_ATTEMPTS, waitPhrase } from '../lib/ratelimit.js';
-import { PLANS, UNLIMITED, bucketOf, countLinks, refusal } from '../lib/plan.js';
+import { PLANS, UNLIMITED, bucketOf, countLinks, refusal, domainRefusal, domainsAllowed, money, DOMAIN_ADDON } from '../lib/plan.js';
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -230,6 +230,39 @@ export default async function run(state) {
 
     const noChat = refusal('base', 'chat', 0);
     check(/does not include/.test(noChat) && /RATA Pro/.test(noChat), `Base, chat: "${noChat}"`);
+  }
+
+  console.log('\n— RATA\u2019s own addresses, and mail on a domain you own —');
+  {
+    check(PLANS.base.ratamail === 0, 'Base connects mailboxes you already have; it does not hand out new ones');
+    check(PLANS.pro.ratamail === UNLIMITED && PLANS.enterprise.ratamail === UNLIMITED,
+      'Pro and Enterprise get addresses at mailrata.org');
+
+    check(PLANS.pro.domains === 0, 'Pro includes no custom domain');
+    check(PLANS.enterprise.domains === UNLIMITED, 'Enterprise includes as many as they like');
+    check(DOMAIN_ADDON.price === 1.5, `and Pro buys them at ${money(DOMAIN_ADDON.price)} a month each`);
+
+    check(domainsAllowed('pro', 0) === 0 && domainsAllowed('pro', 3) === 3,
+      'what is bought is what is allowed');
+    check(domainsAllowed('enterprise', 0) === UNLIMITED, 'Enterprise ignores the counter entirely');
+
+    /* The point of a separate refusal: every other limit is lifted by moving
+       up a plan, and telling a Pro member to pay $56 more for one domain
+       would be both wrong and a good way to lose them. */
+    const ask = domainRefusal('pro', 0, 0);
+    check(/\$1\.50/.test(ask), `Pro is offered the add-on, with its price: "${ask}"`);
+    check(!/^RATA Enterprise/.test(ask) && /Enterprise/.test(ask),
+      'with Enterprise mentioned as the alternative rather than the answer');
+    check(domainRefusal('pro', 1, 1) === null ? false : /another/.test(domainRefusal('pro', 1, 1)),
+      'a second domain on top of one bought is offered as another add-on');
+    check(domainRefusal('pro', 0, 1) === null, 'and a domain already paid for is simply allowed');
+    check(domainRefusal('enterprise', 400, 0) === null, 'Enterprise never meets this at all');
+    check(/Choose a plan/.test(domainRefusal(null, 0, 0)), 'an account with no plan is told what to buy first');
+
+    /* $1.50, never $1.5. */
+    check(money(1.5) === '$1.50' && money(8) === '$8' && money(72) === '$72',
+      `prices are quoted whole: ${money(8)} / ${money(1.5)} / ${money(72)}`);
+    check(!/\$\d+\.\d(?!\d)/.test(ask), 'and no refusal quotes a price with a digit missing');
   }
 
   console.log('\n— the endpoints exist and refuse strangers —');

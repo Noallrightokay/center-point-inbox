@@ -46,6 +46,7 @@ export async function POST(req) {
         plan: row.plan,
         status: row.status,
         stripe_customer: row.stripe_customer,
+        domain_addons: row.domain_addons || 0,
         updated_at: now,
       });
       if (error) throw new Error(error.message);
@@ -57,6 +58,11 @@ export async function POST(req) {
        retries will bring it round again once checkout has landed. */
     const patch = { status: row.status, updated_at: now };
     if (row.plan) patch.plan = row.plan;
+    /* Written on every subscription event rather than only when non-zero: a
+       customer who removes their extra domain sends a quantity of nothing, and
+       skipping the zero would leave them entitled to a domain they stopped
+       paying for. */
+    if (typeof row.domain_addons === 'number') patch.domain_addons = row.domain_addons;
 
     const { data, error } = await sb.from('subscriptions')
       .update(patch).eq('stripe_customer', row.stripe_customer).select('email');

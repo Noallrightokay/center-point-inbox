@@ -92,7 +92,8 @@ export function rowForEvent(event, env = process.env) {
       by: 'email',
       email,
       stripe_customer: typeof o.customer === 'string' ? o.customer : (o.customer?.id || null),
-      plan: planForPrice(priceOf(o), env) || 'base',
+      plan: planForPrice(priceOf(o, env), env) || 'base',
+      domain_addons: domainAddonsOf(o, env),
       status: 'active',
     };
   }
@@ -105,7 +106,8 @@ export function rowForEvent(event, env = process.env) {
     return {
       by: 'customer',
       stripe_customer: customer,
-      plan: planForPrice(priceOf(o), env),
+      plan: planForPrice(priceOf(o, env), env),
+      domain_addons: domainAddonsOf(o, env),
       status: LIVE_STATUSES.includes(o.status) ? o.status : (o.status || 'canceled'),
     };
   }
@@ -113,15 +115,39 @@ export function rowForEvent(event, env = process.env) {
   if (type === 'customer.subscription.deleted') {
     const customer = typeof o.customer === 'string' ? o.customer : (o.customer?.id || null);
     if (!customer) return null;
-    return { by: 'customer', stripe_customer: customer, plan: null, status: 'canceled' };
+    return { by: 'customer', stripe_customer: customer, plan: null, domain_addons: 0, status: 'canceled' };
   }
 
   return null;
 }
 
-function priceOf(o) {
-  return o?.items?.data?.[0]?.price?.id
-    || o?.line_items?.data?.[0]?.price?.id
-    || o?.plan?.id
-    || null;
+/* Every line on the subscription, not just the first.
+
+   Taking items.data[0] was safe while a subscription had exactly one line. The
+   domain add-on makes that false: Stripe does not promise an order, so a
+   subscription carrying "Pro" and "your own domain" could arrive add-on first,
+   and the plan would be read as null and cleared — downgrading a paying
+   customer because they bought something extra. */
+function linesOf(o) {
+  return o?.items?.data || o?.line_items?.data || (o?.plan ? [{ price: { id: o.plan.id }, quantity: 1 }] : []);
+}
+
+/* The plan line, wherever it sits. */
+function priceOf(o, env) {
+  for (const line of linesOf(o)) {
+    const id = line?.price?.id;
+    if (id && planForPrice(id, env)) return id;
+  }
+  return null;
+}
+
+/* How many custom domains were bought, as a quantity on the add-on line. */
+export function domainAddonsOf(o, env = process.env) {
+  const want = env.STRIPE_PRICE_DOMAIN;
+  if (!want) return 0;
+  let n = 0;
+  for (const line of linesOf(o)) {
+    if (line?.price?.id === want) n += Number(line.quantity) || 1;
+  }
+  return n;
 }

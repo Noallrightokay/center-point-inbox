@@ -41,6 +41,10 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
+    /* RATA-hosted addresses. Base connects the mailboxes you already have; it
+       does not hand out new ones. */
+    ratamail: 0,
+    domains: 0,
     blurb: 'Up to two mailboxes in one Center Point inbox, translated as they arrive, and any file converted to any format.',
   },
   pro: {
@@ -56,7 +60,11 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
-    blurb: 'Everything in Base, with more than two mailboxes, the option to view them side by side, and summaries of what arrived.',
+    /* Addresses at mailrata.org, hosted by RATA rather than connected from
+       somewhere else. Their own domain is the paid add-on below. */
+    ratamail: UNLIMITED,
+    domains: 0,
+    blurb: 'Everything in Base, with more than two mailboxes, the option to view them side by side, summaries of what arrived, and your own @mailrata.org addresses.',
   },
   enterprise: {
     label: 'RATA Enterprise',
@@ -71,7 +79,9 @@ export const PLANS = {
     crm: true,
     sms: true,
     automations: true,
-    blurb: 'Everything in Pro, plus the CRM, texts, automations and a shared view across the team.',
+    ratamail: UNLIMITED,
+    domains: UNLIMITED,
+    blurb: 'Everything in Pro, plus mail on as many of your own domains as you like, the CRM, texts, automations and a shared view across the team.',
   },
 };
 
@@ -82,7 +92,29 @@ export const NO_PLAN = {
   mail: 0, chat: 0,
   split: false, translate: false, convert: false, ai: false,
   files: false, crm: false, sms: false, automations: false,
+  ratamail: 0, domains: 0,
   blurb: 'Choose a plan to connect a mailbox. RATA Base is $8 a month.',
+};
+
+/* Mail on your own domain, for a plan that does not include it.
+
+   Pro gets addresses at mailrata.org. Hosting mail on a customer's own domain
+   is a different amount of work — their MX has to point here, and their mail
+   breaking becomes RATA's support call — so it is charged for rather than
+   folded in. Enterprise includes as many as they like.
+
+   Priced per domain and per month, so somebody with three domains pays for
+   three. Stripe carries it as a quantity on the same subscription. */
+/* $8 and $1.50, not $8.00 and $1.5. Written once so no price in the product
+   can be quoted with a stray digit missing. */
+export function money(n) {
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+export const DOMAIN_ADDON = {
+  price: 1.5,
+  label: 'Your own domain',
+  blurb: 'Host mail on a domain you own — you@yourcompany.com, arriving in the same Center Point inbox.',
 };
 
 export const ORDER = ['base', 'pro', 'enterprise'];
@@ -147,6 +179,35 @@ export function refusal(plan, bucket, used) {
   return `${def.label} includes up to ${cap} ${cap === 1 ? one : many}, and ${cap === 1 ? 'it is' : 'they are'} in use.${lift}`;
 }
 
+/* How many domains this account may host mail on: what the plan includes, plus
+   what it has bought. */
+export function domainsAllowed(plan, purchased = 0) {
+  const included = planDef(plan).domains;
+  if (included === UNLIMITED) return UNLIMITED;
+  return included + Math.max(0, Number(purchased) || 0);
+}
+
+/* Null when another domain is allowed, or the sentence to show when it is not.
+
+   This is deliberately not `refusal()`. Every other limit in RATA is lifted by
+   moving up a plan, and saying "upgrade to Enterprise" to a Pro member who
+   wants one custom domain would be both wrong and expensive — the answer there
+   is $1.50, not $56. */
+export function domainRefusal(plan, used, purchased = 0) {
+  const cap = domainsAllowed(plan, purchased);
+  if (used < cap) return null;
+
+  if (!PLANS[plan]) {
+    return `Choose a plan to host mail on your own domain. ${PLANS.pro.label} (${money(PLANS.pro.price)} a month) can add one for ${money(DOMAIN_ADDON.price)} a month.`;
+  }
+  if (plan === 'enterprise') return null;   // unlimited; the cap is never reached
+
+  const have = purchased
+    ? `You are hosting ${used} domain${used === 1 ? '' : 's'}.`
+    : `${planDef(plan).label} includes addresses at mailrata.org rather than mail on your own domain.`;
+  return `${have} Add ${purchased ? 'another' : 'one'} for ${money(DOMAIN_ADDON.price)} a month, or ${PLANS.enterprise.label} (${money(PLANS.enterprise.price)}/month) includes as many as you like.`;
+}
+
 /* The user's plan, read from the subscriptions table the Stripe webhook
    maintains. No active subscription is no plan — not a lesser one. */
 export async function planForUser(sb, email) {
@@ -157,4 +218,19 @@ export async function planForUser(sb, email) {
   const live = ['active', 'trialing'].includes(String(data.status || '').toLowerCase());
   if (!live) return null;
   return PLANS[data.plan] ? data.plan : 'base';
+}
+
+/* The plan and everything bought alongside it. Separate from planForUser so the
+   existing callers, which only ask "which tier", keep their shape. */
+export async function entitlementsForUser(sb, email) {
+  if (!sb || !email) return { plan: null, domainAddons: 0 };
+  const { data } = await sb.from('subscriptions')
+    .select('plan,status,domain_addons').eq('email', String(email).toLowerCase()).maybeSingle();
+  if (!data) return { plan: null, domainAddons: 0 };
+  const live = ['active', 'trialing'].includes(String(data.status || '').toLowerCase());
+  if (!live) return { plan: null, domainAddons: 0 };
+  return {
+    plan: PLANS[data.plan] ? data.plan : 'base',
+    domainAddons: Math.max(0, Number(data.domain_addons) || 0),
+  };
 }

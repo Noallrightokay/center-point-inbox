@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../lib/server';
 import { isMailKey } from '../../../lib/mail';
-import { planForUser, countLinks, planDef, bucketOf, UNLIMITED } from '../../../lib/plan';
+import { entitlementsForUser, countLinks, planDef, bucketOf, domainsAllowed, DOMAIN_ADDON, UNLIMITED } from '../../../lib/plan';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +18,7 @@ export async function GET(req) {
   const { data: rows } = await sb.from('provider_tokens')
     .select('provider,label,extra,updated_at').eq('user_id', user.id);
 
-  const plan = await planForUser(sb, user.email);
+  const { plan, domainAddons } = await entitlementsForUser(sb, user.email);
   const def = planDef(plan);
   const used = countLinks(rows);
 
@@ -30,7 +30,11 @@ export async function GET(req) {
     plan,
     planLabel: def.label,
     price: def.price,
-    limits: { mail: cap(def.mail), chat: cap(def.chat) },
+    limits: { mail: cap(def.mail), chat: cap(def.chat),
+              ratamail: cap(def.ratamail), domains: cap(domainsAllowed(plan, domainAddons)) },
+    /* What the extra domains cost, sent from the server so the price is quoted
+       from one place rather than written into the app as well. */
+    domainAddon: { bought: domainAddons, price: DOMAIN_ADDON.price, blurb: DOMAIN_ADDON.blurb },
     features: { split: def.split, translate: def.translate, convert: def.convert,
                 ai: def.ai, files: def.files, crm: def.crm, sms: def.sms, automations: def.automations },
     used,

@@ -24,7 +24,17 @@ with a **recurring monthly** price:
 | RATA Pro | $16 / month | More than two mailboxes, side by side, summaries |
 | RATA Enterprise | $72 / month | CRM, texts, automations |
 
-Open each price and copy its **price ID** (`price_…`). You need all three.
+And one add-on, which is not a plan:
+
+| Product | Price | What it is |
+|---|---|---|
+| Your own domain | $1.50 / month | Mail hosted on a domain the customer owns. Pro includes none and buys these; Enterprise includes them all and never needs this line. |
+
+Create the add-on price with **"Customers can adjust the quantity"** enabled —
+somebody with three domains pays for three, carried as a quantity on the same
+subscription rather than as three subscriptions.
+
+Open each price and copy its **price ID** (`price_…`). You need all four.
 
 ## 2. A payment link for each
 
@@ -82,6 +92,10 @@ Server-only. These must never appear in the browser:
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_ENTERPRISE` | the Enterprise `price_…` |
+| `STRIPE_PRICE_DOMAIN` | the custom-domain add-on `price_…` |
+
+Leaving `STRIPE_PRICE_DOMAIN` unset is safe: no domain is ever granted by
+accident, the add-on simply cannot be sold until it is set.
 
 Redeploy.
 
@@ -98,13 +112,24 @@ have to build any of it.
 
 1. Someone clicks a plan in Settings and pays on Stripe's page.
 2. Stripe POSTs `checkout.session.completed` to the webhook, signed.
-3. The webhook verifies the signature, maps the price to a plan, and writes
-   `subscriptions`: email, plan, status `active`, and the Stripe customer id.
+3. The webhook verifies the signature, finds the plan line among the
+   subscription's lines, counts any custom-domain add-on quantity, and writes
+   `subscriptions`: email, plan, status `active`, the Stripe customer id and
+   `domain_addons`.
+
+   The plan is found by scanning every line rather than reading the first. A
+   subscription carrying both Pro and the domain add-on can arrive in either
+   order, and reading line one would have cleared the plan of a customer whose
+   only mistake was buying something extra.
 4. The app reads that row. The **server** reads it too, through `planForUser`,
    and that is what refuses an over-limit mailbox — so entitlement does not
    depend on the browser being honest.
 5. Later changes arrive as subscription events. Those carry no email, so they
    are matched on the customer id stored in step 3.
+
+**Dropping the add-on is recorded, not ignored.** A customer who removes their
+extra domain sends a subscription with no add-on line, and that writes zero —
+skipping it would leave them entitled to a domain they stopped paying for.
 
 **A cancellation does not delete anyone's data.** Status goes to `canceled`,
 the plan clears, and linking a new mailbox stops. Mail already synced stays
