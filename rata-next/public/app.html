@@ -2990,6 +2990,9 @@ async function absorbMail(res){
        saying "could not be reached" about it would send the user waiting for a
        refresh that is never going to come. */
     if(a.needsRelink)l.needsRelink=true;else delete l.needsRelink;
+    /* Not reached this time is not an error: nothing is wrong with it, and
+       marking it would have the row claim a problem it does not have. */
+    if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   for(const m of (res.messages||[])){
     if(S.messages.some(x=>x.id===m.id))continue;
@@ -3004,11 +3007,14 @@ async function absorbMail(res){
   const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
   await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
   renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
+  const later=(res.deferred||[]).length;
   toast(stuck.length
     ? `${stuck.join(', ')} needs its app password again — relink it in Accounts`
     : failed.length
       ? `${failed.join(', ')} could not be reached — RATA will try again on the next refresh`
-      : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
+      : later
+        ? `${added?added+' new — ':''}${later} more mailbox${later===1?'':'es'} on the next refresh`
+        : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
 }
 
 /* ---- Google: real OAuth per account ---- */

@@ -28,6 +28,24 @@ const AT_ONCE = 4;
    them and hold the whole response open. */
 const PER_MAILBOX_MS = 25000;
 
+/* A ceiling on the whole refresh, which is the one that actually matters.
+
+   Four at a time bounds how many sockets are open, not how long the request
+   runs: twelve mailboxes is three waves, and three waves of the per-mailbox
+   ceiling is seventy-five seconds in a single HTTP request. Gateways do not
+   wait that long — the customer gets a network error rather than their mail,
+   and because unlimited mailboxes is what Pro sells, it is the customers
+   paying most who hit it first.
+
+   So the refresh returns what it has when the budget runs out and names what
+   it did not reach, which is a true answer. Under thirty seconds is comfortably
+   inside every proxy timeout worth worrying about. */
+const TOTAL_MS = 28000;
+
+/* Not enough time left to be worth opening a connection that will only be cut
+   off part way through. */
+const WORTH_TRYING_MS = 3000;
+
 async function mapLimit(items, n, fn) {
   const out = new Array(items.length);
   let next = 0;
@@ -63,7 +81,20 @@ export async function GET(req) {
     return NextResponse.json({ error: only ? 'That mailbox is not linked' : 'No mailbox linked yet' });
   }
 
-  const results = await mapLimit(mailboxes, AT_ONCE, async r => {
+  const deadline = Date.now() + TOTAL_MS;
+
+  /* Where in the list to start, rotating each minute.
+
+     Without this the same mailboxes are always attempted first, so the ones at
+     the end of a long list would never be reached on an account whose servers
+     are slow — they would be permanently the ones that ran out of budget.
+     Rotating means every refresh covers a different part of the list and
+     everything lands within a few. Stable within the minute, so a user
+     hammering refresh gets consistent answers rather than a shuffle. */
+  const from = mailboxes.length ? Math.floor(Date.now() / 60000) % mailboxes.length : 0;
+  const ordered = [...mailboxes.slice(from), ...mailboxes.slice(0, from)];
+
+  const results = await mapLimit(ordered, AT_ONCE, async r => {
     const host = r.extra?.host || candidateHosts(r.label)[0];
     const port = r.extra?.port || undefined;
     const label = r.extra?.provider_label || describe(r.label)?.label || host;
@@ -83,9 +114,17 @@ export async function GET(req) {
        saying "sync failed" would send the user looking in the wrong place. */
     if (!pass) return { ...base, needsRelink: true, error: `${r.label} could not be unlocked — relink it in Accounts.` };
 
+    /* Checked here rather than before the loop: by the time a worker reaches
+       this mailbox, earlier ones may have spent the budget. */
+    const left = deadline - Date.now();
+    if (left < WORTH_TRYING_MS) {
+      return { ...base, deferred: true,
+        error: `${r.label} was not reached in this refresh — the next one starts with it.` };
+    }
+
     const out = await withDeadline(
       fetchInbox({ host, port, email: r.label, pass, label }),
-      PER_MAILBOX_MS,
+      Math.min(PER_MAILBOX_MS, left),
       () => ({ kind: 'net', error: `${r.label} took too long to answer and was left out of this refresh.` }),
     );
     return { ...base, ...out };
@@ -107,7 +146,14 @@ export async function GET(req) {
   }
 
   const messages = results.flatMap(r => r.messages || []).sort((a, b) => b.ts - a.ts);
-  const failures = results.filter(r => r.error).map(r => ({ email: r.email, error: r.error, needsRelink: !!(r.needsRelink || r.kind === 'auth') }));
+
+  /* A mailbox left for the next refresh is not a failure and must not be
+     reported as one — nothing is wrong with it, and telling somebody to check
+     an app password that is working would be a lie that costs a support
+     email. */
+  const deferred = results.filter(r => r.deferred).map(r => r.email);
+  const failures = results.filter(r => r.error && !r.deferred)
+    .map(r => ({ email: r.email, error: r.error, needsRelink: !!(r.needsRelink || r.kind === 'auth') }));
 
   return NextResponse.json({
     messages,
@@ -116,8 +162,12 @@ export async function GET(req) {
       count: (r.messages || []).length,
       error: r.error || null,
       needsRelink: !!(r.needsRelink || r.kind === 'auth'),
+      deferred: !!r.deferred,
     })),
+    ...(deferred.length ? { deferred } : {}),
     ...(failures.length ? { partial: failures } : {}),
-    ...(failures.length === results.length ? { error: failures[0].error } : {}),
+    /* Only a refresh where everything genuinely failed is an error. One that
+       ran out of time still delivered mail. */
+    ...(failures.length && failures.length === results.length ? { error: failures[0].error } : {}),
   });
 }
