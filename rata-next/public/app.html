@@ -3332,7 +3332,7 @@ async function translateText(text,target){
     try{
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
         headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,
+        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:2000,
           system:'You are a translator. Reply with ONLY the translation into '+(LANGS[target]||target)+', nothing else. Also on the very first line output the ISO 639-1 code of the SOURCE language followed by ::: then the translation.',
           messages:[{role:'user',content:text.slice(0,6000)}]})});
       const d=await r.json();
@@ -3390,7 +3390,7 @@ async function summarizeMessage(id){
     try{
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
         headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,
+        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:400,
           system:'Summarize this message in 2-3 tight sentences, then a dash list of any actions/deadlines for the reader. Plain text.',
           messages:[{role:'user',content:'From: '+msgFrom(m)+'\nSubject: '+(m.subj||'')+'\n\n'+(m.orig||m.body).slice(0,6000)}]})});
       const dd=await r.json();
@@ -3461,7 +3461,7 @@ async function runAIBrief(){
       method:'POST',
       headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6',max_tokens:700,
+        model:'claude-sonnet-5',max_tokens:700,
         system:'You are Rata Assist, the briefing bot inside the Rata unified inbox. Given recent messages, produce a tight daily brief in plain text: 1) one-sentence overview, 2) TO-DOS (dash list, who + what + urgency), 3) AWAITING YOUR REPLY, 4) CAN WAIT. Be concrete and skip anything with no action.',
         messages:[{role:'user',content:'Recent messages as JSON:\n'+JSON.stringify(recent)}]
       })
