@@ -6,7 +6,7 @@
    is told when the allowance runs out. The IMAP conversation itself is proved
    against a real server by the live checks. */
 import { startServer, makeChecker } from './helpers.mjs';
-import { describe, candidateHosts, discoverHosts, mailHostForMx, mailKey, isMailKey, domainOf, checkHost, isAuthFailure } from '../lib/mail.js';
+import { describe, candidateHosts, discoverHosts, mailHostForMx, mailKey, isMailKey, domainOf, checkHost, isAuthFailure, smtpCandidates, isRatamail, ratamailDomain } from '../lib/mail.js';
 import { allowed, failed, succeeded, reset, LINK_ATTEMPTS, waitPhrase } from '../lib/ratelimit.js';
 import { PLANS, UNLIMITED, bucketOf, countLinks, refusal, domainRefusal, domainsAllowed, money, DOMAIN_ADDON } from '../lib/plan.js';
 
@@ -107,6 +107,47 @@ export default async function run(state) {
     for (const addr of ['a.b@x.com', 'a-b@x.com', 'a+b@x.com', 'a_b@x.com', 'ab@x.com', 'A.B@X.com'])
       seen.add(mailKey(addr));
     check(seen.size === 5, `six addresses, five distinct mailboxes (the sixth is the same one in capitals): ${seen.size}`);
+  }
+
+  console.log('\n— mail RATA hosts itself —');
+  {
+    /* The server does not exist yet. Until it does, an @mailrata.org address
+       must behave like anyone else's unknown domain — pointing users at a host
+       that is not answering and calling it a mail problem is worse than not
+       offering it. */
+    delete process.env.RATA_MAIL_HOST;
+    check(ratamailDomain() === null, 'with no server configured, RATA hosts no mail');
+    check(!isRatamail('me@mailrata.org'), 'and its own domain gets no special treatment');
+    check(describe('me@mailrata.org').guessed === true,
+      'an @mailrata.org address falls through to ordinary discovery, which will ask');
+
+    process.env.RATA_MAIL_HOST = 'imap.mailrata.org';
+    try {
+      check(isRatamail('me@mailrata.org') && !isRatamail('me@gmail.com'),
+        'configured, the domain is recognised as RATA\u2019s own');
+      const d = describe('me@mailrata.org');
+      check(d.hostedByRata === true && d.host === 'imap.mailrata.org' && !d.guessed,
+        `and resolves without a lookup: ${d.host} (${d.label})`);
+      check(/separate from your RATA account password/i.test(d.help),
+        'saying plainly that the mailbox password is not the account password');
+
+      const found = await discoverHosts('me@mailrata.org');
+      check(found.hosts.length === 1 && found.hosts[0].source === 'rata',
+        'discovery stops there rather than asking DNS about our own domain');
+
+      check(smtpCandidates(null, 'me@mailrata.org')[0] === 'imap.mailrata.org',
+        'and sending goes to RATA\u2019s own submission host');
+      process.env.RATA_SMTP_HOST = 'smtp.mailrata.org';
+      check(smtpCandidates(null, 'me@mailrata.org')[0] === 'smtp.mailrata.org',
+        'which a deployment can name separately');
+
+      /* Everyone else must be untouched by any of this. */
+      check(describe('someone@gmail.com').host === 'imap.gmail.com',
+        'no other provider changes behaviour when RATA hosts mail');
+    } finally {
+      delete process.env.RATA_MAIL_HOST;
+      delete process.env.RATA_SMTP_HOST;
+    }
   }
 
   console.log('\n— where RATA is willing to open a socket —');

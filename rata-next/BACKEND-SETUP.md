@@ -125,6 +125,19 @@ whatever IMAP host was found, and tries 465 then 587. Microsoft is the one that
 needs two names — `smtp.office365.com` for a business mailbox and
 `smtp-mail.outlook.com` for a consumer one — so both are offered.
 
+### RATA's own addresses
+
+`RATA_MAIL_HOST` turns on mailboxes RATA hosts itself — see MAIL-HOSTING.md.
+Leave it unset until that server exists: an `@mailrata.org` address is then
+treated as any other unknown domain, rather than being pointed at a host that is
+not answering.
+
+| Variable | Value |
+|---|---|
+| `RATA_MAIL_HOST` | the IMAP host of RATA's mail server |
+| `RATA_SMTP_HOST` | its submission host, if different from the above |
+| `RATA_MAIL_DOMAIN` | the domain those addresses live on (default `mailrata.org`) |
+
 ### The two older per-provider routes
 
 `/api/link/imap/gmail` and `/api/link/imap/apple` predate the universal path and

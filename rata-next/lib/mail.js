@@ -106,9 +106,16 @@ export const SMTP_HOSTS = {
    Outlook address and a company's Microsoft 365 mailbox, and the two submit to
    different hosts — so both are offered and the one that accepts wins. Most
    providers need only the first. */
-export function smtpCandidates(imapHost, email) {
+export function smtpCandidates(imapHost, email, env = process.env) {
   const out = [];
   const add = h => { if (h && !out.includes(h)) out.push(h); };
+
+  /* A RATA-hosted address submits to RATA's own server, which is the same host
+     it reads from unless the deployment says otherwise. */
+  if (isRatamail(email, env)) {
+    add(env.RATA_SMTP_HOST || env.RATA_MAIL_HOST);
+    return out.filter(Boolean);
+  }
 
   if (imapHost === 'outlook.office365.com') { add('smtp.office365.com'); add('smtp-mail.outlook.com'); }
   else add(SMTP_HOSTS[imapHost]);
@@ -168,9 +175,50 @@ export function isMailKey(provider) {
 
 /* What we know about an address before anyone types a password: which server
    to try, and where that provider hides its app-password screen. */
+/* ---------------------------------------------------------------------------
+   Mail RATA hosts itself.
+
+   Pro and Enterprise can be given addresses on RATA's own server. From
+   everything above, such an address is an ordinary mailbox at an ordinary IMAP
+   host — the only unusual thing is who runs the far end.
+
+   Which is why it is configured rather than written in. RATA_MAIL_HOST is the
+   IMAP host of RATA's mail server, and until it is set, nothing here is true:
+   an @mailrata.org address falls through to the same DNS discovery as anybody
+   else's, finds nothing, and asks. Hard-coding it before the server exists
+   would point users at a host that is not answering and call it a mail
+   problem.
+
+   RATA_MAIL_DOMAIN exists so a staging deployment can host mail somewhere else
+   without pretending to be the live one. */
+export function ratamailDomain(env = process.env) {
+  return env.RATA_MAIL_HOST ? String(env.RATA_MAIL_DOMAIN || 'mailrata.org').toLowerCase() : null;
+}
+
+export function ratamailHost(env = process.env) {
+  const d = ratamailDomain(env);
+  if (!d) return null;
+  return {
+    host: String(env.RATA_MAIL_HOST).toLowerCase(),
+    label: 'RATA Mail',
+    help: 'Settings → Your RATA addresses → the password shown there. It is separate from your RATA account password.',
+  };
+}
+
+export function isRatamail(email, env = process.env) {
+  const d = ratamailDomain(env);
+  return !!d && domainOf(email) === d;
+}
+
 export function describe(email) {
   const domain = domainOf(email);
   if (!domain) return null;
+
+  /* Before the table, because RATA's own domain is not in it — and should not
+     be, since which domain that is depends on the deployment. */
+  const own = isRatamail(email) ? ratamailHost() : null;
+  if (own) return { domain, ...own, guessed: false, hostedByRata: true };
+
   if (NO_IMAP[domain]) {
     return { domain, unsupported: true, label: NO_IMAP[domain],
       why: `${NO_IMAP[domain]} encrypts mail on your device and offers no IMAP server RATA can reach. Their bridge only runs on your own computer.` };
@@ -301,6 +349,9 @@ export async function discoverHosts(email, override) {
     return { hosts: [{ host: String(override).trim().toLowerCase(), port: PORT, label: domain, source: 'override' }] };
   }
   if (NO_IMAP[domain]) return { refuse: describe(email).why };
+
+  const own = isRatamail(email) ? ratamailHost() : null;
+  if (own) return { hosts: [{ ...own, port: PORT, source: 'rata' }] };
 
   const known = MAIL_HOSTS[domain];
   if (known) return { hosts: [{ host: known.host, port: PORT, label: known.label, help: known.help, source: 'table' }] };
