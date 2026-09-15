@@ -1,4 +1,7 @@
 import { ImapFlow } from 'imapflow';
+import { createHash } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
 /* ---------------------------------------------------------------------------
    Mail accounts — any provider, more than one of them.
@@ -116,10 +119,23 @@ export function domainOf(email) {
   return String(email || '').trim().toLowerCase().split('@')[1] || '';
 }
 
-/* The provider key for one account. Lowercased address, everything outside
-   [a-z0-9] folded to '_', so it stays a readable single token in the table. */
+/* The provider key for one account: a readable slug of the address, plus a
+   digest of the exact address.
+
+   The slug alone is not enough, and the way it fails is silent. Folding
+   everything outside [a-z0-9] to '_' maps 'a.b@x.com' and 'a-b@x.com' onto the
+   same key — and since (user_id, provider) is the primary key, linking the
+   second would upsert straight over the first: one mailbox quietly replaced by
+   another, and a later unlink removing the wrong one. Truncation did the same
+   to long addresses.
+
+   The digest is of the address as written, so distinct addresses cannot share
+   a key, while the slug keeps the row identifiable by eye in the table. */
 export function mailKey(email) {
-  return 'mail:' + String(email).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 180);
+  const addr = String(email).trim().toLowerCase();
+  const slug = addr.replace(/[^a-z0-9]+/g, '_').slice(0, 120);
+  const tag = createHash('sha256').update(addr).digest('hex').slice(0, 10);
+  return `mail:${slug}.${tag}`;
 }
 
 export function isMailKey(provider) {
@@ -156,6 +172,94 @@ export function candidateHosts(email, override) {
   return [`imap.${d}`, `mail.${d}`, d];
 }
 
+/* ---------------------------------------------------------------------------
+   Where RATA is willing to connect.
+
+   The mail server is chosen by the user: either guessed from their domain, or
+   typed into the "server address" box for a host we cannot guess. Both mean an
+   address supplied from outside decides where the server opens a socket — and
+   a server that will connect anywhere its users name is a probe with a public
+   front door. `host: '127.0.0.1'`, or a domain whose A record points at
+   169.254.169.254, turns a mailbox form into a way to reach whatever else runs
+   on this machine or in this network and to learn, from which error comes
+   back, what is listening there.
+
+   So every hostname is resolved first, and refused if any address it answers
+   with is loopback, link-local, private, carrier-grade NAT or otherwise not on
+   the public internet. A mail server the whole world has to reach is public by
+   definition, so nothing legitimate is lost.
+
+   This resolves and then connects, which is two lookups and therefore not proof
+   against a record that changes in between. It closes the practical hole — a
+   private address handed straight over — rather than pretending to be more.
+   --------------------------------------------------------------------------- */
+
+const PRIVATE_NAME = /^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.home\.arpa)$/i;
+
+function v4Private(ip) {
+  const p = String(ip).split('.').map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  if (a === 0 || a === 127 || a >= 224) return true;          // this host, loopback, multicast, reserved
+  if (a === 10) return true;                                   // private
+  if (a === 172 && b >= 16 && b <= 31) return true;            // private
+  if (a === 192 && b === 168) return true;                     // private
+  if (a === 192 && b === 0) return true;                       // IETF protocol assignments
+  if (a === 169 && b === 254) return true;                     // link-local, incl. cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true;           // carrier-grade NAT
+  if (a === 198 && (b === 18 || b === 19)) return true;         // benchmarking
+  return false;
+}
+
+function v6Private(ip) {
+  const s = String(ip).toLowerCase().split('%')[0].replace(/^\[|\]$/g, '');
+  if (s === '::' || s === '::1') return true;
+  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return v4Private(mapped[1]);
+  if (/^f[cd]/.test(s)) return true;      // unique local
+  if (/^fe[89ab]/.test(s)) return true;   // link local
+  if (/^ff/.test(s)) return true;         // multicast
+  return false;
+}
+
+const NOT_PUBLIC = h => `${h} is not a public mail server — it resolves inside a private network, and RATA will not connect there.`;
+
+/* { ok: true } to go ahead; { notFound: true } to try the next candidate;
+   anything else is a refusal to show the user. */
+export async function checkHost(host) {
+  const h = String(host || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!h || h.length > 253 || !/^[a-z0-9.:\[\]-]+$/.test(h)) {
+    return { ok: false, error: `"${host}" is not a valid mail server address.` };
+  }
+  if (PRIVATE_NAME.test(h)) return { ok: false, error: NOT_PUBLIC(h) };
+
+  const bare = h.replace(/^\[|\]$/g, '');
+  const literal = isIP(bare);
+  if (literal) {
+    const bad = literal === 4 ? v4Private(bare) : v6Private(bare);
+    return bad ? { ok: false, error: NOT_PUBLIC(h) } : { ok: true, host: h };
+  }
+
+  let addrs;
+  try { addrs = await lookup(h, { all: true }); }
+  catch { return { ok: false, notFound: true, error: `No mail server answers at ${h}.` }; }
+  if (!addrs.length) return { ok: false, notFound: true, error: `No mail server answers at ${h}.` };
+  for (const a of addrs) {
+    if (a.family === 4 ? v4Private(a.address) : v6Private(a.address)) {
+      return { ok: false, error: NOT_PUBLIC(h) };
+    }
+  }
+  return { ok: true, host: h };
+}
+
+/* "The server said no" and "there is no server" need different answers: the
+   first means the password is wrong and trying again would only push the
+   account closer to being locked; the second is worth retrying. */
+const AUTH_REFUSED = /auth|credential|login|password|AUTHENTICATIONFAILED|\b535\b|\b534\b/i;
+export function isAuthFailure(e) {
+  return AUTH_REFUSED.test(String(e?.message || e || ''));
+}
+
 function client(host, email, pass) {
   return new ImapFlow({
     host, port: PORT, secure: true,
@@ -178,7 +282,14 @@ export async function verifyMail(email, pass, override) {
 
   const hosts = candidateHosts(email, override);
   let refused = false;
+  let blocked = null;
   for (const host of hosts) {
+    /* Checked before the socket, not after: the point is not to open it. */
+    const allowed = await checkHost(host);
+    if (!allowed.ok) {
+      if (!allowed.notFound) { blocked = allowed.error; break; }
+      continue;
+    }
     const c = client(host, email, pass);
     try {
       await c.connect();
@@ -189,12 +300,13 @@ export async function verifyMail(email, pass, override) {
       /* Distinguish "no such server" from "server said no": the first means
          keep looking, the second means the password is wrong and trying other
          hostnames would only lock the account faster. */
-      if (/auth|credential|login|password|AUTHENTICATIONFAILED/i.test(String(e?.message || ''))) {
+      if (isAuthFailure(e)) {
         refused = true;
         break;
       }
     }
   }
+  if (blocked) return { ok: false, error: blocked };
   if (refused) {
     return { ok: false, error: `${info?.label || 'The mail server'} rejected the sign-in. Use an app password, not your normal account password${info?.help ? ` — ${info.help}` : ''}.` };
   }
@@ -207,6 +319,10 @@ const strip = s => String(s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
 
 export async function fetchInbox(acct, { limit = 15 } = {}) {
   const { host, email, pass, label } = acct;
+
+  const allowed = await checkHost(host);
+  if (!allowed.ok) return { kind: 'host', error: allowed.error || `Will not connect to ${host}.` };
+
   const c = client(host, email, pass);
   const messages = [];
   try {
@@ -252,9 +368,15 @@ export async function fetchInbox(acct, { limit = 15 } = {}) {
       }
     } finally { lock.release(); }
     await c.logout();
-  } catch {
+  } catch (e) {
     try { await c.logout(); } catch {}
-    return { error: `${email} did not sync — the app password may have been revoked. Relink it in Accounts.` };
+    /* An app password that was revoked will be revoked on the next refresh
+       too, and repeating a rejected sign-in is how a provider decides to lock
+       the account. The caller uses `kind` to stop retrying that one. */
+    if (isAuthFailure(e)) {
+      return { kind: 'auth', error: `${email} rejected the sign-in — the app password has probably been revoked. Relink it in Accounts.` };
+    }
+    return { kind: 'net', error: `${email} did not sync — ${host} could not be reached. It will be tried again on the next refresh.` };
   }
   messages.sort((a, b) => b.ts - a.ts);
   return { messages };

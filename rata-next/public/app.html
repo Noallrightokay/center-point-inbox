@@ -2324,13 +2324,40 @@ function renderLinked(){
   if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${esc(l.type==='mail'?(l.provLabel||'Email')+(l.host?' · '+l.host:''):LINK_META[l.type][0])} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'AWAITING BACKEND')}</span></b><span>${esc(l.type==='mail'?(l.provLabel||'Email')+(l.host?' · '+l.host:''):LINK_META[l.type][0])} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:(SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:'')}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
   el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(SYNCABLE.includes(l.type))serverSync(l.type)});
+  /* Relink opens the same form with the address already in it: the thing that
+     needs replacing is the password, and making someone retype the address
+     they can see on the row is the kind of friction that ends in a support
+     email. */
+  el.querySelectorAll('[data-lkfix]').forEach(b=>b.onclick=()=>{
+    const l=S.linked.find(x=>x.id===b.dataset.lkfix);if(!l)return;
+    openMailForm(l.label,l.lastError||'');
+  });
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
 const LF_COPY={discord:['Discord handle','@yourhandle'],phone:['phone number','+1 555 555 5555']};
+/* One form for every provider. The address decides the rest — which server to
+   reach and where that provider keeps its app-password screen — so the user is
+   not asked to know any of it. Called both to add a mailbox and to repair one
+   whose app password stopped working, which is the same form with the address
+   filled in. */
+function openMailForm(email,why){
+  lfType='mail';
+  $('#lf-host').style.display='none';$('#lf-host').value='';
+  $('#lf-title').textContent=email?'Relink '+email:'Add an email account';
+  $('#lf-sub').textContent=email
+    ?(why||'That mailbox refused the sign-in. Generate a new app password with your provider and paste it here.')
+    :'Your address and an app password for it. Most providers issue app passwords under their security settings; your normal password usually will not work.';
+  $('#lf-input').placeholder='you@anywhere.com';
+  $('#lf-input').value=email||'';
+  $('#lf-pass').style.display='';$('#lf-pass').value='';
+  $('#linkform').style.display='flex';
+  (email?$('#lf-pass'):$('#lf-input')).focus();
+}
+
 $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   const t=b.dataset.addlink;
   if(t==='google'){googleAddAccount();return}
@@ -2340,13 +2367,7 @@ $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   lfType=t;
   $('#lf-host').style.display='none';$('#lf-host').value='';
   if(t==='mail'){
-    /* One form for every provider. The address decides the rest — which server
-       to reach and where that provider keeps its app-password screen — so the
-       user is not asked to know any of it. */
-    $('#lf-title').textContent='Add an email account';
-    $('#lf-sub').textContent='Your address and an app password for it. Most providers issue app passwords under their security settings; your normal password usually will not work.';
-    $('#lf-input').placeholder='you@anywhere.com';
-    $('#lf-pass').style.display='';$('#lf-pass').value='';
+    openMailForm();return;
   }else if(im){
     $('#lf-title').textContent='Link '+im.label;
     $('#lf-sub').textContent='App-specific password — create one at '+im.help+'. Your normal password will not work.';
@@ -2397,7 +2418,7 @@ async function mailLink(email,pass,host){
     }
     $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
     let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
-    if(l){l.status='live';l.host=res.host;l.provLabel=res.label;save()}
+    if(l){l.status='live';l.host=res.host;l.provLabel=res.label;delete l.needsRelink;delete l.lastError;save()}
     $('#linkform').style.display='none';
     renderLinked();renderConn();refreshQuota();
     await audit('mail.link',res.email+' linked ('+res.label+')');
@@ -2757,7 +2778,7 @@ const CLOUD_FIELDS=['settings','plugins','connections','folders','rules','jobs',
 /* Per-device facts, even inside a field that does travel. An API key belongs
    to the browser that holds it; when a mailbox last synced is true of one
    machine and not another. */
-const CLOUD_STRIP={settings:['api'],linked:['lastSync','lastError','status']};
+const CLOUD_STRIP={settings:['api'],linked:['lastSync','lastError','status','needsRelink']};
 
 function forCloud(st){
   const out={v:st.v};
@@ -2792,7 +2813,7 @@ function applyCloud(remote){
       if(f==='linked'){
         /* Keep this device's sync state for mailboxes it already knows. */
         const mine=Object.fromEntries((S.linked||[]).map(l=>[l.id,l]));
-        S.linked=v.map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError}:{status:'pending'}));
+        S.linked=v.map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink}:{status:'pending'}));
       }else S[f]=v;
     }else if(v&&typeof v==='object'){
       S[f]=Object.assign({},S[f],v);
@@ -2957,6 +2978,11 @@ async function absorbMail(res){
     l.status=a.error?'error':'live';
     l.lastSync=Date.now();
     if(a.error)l.lastError=a.error;else delete l.lastError;
+    /* Two different failures with two different answers. A mailbox that
+       refused the sign-in is stopped at the server until it is relinked, and
+       saying "could not be reached" about it would send the user waiting for a
+       refresh that is never going to come. */
+    if(a.needsRelink)l.needsRelink=true;else delete l.needsRelink;
   }
   for(const m of (res.messages||[])){
     if(S.messages.some(x=>x.id===m.id))continue;
@@ -2967,12 +2993,15 @@ async function absorbMail(res){
   }
   save();
   autoTranslateNew(newIds);
-  const failed=(res.partial||[]).map(f=>f.email);
+  const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
+  const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
   await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
   renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
-  toast(failed.length
-    ? `${failed.join(', ')} could not be reached — check the app password in Accounts`
-    : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
+  toast(stuck.length
+    ? `${stuck.join(', ')} needs its app password again — relink it in Accounts`
+    : failed.length
+      ? `${failed.join(', ')} could not be reached — RATA will try again on the next refresh`
+      : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
 }
 
 /* ---- Google: real OAuth per account ---- */

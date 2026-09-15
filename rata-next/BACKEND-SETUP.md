@@ -191,12 +191,58 @@ Do not claim RATA holds no credentials for other services. It holds the
 mailbox passwords, encrypted — it cannot read mail without them. Encrypted and
 revocable is a strong claim and a true one.
 
+## Holding several mailboxes without becoming a liability
+
+An inbox that takes any address and any app password is, structurally, a
+machine for trying credentials against other people's mail servers. Four things
+keep it from being one, and they are worth understanding before changing any of
+them.
+
+**One row per mailbox, and no two mailboxes sharing one.** The provider key is
+`mail:` plus a readable slug of the address plus a digest of the exact address.
+The slug alone collided — `a.b@x.com` and `a-b@x.com` fold to the same string —
+and because `(user_id, provider)` is the primary key, a collision was an upsert
+straight over the other mailbox: one silently replaced by another, and an
+unlink removing the wrong one. `mailKey()` in `lib/mail.js`.
+
+**Failed sign-ins get slower.** `lib/ratelimit.js` counts them per account and
+per address: five and three in fifteen minutes, with successes not counted at
+all, so linking six mailboxes in a row never meets it. This protects two
+different people — the attacker is denied an oracle that says which leaked
+password still works, and the ordinary user is stopped from walking their own
+Gmail into a lockout by retrying a typo. The counter is in memory, in one
+process, which is the whole picture while RATA runs as a single Node app; behind
+several instances the effective limit multiplies by the instance count, and the
+fix then is to move the counter to Postgres without moving the call sites.
+
+**RATA only connects to public mail servers.** The server address is chosen by
+the user, directly in the "server address" box or indirectly through their
+domain's DNS. `checkHost()` resolves it first and refuses loopback, link-local
+(including `169.254.169.254`), private, unique-local and carrier-grade-NAT
+addresses. Without it, the mailbox form is a way to reach whatever else runs on
+this machine or in this network, and to learn what is there from which error
+comes back.
+
+**A revoked password is not retried.** When a sync gets a refusal rather than a
+timeout, that mailbox is marked in `provider_tokens.extra.auth_failed_at` and
+skipped until it is relinked; the app shows it as **NEEDS APP PASSWORD** with a
+Relink button. Retrying a revoked password every refresh never recovers the
+mailbox — it only walks the account towards the provider's own lockout, with
+RATA doing the walking. A server that was merely unreachable is *not* marked,
+because that would strand a working mailbox behind a relink it does not need.
+
+And one thing about scale rather than safety: `/api/sync/mail` opens four
+mailboxes at a time with a 25-second ceiling on each, rather than all of them at
+once. Pro has no mailbox limit, so "all of them" is a number the user chooses,
+and thirty simultaneous IMAP sessions is a different kind of event from a
+refresh.
+
 ## Known limits
 
 - **One account per provider, per user — except mail.** `provider_tokens` is keyed
   on `(user_id, provider)`. Mailboxes work around this by taking a key of their
-  own per address (`mail:<address>`), so a user may hold several; Microsoft and
-  Slack still overwrite rather than add.
+  own per address (`mail:<slug>.<digest>`), so a user may hold several;
+  Microsoft and Slack still overwrite rather than add.
 - **Credentials are encrypted with `TOKEN_ENC_KEY`** before they reach
   `provider_tokens`, and each value is bound to the row that holds it, so a
   ciphertext moved to another user's row will not open. The service-role key on
@@ -204,10 +250,12 @@ revocable is a strong claim and a true one.
   `TOKEN_ENC_KEY` are needed. They are still worth storing separately: an
   attacker holding both is back to holding everything. What is not encrypted is
   the `label` column, which is the mailbox address.
-- **There is no deletion path.** Cancelling a subscription leaves the
-  `workspaces` and `provider_tokens` rows in place. Nothing deletes an account
-  and everything attached to it. That is the gap most likely to matter legally
-  and it is small to build.
+- **Deleting an account** is `DELETE /api/account`, confirmed by typing the
+  address. It removes the credentials first, then the preferences, the
+  half-finished links and the subscription row, then the login. It refuses
+  while a subscription is still live, because RATA holds no Stripe secret key
+  and so cannot cancel on anyone's behalf — deleting anyway would leave someone
+  paying for an account that no longer exists.
 - **Discord**: their API does not permit reading user DMs via OAuth — by policy. A
   bot-based bridge for servers you own is the viable path (future build).
 - **SMS**: needs a telephony provider (Twilio) — planned, not free.

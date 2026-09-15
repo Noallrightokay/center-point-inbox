@@ -82,8 +82,11 @@ create index if not exists subscriptions_status_idx
 -- 4. PROVIDER TOKENS — server-held credentials for live
 --    Outlook, Slack, and iCloud sync. Written and read ONLY by
 --    the RATA backend (service role). No client policies on
---    purpose. NOTE: values are stored in plaintext columns —
---    see the credential-storage note in BACKEND-SETUP.md.
+--    purpose. `access` and `refresh` hold AES-256-GCM
+--    ciphertext (see lib/secrets.js), each value bound to this
+--    row's user_id and provider so one moved to another row
+--    will not open. The key lives in TOKEN_ENC_KEY, outside
+--    this database.
 -- ------------------------------------------------------------
 create table if not exists public.provider_tokens (
   user_id uuid not null references auth.users (id) on delete cascade,

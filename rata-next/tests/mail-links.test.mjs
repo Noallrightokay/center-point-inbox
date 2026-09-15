@@ -6,7 +6,8 @@
    is told when the allowance runs out. The IMAP conversation itself is proved
    against a real server by the live checks. */
 import { startServer, makeChecker } from './helpers.mjs';
-import { describe, candidateHosts, mailKey, isMailKey, domainOf } from '../lib/mail.js';
+import { describe, candidateHosts, mailKey, isMailKey, domainOf, checkHost, isAuthFailure } from '../lib/mail.js';
+import { allowed, failed, succeeded, reset, LINK_ATTEMPTS, waitPhrase } from '../lib/ratelimit.js';
 import { PLANS, UNLIMITED, bucketOf, countLinks, refusal } from '../lib/plan.js';
 
 export default async function run(state) {
@@ -44,7 +45,89 @@ export default async function run(state) {
     check(a !== b, `two addresses, two keys: ${a} / ${b}`);
     check(mailKey('Owner@Example.com') === a, 'the same address always lands on the same key');
     check(isMailKey(a) && !isMailKey('slack'), 'mail keys are distinguishable from the OAuth providers');
-    check(/^mail:[a-z0-9_]+$/.test(a), `and stay a single readable token: ${a}`);
+    check(/^mail:[a-z0-9_]+\.[0-9a-f]{10}$/.test(a), `and stay a single readable token: ${a}`);
+
+    /* The slug alone collides, and (user_id, provider) is the primary key — so
+       a collision is not a cosmetic clash, it is an upsert straight over
+       somebody's other mailbox. */
+    check(mailKey('a.b@x.com') !== mailKey('a-b@x.com'),
+      'addresses that differ only in punctuation get different keys');
+    check(mailKey('a.b@x.com') !== mailKey('ab@x.com'),
+      'and so do ones that differ by a character the slug drops');
+
+    const long = 'x'.repeat(200) + '@example.com';
+    check(mailKey(long) !== mailKey('x'.repeat(201) + '@example.com'),
+      'a long address is not truncated onto its neighbour');
+
+    const seen = new Set();
+    for (const addr of ['a.b@x.com', 'a-b@x.com', 'a+b@x.com', 'a_b@x.com', 'ab@x.com', 'A.B@X.com'])
+      seen.add(mailKey(addr));
+    check(seen.size === 5, `six addresses, five distinct mailboxes (the sixth is the same one in capitals): ${seen.size}`);
+  }
+
+  console.log('\n— where RATA is willing to open a socket —');
+  {
+    /* The server address is supplied by the user. Without this, a mailbox form
+       is a way to reach whatever else is on this machine or this network, and
+       to learn what is there from which error comes back. */
+    for (const host of ['127.0.0.1', 'localhost', '10.0.0.5', '192.168.1.1', '169.254.169.254',
+                        '172.16.4.4', '100.64.0.1', '[::1]', 'db.internal', 'nas.local']) {
+      const r = await checkHost(host);
+      check(!r.ok && !r.notFound, `${host} — refused${r.error ? '' : ' (no reason given!)'}`);
+    }
+    check(/private network/i.test((await checkHost('169.254.169.254')).error),
+      'and the refusal says why rather than looking like a lookup failure');
+
+    check((await checkHost('8.8.8.8')).ok, 'a public address is allowed');
+    check((await checkHost('imap.gmail.com')).ok, 'and so is a real mail server');
+
+    const bad = await checkHost('not a host name');
+    check(!bad.ok, 'a hostname that is not one is refused before any lookup');
+
+    /* Distinguishing the two matters to the caller: "nothing there" means try
+       the next candidate name, "refused" means stop. */
+    const missing = await checkHost('imap.nx-' + Date.now() + '.invalid');
+    check(missing.notFound === true, 'a name that resolves to nothing is a miss, not a refusal');
+  }
+
+  console.log('\n— a rejected sign-in is told apart from an unreachable server —');
+  {
+    check(isAuthFailure(new Error('Invalid credentials (Failure)')), 'AUTHENTICATIONFAILED: the password is wrong');
+    check(isAuthFailure(new Error('535 5.7.8 Username and Password not accepted')), 'so is an SMTP 535');
+    check(!isAuthFailure(new Error('getaddrinfo ENOTFOUND imap.example.com')), 'a name that does not resolve is not');
+    check(!isAuthFailure(new Error('Socket timeout')), 'nor is a timeout — retrying that one is fine');
+  }
+
+  console.log('\n— failed sign-ins get slower —');
+  {
+    reset();
+    const k = 'link:test-user';
+    check(allowed(k, LINK_ATTEMPTS).ok, 'the first attempt is allowed');
+    for (let i = 0; i < LINK_ATTEMPTS.limit; i++) failed(k, LINK_ATTEMPTS);
+    const stop = allowed(k, LINK_ATTEMPTS);
+    check(!stop.ok, `after ${LINK_ATTEMPTS.limit} failures the next is refused`);
+    check(stop.retryAfterMs > 0 && /minute/.test(waitPhrase(stop.retryAfterMs)),
+      `and the wait is expressed in something actionable: "${waitPhrase(stop.retryAfterMs)}"`);
+
+    /* Otherwise somebody linking six mailboxes in a row would meet this. */
+    reset();
+    for (let i = 0; i < 20; i++) succeeded('link:happy-user');
+    check(allowed('link:happy-user', LINK_ATTEMPTS).ok, 'successes are not counted at all');
+
+    reset();
+    const u = 'link:someone';
+    failed(u, LINK_ATTEMPTS); failed(u, LINK_ATTEMPTS);
+    succeeded(u);
+    check(allowed(u, LINK_ATTEMPTS).remaining === LINK_ATTEMPTS.limit,
+      'and getting it right clears what came before, so a typo is not held against you');
+
+    reset();
+    const short = { limit: 1, windowMs: 40 };
+    failed('link:brief', short);
+    check(!allowed('link:brief', short).ok, 'the window holds while it is open');
+    await new Promise(r => setTimeout(r, 60));
+    check(allowed('link:brief', short).ok, 'and lets go when it closes');
+    reset();
   }
 
   console.log('\n— what each plan includes —');

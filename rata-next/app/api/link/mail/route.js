@@ -3,6 +3,7 @@ import { userFromRequest } from '../../../../lib/server';
 import { describe, verifyMail, mailKey } from '../../../../lib/mail';
 import { planForUser, countLinks, refusal } from '../../../../lib/plan';
 import { sealRow } from '../../../../lib/secrets';
+import { allowed, failed, succeeded, LINK_ATTEMPTS, ADDRESS_ATTEMPTS, waitPhrase } from '../../../../lib/ratelimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,11 +45,34 @@ export async function POST(req) {
     if (stop) return NextResponse.json({ error: stop, overLimit: true, plan }, { status: 402 });
   }
 
+  /* Two counters, checked before a socket is opened. The per-account one
+     bounds how much guessing one signed-in user may do; the per-address one
+     bounds how much one mailbox may receive however many accounts are used to
+     spread it out. See lib/ratelimit.js for why this endpoint needs either. */
+  const byUser = `link:${user.id}`;
+  const byAddr = `addr:${email}`;
+  for (const [key, policy, who] of [[byUser, LINK_ATTEMPTS, 'this account'], [byAddr, ADDRESS_ATTEMPTS, email]]) {
+    const gate = allowed(key, policy);
+    if (!gate.ok) {
+      return NextResponse.json({
+        error: `Too many failed sign-ins for ${who}. Try again ${waitPhrase(gate.retryAfterMs)} — and check the app password before you do, because your mail provider is counting these too.`,
+        retryAfterMs: gate.retryAfterMs,
+      }, { status: 429, headers: { 'Retry-After': String(Math.ceil(gate.retryAfterMs / 1000)) } });
+    }
+  }
+
   const check = await verifyMail(email, pass, host);
   /* Ask for the server address only when we were guessing it and the guess
      failed — a known provider that refuses is a password problem, and
      showing a server box there would send the user hunting for nothing. */
-  if (!check.ok) return NextResponse.json({ error: check.error, needsHost: !host && !!info?.guessed });
+  if (!check.ok) {
+    failed(byUser, LINK_ATTEMPTS);
+    failed(byAddr, ADDRESS_ATTEMPTS);
+    return NextResponse.json({ error: check.error, needsHost: !host && !!info?.guessed });
+  }
+  /* Getting it right clears both counters: somebody working out their own app
+     password should not be left in a cooldown once they have. */
+  succeeded(byUser); succeeded(byAddr);
 
   let sealed;
   try {

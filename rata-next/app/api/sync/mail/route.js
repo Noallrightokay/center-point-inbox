@@ -12,6 +12,42 @@ export const dynamic = 'force-dynamic';
 
    One mailbox failing must not lose the others: each account reports its own
    error alongside whatever did arrive. */
+
+/* How many mailboxes are opened at once.
+
+   Not all of them. A Pro account has no mailbox limit, so "all of them" is a
+   number the user chooses — and thirty simultaneous IMAP sessions is a burst
+   that ties up thirty sockets here, looks like abuse from the far end, and
+   makes the slowest of the thirty decide how long everyone waits. Four at a
+   time keeps a large account's refresh a few seconds longer than a small one's
+   instead of a different kind of event. */
+const AT_ONCE = 4;
+
+/* And a ceiling on any single one. imapflow's own timeouts cover a socket that
+   stalls, but a server that answers every step slowly can still pass all of
+   them and hold the whole response open. */
+const PER_MAILBOX_MS = 25000;
+
+async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  }));
+  return out;
+}
+
+function withDeadline(promise, ms, onTimeout) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise(resolve => { timer = setTimeout(() => resolve(onTimeout()), ms); }),
+  ]);
+}
+
 export async function GET(req) {
   const { user, sb, error } = await userFromRequest(req);
   if (error) return NextResponse.json({ error });
@@ -27,23 +63,59 @@ export async function GET(req) {
     return NextResponse.json({ error: only ? 'That mailbox is not linked' : 'No mailbox linked yet' });
   }
 
-  const results = await Promise.all(mailboxes.map(async r => {
+  const results = await mapLimit(mailboxes, AT_ONCE, async r => {
     const host = r.extra?.host || candidateHosts(r.label)[0];
     const label = r.extra?.provider_label || describe(r.label)?.label || host;
+    const base = { email: r.label, label, provider: r.provider };
+
+    /* A mailbox whose password was rejected last time is not tried again.
+       Retrying a revoked app password on every refresh does not recover the
+       mailbox — it only walks the account towards the provider's own lockout,
+       and RATA would be the one doing the walking. Relinking clears this. */
+    if (r.extra?.auth_failed_at) {
+      return { ...base, needsRelink: true,
+        error: `${r.label} needs its app password again — RATA stopped trying so your provider does not lock the account. Relink it in Accounts.` };
+    }
+
     const pass = decryptSecret(r.access, user.id, r.provider);
     /* An unreadable credential is a key problem, not a mail problem, and
        saying "sync failed" would send the user looking in the wrong place. */
-    if (!pass) return { email: r.label, label, error: `${r.label} could not be unlocked — relink it in Accounts.` };
-    const out = await fetchInbox({ host, email: r.label, pass, label });
-    return { email: r.label, label, ...out };
-  }));
+    if (!pass) return { ...base, needsRelink: true, error: `${r.label} could not be unlocked — relink it in Accounts.` };
+
+    const out = await withDeadline(
+      fetchInbox({ host, email: r.label, pass, label }),
+      PER_MAILBOX_MS,
+      () => ({ kind: 'net', error: `${r.label} took too long to answer and was left out of this refresh.` }),
+    );
+    return { ...base, ...out };
+  });
+
+  /* Remember the rejections, so the skip above has something to read. Only a
+     refused sign-in is recorded: a server that was unreachable is a network
+     that will probably be back, and marking that would strand a working
+     mailbox behind a relink it does not need. */
+  const refused = results.filter(r => r.kind === 'auth');
+  if (refused.length) {
+    const at = new Date().toISOString();
+    await Promise.all(refused.map(async r => {
+      const row = mailboxes.find(m => m.provider === r.provider);
+      await sb.from('provider_tokens')
+        .update({ extra: { ...(row?.extra || {}), auth_failed_at: at } })
+        .eq('user_id', user.id).eq('provider', r.provider);
+    })).catch(() => { /* the sync still reports it; the note is an optimisation */ });
+  }
 
   const messages = results.flatMap(r => r.messages || []).sort((a, b) => b.ts - a.ts);
-  const failures = results.filter(r => r.error).map(r => ({ email: r.email, error: r.error }));
+  const failures = results.filter(r => r.error).map(r => ({ email: r.email, error: r.error, needsRelink: !!(r.needsRelink || r.kind === 'auth') }));
 
   return NextResponse.json({
     messages,
-    accounts: results.map(r => ({ email: r.email, label: r.label, count: (r.messages || []).length, error: r.error || null })),
+    accounts: results.map(r => ({
+      email: r.email, label: r.label,
+      count: (r.messages || []).length,
+      error: r.error || null,
+      needsRelink: !!(r.needsRelink || r.kind === 'auth'),
+    })),
     ...(failures.length ? { partial: failures } : {}),
     ...(failures.length === results.length ? { error: failures[0].error } : {}),
   });
