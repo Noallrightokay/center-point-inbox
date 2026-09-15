@@ -68,7 +68,11 @@ export async function POST(req) {
   if (!check.ok) {
     failed(byUser, LINK_ATTEMPTS);
     failed(byAddr, ADDRESS_ATTEMPTS);
-    return NextResponse.json({ error: check.error, needsHost: !host && !!info?.guessed });
+    /* Whether to show the server box is verifyMail's call: it is the thing
+       that knows whether the address was refused (a password problem, where a
+       server box sends the user hunting for nothing) or never found (where it
+       is the only way forward). */
+    return NextResponse.json({ error: check.error, needsHost: !host && !!check.needsHost });
   }
   /* Getting it right clears both counters: somebody working out their own app
      password should not be left in a cooldown once they have. */
@@ -82,7 +86,7 @@ export async function POST(req) {
       label: email,
       access: pass,
       refresh: null,
-      extra: { kind: 'mail', host: check.host, port: 993, provider_label: check.label },
+      extra: { kind: 'mail', host: check.host, port: check.port || 993, provider_label: check.label, found_by: check.source },
       expires_at: null,
       updated_at: new Date().toISOString(),
     });
@@ -96,7 +100,15 @@ export async function POST(req) {
   const { error: e2 } = await sb.from('provider_tokens').upsert(sealed);
   if (e2) return NextResponse.json({ error: 'Could not save the link — ' + e2.message });
 
-  return NextResponse.json({ ok: true, email, host: check.host, label: check.label, relinked: !!already });
+  return NextResponse.json({
+    ok: true, email,
+    host: check.host, port: check.port || 993,
+    label: check.label,
+    /* How the server was found, so the app can say "that is Google Workspace"
+       rather than showing a hostname the user has never seen. */
+    foundBy: check.source,
+    relinked: !!already,
+  });
 }
 
 export async function DELETE(req) {

@@ -139,7 +139,13 @@ export default async function run(state) {
     check(form.placeholder === 'you@anywhere.com', `placeholder invites any provider: "${form.placeholder}"`);
     check(form.passShown, 'it asks for an app password');
     check(!form.hostShown, 'and does not ask for a server address unless it has to');
-    check(!/gmail|icloud/i.test(form.sub), 'the help text names no single provider');
+    /* Naming providers here is the point, not a slip: one form takes all of
+       them, and a list of familiar names says that better than avoiding the
+       word "Gmail" does. What would be wrong is copy that promises only some. */
+    check(/any email address/i.test(form.sub), `the help text opens with the promise: "${form.sub.slice(0, 48)}…"`);
+    check(/company domain|own domain/i.test(form.sub),
+      'and says a work address on its own domain counts, which is the one people assume will not');
+    check(/app password/i.test(form.sub), 'while being clear it is an app password, not the account password');
     await page.evaluate(() => document.querySelector('#lf-cancel').click());
 
     /* ---- deleting the account ---- */

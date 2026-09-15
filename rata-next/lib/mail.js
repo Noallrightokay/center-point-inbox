@@ -1,6 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import { createHash } from 'node:crypto';
-import { lookup } from 'node:dns/promises';
+import { lookup, resolveMx, resolveSrv } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
 /* ---------------------------------------------------------------------------
@@ -100,6 +100,30 @@ export const SMTP_HOSTS = {
   'imap.broadband.rogers.com': 'smtp.broadband.rogers.com',
 };
 
+/* Submission hosts to try, best first.
+
+   One name is not always enough. outlook.office365.com serves both a consumer
+   Outlook address and a company's Microsoft 365 mailbox, and the two submit to
+   different hosts — so both are offered and the one that accepts wins. Most
+   providers need only the first. */
+export function smtpCandidates(imapHost, email) {
+  const out = [];
+  const add = h => { if (h && !out.includes(h)) out.push(h); };
+
+  if (imapHost === 'outlook.office365.com') { add('smtp.office365.com'); add('smtp-mail.outlook.com'); }
+  else add(SMTP_HOSTS[imapHost]);
+
+  if (imapHost && imapHost.startsWith('imap.')) add('smtp.' + imapHost.slice(5));
+  /* A host that is not named imap.<something> is usually the submission host
+     too — mail.privateemail.com and secure.emailsrvr.com both are. */
+  else add(imapHost);
+
+  /* Only when nothing above produced a name. Every extra candidate is two more
+     connection timeouts on the way to the same failure. */
+  if (!out.length) add('smtp.' + domainOf(email));
+  return out.filter(Boolean);
+}
+
 export function smtpHostFor(imapHost, email) {
   if (imapHost && SMTP_HOSTS[imapHost]) return SMTP_HOSTS[imapHost];
   if (imapHost && imapHost.startsWith('imap.')) return 'smtp.' + imapHost.slice(5);
@@ -153,6 +177,8 @@ export function describe(email) {
   }
   const known = MAIL_HOSTS[domain];
   if (known) return { domain, ...known, guessed: false };
+  /* Everything else is settled by the domain's own DNS at link time — see
+     discoverHosts. This is only what can be said before that lookup runs. */
   return {
     domain,
     host: 'imap.' + domain,
@@ -162,14 +188,149 @@ export function describe(email) {
   };
 }
 
+/* ---------------------------------------------------------------------------
+   Finding the server for a domain nobody has heard of.
+
+   The table above covers consumer mail. It does not cover the case RATA exists
+   for: someone whose address is at their own company's domain. Guessing
+   imap.<domain> works for a small host running its own server and fails for
+   almost every business, because most businesses do not run a mail server —
+   they point their domain at one. thesherwood.group has no imap.thesherwood
+   .group; it has an MX record pointing at Google.
+
+   So the domain's DNS is asked, which is the same thing a mail client does:
+
+     1. an SRV record (RFC 6186), if the domain publishes where its IMAP is
+     2. the MX records, mapped to the IMAP host of whoever serves the mail
+     3. the conventional names, for a host that really does run its own
+
+   Two things the MX deliberately does not resolve to a guess. A filtering
+   service in front of the real mailbox (Proofpoint, Mimecast, Barracuda) says
+   nothing about where the mailbox is, and connecting to a filter's own host
+   would fail confusingly. A forwarding service has no mailbox at all. Both are
+   named rather than probed, so the user is told what is actually going on.
+   --------------------------------------------------------------------------- */
+
+const MX_HOSTS = [
+  { match: /(^|\.)(google|googlemail)\.com$/,        host: 'imap.gmail.com',        label: 'Google Workspace',
+    help: 'myaccount.google.com/apppasswords, signed in with your work address — needs 2-Step Verification on' },
+  { match: /(^|\.)(outlook\.com|office365\.com)$/,   host: 'outlook.office365.com', label: 'Microsoft 365',
+    help: 'Your Microsoft 365 account → Security → App passwords. Some organisations disable these — your IT administrator can tell you.' },
+  { match: /(^|\.)zoho\.(com|eu|in)$/,               host: 'imap.zoho.com',         label: 'Zoho Mail',
+    help: 'accounts.zoho.com → Security → App passwords' },
+  { match: /(^|\.)messagingengine\.com$/,            host: 'imap.fastmail.com',     label: 'Fastmail',
+    help: 'fastmail.com → Settings → Privacy & Security → App passwords' },
+  { match: /(^|\.)icloud\.com$/,                     host: 'imap.mail.me.com',      label: 'iCloud Mail',
+    help: 'appleid.apple.com → Sign-In and Security → App-Specific Passwords' },
+  { match: /(^|\.)yahoodns\.net$/,                   host: 'imap.mail.yahoo.com',   label: 'Yahoo Mail',
+    help: 'login.yahoo.com → Account security → Generate app password' },
+  { match: /(^|\.)secureserver\.net$/,               host: 'imap.secureserver.net',  label: 'GoDaddy',
+    help: 'Use your mailbox password, or an app password if your plan issues them' },
+  { match: /(^|\.)registrar-servers\.com$/,          host: 'mail.privateemail.com', label: 'Namecheap Private Email',
+    help: 'Use your Private Email mailbox password' },
+  { match: /(^|\.)titan\.email$/,                    host: 'imap.titan.email',      label: 'Titan',
+    help: 'Use your Titan mailbox password' },
+  { match: /(^|\.)(ionos|1and1)\.(com|co\.uk)$|(^|\.)(kundenserver|perfora)\.(de|net)$/,
+                                                     host: 'imap.ionos.com',        label: 'IONOS',
+    help: 'Use your IONOS mailbox password' },
+  { match: /(^|\.)emailsrvr\.com$/,                  host: 'secure.emailsrvr.com',  label: 'Rackspace Email',
+    help: 'Use your Rackspace mailbox password' },
+  { match: /(^|\.)hostinger\.com$/,                  host: 'imap.hostinger.com',    label: 'Hostinger Email',
+    help: 'hPanel → Emails → the mailbox password' },
+  { match: /(^|\.)migadu\.com$/,                     host: 'imap.migadu.com',       label: 'Migadu',
+    help: 'admin.migadu.com → the mailbox → its password' },
+  { match: /(^|\.)mailbox\.org$/,                    host: 'imap.mailbox.org',      label: 'mailbox.org',
+    help: 'Use your mailbox.org password' },
+  { match: /(^|\.)mail\.de$/,                        host: 'imap.mail.de',          label: 'mail.de',
+    help: 'Use your mail.de password' },
+
+  /* Ends the search rather than pointing at a server. */
+  { match: /(^|\.)(protonmail\.ch|proton\.me|protonmail\.com)$/, refuse:
+    'That domain’s mail is hosted by Proton, which encrypts it on the device and offers no IMAP server RATA can reach. Their bridge only runs on your own computer.' },
+  { match: /(^|\.)tuta(nota)?\.(com|de)$/, refuse:
+    'That domain’s mail is hosted by Tuta, which encrypts it on the device and offers no IMAP server RATA can reach.' },
+  { match: /(^|\.)(improvmx|forwardemail\.net|mailgun\.org|sendgrid\.net|mxroute)\.?/, refuse:
+    'That domain forwards its mail somewhere else rather than keeping a mailbox of its own. Link the address the mail is forwarded to — that is where it actually lands.' },
+
+  /* A filter in front of the real mailbox. Where the mailbox itself is, the MX
+     does not say — so say that, instead of connecting to the filter. */
+  { match: /(^|\.)(pphosted\.com|mimecast\.com|barracudanetworks\.com|messagelabs\.com|iphmx\.com|trendmicro\.com)$/,
+    filtered: true },
+];
+
+export function mailHostForMx(mx) {
+  const h = String(mx || '').toLowerCase().replace(/\.$/, '');
+  for (const rule of MX_HOSTS) if (rule.match.test(h)) return { ...rule, mx: h };
+  return null;
+}
+
 /* Hosts to try for an unknown domain, in the order they are conventionally
-   used. Probing beats making someone find their own IMAP hostname. */
+   used. Probing beats making someone find their own IMAP hostname. Kept
+   synchronous and DNS-free: discoverHosts() below uses it as the last resort,
+   and the sync path uses it to reconstruct a host for a row written before
+   `extra.host` existed. */
 export function candidateHosts(email, override) {
   if (override) return [String(override).trim().toLowerCase()];
   const d = domainOf(email);
   const known = MAIL_HOSTS[d];
   if (known) return [known.host];
   return [`imap.${d}`, `mail.${d}`, d];
+}
+
+/* What the domain's own DNS says about where its IMAP is. RFC 6186: a domain
+   may publish _imaps._tcp pointing at host and port. Few do, but the ones that
+   do are telling us the answer directly, so it is asked first. */
+async function fromSrv(domain) {
+  let recs;
+  try { recs = await resolveSrv(`_imaps._tcp.${domain}`); } catch { return null; }
+  const best = (recs || [])
+    .filter(r => r.name && r.name !== '.')              // '.' means "explicitly none"
+    .sort((a, b) => a.priority - b.priority || b.weight - a.weight)[0];
+  if (!best) return null;
+  return { host: String(best.name).toLowerCase().replace(/\.$/, ''), port: best.port || PORT, source: 'srv' };
+}
+
+/* Every server worth trying for an address, best first.
+
+   Returns candidates, or a single `refuse` when the domain's DNS says there is
+   nothing to connect to — a Proton-hosted domain, or one that only forwards.
+   Saying so beats three timeouts and a box asking for a server name. */
+export async function discoverHosts(email, override) {
+  const domain = domainOf(email);
+  if (override) {
+    return { hosts: [{ host: String(override).trim().toLowerCase(), port: PORT, label: domain, source: 'override' }] };
+  }
+  if (NO_IMAP[domain]) return { refuse: describe(email).why };
+
+  const known = MAIL_HOSTS[domain];
+  if (known) return { hosts: [{ host: known.host, port: PORT, label: known.label, help: known.help, source: 'table' }] };
+
+  const hosts = [];
+  const srv = await fromSrv(domain);
+  if (srv) hosts.push({ ...srv, label: domain });
+
+  let mx = [];
+  try { mx = await resolveMx(domain); } catch { /* no MX, or no such domain */ }
+  mx.sort((a, b) => a.priority - b.priority);
+
+  let filtered = null;
+  for (const r of mx) {
+    const hit = mailHostForMx(r.exchange);
+    if (!hit) continue;
+    if (hit.refuse) return { refuse: hit.refuse };
+    if (hit.filtered) { filtered = hit.mx; continue; }
+    if (!hosts.some(h => h.host === hit.host)) {
+      hosts.push({ host: hit.host, port: PORT, label: hit.label, help: hit.help, source: 'mx' });
+    }
+  }
+
+  /* A domain that runs its own server: the conventional names, tried last so a
+     stale imap.<domain> cannot outrank what the MX actually says. */
+  for (const h of candidateHosts(email)) {
+    if (!hosts.some(x => x.host === h)) hosts.push({ host: h, port: PORT, label: domain, source: 'guess' });
+  }
+
+  return { hosts, filtered, mx: mx.map(r => r.exchange) };
 }
 
 /* ---------------------------------------------------------------------------
@@ -260,9 +421,9 @@ export function isAuthFailure(e) {
   return AUTH_REFUSED.test(String(e?.message || e || ''));
 }
 
-function client(host, email, pass) {
+function client(host, email, pass, port = PORT) {
   return new ImapFlow({
-    host, port: PORT, secure: true,
+    host, port: port || PORT, secure: true,
     auth: { user: email, pass },
     logger: false,
     /* A wrong hostname should fail in seconds, not hang the request while we
@@ -280,50 +441,84 @@ export async function verifyMail(email, pass, override) {
   const info = describe(email);
   if (info?.unsupported) return { ok: false, error: info.why };
 
-  const hosts = candidateHosts(email, override);
-  let refused = false;
+  const found = await discoverHosts(email, override);
+  /* The domain's DNS already answered the question, and the answer was "there
+     is no mailbox here". Trying anyway would spend three timeouts to arrive at
+     a worse version of the same sentence. */
+  if (found.refuse) return { ok: false, error: found.refuse };
+
+  let refused = null;
   let blocked = null;
-  for (const host of hosts) {
-    /* Checked before the socket, not after: the point is not to open it. */
-    const allowed = await checkHost(host);
+  const tried = [];
+
+  for (const cand of found.hosts) {
+    /* Checked before the socket, not after: the point is not to open it. An MX
+       or SRV record is published by the address's own domain, so this is a
+       hostname an outsider chooses — the same reason the override is checked. */
+    const allowed = await checkHost(cand.host);
     if (!allowed.ok) {
       if (!allowed.notFound) { blocked = allowed.error; break; }
       continue;
     }
-    const c = client(host, email, pass);
+    tried.push(cand.host);
+
+    const c = client(cand.host, email, pass, cand.port);
     try {
       await c.connect();
       await c.logout();
-      return { ok: true, host, label: info?.label || host };
+      return {
+        ok: true,
+        host: cand.host,
+        port: cand.port || PORT,
+        label: cand.label || info?.label || cand.host,
+        help: cand.help || info?.help || null,
+        /* How it was found, so the app can say "that is Google Workspace"
+           rather than showing a hostname nobody recognises. */
+        source: cand.source,
+      };
     } catch (e) {
       try { await c.logout(); } catch {}
       /* Distinguish "no such server" from "server said no": the first means
          keep looking, the second means the password is wrong and trying other
          hostnames would only lock the account faster. */
       if (isAuthFailure(e)) {
-        refused = true;
+        refused = cand;
         break;
       }
     }
   }
+
   if (blocked) return { ok: false, error: blocked };
+
   if (refused) {
-    return { ok: false, error: `${info?.label || 'The mail server'} rejected the sign-in. Use an app password, not your normal account password${info?.help ? ` — ${info.help}` : ''}.` };
+    const help = refused.help || info?.help;
+    return { ok: false, error: `${refused.label || 'The mail server'} rejected the sign-in. Use an app password, not your normal account password${help ? ` — ${help}` : ''}.` };
   }
-  return { ok: false, error: override
-    ? `Could not reach ${override}. Check the server address with your mail provider.`
-    : `Could not find a mail server for ${info?.domain || 'that address'}. Enter the IMAP server address below — your provider lists it as "IMAP server" or "incoming mail server".` };
+
+  if (override) {
+    return { ok: false, error: `Could not reach ${override}. Check the server address with your mail provider.` };
+  }
+
+  /* A filter in front of the mailbox is the one failure where the domain's DNS
+     tells us something useful about why. */
+  if (found.filtered) {
+    return { ok: false, needsHost: true, error:
+      `${domainOf(email)} filters its mail through ${found.filtered}, which does not say where the mailbox itself is. Enter the IMAP server address below — your IT administrator will know it.` };
+  }
+
+  return { ok: false, needsHost: true, error:
+    `RATA checked ${domainOf(email)}’s DNS and tried ${tried.length ? tried.join(', ') : 'the usual server names'} without finding a mailbox. Enter the IMAP server address below — your provider or IT administrator lists it as "IMAP server" or "incoming mail server".` };
 }
 
 const strip = s => String(s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 export async function fetchInbox(acct, { limit = 15 } = {}) {
-  const { host, email, pass, label } = acct;
+  const { host, email, pass, label, port } = acct;
 
   const allowed = await checkHost(host);
   if (!allowed.ok) return { kind: 'host', error: allowed.error || `Will not connect to ${host}.` };
 
-  const c = client(host, email, pass);
+  const c = client(host, email, pass, port);
   const messages = [];
   try {
     await c.connect();

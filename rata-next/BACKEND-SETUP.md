@@ -87,17 +87,56 @@ the single most common cause of "Microsoft token exchange failed".
 
 → set `SLACK_CLIENT_ID` + `SLACK_CLIENT_SECRET`.
 
-## iCloud Mail and Gmail over IMAP — no setup required
+## Any mailbox, at any provider — no setup required
 
-Two providers link with an **app-specific password** instead of OAuth. Both need no
-environment variables, no developer account, and no work from you — each user adds
-their own address and password in Settings, and RATA verifies it by opening a real
-IMAP connection before storing anything.
+There is one way to add mail and it takes every address: Gmail, Yahoo, Outlook,
+Hotmail, iCloud, a company address on its own domain. The user types the address
+and an **app-specific password**; RATA works out the server and proves the
+credentials by opening a real IMAP connection before storing anything. No
+environment variables, no developer account, no per-provider work from you.
+
+**How the server is found**, in order, in `discoverHosts()`:
+
+1. **The table** in `lib/mail.js` — about 26 consumer domains, answered without
+   a lookup.
+2. **An SRV record** (`_imaps._tcp.<domain>`, RFC 6186) if the domain publishes
+   one. Few do; the ones that do are telling us the answer outright.
+3. **The MX records**, mapped to the IMAP host of whoever serves that domain's
+   mail. This is the one that matters for business addresses. Most companies do
+   not run a mail server — they point their domain at Google Workspace or
+   Microsoft 365, so there is no `imap.<their domain>` to find and guessing one
+   fails. `anthropic.com` has no IMAP host of its own; its MX says Google, and
+   that is the answer.
+4. **The conventional names** — `imap.<domain>`, `mail.<domain>`, `<domain>` —
+   for a domain that really does run its own server. Last, so a stale
+   `imap.<domain>` record cannot outrank what the MX actually says.
+5. Only if all of that misses does the app ask the user for a server address.
+
+Three MX answers end the search rather than producing a hostname, because
+connecting would be wrong: a domain hosted at **Proton or Tuta** (no IMAP server
+exists to reach), a **forwarding-only** domain such as ImprovMX (no mailbox at
+all — link the address the mail lands in), and a **filtering service** in front
+of the real mailbox such as Proofpoint or Mimecast (the filter's host says
+nothing about where the mailbox is, so the user is asked). Each says which of
+those it is instead of timing out.
+
+Sending follows the same route: `smtpCandidates()` derives submission hosts from
+whatever IMAP host was found, and tries 465 then 587. Microsoft is the one that
+needs two names — `smtp.office365.com` for a business mailbox and
+`smtp-mail.outlook.com` for a consumer one — so both are offered.
+
+### The two older per-provider routes
+
+`/api/link/imap/gmail` and `/api/link/imap/apple` predate the universal path and
+still exist so mailboxes linked through them keep working. Nothing in the app
+points at them any more — there is a single **＋ Email account** button.
 
 | Provider | Host | Where the user gets the password |
 |---|---|---|
 | iCloud Mail | `imap.mail.me.com` | appleid.apple.com → Sign-In and Security → App-Specific Passwords |
 | Gmail | `imap.gmail.com` | myaccount.google.com/apppasswords (requires 2-Step Verification) |
+| Google Workspace | `imap.gmail.com` | the same screen, signed in with the work address |
+| Microsoft 365 | `outlook.office365.com` | account → Security → App passwords (an admin can disable these) |
 
 Apple offers no OAuth for Mail at all, so IMAP is the only route. Gmail *does* offer
 OAuth, and it is the nicer experience — but `gmail.readonly` is a **restricted** scope:

@@ -2350,7 +2350,7 @@ function openMailForm(email,why){
   $('#lf-title').textContent=email?'Relink '+email:'Add an email account';
   $('#lf-sub').textContent=email
     ?(why||'That mailbox refused the sign-in. Generate a new app password with your provider and paste it here.')
-    :'Your address and an app password for it. Most providers issue app passwords under their security settings; your normal password usually will not work.';
+    :'Any email address — Gmail, Yahoo, Outlook, your own company domain. Enter it with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work.';
   $('#lf-input').placeholder='you@anywhere.com';
   $('#lf-input').value=email||'';
   $('#lf-pass').style.display='';$('#lf-pass').value='';
@@ -2421,8 +2421,10 @@ async function mailLink(email,pass,host){
     if(l){l.status='live';l.host=res.host;l.provLabel=res.label;delete l.needsRelink;delete l.lastError;save()}
     $('#linkform').style.display='none';
     renderLinked();renderConn();refreshQuota();
-    await audit('mail.link',res.email+' linked ('+res.label+')');
-    toast(res.email+' linked — pulling messages…');
+    await audit('mail.link',res.email+' linked ('+res.label+(res.foundBy?' · found by '+res.foundBy:'')+')');
+    toast(res.label&&res.foundBy==='mx'
+      ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
+      :res.email+' linked — pulling messages…');
     await serverSync('mail');
   }catch(e){
     toast(e.message==='cloud-account-required'

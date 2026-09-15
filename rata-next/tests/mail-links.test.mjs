@@ -6,7 +6,7 @@
    is told when the allowance runs out. The IMAP conversation itself is proved
    against a real server by the live checks. */
 import { startServer, makeChecker } from './helpers.mjs';
-import { describe, candidateHosts, mailKey, isMailKey, domainOf, checkHost, isAuthFailure } from '../lib/mail.js';
+import { describe, candidateHosts, discoverHosts, mailHostForMx, mailKey, isMailKey, domainOf, checkHost, isAuthFailure } from '../lib/mail.js';
 import { allowed, failed, succeeded, reset, LINK_ATTEMPTS, waitPhrase } from '../lib/ratelimit.js';
 import { PLANS, UNLIMITED, bucketOf, countLinks, refusal } from '../lib/plan.js';
 
@@ -37,6 +37,50 @@ export default async function run(state) {
     check(/no IMAP server/i.test(proton.why), `and says why: "${proton.why.slice(0, 58)}…"`);
 
     check(domainOf('Mixed.Case@Example.COM') === 'example.com', 'the address is matched case-insensitively');
+  }
+
+  console.log('\n— a business address on its own domain —');
+  {
+    /* The case RATA exists for, and the one guessing gets wrong. Most companies
+       do not run a mail server; they point their domain at one. There is no
+       imap.<their domain> to find — the MX record is where the answer is. */
+    for (const [mx, host, label] of [
+      ['aspmx.l.google.com', 'imap.gmail.com', 'Google Workspace'],
+      ['alt2.aspmx.l.google.com', 'imap.gmail.com', 'Google Workspace'],
+      ['acme-com.mail.protection.outlook.com', 'outlook.office365.com', 'Microsoft 365'],
+      ['mx.zoho.eu', 'imap.zoho.com', 'Zoho Mail'],
+      ['in1-smtp.messagingengine.com', 'imap.fastmail.com', 'Fastmail'],
+      ['mx1.titan.email', 'imap.titan.email', 'Titan'],
+      ['mx.emailsrvr.com', 'secure.emailsrvr.com', 'Rackspace Email'],
+      ['mx1.registrar-servers.com', 'mail.privateemail.com', 'Namecheap Private Email'],
+    ]) {
+      const hit = mailHostForMx(mx);
+      check(hit && hit.host === host && hit.label === label, `MX ${mx} -> ${label} (${hit && hit.host})`);
+      check(!!(hit && hit.help), 'and comes with where that provider keeps its app passwords');
+    }
+
+    /* Two answers that are not a hostname, because connecting would be wrong. */
+    check(mailHostForMx('mail.protonmail.ch').refuse, 'a domain hosted at Proton is refused with the reason, not probed');
+    check(/forwards its mail/i.test(mailHostForMx('mx1.improvmx.com').refuse || ''),
+      'a forwarding-only domain is told to link the address the mail actually lands in');
+    check(mailHostForMx('mx0a-000abc01.pphosted.com').filtered === true,
+      'and a spam filter in front of the mailbox is not mistaken for the mailbox');
+
+    check(mailHostForMx('mail.somecompany.example') === null,
+      'an MX nobody recognises resolves to nothing, so the conventional names still get their turn');
+
+    /* Order matters: what the domain says beats what we would have guessed. */
+    const found = await discoverHosts('someone@gmail.com');
+    check(found.hosts[0].host === 'imap.gmail.com' && found.hosts[0].source === 'table',
+      'a consumer address is answered from the table without a lookup');
+
+    const nowhere = await discoverHosts('someone@nx-' + Date.now() + '.invalid');
+    check(nowhere.hosts.every(h => h.source === 'guess'),
+      'a domain with no DNS at all falls back to the conventional names rather than failing');
+
+    const forced = await discoverHosts('someone@example.com', 'mail.example.org');
+    check(forced.hosts.length === 1 && forced.hosts[0].source === 'override',
+      'and a server the user typed in is the only one tried');
   }
 
   console.log('\n— one row per mailbox, inside the existing primary key —');

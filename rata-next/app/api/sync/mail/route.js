@@ -65,6 +65,7 @@ export async function GET(req) {
 
   const results = await mapLimit(mailboxes, AT_ONCE, async r => {
     const host = r.extra?.host || candidateHosts(r.label)[0];
+    const port = r.extra?.port || undefined;
     const label = r.extra?.provider_label || describe(r.label)?.label || host;
     const base = { email: r.label, label, provider: r.provider };
 
@@ -83,7 +84,7 @@ export async function GET(req) {
     if (!pass) return { ...base, needsRelink: true, error: `${r.label} could not be unlocked — relink it in Accounts.` };
 
     const out = await withDeadline(
-      fetchInbox({ host, email: r.label, pass, label }),
+      fetchInbox({ host, port, email: r.label, pass, label }),
       PER_MAILBOX_MS,
       () => ({ kind: 'net', error: `${r.label} took too long to answer and was left out of this refresh.` }),
     );
