@@ -9,6 +9,7 @@ const SUITES = [
   ['Stripe webhook',     './stripe.test.mjs'],
   ['account deletion',   './account-delete.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],
+  ['health endpoint',    './health.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 

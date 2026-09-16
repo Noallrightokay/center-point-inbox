@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Stands in for `docker compose exec -T db pg_dumpall`. Shaped like a real RATA
+# cluster dump: roles and DDL, then the tables that actually carry weight —
+# workspaces (JSON per user) and provider_tokens (credential ciphertext).
+if [ -n "${TINY:-}" ]; then echo "-- nothing came back"; exit 0; fi
+N=${ROWS:-50}
+echo "--"; echo "-- PostgreSQL database cluster dump"; echo "--"
+echo "DROP DATABASE IF EXISTS postgres;"
+echo "DROP ROLE IF EXISTS postgres;"
+echo "CREATE ROLE postgres;"
+echo "COPY auth.users (id, email, encrypted_password) FROM stdin;"
+for i in $(seq 1 $N); do
+  echo "0000-$i	user${i}@example.com	\$2a\$10\$K8mQ2vN9xJpL4wR7tY3uEeH1sA6dF0gB5cX2zV8nM4qW7jT9kP3rO"
+done
+echo "\\."
+echo "COPY public.workspaces (id, data) FROM stdin;"
+for i in $(seq 1 $N); do
+  printf '0000-%s\t{"settings":{"plan":"pro","name":"User %s","planSince":1757000000000},"folders":["Clients","Invoices","Contracts"],"rules":[{"if":"from","is":"billing@","then":"Finance"}],"linked":[{"id":"lk-a","type":"mail","label":"user%s@example.com","provLabel":"Gmail","host":"imap.gmail.com"},{"id":"lk-b","type":"mail","label":"work%s@reyesandco.com","provLabel":"Google Workspace","host":"imap.gmail.com"}],"plugins":{"split":true,"jobs":false},"jobs":[]}\n' "$i" "$i" "$i" "$i"
+done
+echo "\\."
+echo "COPY public.provider_tokens (user_id, provider, label, access) FROM stdin;"
+for i in $(seq 1 $N); do
+  echo "0000-$i	mail:user${i}_example_com.a1b2c3d4e5	user${i}@example.com	v1.k3nR8pQ2xL9v.7mT4wY1sD6fG0hJ.aZ5cV8bN3mK6jH9gF2dS4aQ7wE1rT0yU3iO5pL8kJ6hG"
+done
+echo "\\."
+echo "CANARY-ROW-THAT-MUST-SURVIVE-THE-ROUND-TRIP"
