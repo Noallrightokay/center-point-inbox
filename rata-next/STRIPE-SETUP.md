@@ -44,12 +44,25 @@ On each link, under **After payment**, choose *Redirect customers to a page*
 and set it to:
 
 ```
-https://mailrata.org/app?checkout=success
+https://mailrata.org/account?checkout=success
 ```
 
-The redirect is only there so the user lands back in the app. It grants
-nothing — the webhook is what records the plan, and the app treats the absence
-of a subscription row as the absence of a plan no matter what the URL says.
+**The licence page, not the app.** What somebody needs in the ten seconds after
+paying is the key that makes the desktop app run, and `/account` is the only
+page that has it. Sending them to `/app` instead leaves them inside the web
+version wondering what they just bought.
+
+The redirect grants nothing. The webhook is what records the plan, and the
+licence page asks the server — which reads the subscription row and not the URL,
+so `?checkout=success` on its own buys nobody anything.
+
+`?checkout=success` is not decoration. Stripe redirects the customer and
+delivers the webhook independently, and the redirect usually wins by a second or
+two — so a brand-new subscriber would otherwise land here and be told they have
+no active plan, which is the single worst sentence to show somebody who has just
+paid. The page reads that parameter, treats "no subscription" as *not yet*, and
+waits up to twenty seconds for the webhook before it says anything
+discouraging. Change the redirect and you lose that.
 
 Copy the three `https://buy.stripe.com/…` URLs.
 

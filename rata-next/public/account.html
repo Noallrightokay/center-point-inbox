@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E1A">
+<title>RATA — Your licence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<style>
+:root{
+  --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --wash:#D9E2FF;
+  --slate:#5C6B85; --faint:#93A0B8; --card:#FFFFFF; --fill:#E8ECF4;
+  --red:#E5484D; --green:#12B76A; --amber:#B54708;
+  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,sans-serif;
+  --disp:'Sora',var(--sans);
+  --mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;position:relative;overflow-x:hidden;color:var(--ink)}
+body::before{content:'';position:fixed;top:-300px;left:-220px;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.25),transparent 62%)}
+body::after{content:'';position:fixed;bottom:-340px;right:-240px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(143,170,255,.14),transparent 62%)}
+.card{position:relative;z-index:1;width:min(560px,100%);background:var(--paper);border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.55);padding:34px}
+.logo{display:flex;align-items:center;gap:11px;margin-bottom:6px}
+.logo b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:23px;letter-spacing:.04em}
+.mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box}
+.tag{font-size:12.5px;color:var(--faint);margin-bottom:24px}
+h1{font-family:'Fredoka',var(--disp);font-weight:600;font-size:20px;letter-spacing:.02em;margin-bottom:4px}
+.sub{font-size:13.5px;color:var(--slate);line-height:1.6}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.03em;padding:4px 11px;border-radius:999px;margin-bottom:14px}
+.chip.live{background:rgba(18,183,106,.12);color:var(--green)}
+.chip.none{background:var(--fill);color:var(--slate)}
+.chip.warn{background:rgba(181,71,8,.1);color:var(--amber)}
+.key{margin-top:16px;background:var(--card);border:1px solid rgba(10,14,26,.08);border-radius:13px;padding:14px 16px}
+.key code{display:block;font-family:var(--mono);font-size:11.5px;line-height:1.65;color:var(--ink);word-break:break-all;user-select:all}
+.keyrow{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.go{padding:12px 20px;border:none;border-radius:12px;background:var(--tint);color:#fff;font-family:var(--sans);font-weight:600;font-size:14.5px;cursor:pointer;box-shadow:0 4px 16px rgba(46,92,255,.35);transition:filter .15s;text-decoration:none;display:inline-block}
+.go:hover{filter:brightness(1.06)}
+.go:disabled{opacity:.6;cursor:default}
+.ghost{padding:12px 18px;border:none;border-radius:12px;background:var(--fill);color:var(--ink);font-family:var(--sans);font-weight:600;font-size:14px;cursor:pointer;text-decoration:none;display:inline-block}
+.steps{counter-reset:s;margin-top:20px;padding-top:18px;border-top:1px solid rgba(10,14,26,.07)}
+.steps li{list-style:none;counter-increment:s;position:relative;padding-left:32px;margin-bottom:11px;font-size:13.5px;color:var(--slate);line-height:1.55}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:22px;height:22px;border-radius:50%;background:var(--wash);color:var(--tint);display:grid;place-items:center;font-size:11.5px;font-weight:700;font-family:'Fredoka',var(--sans)}
+.note{font-size:12.5px;color:var(--faint);line-height:1.6;margin-top:16px;padding-top:15px;border-top:1px solid rgba(10,14,26,.07)}
+.note a,.sub a{color:var(--tint);text-decoration:none;font-weight:600}
+.msg{font-size:13px;font-weight:500;padding:11px 14px;border-radius:11px;margin-top:16px;line-height:1.55}
+.msg.bad{background:rgba(229,72,77,.1);color:var(--red)}
+.msg.good{background:rgba(18,183,106,.12);color:var(--green)}
+.foot{margin-top:22px;padding-top:15px;border-top:1px solid rgba(10,14,26,.07);display:flex;align-items:center;gap:12px;font-size:12px;color:var(--faint);flex-wrap:wrap}
+.foot .sp{flex:1}
+.foot a,.linkbtn{color:var(--slate);text-decoration:none;font-weight:600;background:none;border:none;font-family:var(--sans);font-size:12px;cursor:pointer;padding:0}
+.skel{height:13px;background:var(--fill);border-radius:7px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <img class="mk" src="icons/mark-256.png" alt="" width="36" height="36">
+    <b>RATA</b>
+  </div>
+  <div class="tag">Every message. Every language. One inbox.</div>
+
+  <div id="body">
+    <h1>Your licence</h1>
+    <div class="skel" style="width:70%"></div>
+    <div class="skel" style="width:90%"></div>
+  </div>
+
+  <div class="foot">
+    <a href="/">← Home</a>
+    <span class="sp"></span>
+    <span id="who"></span>
+    <button class="linkbtn" id="out" style="display:none">Sign out</button>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+/* The licence page.
+
+   One job: show a paying customer the key that makes the desktop app run, and
+   tell them what to do with it. Everything else on this page exists to make
+   that one job legible when it cannot be done — no account, no subscription,
+   no backend — because "your licence" with an empty box under it is the worst
+   possible answer for somebody who has just paid. */
+const CFG = Object.assign({}, window.RATA_CONFIG || {}, JSON.parse(localStorage.getItem('centra_deploy_cfg') || '{}'));
+const CLOUD = !!(CFG.supabaseUrl && CFG.supabaseKey);
+const body = document.getElementById('body');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let SBP = null;
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error('could not load ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function supa() {
+  if (!CLOUD) return null;
+  if (!SBP) {
+    if (!window.supabase) await loadScript('vendor/supabase-js-2.112.4.js');
+    SBP = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  }
+  return SBP;
+}
+
+function show(html) { body.innerHTML = html; }
+
+/* The token is base64url JSON and readable on purpose — there is nothing
+   secret in "this person bought Pro", and showing somebody the date their own
+   licence runs to beats asking them to trust that it has one. */
+function expiryOf(token) {
+  try {
+    const payload = JSON.parse(atob(String(token).split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (!payload.exp) return null;
+    return new Date(payload.exp * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+  } catch { return null; }
+}
+
+function howTo() {
+  return `<ol class="steps">
+    <li>Install RATA on your computer and open it.</li>
+    <li>It asks for a licence key the first time. Paste this one in.</li>
+    <li>That is the last time you will see this page. RATA keeps working offline for thirty days at a stretch and renews itself whenever it is online.</li>
+  </ol>`;
+}
+
+function licensed(d) {
+  const until = expiryOf(d.licence);
+  show(`
+    <span class="chip live">● ${esc(d.planLabel || 'Licensed')}</span>
+    <h1>Your licence key</h1>
+    <p class="sub">Issued to <b>${esc(d.email)}</b>${until ? `, and good until <b>${esc(until)}</b>` : ''}. The app renews it on its own — you should not need to come back here.</p>
+    <div class="key"><code id="k">${esc(d.licence)}</code></div>
+    <div class="keyrow">
+      <button class="go" id="copy">Copy licence key</button>
+      <a class="ghost" href="/#download">Get the app</a>
+    </div>
+    <div id="copied"></div>
+    ${howTo()}
+    <p class="note">Keep it to yourself — anyone with this key can run RATA as you until it expires. If it gets out, change your plan or ask us to reissue it and the old one stops working within thirty days.</p>
+  `);
+  document.getElementById('copy').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(d.licence);
+      document.getElementById('copied').innerHTML = '<div class="msg good">Copied. Paste it into RATA on your computer.</div>';
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = 'Copy licence key'; }, 2500);
+    } catch {
+      /* Clipboard access can be refused, and there is a perfectly good
+         fallback: the key is already selectable. */
+      document.getElementById('copied').innerHTML = '<div class="msg bad">This browser would not let the page copy for you — select the key above and copy it yourself.</div>';
+      const r = document.createRange();
+      r.selectNodeContents(document.getElementById('k'));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    }
+  });
+}
+
+/* Just back from Stripe.
+
+   Stripe redirects the customer and delivers the webhook independently, and the
+   redirect usually wins by a second or two — so somebody who has this moment
+   paid can arrive here and be told they have no active plan. That is the single
+   worst sentence this page could show them, and it is the most likely one on
+   their very first visit.
+
+   So when we know they have just come from checkout, an unsubscribed answer is
+   treated as "not yet" rather than "no", and we wait for the webhook. Only
+   after that does the page say anything discouraging. */
+const JUST_PAID = /(^|[?&])checkout=success(&|$)/.test(location.search);
+const WAIT_STEPS = 10;
+const WAIT_GAP = 2000;
+
+function settlingUp(attempt) {
+  show(`
+    <span class="chip live">● Payment received</span>
+    <h1>Setting up your licence…</h1>
+    <p class="sub">Stripe has taken the payment and we are waiting for it to reach us. This usually takes a couple of seconds.</p>
+    <div class="skel" style="width:${Math.min(92, 20 + attempt * 8)}%"></div>
+    <p class="note">Nothing is lost if you close this page — your subscription is already active. The key will be here whenever you come back.</p>
+  `);
+}
+
+function unsubscribed(d) {
+  show(`
+    <span class="chip none">No active plan</span>
+    <h1>Choose a plan to get your key</h1>
+    <p class="sub">${JUST_PAID
+      ? 'Your payment has not reached us yet. If you have just paid, give it a minute and reload — nothing is lost, and the key will appear here.'
+      : esc(d.message || 'There is no active subscription on this account.')}</p>
+    <div class="keyrow">
+      <a class="go" href="${esc(CFG.stripeBase || '/#pricing')}">RATA Base — $12.99</a>
+      <a class="ghost" href="${esc(CFG.stripePro || '/#pricing')}">RATA Pro — $23.99</a>
+    </div>
+    <p class="note">Signed in as ${esc(d.email || '')}. Pay with this same address and the key appears here straight after — the subscription and the licence are keyed on it.</p>
+  `);
+}
+
+/* `text` is what the customer reads; `detail` is what they can quote to us.
+   The two are never the same string. A deployment message like
+   "LICENCE_PRIVATE_KEY is not set" is true, useless to the person reading it,
+   and reads like an accusation to somebody who has just paid — but it is
+   exactly what support needs, so it goes underneath in small type with a label
+   saying what it is for. */
+function problem(text, action, detail) {
+  show(`
+    <span class="chip warn">Not available</span>
+    <h1>Your licence</h1>
+    <div class="msg bad">${esc(text)}</div>
+    ${action || ''}
+    ${detail ? `<p class="note">If you get in touch, this is the part that helps us find it:<br><code style="font-family:var(--mono);font-size:11.5px;word-break:break-word">${esc(detail)}</code></p>` : ''}
+  `);
+}
+
+(async function () {
+  if (!CLOUD) {
+    /* A deployment with no database has no accounts and therefore no
+       subscriptions to look a licence up against. Saying so beats a sign-in
+       form that cannot work. */
+    return problem(
+      'This deployment has no accounts configured, so there are no licences to show. RATA still runs on this device without one.',
+      '<div class="keyrow"><a class="go" href="/app">Open RATA here</a></div>'
+    );
+  }
+
+  const sb = await supa();
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    return show(`
+      <h1>Sign in to see your licence</h1>
+      <p class="sub">Your licence key is tied to the account you bought with, so we need to know which one that is.</p>
+      <div class="keyrow">
+        <a class="go" href="auth.html?mode=login&next=account">Log in</a>
+        <a class="ghost" href="auth.html?mode=signup">Create an account</a>
+      </div>
+    `);
+  }
+
+  const email = (session.user.email || '').toLowerCase();
+  document.getElementById('who').textContent = email;
+  const out = document.getElementById('out');
+  out.style.display = '';
+  out.addEventListener('click', async () => { await sb.auth.signOut(); location.reload(); });
+
+  const ask = async () => {
+    const r = await fetch('/api/licence', { headers: { Authorization: 'Bearer ' + session.access_token } });
+    return r.json();
+  };
+
+  let d;
+  try {
+    d = await ask();
+    /* Only when they have just paid, and only while the answer is the one the
+       webhook is expected to change. Any other answer is taken at face value. */
+    for (let i = 0; JUST_PAID && d.reason === 'no-subscription' && i < WAIT_STEPS; i++) {
+      settlingUp(i);
+      await new Promise(r => setTimeout(r, WAIT_GAP));
+      d = await ask();
+    }
+  } catch {
+    return problem('Could not reach RATA just now. Try again in a moment — and if RATA is already running on your computer, it carries on regardless.');
+  }
+
+  if (d.licensed && d.licence) return licensed(Object.assign({ email }, d));
+  if (d.reason === 'no-subscription') return unsubscribed(Object.assign({ email }, d));
+  /* Anything else is our fault, not theirs, and must never read as "you have
+     not paid" — a customer who has paid and is told that does not come back.
+     The server's own words go in `detail`, never in the sentence they read. */
+  problem(
+    'Your licence could not be issued just now. This is at our end, not yours — your subscription is unaffected, and RATA keeps working on any computer where it is already running. Try again shortly.',
+    '<div class="keyrow"><button class="go" onclick="location.reload()">Try again</button></div>',
+    d.error || d.message || ''
+  );
+})();
+</script>
+</body>
+</html>

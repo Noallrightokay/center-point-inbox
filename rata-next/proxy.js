@@ -44,6 +44,7 @@ export default function proxy(req) {
     '/': '/index.html',
     '/auth': '/auth.html',
     '/app': '/app.html',
+    '/account': '/account.html',
     '/config.js': '/api/config',
   };
   if (map[pathname]) return NextResponse.rewrite(new URL(map[pathname], req.url));

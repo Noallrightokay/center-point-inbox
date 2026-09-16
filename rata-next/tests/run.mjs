@@ -11,6 +11,7 @@ const SUITES = [
   ['domain redirect',    './redirect.test.mjs'],
   ['health endpoint',    './health.test.mjs'],
   ['licences',           './licence.test.mjs'],
+  ['licence page',       './account.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 
