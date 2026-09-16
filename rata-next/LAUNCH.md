@@ -24,7 +24,7 @@ Neither of these can be worked around, and both fail quietly if skipped:
 | | What happens without it |
 |---|---|
 | **`TOKEN_ENC_KEY` is not set** | Linking any mailbox fails with "TOKEN_ENC_KEY is not set". By design — RATA refuses to store a mail password in the clear rather than doing it quietly. **Nobody can connect an inbox until this exists.** |
-| **Nothing since `4a19f94` is deployed** | The live site is running a build from before any of this: it shows $8 / $16, has no multi-mailbox linking, no MX discovery, no credential encryption and no Stripe. |
+| **Nothing since `4a19f94` is deployed** | The live site is running a build from before any of this: it still shows $8 / $79, and has no multi-mailbox linking, no MX discovery, no credential encryption and no Stripe. |
 
 ---
 
