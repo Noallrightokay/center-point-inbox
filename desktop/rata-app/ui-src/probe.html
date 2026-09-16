@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>probe</title>
+<style>body{font:15px/1.5 system-ui;padding:20px;margin:0}pre{background:#f4f4f5;padding:10px;border-radius:6px;white-space:pre-wrap;font-size:13px}b{display:block;margin-top:12px}</style>
+<div id=o>running…</div>
+<script>
+const o=document.getElementById('o');const lines=[];
+function say(k,v){lines.push('<b>'+k+'</b><pre>'+String(v).replace(/[<&]/g,c=>({'<':'&lt;','&':'&amp;'}[c]))+'</pre>');o.innerHTML=lines.join('')}
+(async()=>{
+  say('window.__TAURI__', typeof window.__TAURI__);
+  const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+  say('invoke', typeof invoke);
+  if(!invoke){say('RESULT','FAIL - the bridge would silently do nothing');return}
+  try{ say('list_mailboxes', JSON.stringify(await invoke('list_mailboxes'))); }catch(e){ say('list_mailboxes ERROR', e) }
+  try{ say('link_mailbox proton - should refuse', JSON.stringify(await invoke('link_mailbox',{email:'x@proton.me',password:'y',host:null}))); }catch(e){ say('link_mailbox ERROR', e) }
+  try{ say('refresh_mail', JSON.stringify(await invoke('refresh_mail',{limit:5}))); }catch(e){ say('refresh_mail ERROR', e) }
+  try{ await invoke('send_mail',{from:'a@b.com',to:'c@d.com',subject:'s',body:'b',inReplyTo:null}); say('send_mail','unexpectedly OK'); }catch(e){ say('send_mail not linked - should refuse', e) }
+  try{ await invoke('read_file',{path:'/etc/passwd'}); say('read_file','REACHABLE - BAD'); }catch(e){ say('a command that does not exist', e) }
+})();
+</script>

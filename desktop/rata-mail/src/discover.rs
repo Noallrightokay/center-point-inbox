@@ -21,6 +21,8 @@ pub struct MailHost {
 /// domain's mail is at Google Workspace" rather than showing a hostname the
 /// customer has never seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Source {
     Table,
     Srv,

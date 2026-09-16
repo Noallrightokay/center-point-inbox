@@ -66,6 +66,7 @@ pub struct Account {
 
 /// One message, flattened to what a combined inbox actually shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Message {
     /// The account is part of the id: the same uid in two different mailboxes
     /// must not collide once they are shown in one list.
@@ -85,6 +86,7 @@ pub struct Message {
 
 /// What a successful link found.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Verified {
     pub host: String,
     pub port: u16,

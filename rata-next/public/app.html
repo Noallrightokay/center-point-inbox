@@ -3152,6 +3152,12 @@ async function removeLinked(id){
 
 /* ---- RATA backend (Next.js API routes): live Outlook + Slack ---- */
 async function apiFetch(path,opts){
+  /* The desktop build answers these itself — the mailboxes, the mail and the
+     passwords are all on the machine the app is running on, and there is no
+     server in the picture. One seam, so the interface stays a single file
+     rather than growing a second copy that drifts. See
+     desktop/rata-app/ui-src/bridge.js. */
+  if(window.__RATA_NATIVE__)return window.__RATA_NATIVE__(path,opts);
   if(!SESSION||SESSION.mode!=='supabase')throw new Error('cloud-account-required');
   const sb=await supa();if(!sb)throw new Error('cloud-account-required');
   const {data:{session}}=await sb.auth.getSession();

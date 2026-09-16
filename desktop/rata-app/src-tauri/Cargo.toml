@@ -1,0 +1,22 @@
+[package]
+name = "rata-app"
+version = "0.1.0"
+edition = "2024"
+description = "RATA — your mail, on your machine"
+default-run = "rata-app"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rata-mail = { path = "../../rata-mail", features = ["serde"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+
+[features]
+# Tauri needs this to build a release binary without a console window on Windows.
+default = []

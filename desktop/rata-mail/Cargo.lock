@@ -1075,6 +1075,7 @@ dependencies = [
  "futures",
  "hickory-resolver",
  "rustls-platform-verifier",
+ "serde",
  "sha2",
  "tokio",
  "tokio-rustls",
