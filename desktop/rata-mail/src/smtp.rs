@@ -31,8 +31,8 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::client::TlsStream;
 
-use crate::compose::{message_id, render, Outgoing};
-use crate::discover::{smtp_candidates, SMTP_PORTS};
+use crate::compose::{Outgoing, message_id, render};
+use crate::discover::{SMTP_PORTS, smtp_candidates};
 use crate::guard::HostVerdict;
 use crate::imap::Account;
 use crate::resolve::Resolver;
@@ -195,7 +195,10 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
     if let Some(why) = blocked {
         return Sent::Host(why);
     }
-    let first = hosts.first().map(String::as_str).unwrap_or("the mail server");
+    let first = hosts
+        .first()
+        .map(String::as_str)
+        .unwrap_or("the mail server");
     Sent::Net(format!(
         "Could not reach {first} to send: {}. Check with your provider that sending from a mail app is enabled for this account.",
         last.trim_end_matches('.')
@@ -278,13 +281,16 @@ async fn attempt(
 
     match step(&mut wire, "DATA", host).await {
         Ok(r) if r.code != 354 => {
-            return Sent::Rejected(format!("{host} would not take the message: {}", r.text))
+            return Sent::Rejected(format!("{host} would not take the message: {}", r.text));
         }
         Ok(_) => {}
         Err(sent) => return sent,
     }
 
-    if let Err(e) = timeout(DATA, wire.say(body)).await.unwrap_or(Err("timed out".into())) {
+    if let Err(e) = timeout(DATA, wire.say(body))
+        .await
+        .unwrap_or(Err("timed out".into()))
+    {
         return Sent::Net(format!("{host}: {e}"));
     }
     let accepted = match timeout(DATA, wire.ask(".")).await {
@@ -295,7 +301,10 @@ async fn attempt(
     let _ = timeout(COMMAND, wire.ask("QUIT")).await;
 
     if !accepted.ok() {
-        return Sent::Rejected(format!("{host} did not accept the message: {}", accepted.text));
+        return Sent::Rejected(format!(
+            "{host} did not accept the message: {}",
+            accepted.text
+        ));
     }
     Sent::Ok {
         via: format!("{host}:{port}"),
@@ -493,7 +502,10 @@ mod tests {
     use crate::discover::IMAP_PORT;
 
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     fn acct(host: &str) -> Account {
@@ -574,7 +586,10 @@ mod tests {
 
     #[test]
     fn a_reply_is_classified_by_what_it_means() {
-        let r = |code, text: &str| Reply { code, text: text.into() };
+        let r = |code, text: &str| Reply {
+            code,
+            text: text.into(),
+        };
         assert!(r(250, "OK").ok());
         assert!(r(354, "Start mail input").ok());
         assert!(!r(535, "5.7.8 Username and Password not accepted").ok());
@@ -620,14 +635,12 @@ mod tests {
     fn a_reply_spread_over_several_lines_is_read_as_one() {
         rt().block_on(async {
             // What every real server sends in answer to EHLO.
-            let mut wire = scripted(&[
-                "250-smtp.example.com at your service
+            let mut wire = scripted(&["250-smtp.example.com at your service
 250-SIZE 35882577
 250-8BITMIME
 250-AUTH LOGIN PLAIN
 250 SMTPUTF8
-",
-            ])
+"])
             .await;
             let r = wire.hear().await.unwrap();
             assert_eq!(r.code, 250);
@@ -641,11 +654,9 @@ mod tests {
     #[test]
     fn a_refusal_spread_over_several_lines_is_still_a_refusal() {
         rt().block_on(async {
-            let mut wire = scripted(&[
-                "535-5.7.8 Username and Password not accepted.
+            let mut wire = scripted(&["535-5.7.8 Username and Password not accepted.
 535 5.7.8 For more information, go to support.example
-",
-            ])
+"])
             .await;
             let r = wire.hear().await.unwrap();
             assert_eq!(r.code, 535);
@@ -712,11 +723,13 @@ mod tests {
     fn a_server_talking_nonsense_is_given_up_on_rather_than_guessed_at() {
         rt().block_on(async {
             let mut wire = scripted(&["this is not SMTP at all
-"]).await;
+"])
+            .await;
             assert!(wire.hear().await.is_err());
 
             let mut wire = scripted(&["
-"]).await;
+"])
+            .await;
             assert!(wire.hear().await.is_err());
         });
     }

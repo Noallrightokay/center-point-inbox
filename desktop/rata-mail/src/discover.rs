@@ -44,7 +44,8 @@ pub const IMAP_PORT: u16 = 993;
 
 const GOOGLE_HELP: &str = "myaccount.google.com/apppasswords — needs 2-Step Verification on";
 const APPLE_HELP: &str = "appleid.apple.com → Sign-In and Security → App-Specific Passwords";
-const MS_HELP: &str = "account.microsoft.com → Security → App passwords (needs two-step verification)";
+const MS_HELP: &str =
+    "account.microsoft.com → Security → App passwords (needs two-step verification)";
 const YAHOO_HELP: &str = "login.yahoo.com → Account security → Generate app password";
 
 /// Consumer domains, answered without a lookup.
@@ -57,18 +58,58 @@ pub fn table(domain: &str) -> Option<MailHost> {
             h("outlook.office365.com", "Outlook", MS_HELP)
         }
         "yahoo.com" | "ymail.com" => h("imap.mail.yahoo.com", "Yahoo Mail", YAHOO_HELP),
-        "aol.com" => h("imap.aol.com", "AOL Mail", "login.aol.com → Account security → Generate app password"),
-        "zoho.com" => h("imap.zoho.com", "Zoho Mail", "accounts.zoho.com → Security → App passwords"),
-        "fastmail.com" | "fastmail.fm" => h("imap.fastmail.com", "Fastmail", "fastmail.com → Settings → Privacy & Security → App passwords"),
+        "aol.com" => h(
+            "imap.aol.com",
+            "AOL Mail",
+            "login.aol.com → Account security → Generate app password",
+        ),
+        "zoho.com" => h(
+            "imap.zoho.com",
+            "Zoho Mail",
+            "accounts.zoho.com → Security → App passwords",
+        ),
+        "fastmail.com" | "fastmail.fm" => h(
+            "imap.fastmail.com",
+            "Fastmail",
+            "fastmail.com → Settings → Privacy & Security → App passwords",
+        ),
         "gmx.com" => h("imap.gmx.com", "GMX", "Enable IMAP in GMX settings"),
         "gmx.net" => h("imap.gmx.net", "GMX", "Enable IMAP in GMX settings"),
-        "mail.com" => h("imap.mail.com", "Mail.com", "Enable IMAP in your Mail.com settings"),
-        "web.de" => h("imap.web.de", "WEB.DE", "Enable IMAP in your WEB.DE settings"),
-        "yandex.com" => h("imap.yandex.com", "Yandex Mail", "id.yandex.com → Security → App passwords"),
-        "comcast.net" => h("imap.comcast.net", "Comcast", "Use your Xfinity password, with third-party access enabled"),
-        "att.net" => h("imap.mail.att.net", "AT&T Mail", "currently.att.net → Profile → Sign-in info → Manage secure mail key"),
-        "verizon.net" => h("imap.aol.com", "Verizon Mail", "Verizon mail is served by AOL — generate an AOL app password"),
-        "rogers.com" => h("imap.broadband.rogers.com", "Rogers", "Use your Rogers email password"),
+        "mail.com" => h(
+            "imap.mail.com",
+            "Mail.com",
+            "Enable IMAP in your Mail.com settings",
+        ),
+        "web.de" => h(
+            "imap.web.de",
+            "WEB.DE",
+            "Enable IMAP in your WEB.DE settings",
+        ),
+        "yandex.com" => h(
+            "imap.yandex.com",
+            "Yandex Mail",
+            "id.yandex.com → Security → App passwords",
+        ),
+        "comcast.net" => h(
+            "imap.comcast.net",
+            "Comcast",
+            "Use your Xfinity password, with third-party access enabled",
+        ),
+        "att.net" => h(
+            "imap.mail.att.net",
+            "AT&T Mail",
+            "currently.att.net → Profile → Sign-in info → Manage secure mail key",
+        ),
+        "verizon.net" => h(
+            "imap.aol.com",
+            "Verizon Mail",
+            "Verizon mail is served by AOL — generate an AOL app password",
+        ),
+        "rogers.com" => h(
+            "imap.broadband.rogers.com",
+            "Rogers",
+            "Use your Rogers email password",
+        ),
         "shaw.ca" => h("imap.shaw.ca", "Shaw", "Use your Shaw email password"),
         "bell.net" | "sympatico.ca" => h("imap.bell.net", "Bell", "Use your Bell email password"),
         _ => None,
@@ -105,18 +146,32 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
     let serves = |host, label, help| Some(MxRule::Serves(MailHost { host, label, help }));
 
     if under("google.com") || under("googlemail.com") {
-        return serves("imap.gmail.com", "Google Workspace",
-            "myaccount.google.com/apppasswords, signed in with your work address — needs 2-Step Verification on");
+        return serves(
+            "imap.gmail.com",
+            "Google Workspace",
+            "myaccount.google.com/apppasswords, signed in with your work address — needs 2-Step Verification on",
+        );
     }
     if under("outlook.com") || under("office365.com") {
-        return serves("outlook.office365.com", "Microsoft 365",
-            "Your Microsoft 365 account → Security → App passwords. Some organisations disable these — your IT administrator can tell you.");
+        return serves(
+            "outlook.office365.com",
+            "Microsoft 365",
+            "Your Microsoft 365 account → Security → App passwords. Some organisations disable these — your IT administrator can tell you.",
+        );
     }
     if under("zoho.com") || under("zoho.eu") || under("zoho.in") {
-        return serves("imap.zoho.com", "Zoho Mail", "accounts.zoho.com → Security → App passwords");
+        return serves(
+            "imap.zoho.com",
+            "Zoho Mail",
+            "accounts.zoho.com → Security → App passwords",
+        );
     }
     if under("messagingengine.com") {
-        return serves("imap.fastmail.com", "Fastmail", "fastmail.com → Settings → Privacy & Security → App passwords");
+        return serves(
+            "imap.fastmail.com",
+            "Fastmail",
+            "fastmail.com → Settings → Privacy & Security → App passwords",
+        );
     }
     if under("icloud.com") {
         return serves("imap.mail.me.com", "iCloud Mail", APPLE_HELP);
@@ -125,42 +180,85 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
         return serves("imap.mail.yahoo.com", "Yahoo Mail", YAHOO_HELP);
     }
     if under("secureserver.net") {
-        return serves("imap.secureserver.net", "GoDaddy", "Use your mailbox password, or an app password if your plan issues them");
+        return serves(
+            "imap.secureserver.net",
+            "GoDaddy",
+            "Use your mailbox password, or an app password if your plan issues them",
+        );
     }
     if under("registrar-servers.com") {
-        return serves("mail.privateemail.com", "Namecheap Private Email", "Use your Private Email mailbox password");
+        return serves(
+            "mail.privateemail.com",
+            "Namecheap Private Email",
+            "Use your Private Email mailbox password",
+        );
     }
     if under("titan.email") {
-        return serves("imap.titan.email", "Titan", "Use your Titan mailbox password");
+        return serves(
+            "imap.titan.email",
+            "Titan",
+            "Use your Titan mailbox password",
+        );
     }
-    if under("ionos.com") || under("1and1.com") || under("kundenserver.de") || under("perfora.net") {
+    if under("ionos.com") || under("1and1.com") || under("kundenserver.de") || under("perfora.net")
+    {
         return serves("imap.ionos.com", "IONOS", "Use your IONOS mailbox password");
     }
     if under("emailsrvr.com") {
-        return serves("secure.emailsrvr.com", "Rackspace Email", "Use your Rackspace mailbox password");
+        return serves(
+            "secure.emailsrvr.com",
+            "Rackspace Email",
+            "Use your Rackspace mailbox password",
+        );
     }
     if under("hostinger.com") {
-        return serves("imap.hostinger.com", "Hostinger Email", "hPanel → Emails → the mailbox password");
+        return serves(
+            "imap.hostinger.com",
+            "Hostinger Email",
+            "hPanel → Emails → the mailbox password",
+        );
     }
     if under("migadu.com") {
-        return serves("imap.migadu.com", "Migadu", "admin.migadu.com → the mailbox → its password");
+        return serves(
+            "imap.migadu.com",
+            "Migadu",
+            "admin.migadu.com → the mailbox → its password",
+        );
     }
     if under("mailbox.org") {
-        return serves("imap.mailbox.org", "mailbox.org", "Use your mailbox.org password");
+        return serves(
+            "imap.mailbox.org",
+            "mailbox.org",
+            "Use your mailbox.org password",
+        );
     }
 
     if under("protonmail.ch") || under("proton.me") || under("protonmail.com") {
-        return Some(MxRule::Refuse("That domain's mail is hosted by Proton, which encrypts it on the device and offers no IMAP server RATA can reach. Their bridge only runs on your own computer."));
+        return Some(MxRule::Refuse(
+            "That domain's mail is hosted by Proton, which encrypts it on the device and offers no IMAP server RATA can reach. Their bridge only runs on your own computer.",
+        ));
     }
     if under("tutanota.de") || under("tuta.com") {
-        return Some(MxRule::Refuse("That domain's mail is hosted by Tuta, which encrypts it on the device and offers no IMAP server RATA can reach."));
+        return Some(MxRule::Refuse(
+            "That domain's mail is hosted by Tuta, which encrypts it on the device and offers no IMAP server RATA can reach.",
+        ));
     }
-    if under("improvmx.com") || under("forwardemail.net") || under("mailgun.org") || under("sendgrid.net") {
-        return Some(MxRule::Refuse("That domain forwards its mail somewhere else rather than keeping a mailbox of its own. Link the address the mail is forwarded to — that is where it actually lands."));
+    if under("improvmx.com")
+        || under("forwardemail.net")
+        || under("mailgun.org")
+        || under("sendgrid.net")
+    {
+        return Some(MxRule::Refuse(
+            "That domain forwards its mail somewhere else rather than keeping a mailbox of its own. Link the address the mail is forwarded to — that is where it actually lands.",
+        ));
     }
 
-    if under("pphosted.com") || under("mimecast.com") || under("barracudanetworks.com")
-        || under("messagelabs.com") || under("iphmx.com") || under("trendmicro.com")
+    if under("pphosted.com")
+        || under("mimecast.com")
+        || under("barracudanetworks.com")
+        || under("messagelabs.com")
+        || under("iphmx.com")
+        || under("trendmicro.com")
     {
         return Some(MxRule::Filtered);
     }
@@ -229,9 +327,17 @@ pub const SMTP_PORTS: [(u16, bool); 2] = [(465, true), (587, false)];
 /// closer to being locked.
 pub fn is_auth_failure(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
-    ["auth", "credential", "login", "password", "authenticationfailed", "535", "534"]
-        .iter()
-        .any(|needle| m.contains(needle))
+    [
+        "auth",
+        "credential",
+        "login",
+        "password",
+        "authenticationfailed",
+        "535",
+        "534",
+    ]
+    .iter()
+    .any(|needle| m.contains(needle))
 }
 
 #[cfg(test)]
@@ -259,18 +365,37 @@ mod tests {
         // servers, they point a domain at one.
         for (mx, host, label) in [
             ("aspmx.l.google.com", "imap.gmail.com", "Google Workspace"),
-            ("alt2.aspmx.l.google.com", "imap.gmail.com", "Google Workspace"),
-            ("acme-com.mail.protection.outlook.com", "outlook.office365.com", "Microsoft 365"),
+            (
+                "alt2.aspmx.l.google.com",
+                "imap.gmail.com",
+                "Google Workspace",
+            ),
+            (
+                "acme-com.mail.protection.outlook.com",
+                "outlook.office365.com",
+                "Microsoft 365",
+            ),
             ("mx.zoho.eu", "imap.zoho.com", "Zoho Mail"),
-            ("in1-smtp.messagingengine.com", "imap.fastmail.com", "Fastmail"),
+            (
+                "in1-smtp.messagingengine.com",
+                "imap.fastmail.com",
+                "Fastmail",
+            ),
             ("mx1.titan.email", "imap.titan.email", "Titan"),
-            ("mx.emailsrvr.com", "secure.emailsrvr.com", "Rackspace Email"),
+            (
+                "mx.emailsrvr.com",
+                "secure.emailsrvr.com",
+                "Rackspace Email",
+            ),
         ] {
             match mx_rule(mx) {
                 Some(MxRule::Serves(h)) => {
                     assert_eq!(h.host, host, "{mx}");
                     assert_eq!(h.label, label, "{mx}");
-                    assert!(!h.help.is_empty(), "{mx} should say where app passwords live");
+                    assert!(
+                        !h.help.is_empty(),
+                        "{mx} should say where app passwords live"
+                    );
                 }
                 other => panic!("{mx} -> {other:?}"),
             }
@@ -279,12 +404,18 @@ mod tests {
 
     #[test]
     fn three_answers_end_the_search_instead_of_producing_a_hostname() {
-        assert!(matches!(mx_rule("mail.protonmail.ch"), Some(MxRule::Refuse(_))));
+        assert!(matches!(
+            mx_rule("mail.protonmail.ch"),
+            Some(MxRule::Refuse(_))
+        ));
         match mx_rule("mx1.improvmx.com") {
             Some(MxRule::Refuse(why)) => assert!(why.contains("forwards"), "{why}"),
             other => panic!("{other:?}"),
         }
-        assert_eq!(mx_rule("mx0a-000abc01.pphosted.com"), Some(MxRule::Filtered));
+        assert_eq!(
+            mx_rule("mx0a-000abc01.pphosted.com"),
+            Some(MxRule::Filtered)
+        );
     }
 
     #[test]
@@ -292,7 +423,11 @@ mod tests {
         assert_eq!(mx_rule("mail.somecompany.example"), None);
         assert_eq!(
             conventional("owner@thesherwood.group"),
-            ["imap.thesherwood.group", "mail.thesherwood.group", "thesherwood.group"]
+            [
+                "imap.thesherwood.group",
+                "mail.thesherwood.group",
+                "thesherwood.group"
+            ]
         );
     }
 
@@ -304,10 +439,19 @@ mod tests {
 
     #[test]
     fn sending_derives_from_whatever_imap_host_was_found() {
-        assert_eq!(smtp_candidates("imap.gmail.com", "a@b.com"), ["smtp.gmail.com"]);
-        assert_eq!(smtp_candidates("imap.titan.email", "a@b.com"), ["smtp.titan.email"]);
+        assert_eq!(
+            smtp_candidates("imap.gmail.com", "a@b.com"),
+            ["smtp.gmail.com"]
+        );
+        assert_eq!(
+            smtp_candidates("imap.titan.email", "a@b.com"),
+            ["smtp.titan.email"]
+        );
         // Not named imap.* — it is the submission host too.
-        assert_eq!(smtp_candidates("mail.privateemail.com", "a@b.com"), ["mail.privateemail.com"]);
+        assert_eq!(
+            smtp_candidates("mail.privateemail.com", "a@b.com"),
+            ["mail.privateemail.com"]
+        );
         // Microsoft needs both: business and consumer submit to different hosts.
         let ms = smtp_candidates("outlook.office365.com", "a@b.com");
         assert_eq!(ms[0], "smtp.office365.com");
@@ -317,7 +461,9 @@ mod tests {
     #[test]
     fn a_refusal_is_told_apart_from_an_unreachable_server() {
         assert!(is_auth_failure("Invalid credentials (Failure)"));
-        assert!(is_auth_failure("535 5.7.8 Username and Password not accepted"));
+        assert!(is_auth_failure(
+            "535 5.7.8 Username and Password not accepted"
+        ));
         assert!(!is_auth_failure("getaddrinfo ENOTFOUND imap.example.com"));
         assert!(!is_auth_failure("Socket timeout"));
     }

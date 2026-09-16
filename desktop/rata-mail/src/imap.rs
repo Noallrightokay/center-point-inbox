@@ -30,15 +30,15 @@ use async_imap::{Client, Session};
 use futures::StreamExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::ServerName;
 
-use crate::discover::{is_auth_failure, Candidate, Source, IMAP_PORT};
+use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure};
 use crate::guard::HostVerdict;
 use crate::key::{domain_of, mail_key};
-use crate::resolve::{discover, resolve_public, Discovery, Resolver};
+use crate::resolve::{Discovery, Resolver, discover, resolve_public};
 use crate::words;
 
 /// A wrong hostname must fail in seconds rather than hanging a refresh while
@@ -183,8 +183,12 @@ async fn open(resolver: &Resolver, host: &str, port: u16) -> Result<Client<Tls>,
     // IMAP servers speak first; nothing may be sent before they have.
     match timeout(GREETING, client.read_response()).await {
         Ok(Ok(Some(_))) => Ok(client),
-        Ok(Ok(None)) => Err(Trouble::Net(format!("{host} closed the connection without answering."))),
-        Ok(Err(e)) => Err(Trouble::Net(format!("{host} did not answer as a mail server: {e}"))),
+        Ok(Ok(None)) => Err(Trouble::Net(format!(
+            "{host} closed the connection without answering."
+        ))),
+        Ok(Err(e)) => Err(Trouble::Net(format!(
+            "{host} did not answer as a mail server: {e}"
+        ))),
         Err(_) => Err(Trouble::Net(format!("{host} did not answer in time."))),
     }
 }
@@ -219,8 +223,8 @@ pub(crate) async fn dial(addrs: &[IpAddr], port: u16, host: &str) -> Result<TcpS
 /// rather than a way around TLS: the address decides where the packets go, the
 /// certificate decides who is allowed to be there.
 pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<Tls, String> {
-    let server = ServerName::try_from(name.to_string())
-        .map_err(|_| HostVerdict::Malformed.explain(host))?;
+    let server =
+        ServerName::try_from(name.to_string()).map_err(|_| HostVerdict::Malformed.explain(host))?;
     let config = tls()?;
     timeout(CONNECT, TlsConnector::from(config).connect(server, tcp))
         .await
@@ -348,7 +352,11 @@ pub async fn verify(
 /// cause — a normal account password where an app password is needed — so the
 /// sentence says that, and says where theirs lives.
 fn refusal(cand: &Candidate) -> String {
-    let who = if cand.label.is_empty() { "The mail server" } else { &cand.label };
+    let who = if cand.label.is_empty() {
+        "The mail server"
+    } else {
+        &cand.label
+    };
     match &cand.help {
         Some(help) => format!(
             "{who} rejected the sign-in. Use an app password, not your normal account password — {help}."
@@ -376,7 +384,7 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Fetched::Host(why),
         Err(Trouble::Net(why) | Trouble::Auth(why)) => {
-            return Fetched::Net(unreachable_msg(acct, &why))
+            return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
 
@@ -384,7 +392,7 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
-            return Fetched::Net(unreachable_msg(acct, &why))
+            return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
 
@@ -502,10 +510,7 @@ fn build(acct: &Account, f: &async_imap::types::Fetch) -> Message {
     // header inside the message. The header is written by the sender and is
     // routinely wrong: a skewed clock or a spammer's future date would park a
     // message permanently at the top of the list.
-    let ts = f
-        .internal_date()
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
+    let ts = f.internal_date().map(|d| d.timestamp_millis()).unwrap_or(0);
 
     let mut unread = true;
     let mut starred = false;
@@ -521,7 +526,11 @@ fn build(acct: &Account, f: &async_imap::types::Fetch) -> Message {
     Message {
         id: format!("{}_{}", mail_key(&acct.email), uid),
         acct: acct.email.clone(),
-        acct_label: if acct.label.is_empty() { acct.email.clone() } else { acct.label.clone() },
+        acct_label: if acct.label.is_empty() {
+            acct.email.clone()
+        } else {
+            acct.label.clone()
+        },
         from_name,
         from_addr,
         subject,
@@ -643,7 +652,10 @@ mod tests {
         let q = items();
         assert!(q.contains("BODY.PEEK[TEXT]"), "{q}");
         assert!(!q.contains("BODY[TEXT]"), "{q}");
-        assert!(q.contains("UID") && q.contains("FLAGS") && q.contains("ENVELOPE"), "{q}");
+        assert!(
+            q.contains("UID") && q.contains("FLAGS") && q.contains("ENVELOPE"),
+            "{q}"
+        );
     }
 
     #[test]

@@ -33,13 +33,13 @@ pub mod resolve;
 pub mod smtp;
 pub mod words;
 
-pub use guard::{check_literal, check_resolved, is_public, HostVerdict};
-pub use discover::{
-    conventional, is_auth_failure, mx_rule, no_imap, smtp_candidates, table, Candidate, MailHost,
-    MxRule, Source, IMAP_PORT, SMTP_PORTS,
-};
-pub use imap::{fetch_inbox, verify, Account, Fetched, Message, Verified, Verify};
-pub use key::{domain_of, mail_key};
-pub use resolve::{check_host, discover, resolve_public, Discovery, Resolver};
 pub use compose::{Address, Outgoing};
-pub use smtp::{send, Sent};
+pub use discover::{
+    Candidate, IMAP_PORT, MailHost, MxRule, SMTP_PORTS, Source, conventional, is_auth_failure,
+    mx_rule, no_imap, smtp_candidates, table,
+};
+pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
+pub use imap::{Account, Fetched, Message, Verified, Verify, fetch_inbox, verify};
+pub use key::{domain_of, mail_key};
+pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
+pub use smtp::{Sent, send};

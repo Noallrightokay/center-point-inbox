@@ -64,10 +64,9 @@ impl Address {
         }
         // Whitespace, controls and angle brackets are the injection vector, and
         // none of them belongs in a bare address anyway.
-        if addr
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"'))
-        {
+        if addr.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"')
+        }) {
             return None;
         }
         Some(Address(addr.to_ascii_lowercase()))
@@ -124,7 +123,9 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         // A display name is a quoted string, and the quoting has to survive a
         // name with a quote in it.
         Some(name) if !name.trim().is_empty() => {
-            let shown = words::encode_header(name).replace('\\', "").replace('"', "'");
+            let shown = words::encode_header(name)
+                .replace('\\', "")
+                .replace('"', "'");
             format!("\"{}\" <{}>", shown, msg.from.as_str())
         }
         _ => format!("<{}>", msg.from.as_str()),
@@ -196,7 +197,11 @@ pub fn message_id(msg: &Outgoing, nanos: u128) -> String {
     h.update(msg.from.as_str().as_bytes());
     h.update(msg.subject.as_bytes());
     h.update(msg.body.as_bytes());
-    h.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect()
+    h.finalize()
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -221,9 +226,18 @@ mod tests {
     #[test]
     fn the_addresses_people_actually_paste() {
         assert_eq!(addr("Owner@Example.com").as_str(), "owner@example.com");
-        assert_eq!(addr("Jane Doe <jane@example.com>").as_str(), "jane@example.com");
-        assert_eq!(addr("  spaced@example.com  ").as_str(), "spaced@example.com");
-        assert_eq!(addr("a.b+tag@sub.example.co.uk").domain(), "sub.example.co.uk");
+        assert_eq!(
+            addr("Jane Doe <jane@example.com>").as_str(),
+            "jane@example.com"
+        );
+        assert_eq!(
+            addr("  spaced@example.com  ").as_str(),
+            "spaced@example.com"
+        );
+        assert_eq!(
+            addr("a.b+tag@sub.example.co.uk").domain(),
+            "sub.example.co.uk"
+        );
     }
 
     #[test]
@@ -234,7 +248,10 @@ mod tests {
             "a@b.com, everyone@example.com",
             "a@b.com everyone@example.com",
         ] {
-            assert!(Address::parse(attack).is_none(), "{attack:?} should not parse");
+            assert!(
+                Address::parse(attack).is_none(),
+                "{attack:?} should not parse"
+            );
         }
     }
 
@@ -263,14 +280,28 @@ mod tests {
 
     #[test]
     fn rubbish_is_refused_rather_than_sent_to() {
-        for bad in ["", "   ", "nobody", "@example.com", "a@", "a@b", "a@@b.com", "a@.com", "a@b."] {
+        for bad in [
+            "",
+            "   ",
+            "nobody",
+            "@example.com",
+            "a@",
+            "a@b",
+            "a@@b.com",
+            "a@.com",
+            "a@b.",
+        ] {
             assert!(Address::parse(bad).is_none(), "{bad:?} should not parse");
         }
     }
 
     #[test]
     fn a_plain_message_comes_out_readable() {
-        let m = render(&msg("Invoice", "Hello there.\nThanks."), "Wed, 16 Sep 2026 12:00:00 +0000", "abc");
+        let m = render(
+            &msg("Invoice", "Hello there.\nThanks."),
+            "Wed, 16 Sep 2026 12:00:00 +0000",
+            "abc",
+        );
         assert!(m.contains("From: <owner@example.com>\r\n"), "{m}");
         assert!(m.contains("To: <someone@elsewhere.org>\r\n"), "{m}");
         assert!(m.contains("Subject: Invoice\r\n"), "{m}");
@@ -296,7 +327,10 @@ mod tests {
     fn a_subject_cannot_add_a_bcc() {
         let m = render(&msg("Hi\r\nBcc: everyone@example.com", "body"), "d", "i");
         assert!(!m.contains("Bcc:\r\n") && !m.contains("\r\nBcc:"), "{m}");
-        assert!(m.contains("Subject: HiBcc: everyone@example.com\r\n"), "{m}");
+        assert!(
+            m.contains("Subject: HiBcc: everyone@example.com\r\n"),
+            "{m}"
+        );
     }
 
     #[test]
@@ -310,8 +344,14 @@ mod tests {
         );
         // A very long line is illegal in 7bit too, encoded or not.
         let long = render(&msg("x", &"a".repeat(2000)), "d", "i");
-        assert!(long.contains("base64"), "a 2000-character line must not go out raw");
-        assert!(long.split("\r\n").all(|l| l.len() <= 998), "a line exceeded the limit");
+        assert!(
+            long.contains("base64"),
+            "a 2000-character line must not go out raw"
+        );
+        assert!(
+            long.split("\r\n").all(|l| l.len() <= 998),
+            "a line exceeded the limit"
+        );
     }
 
     #[test]
@@ -320,7 +360,10 @@ mod tests {
         m.from_name = Some("O\"Brien \\ Co".into());
         let out = render(&m, "d", "i");
         let line = out.lines().next().unwrap();
-        assert!(line.starts_with("From: \"") && line.ends_with("<owner@example.com>"), "{line}");
+        assert!(
+            line.starts_with("From: \"") && line.ends_with("<owner@example.com>"),
+            "{line}"
+        );
         // One opening and one closing quote, and nothing that escapes them.
         assert_eq!(line.matches('"').count(), 2, "{line}");
         assert!(!line.contains('\\'), "{line}");

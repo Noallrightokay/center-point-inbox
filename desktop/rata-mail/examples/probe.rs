@@ -5,7 +5,7 @@
 //!   cargo run --example probe -- fetch you@example.com 'app password' imap.example.com
 //!   cargo run --example probe -- send  you@example.com 'app password' imap.example.com them@elsewhere.org
 use rata_mail::{
-    fetch_inbox, send, verify, Account, Address, Fetched, Outgoing, Resolver, Sent, Verify,
+    Account, Address, Fetched, Outgoing, Resolver, Sent, Verify, fetch_inbox, send, verify,
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -13,7 +13,10 @@ async fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let what = a.first().map(String::as_str).unwrap_or("link");
     let email = a.get(1).cloned().unwrap_or_default();
-    let pass = a.get(2).cloned().unwrap_or_else(|| "definitely-wrong".into());
+    let pass = a
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "definitely-wrong".into());
     let host = a.get(3).cloned().unwrap_or_default();
     let r = Resolver::system().expect("resolver");
 

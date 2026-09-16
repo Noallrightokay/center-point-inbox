@@ -86,7 +86,10 @@ pub struct Rejected {
 
 /// Check a licence, offline.
 pub fn check(token: &str, public_pem: Option<&str>, now_secs: i64) -> Result<Licence, Rejected> {
-    let bad = |reason| Rejected { reason, licence: None };
+    let bad = |reason| Rejected {
+        reason,
+        licence: None,
+    };
 
     if token.trim().is_empty() {
         return Err(bad(Reason::Missing));
@@ -110,7 +113,10 @@ pub fn check(token: &str, public_pem: Option<&str>, now_secs: i64) -> Result<Lic
         Err(_) => return Err(bad(Reason::Malformed)),
     };
     if key
-        .verify_strict(parts[1].as_bytes(), &ed25519_dalek::Signature::from_bytes(&signature))
+        .verify_strict(
+            parts[1].as_bytes(),
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        )
         .is_err()
     {
         return Err(bad(Reason::BadSignature));
@@ -121,8 +127,16 @@ pub fn check(token: &str, public_pem: Option<&str>, now_secs: i64) -> Result<Lic
         Err(_) => return Err(bad(Reason::Malformed)),
     };
     let licence = Licence {
-        sub: payload.get("sub").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        plan: payload.get("plan").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        sub: payload
+            .get("sub")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        plan: payload
+            .get("plan")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         iat: payload.get("iat").and_then(|v| v.as_i64()).unwrap_or(0),
         exp: payload.get("exp").and_then(|v| v.as_i64()).unwrap_or(0),
     };
@@ -271,7 +285,11 @@ mod tests {
         );
         // And a key that is not an Ed25519 one is the same as no key, rather
         // than being read as a nonsense one.
-        for junk in ["", "-----BEGIN PUBLIC KEY-----\nbm90IGEga2V5\n-----END PUBLIC KEY-----", "hello"] {
+        for junk in [
+            "",
+            "-----BEGIN PUBLIC KEY-----\nbm90IGEga2V5\n-----END PUBLIC KEY-----",
+            "hello",
+        ] {
             assert_eq!(
                 check(JS_TOKEN, Some(junk), ISSUED).unwrap_err().reason,
                 Reason::NoPublicKey,
@@ -283,12 +301,23 @@ mod tests {
     #[test]
     fn rubbish_is_refused_without_panicking() {
         for junk in [
-            "", "   ", "v1", "v1.a", "v1.a.b.c", "v2.a.b", "not a licence at all",
-            "v1.!!!.???", "v1..", "v1.eyJ2IjoxfQ.AAAA",
+            "",
+            "   ",
+            "v1",
+            "v1.a",
+            "v1.a.b.c",
+            "v2.a.b",
+            "not a licence at all",
+            "v1.!!!.???",
+            "v1..",
+            "v1.eyJ2IjoxfQ.AAAA",
         ] {
             let e = check(junk, Some(JS_PUBLIC_KEY), ISSUED).unwrap_err();
             assert!(
-                matches!(e.reason, Reason::Malformed | Reason::Missing | Reason::BadSignature),
+                matches!(
+                    e.reason,
+                    Reason::Malformed | Reason::Missing | Reason::BadSignature
+                ),
                 "{junk:?} gave {:?}",
                 e.reason
             );
@@ -299,9 +328,14 @@ mod tests {
     #[test]
     fn a_licence_a_second_before_expiry_still_works() {
         let l = check(JS_TOKEN, Some(JS_PUBLIC_KEY), ISSUED).unwrap();
-        assert!(check(JS_TOKEN, Some(JS_PUBLIC_KEY), l.exp).is_ok(), "on the boundary");
+        assert!(
+            check(JS_TOKEN, Some(JS_PUBLIC_KEY), l.exp).is_ok(),
+            "on the boundary"
+        );
         assert_eq!(
-            check(JS_TOKEN, Some(JS_PUBLIC_KEY), l.exp + 1).unwrap_err().reason,
+            check(JS_TOKEN, Some(JS_PUBLIC_KEY), l.exp + 1)
+                .unwrap_err()
+                .reason,
             Reason::Expired
         );
     }
@@ -370,8 +404,18 @@ pub fn plan_def(key: &str) -> Plan {
 /// licence lapses is not something anybody needs to plan around.
 pub fn on_day(unix_secs: i64) -> String {
     const MONTHS: [&str; 12] = [
-        "January", "February", "March", "April", "May", "June", "July", "August", "September",
-        "October", "November", "December",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     let days = unix_secs.div_euclid(86_400);
     // The same civil-from-days arithmetic as the Date header in rata-mail.

@@ -9,12 +9,12 @@
 use std::sync::Mutex;
 
 use rata_mail::{
-    fetch_inbox, send, verify, Account, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify,
+    Account, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, fetch_inbox, send, verify,
 };
 use serde::Serialize;
 
 use crate::licence::{self, Licence, Plan, Reason};
-use crate::store::{now, Mailbox, Store};
+use crate::store::{Mailbox, Store, now};
 use crate::vault::Vault;
 
 /// How many mailboxes are read at once. Four was the server's number and the
@@ -38,12 +38,20 @@ pub struct Rata {
 #[derive(Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum Linked {
-    Ok { mailbox: Mailbox },
+    Ok {
+        mailbox: Mailbox,
+    },
     /// The password was rejected.
-    Refused { error: String },
+    Refused {
+        error: String,
+    },
     /// Nothing answered; the app should show the "server address" box.
-    NeedsHost { error: String },
-    Failed { error: String },
+    NeedsHost {
+        error: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 /// What one refresh brought back.
@@ -185,7 +193,10 @@ impl Rata {
     }
 
     pub fn mailboxes(&self) -> Vec<Mailbox> {
-        self.store.lock().map(|s| s.list().to_vec()).unwrap_or_default()
+        self.store
+            .lock()
+            .map(|s| s.list().to_vec())
+            .unwrap_or_default()
     }
 
     /// Prove the password works, then remember the mailbox.
@@ -209,7 +220,11 @@ impl Rata {
         // Relinking a mailbox that is already here is not a new one, so it must
         // not be refused for being over the limit — that would strand somebody
         // at their cap with a mailbox they cannot repair.
-        let already = self.store.lock().map(|s| s.find(&email).is_some()).unwrap_or(false);
+        let already = self
+            .store
+            .lock()
+            .map(|s| s.find(&email).is_some())
+            .unwrap_or(false);
         if !already && let Some(limit) = plan.mail {
             let used = self.mailboxes().len() as u32;
             if used >= limit {
@@ -238,7 +253,11 @@ impl Rata {
                     email: email.clone(),
                     host: found.host.clone(),
                     port: found.port,
-                    label: if found.label.is_empty() { email.clone() } else { found.label.clone() },
+                    label: if found.label.is_empty() {
+                        email.clone()
+                    } else {
+                        found.label.clone()
+                    },
                     help: found.help.clone(),
                     source: format!("{:?}", found.source).to_lowercase(),
                     added_at: now(),
@@ -263,7 +282,9 @@ impl Rata {
     pub fn unlink(&self, email: &str) -> Result<(), String> {
         let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
         store.remove(email);
-        store.save().map_err(|e| format!("The mailbox list could not be saved: {e}"))?;
+        store
+            .save()
+            .map_err(|e| format!("The mailbox list could not be saved: {e}"))?;
         drop(store);
         self.vault.forget(email)
     }
@@ -284,7 +305,10 @@ impl Rata {
                 out.skipped.push(Problem {
                     email: m.email.clone(),
                     kind: "auth".into(),
-                    error: format!("{} needs relinking — its app password was rejected.", m.email),
+                    error: format!(
+                        "{} needs relinking — its app password was rejected.",
+                        m.email
+                    ),
                 });
                 continue;
             }
@@ -319,10 +343,7 @@ impl Rata {
             kind: kind.into(),
             error,
         };
-        let pass = self
-            .vault
-            .get(&m.email)
-            .map_err(|e| problem("auth", e))?;
+        let pass = self.vault.get(&m.email).map_err(|e| problem("auth", e))?;
 
         let acct = Account {
             email: m.email.clone(),
@@ -352,7 +373,8 @@ impl Rata {
         let from_addr = Address::parse(from)
             .ok_or_else(|| "Which account should this come from?".to_string())?;
         let to_list = Address::parse_list(to).ok_or_else(|| {
-            "Enter a valid recipient address — one address, or several separated by commas.".to_string()
+            "Enter a valid recipient address — one address, or several separated by commas."
+                .to_string()
         })?;
 
         let m = self
@@ -361,7 +383,12 @@ impl Rata {
             .map_err(|_| "the mailbox list is busy".to_string())?
             .find(from_addr.as_str())
             .cloned()
-            .ok_or_else(|| format!("{} is not linked — add it in Accounts first.", from_addr.as_str()))?;
+            .ok_or_else(|| {
+                format!(
+                    "{} is not linked — add it in Accounts first.",
+                    from_addr.as_str()
+                )
+            })?;
 
         let pass = self.vault.get(&m.email)?;
         let acct = Account {
@@ -420,7 +447,10 @@ mod tests {
     use crate::vault::Memory;
 
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     fn tmpfile(name: &str) -> std::path::PathBuf {
@@ -479,8 +509,14 @@ mod tests {
                 Linked::Failed { error } => assert!(error.contains("no IMAP server"), "{error}"),
                 other => panic!("{other:?}"),
             }
-            assert!(app.mailboxes().is_empty(), "a failed link left a mailbox behind");
-            assert!(app.vault.get("someone@proton.me").is_err(), "and a password behind");
+            assert!(
+                app.mailboxes().is_empty(),
+                "a failed link left a mailbox behind"
+            );
+            assert!(
+                app.vault.get("someone@proton.me").is_err(),
+                "and a password behind"
+            );
         });
     }
 
@@ -519,9 +555,16 @@ mod tests {
             app.note_auth_failure("owner@example.com");
 
             let out = app.refresh(15).await;
-            assert!(out.problems.is_empty(), "it should not have been tried at all");
+            assert!(
+                out.problems.is_empty(),
+                "it should not have been tried at all"
+            );
             assert_eq!(out.skipped.len(), 1);
-            assert!(out.skipped[0].error.contains("relinking"), "{:?}", out.skipped[0]);
+            assert!(
+                out.skipped[0].error.contains("relinking"),
+                "{:?}",
+                out.skipped[0]
+            );
 
             // And it comes back once the password is replaced.
             app.clear_auth_failure("owner@example.com");
@@ -573,7 +616,11 @@ mod tests {
             let out = app.refresh(15).await;
             assert_eq!(out.problems.len(), 1);
             assert_eq!(out.problems[0].kind, "auth");
-            assert!(out.problems[0].error.contains("relink"), "{:?}", out.problems[0]);
+            assert!(
+                out.problems[0].error.contains("relink"),
+                "{:?}",
+                out.problems[0]
+            );
         });
     }
 
@@ -582,7 +629,13 @@ mod tests {
         rt().block_on(async {
             let app = rata(tmpfile("send"));
             let e = app
-                .send("nobody@example.com", "them@elsewhere.org", "hi", "hello", None)
+                .send(
+                    "nobody@example.com",
+                    "them@elsewhere.org",
+                    "hi",
+                    "hello",
+                    None,
+                )
                 .await
                 .unwrap_err();
             assert!(e.contains("not linked"), "{e}");
@@ -643,11 +696,17 @@ mod tests {
         let s = app.standing();
         assert!(!s.licensed);
         assert_eq!(s.reason, Some(Reason::Expired));
-        assert!(s.renew_soon, "an expired licence is exactly what renewal is for");
+        assert!(
+            s.renew_soon,
+            "an expired licence is exactly what renewal is for"
+        );
         // Still readable, so the app knows whose licence to renew.
         assert_eq!(s.licence.unwrap().sub, "buyer@example.com");
         assert_eq!(app.mailboxes().len(), 1, "the account list survives");
-        assert!(app.vault.get("owner@example.com").is_ok(), "and so does the password");
+        assert!(
+            app.vault.get("owner@example.com").is_ok(),
+            "and so does the password"
+        );
     }
 
     #[test]
@@ -713,7 +772,10 @@ mod tests {
         assert_eq!(s.limit, None, "no limit, rather than a large one");
         assert_eq!(s.plan.unwrap().label, "RATA Pro");
         assert!(s.plan.unwrap().split && s.plan.unwrap().ai);
-        assert!(!s.renew_soon, "a licence good for decades is not due for renewal");
+        assert!(
+            !s.renew_soon,
+            "a licence good for decades is not due for renewal"
+        );
         assert!(s.message.contains("Licensed for RATA Pro"), "{}", s.message);
     }
 

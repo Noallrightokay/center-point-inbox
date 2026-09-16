@@ -30,7 +30,9 @@ pub fn decode(raw: &[u8]) -> String {
     let mut last_was_word = false;
 
     while i < raw.len() {
-        if raw[i] == b'=' && i + 1 < raw.len() && raw[i + 1] == b'?'
+        if raw[i] == b'='
+            && i + 1 < raw.len()
+            && raw[i + 1] == b'?'
             && let Some((text, next)) = word_at(raw, i)
         {
             if !last_was_word && let Some(sp) = pending_space.take() {
@@ -45,7 +47,9 @@ pub fn decode(raw: &[u8]) -> String {
         let ch = raw[i];
         if ch.is_ascii_whitespace() {
             // Hold it back until we know whether an encoded-word follows.
-            pending_space.get_or_insert_with(String::new).push(ch as char);
+            pending_space
+                .get_or_insert_with(String::new)
+                .push(ch as char);
             i += 1;
             continue;
         }
@@ -202,8 +206,16 @@ pub fn base64_encode(input: &[u8]) -> String {
         let n = (b1 << 16) | (b2 << 8) | b3;
         out.push(A[(n >> 18) as usize & 63] as char);
         out.push(A[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            A[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -321,10 +333,10 @@ mod tests {
     #[test]
     fn something_that_only_looks_like_an_encoded_word_is_passed_through() {
         for raw in [
-            "=?UTF-8?B?",              // truncated
-            "=?UTF-8?X?abc?=",         // no such encoding
-            "=??B?abc?=",              // no charset
-            "=?UTF-8?B?ab cd?=",       // whitespace inside
+            "=?UTF-8?B?",        // truncated
+            "=?UTF-8?X?abc?=",   // no such encoding
+            "=??B?abc?=",        // no charset
+            "=?UTF-8?B?ab cd?=", // whitespace inside
             "what =? about this",
         ] {
             assert_eq!(d(raw), raw, "{raw:?} should survive untouched");
@@ -337,7 +349,14 @@ mod tests {
         // did not open a valid encoded word, and spun on it forever — a bug
         // that fails as a hung refresh rather than an error, which is the worst
         // way for one to fail. Every string here ends in that state.
-        for raw in ["=?", "=?=?=?", "a=?b", "=?x?Y?z?= =?", "==??", "=?UTF-8?B?ab cd?=x"] {
+        for raw in [
+            "=?",
+            "=?=?=?",
+            "a=?b",
+            "=?x?Y?z?= =?",
+            "==??",
+            "=?UTF-8?B?ab cd?=x",
+        ] {
             let out = d(raw);
             assert!(!out.is_empty(), "{raw:?} produced nothing");
         }
@@ -358,7 +377,11 @@ mod tests {
             "A subject long enough to need splitting across several encoded words: ünicode",
         ] {
             let header = encode_header(original);
-            assert_eq!(decode(header.as_bytes()), original, "{original:?} -> {header:?}");
+            assert_eq!(
+                decode(header.as_bytes()),
+                original,
+                "{original:?} -> {header:?}"
+            );
         }
     }
 
@@ -387,7 +410,10 @@ mod tests {
             "Hello\u{0}Bcc: everyone@example.com",
         ] {
             let out = encode_header(attack);
-            assert!(!out.contains('\r') && !out.contains('\n') && !out.contains('\u{0}'), "{out:?}");
+            assert!(
+                !out.contains('\r') && !out.contains('\n') && !out.contains('\u{0}'),
+                "{out:?}"
+            );
             // And it must not have been smuggled through the encoder either.
             let round = decode(out.as_bytes());
             assert!(!round.contains('\r') && !round.contains('\n'), "{round:?}");
@@ -397,7 +423,10 @@ mod tests {
     #[test]
     fn base64_round_trips() {
         for raw in ["", "f", "fo", "foo", "foob", "fooba", "foobar", "🎉 Done"] {
-            assert_eq!(base64(base64_encode(raw.as_bytes()).as_bytes()), raw.as_bytes());
+            assert_eq!(
+                base64(base64_encode(raw.as_bytes()).as_bytes()),
+                raw.as_bytes()
+            );
         }
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
         assert_eq!(base64_encode(b"f"), "Zg==");

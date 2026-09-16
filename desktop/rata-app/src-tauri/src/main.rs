@@ -38,8 +38,8 @@ fn main() {
 
             // Built once and shared: each resolver carries its own cache, and
             // making a fresh one per refresh would throw that away.
-            let resolver = rata_mail::Resolver::system()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let resolver =
+                rata_mail::Resolver::system().map_err(|e| std::io::Error::other(e.to_string()))?;
 
             app.manage(Arc::new(Rata::new(
                 store,

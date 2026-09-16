@@ -10,14 +10,12 @@
 
 use std::net::IpAddr;
 
-use hickory_resolver::{
-    proto::rr::RData, Resolver as HickoryResolver, TokioResolver,
-};
+use hickory_resolver::{Resolver as HickoryResolver, TokioResolver, proto::rr::RData};
 
 use crate::discover::{
-    conventional, mx_rule, no_imap, table, Candidate, MxRule, Source, IMAP_PORT,
+    Candidate, IMAP_PORT, MxRule, Source, conventional, mx_rule, no_imap, table,
 };
-use crate::guard::{check_literal, check_resolved, normalise, HostVerdict};
+use crate::guard::{HostVerdict, check_literal, check_resolved, normalise};
 use crate::key::domain_of;
 
 /// A DNS resolver. Built once and shared — each one carries its own cache, so
@@ -252,7 +250,10 @@ mod tests {
     // assert on the shape of the answer rather than a specific record, so a
     // provider reshuffling its MX does not turn into a red build.
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -316,7 +317,10 @@ mod tests {
             let r = Resolver::system().expect("resolver");
             assert_eq!(check_host(&r, "localhost").await, HostVerdict::NotPublic);
             assert_eq!(check_host(&r, "127.0.0.1").await, HostVerdict::NotPublic);
-            assert_eq!(check_host(&r, "::ffff:7f00:1").await, HostVerdict::NotPublic);
+            assert_eq!(
+                check_host(&r, "::ffff:7f00:1").await,
+                HostVerdict::NotPublic
+            );
             let missing = format!("nx-{}.invalid", std::process::id());
             assert_eq!(check_host(&r, &missing).await, HostVerdict::NotFound);
         });
@@ -330,7 +334,11 @@ mod tests {
             match discover(&r, "someone@anthropic.com", None).await {
                 Discovery::Candidates { hosts, .. } => {
                     let first = &hosts[0];
-                    assert_eq!(first.source, Source::Mx, "expected the MX to answer: {hosts:?}");
+                    assert_eq!(
+                        first.source,
+                        Source::Mx,
+                        "expected the MX to answer: {hosts:?}"
+                    );
                     assert!(first.help.is_some(), "and to carry its app-password help");
                     // The conventional guesses must still be behind it.
                     assert!(hosts.iter().any(|c| c.source == Source::Guess));

@@ -73,7 +73,7 @@ fn v4_public(ip: Ipv4Addr) -> bool {
         || a >= 240               // reserved, and 255.255.255.255 with it
         || (a == 100 && (64..=127).contains(&b))   // carrier-grade NAT
         || (a == 192 && b == 0)                    // IETF protocol assignments
-        || (a == 198 && (b == 18 || b == 19)))     // benchmarking
+        || (a == 198 && (b == 18 || b == 19))) // benchmarking
 }
 
 fn v6_public(ip: Ipv6Addr) -> bool {
@@ -88,7 +88,10 @@ fn v6_public(ip: Ipv6Addr) -> bool {
     // ::a.b.c.d — the deprecated IPv4-compatible form, still routable text.
     if seg[..6] == [0, 0, 0, 0, 0, 0] && !ip.is_unspecified() && !ip.is_loopback() {
         return v4_public(Ipv4Addr::new(
-            (seg[6] >> 8) as u8, seg[6] as u8, (seg[7] >> 8) as u8, seg[7] as u8,
+            (seg[6] >> 8) as u8,
+            seg[6] as u8,
+            (seg[7] >> 8) as u8,
+            seg[7] as u8,
         ));
     }
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
@@ -100,7 +103,10 @@ fn v6_public(ip: Ipv6Addr) -> bool {
     if seg[0] == 0x2002 {
         // 2002::/16 — 6to4 carries its v4 in the next two groups
         return v4_public(Ipv4Addr::new(
-            (seg[1] >> 8) as u8, seg[1] as u8, (seg[2] >> 8) as u8, seg[2] as u8,
+            (seg[1] >> 8) as u8,
+            seg[1] as u8,
+            (seg[2] >> 8) as u8,
+            seg[2] as u8,
         ));
     }
     if seg[0] & 0xfe00 == 0xfc00 {
@@ -211,7 +217,12 @@ mod tests {
 
     #[test]
     fn real_public_addresses_are_allowed() {
-        for ok in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "[2606:4700:4700::1111]"] {
+        for ok in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "2606:4700:4700::1111",
+            "[2606:4700:4700::1111]",
+        ] {
             assert_eq!(v(ok), HostVerdict::Allowed, "{ok} should be allowed");
         }
     }
@@ -219,9 +230,19 @@ mod tests {
     #[test]
     fn the_v4_ranges() {
         for bad in [
-            "127.0.0.1", "10.0.0.1", "192.168.1.1", "172.16.4.4", "172.31.255.255",
-            "169.254.169.254", "100.64.0.1", "198.18.0.1", "192.0.0.1", "0.0.0.0",
-            "255.255.255.255", "224.0.0.1", "240.0.0.1",
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "172.16.4.4",
+            "172.31.255.255",
+            "169.254.169.254",
+            "100.64.0.1",
+            "198.18.0.1",
+            "192.0.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "240.0.0.1",
         ] {
             assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
         }
@@ -234,7 +255,14 @@ mod tests {
 
     #[test]
     fn names_that_are_never_public() {
-        for bad in ["localhost", "LOCALHOST", "db.internal", "nas.local", "x.home.arpa", "a.localhost"] {
+        for bad in [
+            "localhost",
+            "LOCALHOST",
+            "db.internal",
+            "nas.local",
+            "x.home.arpa",
+            "a.localhost",
+        ] {
             assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
         }
     }
@@ -247,8 +275,19 @@ mod tests {
 
     #[test]
     fn rubbish_is_refused_rather_than_guessed_at() {
-        for bad in ["not a host name", "", "   ", "x@y.z", "http://imap.gmail.com", &"a".repeat(300)] {
-            assert_eq!(v(bad), HostVerdict::Malformed, "{bad:?} should be malformed");
+        for bad in [
+            "not a host name",
+            "",
+            "   ",
+            "x@y.z",
+            "http://imap.gmail.com",
+            &"a".repeat(300),
+        ] {
+            assert_eq!(
+                v(bad),
+                HostVerdict::Malformed,
+                "{bad:?} should be malformed"
+            );
         }
     }
 

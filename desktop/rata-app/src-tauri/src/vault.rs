@@ -65,7 +65,8 @@ impl Vault for Keychain {
 fn explain(e: keyring::Error) -> String {
     match e {
         keyring::Error::NoEntry => {
-            "That mailbox's password is no longer in this computer's keychain. Relink the account.".into()
+            "That mailbox's password is no longer in this computer's keychain. Relink the account."
+                .into()
         }
         keyring::Error::PlatformFailure(inner) => format!(
             "This computer's keychain could not be reached, so RATA will not store the password anywhere else: {inner}"

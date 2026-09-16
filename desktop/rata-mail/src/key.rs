@@ -56,7 +56,10 @@ mod tests {
 
     #[test]
     fn the_same_address_always_lands_on_the_same_key() {
-        assert_eq!(mail_key("Owner@Example.com"), mail_key("  owner@example.com "));
+        assert_eq!(
+            mail_key("Owner@Example.com"),
+            mail_key("  owner@example.com ")
+        );
     }
 
     #[test]

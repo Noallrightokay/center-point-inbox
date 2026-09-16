@@ -56,6 +56,24 @@ server.
 Installers must be built on the platform they target — a Linux machine cannot
 produce a signed .dmg or .msi. That is three build machines, or three CI runners.
 
+## CI
+
+`.github/workflows/desktop-ci.yml`, in two jobs. **Mail layer** needs nothing
+installed and answers in about a minute; **Desktop shell** installs the system
+webview and runs `sync-ui.sh` first, which makes that script's three anchor
+checks against `rata-next/public` part of CI rather than something that fails on
+a release machine. Both run `cargo fmt --check`, `cargo clippy -- -D warnings`
+and `cargo test`.
+
+The toolchain is pinned rather than `stable`. With `-D warnings`, an unpinned
+toolchain means a new clippy lint reddens an unrelated pull request on the day
+it ships, which teaches everyone to ignore the colour.
+
+Some of the mail tests resolve real names — `anthropic.com` has no mail server
+of its own and its MX is the case the whole discovery module exists for, so a
+test that stubbed DNS would be testing the stub. They assert on the shape of the
+answer rather than on a specific record.
+
 ## One interface, not two
 
 `ui/` is generated and gitignored. `sync-ui.sh` copies `rata-next/public` and

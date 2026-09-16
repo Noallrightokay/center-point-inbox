@@ -109,7 +109,9 @@ impl Store {
     /// would mean a token that stopped verifying could not even be read back
     /// to say whose it was.
     pub fn set_licence(&mut self, token: Option<String>) {
-        self.licence = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        self.licence = token
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
     }
 
     pub fn list(&self) -> &[Mailbox] {
@@ -163,7 +165,11 @@ mod tests {
     use super::*;
 
     fn tmpdir() -> PathBuf {
-        let p = std::env::temp_dir().join(format!("rata-store-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let p = std::env::temp_dir().join(format!(
+            "rata-store-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
@@ -211,7 +217,10 @@ mod tests {
 
         let raw = fs::read_to_string(&file).unwrap();
         for word in ["pass", "password", "secret", "token", "credential"] {
-            assert!(!raw.to_lowercase().contains(word), "{word} appears in {raw}");
+            assert!(
+                !raw.to_lowercase().contains(word),
+                "{word} appears in {raw}"
+            );
         }
     }
 
@@ -223,7 +232,10 @@ mod tests {
         moved.host = "imap.newprovider.com".into();
         s.put(moved);
         assert_eq!(s.list().len(), 1);
-        assert_eq!(s.find("owner@example.com").unwrap().host, "imap.newprovider.com");
+        assert_eq!(
+            s.find("owner@example.com").unwrap().host,
+            "imap.newprovider.com"
+        );
     }
 
     #[test]
@@ -252,7 +264,10 @@ mod tests {
         s.put(mailbox("second@example.org"));
         s.save().unwrap();
 
-        assert!(!file.with_extension("json.tmp").exists(), "the temporary file was left behind");
+        assert!(
+            !file.with_extension("json.tmp").exists(),
+            "the temporary file was left behind"
+        );
         assert_eq!(Store::open(&file).list().len(), 2);
     }
 
@@ -261,7 +276,10 @@ mod tests {
         let mut s = Store::open(tmpdir().join("m.json"));
         s.put(mailbox("owner@example.com"));
         s.mark_auth("owner@example.com", Some(1234));
-        assert_eq!(s.find("owner@example.com").unwrap().auth_failed_at, Some(1234));
+        assert_eq!(
+            s.find("owner@example.com").unwrap().auth_failed_at,
+            Some(1234)
+        );
         // And cleared when it works again.
         s.mark_auth("owner@example.com", None);
         assert_eq!(s.find("owner@example.com").unwrap().auth_failed_at, None);
