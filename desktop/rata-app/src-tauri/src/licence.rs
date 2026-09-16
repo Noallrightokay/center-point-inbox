@@ -229,6 +229,28 @@ mod tests {
         assert_eq!(l.plan, "pro");
         assert_eq!(l.exp - l.iat, 30 * 86400, "thirty days offline");
     }
+    /// A key pair made with openssl rather than with Node, because that is the
+    /// path an operator actually takes: the private half has to live on the
+    /// server, so generating it there with a tool already installed beats
+    /// putting Node and a checkout on a mail server to run a script once.
+    ///
+    ///     openssl genpkey -algorithm ed25519 -out licence.key
+    ///     openssl pkey -in licence.key -pubout -out licence.pub
+    ///
+    /// Both write the PEM shapes this parser expects, but "both should produce
+    /// PKCS8 and SPKI" is a claim, and a key format that almost works is a
+    /// product that cannot issue a licence to anybody.
+    #[test]
+    fn a_key_generated_with_openssl_verifies_a_real_token() {
+        let pub_pem = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAhdSJJd7eXZs+eAZyuMPh8JCU0MYsTUl8TFDnmDgsQ1s=\n-----END PUBLIC KEY-----";
+        // Issued by rata-next/lib/licence.js against the matching private half.
+        let token = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwcm8iLCJpYXQiOjE3ODk1ODE1ODgsImV4cCI6MTc5MjE3MzU4OH0.DRmMo8VWz-SYwjsJXFfJYXi4bota7TLpY4les1lrFprohhEejiTnldztlvSkzXohUY9veJVH5XZlGn2uid4LCA";
+        // The clock is not what is under test here, so it is pinned far before
+        // the token's expiry and this stays green in 2040.
+        let l = check(token, Some(pub_pem), 0).expect("an openssl key must work");
+        assert_eq!(l.sub, "buyer@example.com");
+        assert_eq!(l.plan, "pro");
+    }
 
     #[test]
     fn a_pem_mangled_by_a_hosting_panel_still_works() {
