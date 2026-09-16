@@ -605,9 +605,44 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 #toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(10px) scale(.97);background:var(--glass-strong);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);color:var(--ink);padding:11px 22px;font-size:13.5px;font-weight:600;border-radius:999px;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:all .25s cubic-bezier(.32,.72,.35,1);z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 
-/* ---------- mobile ---------- */
+/* ---------- the resting reading pane ---------- */
+.rest-wrap{max-width:720px;margin:0 auto;padding:46px 30px 60px;width:100%;display:flex;flex-direction:column;gap:26px}
+.rest-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.rest-head h2{font-size:24px;font-weight:650;letter-spacing:-.02em;margin:7px 0 0;text-wrap:balance}
+.rest-sub{margin:6px 0 0;color:var(--slate);font-size:14px}
+.rest-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:10px}
+.rest-box{display:flex;flex-direction:column;gap:5px;align-items:flex-start;text-align:left;padding:14px 15px;border-radius:14px;background:var(--card);border:1px solid var(--hair-2);transition:var(--lift);width:100%}
+.rest-box:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.rest-box-top{display:flex;align-items:center;gap:9px;width:100%;min-width:0}
+.rest-box-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.rest-pip{flex:none;background:var(--tint);color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:0 6px}
+.rest-box-sub{font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.rest-warn{font-size:11.5px;color:var(--amber,#b26b00);font-weight:600}
+.rest-latest{display:flex;flex-direction:column;gap:2px}
+.rest-item{display:flex;gap:11px;align-items:flex-start;text-align:left;padding:10px 11px;border-radius:12px;transition:var(--lift);width:100%}
+.rest-item:hover{background:var(--fill-2)}
+.rest-item.un .rest-item-subj{font-weight:650;color:var(--ink)}
+.rest-item-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.rest-item-l1{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.rest-item-subj{font-size:13px;color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rest-item-acct{font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avatar.sm{width:30px;height:30px;font-size:11px;flex:none}
+.rest-empty{text-align:center;padding-top:80px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.rest-empty h2{font-size:21px;font-weight:650;margin:0}
+.rest-empty p{color:var(--slate);font-size:14px;max-width:44ch;margin:0}
+
+/* ---------- widths ----------
+
+   Four tiers, and the line between them is one question: is there room for a
+   list and something readable beside it? Reading needs about 480px and the
+   list about 340, so below roughly 900 the two cannot share a screen and the
+   detail becomes a full-screen layer instead. Above it they sit side by side,
+   with the rail dropping its labels until there is room for those too. */
 #mnav{display:none}
-@media (max-width:880px){
+
+/* Phone and tablet portrait: one column, detail over the top, nav at the
+   bottom where a thumb is. */
+@media (max-width:900px){
   #rail{display:none}
   #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-top:1px solid var(--hair-2);z-index:40}
   #mnav button{flex:1;padding:8px 0 max(8px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--faint)}
@@ -628,7 +663,54 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
   #compose{max-height:100vh;height:100%;border-radius:0}
   .grabber{display:none}
   .bubble-wrap{max-width:86%}
+  .rest-wrap{padding:26px 16px 40px;gap:20px}
+  .rest-head h2{font-size:20px}
 }
+
+/* Phone: the list is the point, and it was starting a screen and a half down.
+   Everything above it — the mode switch, the briefing, the per-account chips,
+   two rows of filters, the sync button — is furniture, and at 390px wide it
+   was costing more than it earned. Same controls, less air. */
+@media (max-width:600px){
+  .chip-row{padding:7px 12px;gap:6px}
+  .seg{margin:8px 12px}
+  .digest-strip{padding:10px 13px;font-size:12.5px}
+  #sources{padding:6px 12px 2px}
+  .src-chip{padding:5px 10px;font-size:11.5px}
+  .pill{padding:6px 11px;font-size:12px}
+  #sync-all{font-size:12px;padding:7px 12px;margin:0 12px 6px}
+  .mail-row{padding:11px 10px}
+  .m-prev{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+}
+
+/* Tablet portrait specifically: the same single column, but a tablet is not a
+   phone held sideways — the content gets a measure rather than running the
+   full width of a 10-inch screen, and touch targets stay generous. */
+@media (min-width:601px) and (max-width:900px){
+  .side-list > *{max-width:720px;margin-left:auto;margin-right:auto;width:100%}
+  .md-inner{padding:24px 26px 70px}
+  .mail-row{padding:14px 13px}
+  #mnav button{font-size:11px;padding:10px 0 max(10px,env(safe-area-inset-bottom))}
+  #mnav svg{width:24px;height:24px}
+}
+
+/* Tablet landscape and small laptops: both panes fit, but 232px of rail is
+   232px not being read in. Icons only until there is room for words. */
+@media (min-width:901px) and (max-width:1200px){
+  #rail{width:72px;padding:18px 10px 14px;align-items:center}
+  #rail .nav-label,#rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
+  #rail .nav-item{justify-content:center;padding:11px 0;gap:0}
+  #rail .nav-item svg{width:20px;height:20px}
+  #rail .nav-count{position:absolute;top:4px;right:10px;font-size:10px}
+  #rail .nav-item{position:relative}
+  #compose-btn{width:44px;height:44px;padding:0;border-radius:50%;font-size:0;justify-content:center}
+  #compose-btn::after{content:'+';font-size:22px;font-weight:600}
+  #btn-signout,.js-install{font-size:0;padding:9px 0}
+  #btn-signout::after{content:'⏻';font-size:15px}
+  .side-list{width:340px}
+  .rest-wrap{padding:34px 24px 50px}
+}
+
 /* ---------- app bridge (browser) ---------- */
 .browser{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
 .b-tabs{display:flex;gap:2px;background:var(--fill-2);padding:8px 8px 0;overflow-x:auto;scrollbar-width:none}
@@ -678,21 +760,21 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
   <nav id="rail">
     <div class="brand">
       <div class="brand-mark"><img class="mk" src="icons/mark-256.png" alt="" width="38" height="38"></div>
-      <div><div class="brand-name">RATA</div><div class="brand-sub">Every message. Every language.</div></div>
+      <div class="brand-text"><div class="brand-name">RATA</div><div class="brand-sub">Every message. Every language.</div></div>
     </div>
     <button id="compose-btn">Compose</button>
-    <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Mail<span class="nav-count" id="nc-inbox">0</span></button>
-    <button class="nav-item" data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>People</button>
-    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Files<span class="nav-count" id="nc-docs">0</span></button>
-    <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>More</button>
+    <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg><span class="nav-label">Mail</span><span class="nav-count" id="nc-inbox">0</span></button>
+    <button class="nav-item" data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg><span class="nav-label">People</span></button>
+    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Files</span><span class="nav-count" id="nc-docs">0</span></button>
+    <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg><span class="nav-label">More</span></button>
     <div id="nav-more" hidden>
-      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New document</button>
-      <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Search</button>
-      <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg>Accounts</button>
-      <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg>Extras<span class="nav-count" id="nc-plug">0</span></button>
-      <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>Privacy checks</button>
+      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span class="nav-label">New document</span></button>
+      <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-label">Search</span></button>
+      <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg><span class="nav-label">Accounts</span></button>
+      <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg><span class="nav-label">Extras</span><span class="nav-count" id="nc-plug">0</span></button>
+      <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Privacy checks</span></button>
     </div>
-    <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg>Settings</button>
+    <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg><span class="nav-label">Settings</span></button>
     <div class="rail-foot">
       <div class="rail-profile">DLP profile<b id="rail-prof">HIPAA</b></div>
       <div class="rail-profile" style="margin-top:10px">Signed in<b id="rail-acct" style="color:var(--slate);word-break:break-all"></b></div>
@@ -736,7 +818,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
       <div class="extra-panes" id="extra-panes"></div>
-      <div class="detail-pane" id="mail-detail"><div class="empty" style="padding-top:120px"><b>Nothing selected</b>Pick a message on the left to read it.</div></div>
+      <div class="detail-pane" id="mail-detail"></div>
     </section>
 
     <!-- PEOPLE -->
@@ -1310,6 +1392,11 @@ function renderSyncAll(){renderSources();
 }
 function renderChSeg(){renderSyncAll();
   const defs=[['all','All'],['email','Email'],['sms','Text'],['slack','Slack'],['discord','Discord']].filter(([v])=>v==='all'||channelEnabled(v));
+  /* With one channel connected, "All 13" and "Email 13" are two buttons
+     showing the same number. The segment only earns its space once there is a
+     second channel to switch between. */
+  const seg=$('#ch-seg');
+  if(defs.length<3){seg.innerHTML='';chFilter='all';return}
   if(!defs.some(d=>d[0]===chFilter))chFilter='all';
   const cnt=v=>S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)&&(v==='all'||m.ch===v)).length;
   $('#ch-seg').innerHTML='<div class="seg">'+defs.map(([v,l])=>`<button class="${chFilter===v?'on':''}" data-c="${v}">${l}<span class="cnt">${cnt(v)}</span></button>`).join('')+'</div>';
@@ -1548,6 +1635,8 @@ function mailRowHTML(m){
     </div>`;
 }
 function renderMail(){
+  /* Whatever changed the list may have changed what the resting pane says. */
+  setTimeout(renderResting,0);
   /* Side by side, the left pane belongs to its own account; on its own it
      follows the filter chips as before. */
   const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
@@ -1580,6 +1669,92 @@ function renderMail(){
   }
   sc.querySelectorAll('.avatar[data-cid]').forEach(a=>a.onclick=e=>{e.stopPropagation();go('people');openPerson(a.dataset.cid)});
 }
+/* What the reading pane shows when nothing is selected.
+
+   At desktop width that pane is the biggest thing on screen — around eight
+   hundred pixels of it — and it used to hold the words "Nothing selected",
+   which is an apology taking up half the app. The obvious fix, opening the
+   newest message automatically, is the wrong one: openMail marks a message
+   read, so the app would quietly mark your newest mail read every time you
+   loaded it.
+
+   So the space holds the thing RATA is actually for instead — every mailbox
+   in one view, what is waiting in each, and what arrived last. It is the
+   Center Point, stated. */
+function renderResting(){
+  const d=$('#mail-detail');
+  if(!d||selMail)return;
+  d.classList.remove('open');
+
+  const boxes=S.linked.filter(l=>l.type==='mail'||imapKeyFor(l.type));
+  if(!boxes.length){
+    d.innerHTML=`<div class="rest-wrap"><div class="rest-empty">
+      <h2>Nothing connected yet</h2>
+      <p>RATA brings every mailbox you have into one stream — Gmail, Outlook, iCloud, a work address on your own domain. Add the first one and it starts filling in.</p>
+      <button class="btn primary" id="rest-add">＋ Add an email account</button>
+    </div></div>`;
+    const b=$('#rest-add');if(b)b.onclick=()=>{go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)};
+    return;
+  }
+
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&!m.sent);
+  const unread=pool.filter(m=>m.unread);
+  const need=unread.filter(m=>categorize(m)==='priority');
+  const latest=[...pool].sort((a,b)=>b.ts-a.ts).slice(0,5);
+
+  /* A message names its mailbox by address when it came from a live sync and
+     by linked-entry id otherwise — a seeded demo, or anything saved before the
+     server started sending the address. Accept both rather than silently
+     counting zero. */
+  const owns=(l,m)=>{
+    const a=String(m.acct||'').toLowerCase();
+    return !!a&&(a===String(l.id).toLowerCase()||a===String(l.label||'').toLowerCase());
+  };
+  const perBox=boxes.map(l=>{
+    const mine=pool.filter(m=>owns(l,m));
+    return {l,total:mine.length,unread:mine.filter(m=>m.unread).length,
+            last:mine.sort((a,b)=>b.ts-a.ts)[0]};
+  }).sort((a,b)=>b.unread-a.unread||(b.last?.ts||0)-(a.last?.ts||0));
+
+  d.innerHTML=`<div class="rest-wrap">
+    <div class="rest-head">
+      <span class="rest-kicker">Center Point</span>
+      <h2>${unread.length?`${unread.length} unread across ${boxes.length} mailbox${boxes.length===1?'':'es'}`:`All caught up across ${boxes.length} mailbox${boxes.length===1?'':'es'}`}</h2>
+      ${need.length?`<p class="rest-sub">${need.length} look${need.length===1?'s':''} like it needs you.</p>`:'<p class="rest-sub">Nothing is waiting on you right now.</p>'}
+    </div>
+
+    <div class="rest-grid">
+      ${perBox.map(b=>`<button class="rest-box" data-box="${esc(b.l.label)}">
+        <span class="rest-box-top">
+          <span class="rest-box-name">${esc(b.l.label)}</span>
+          ${b.unread?`<span class="rest-pip">${b.unread}</span>`:''}
+        </span>
+        <span class="rest-box-sub">${b.l.provLabel?esc(b.l.provLabel)+' · ':''}${b.total} message${b.total===1?'':'s'}${b.last?' · '+rel(b.last.ts)+' ago':''}</span>
+        ${b.l.needsRelink?'<span class="rest-warn">Needs its app password again</span>':''}
+      </button>`).join('')}
+    </div>
+
+    ${latest.length?`<div class="rest-latest">
+      <div class="sec-label">Latest</div>
+      ${latest.map(m=>`<button class="rest-item ${m.unread?'un':''}" data-mid="${esc(m.id)}">
+        <span class="avatar sm" style="background:${avColor(msgFrom(m))}">${initials(msgFrom(m))}</span>
+        <span class="rest-item-body">
+          <span class="rest-item-l1"><b>${esc(msgFrom(m))}</b><span class="m-time">${rel(m.ts)}</span></span>
+          <span class="rest-item-subj">${esc(m.subj||m.prev||'')}</span>
+          <span class="rest-item-acct">${esc(boxes.find(l=>owns(l,m))?.label||m.acct||'')}</span>
+        </span>
+      </button>`).join('')}
+    </div>`:''}
+  </div>`;
+
+  d.querySelectorAll('[data-mid]').forEach(b=>b.onclick=()=>openMail(b.dataset.mid));
+  /* Clicking a mailbox filters the list to it rather than opening anything —
+     the pane is a way into the inbox, not a second inbox. */
+  d.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>{
+    mailFilter=b.dataset.box;renderMailFilters();renderMail();
+  });
+}
+
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
   if((m.ch==='sms'||m.ch==='slack'||m.ch==='discord')&&m.cid){
@@ -1635,7 +1810,7 @@ function openMail(id){
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();renderMail();toast('Marked unread')};
-  $('#md-del').onclick=()=>{S.messages=S.messages.filter(x=>x.id!==id);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');d.innerHTML='<div class="empty" style="padding-top:120px"><b>Message deleted</b></div>';renderMail()};
+  $('#md-del').onclick=()=>{S.messages=S.messages.filter(x=>x.id!==id);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail()};
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
