@@ -54,7 +54,35 @@ build, in CI, and anywhere else convenient. The private half never leaves the
 server.
 
 Installers must be built on the platform they target — a Linux machine cannot
-produce a signed .dmg or .msi. That is three build machines, or three CI runners.
+produce a .dmg or a .msi, let alone sign one. That is three build machines, or
+three CI runners.
+
+## Releasing
+
+`.github/workflows/release.yml` is the three build machines. Push a `v*` tag to
+cut a release, or run it by hand from the Actions tab to get installers to try
+without tagging anything — a manual run attaches them to the run and creates no
+release.
+
+It builds four: Linux (.deb and .AppImage), macOS on Apple silicon, macOS on
+Intel, and Windows (.msi and .exe). A tag produces a **draft** release, because
+one that appears the moment a tag is pushed is one nobody checked.
+
+Linux builds on ubuntu-22.04 rather than the newest runner on purpose: an
+AppImage linked against a newer glibc will not start on an older distribution,
+and running anywhere is the only reason to ship an AppImage.
+
+### Secrets it wants
+
+| Secret | Without it |
+|---|---|
+| `RATA_LICENCE_PUBLIC_KEY` | **The build fails, deliberately.** An installer with no licence key refuses every licence, and that is the worst possible thing to hand somebody who has just paid. It is the public half and is not secret; it lives in Actions secrets so it cannot be changed by accident. |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | macOS shows *"RATA is damaged and can't be opened"* — Gatekeeper's words for an unsigned app, and indistinguishable from a broken download to the person reading it. Needs a paid Apple Developer account. |
+| A Windows code-signing certificate | SmartScreen warns before the installer runs. Setting one up is in Tauri's Windows signing documentation. |
+
+The build works without the signing secrets and the installers install; they
+just arrive looking untrustworthy, which for a product whose pitch is "your mail
+stays yours" is worth more than the certificates cost.
 
 ## CI
 
