@@ -2524,12 +2524,34 @@ function renderPlan(){
      they are already on — that is a paid-for confusion. */
   const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};
   const here=S.settings.plan;
+
+  /* Carry the signed-in address into checkout.
+
+     The subscription is recorded against whatever address the buyer types on
+     Stripe's page, and the app reads entitlement by the address they signed up
+     with. Left to chance those differ all the time — somebody registers with a
+     personal address and pays with the one their card is under — and the
+     payment then lands on a row nobody reads. They have been charged and see
+     no plan, which is the worst support ticket there is.
+
+     prefilled_email fills Stripe's field; client_reference_id rides along so a
+     payment can still be matched to an account if they change it anyway. */
+  const buyer=(SESSION&&SESSION.email)||'';
+  const withBuyer=u=>{
+    if(!u)return u;
+    try{
+      const url=new URL(u);
+      if(buyer)url.searchParams.set('prefilled_email',buyer);
+      if(SESSION&&SESSION.uid)url.searchParams.set('client_reference_id',SESSION.uid);
+      return url.toString();
+    }catch(e){return u}
+  };
   /* Only plans that are on sale, and never the one they are already on. A
      checkout button for a tier whose features do not exist yet is a paid-for
      disappointment. */
   $('#plan-buttons').innerHTML=SELLABLE
     .filter(k=>links[k]&&k!==here)
-    .map((k,i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(links[k])}" target="_blank" rel="noopener">${here?'Switch to ':'Get '}${esc(TIERS[k].label.replace('RATA ',''))} — ${money(TIERS[k].price)}</a>`)
+    .map((k,i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(withBuyer(links[k]))}" target="_blank" rel="noopener">${here?'Switch to ':'Get '}${esc(TIERS[k].label.replace('RATA ',''))} — ${money(TIERS[k].price)}</a>`)
     .join('');
   const p=$('#bill-portal');
   $('#bill-nolinks').style.display=SELLABLE.some(k=>links[k])?'none':'';

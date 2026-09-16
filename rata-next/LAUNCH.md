@@ -8,6 +8,13 @@ on from one that has not.
 
 **Roughly 45 minutes**, most of it in the Stripe dashboard.
 
+What is live right now, checked today: the pricing page still says **$8 / $79**
+— the pricing from two revisions ago — and `/api/config` still emits the old
+`stripeMonthly` / `stripeAnnual` keys. `app.html` contains none of the
+multi-mailbox linking, DNS discovery, relink flow or plan tiers. Supabase at
+`db.mailrata.org` is up and healthy, and the `.com` redirect works. So the
+foundation is sound and **launch is essentially the deploy**.
+
 ---
 
 ## 0. Before anything — the two hard blockers
@@ -130,7 +137,32 @@ In this order, because each depends on the last:
 6. **Delete the account** (Settings → Delete). It should refuse while the
    subscription is live — that refusal is the feature.
 
-## 7. Before you sleep, not after
+## 7. Two things to know about signups before you open the doors
+
+Checked against the live backend today:
+
+**Signups are auto-confirmed** (`mailer_autoconfirm` is on), so anyone can
+register any address without proving they own it. Entitlement is looked up by
+that address — `subscriptions` is keyed on email — so the link between "who
+paid at Stripe" and "who holds the account" rests on an address nobody
+verified. Two consequences, one common and one nasty:
+
+- *Common:* somebody registers with a personal address, pays with the one their
+  card is under, and the payment lands on a row no account reads. They have been
+  charged and see no plan. **This is now mitigated** — checkout links carry
+  `prefilled_email` for the signed-in address and `client_reference_id` for
+  their account id, so the two only diverge if the buyer deliberately edits the
+  field.
+- *Nasty:* somebody registers an address they do not own before its real owner
+  does. The owner cannot then register at all, and if they pay using it, the
+  plan lands on the squatter's account.
+
+The real fix is email confirmation, which needs an SMTP sender configured in
+GoTrue — turning `mailer_autoconfirm` off without one would break signup
+completely, so **do not flip it on launch day**. Configure a sender first, then
+turn it off, and the whole class goes away.
+
+## 8. Before you sleep, not after
 
 - **Backups.** `infrastructure/backup/backup.sh`, nightly, off the box. There
   is currently no copy of the database anywhere. At a few hundred paying
