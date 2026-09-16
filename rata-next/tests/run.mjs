@@ -10,6 +10,7 @@ const SUITES = [
   ['account deletion',   './account-delete.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],
   ['health endpoint',    './health.test.mjs'],
+  ['licences',           './licence.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 
