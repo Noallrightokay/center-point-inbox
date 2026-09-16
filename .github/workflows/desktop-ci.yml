@@ -1,0 +1,122 @@
+name: Desktop CI
+
+# The desktop app is where the mail layer lives now, and nothing was running it.
+# rata-next-ci is filtered to `rata-next/**`, so a change that broke every IMAP
+# test would have merged green.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      # The shell build assembles its web assets from rata-next/public, so a
+      # change there can break this build without touching desktop/ at all.
+      - "rata-next/public/**"
+      - ".github/workflows/desktop-ci.yml"
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned rather than `stable`. With -D warnings an unpinned toolchain means a
+  # new clippy lint reddens an unrelated pull request on the day it ships, which
+  # trains everyone to ignore the colour. Bump it deliberately.
+  RUST: "1.94.1"
+
+jobs:
+  # The mail layer on its own: no GTK, no webview, nothing to install. It holds
+  # most of the logic and all of the outbound guard, so it is worth having an
+  # answer from it in a minute rather than waiting on the shell.
+  mail:
+    name: Mail layer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop/rata-mail
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-mail
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Several of these resolve real names — gmail.com's table entry needs no
+      # lookup, but anthropic.com's MX does, and that is the case the whole
+      # discovery module exists for. They assert on the shape of the answer
+      # rather than on a specific record, so a provider reshuffling its MX does
+      # not turn into a red build.
+      - name: Tests
+        run: cargo test --all-targets
+
+  # The shell. Needs the system webview, and needs ui/ to exist before
+  # tauri-build reads the config — which also means sync-ui.sh runs here, so its
+  # three anchor checks against rata-next/public are part of CI rather than
+  # something that fails on a release machine.
+  app:
+    name: Desktop shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the system webview
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - name: Formatting
+        run: cargo fmt --check
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      # Built without RATA_LICENCE_PUBLIC_KEY, which is not an oversight: with
+      # no key the app refuses every licence rather than accepting any, and
+      # these tests pass their own key in so they check the verifier either way.
+      # A release supplies the real key; see desktop/rata-app/README.md.
+      #
+      # Debug only. A release build would compile four hundred crates a second
+      # time to prove something the debug build already proved — that this
+      # compiles — and packaging happens on the per-platform release machines
+      # regardless, since Linux cannot sign a .dmg or a .msi.
+      - name: Tests
+        run: cargo test --all-targets
+        working-directory: desktop/rata-app/src-tauri

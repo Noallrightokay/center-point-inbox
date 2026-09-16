@@ -1,0 +1,22 @@
+[package]
+name = "rata-mail"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt", "macros", "time", "net"] }
+
+[features]
+# The mail layer does not need serde; the app that shows the mail does. Kept
+# optional so the crate stays usable on its own.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
+futures = "0.3.34"
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
+rustls-platform-verifier = "0.7.0"
+sha2 = "0.11.0"
+tokio = { version = "1.53.1", features = ["rt", "macros", "net", "time", "io-util"] }
+tokio-rustls = "0.26.5"

@@ -1,7 +1,8 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v13';
+const V = 'rata-shell-v14';
 const SHELL = [
-  './', './index.html', './auth.html', './app.html', './manifest.json', './config.js',
+  './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
+  './fonts/fonts.css',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png', './icons/mark-256.png'
 ];
 
@@ -13,6 +14,41 @@ const SHELL = [
    engines into the shell install would mean one flaky byte costs the app its
    entire offline shell. These are added individually and best-effort — a miss
    here is recoverable (the page fetches it on demand), a broken shell is not. */
+/* The typefaces, precached the same way and for the same reason: the site
+   should look like itself with the network off, and a page that falls back to
+   the system font offline is a page that visibly changes shape the moment the
+   wifi drops.
+
+   Best-effort rather than part of the shell, deliberately. unicode-range means
+   a browser fetches only what it needs at runtime, so most of these are never
+   requested by any one reader — making the shell install atomic over all of
+   them would risk the whole offline shell for bytes nobody was going to use. */
+const FONTS = [
+  './fonts/fredoka-500-hebrew.woff2',
+  './fonts/fredoka-500-latin-ext.woff2',
+  './fonts/fredoka-500-latin.woff2',
+  './fonts/fredoka-600-hebrew.woff2',
+  './fonts/fredoka-600-latin-ext.woff2',
+  './fonts/fredoka-600-latin.woff2',
+  './fonts/fredoka-700-hebrew.woff2',
+  './fonts/fredoka-700-latin-ext.woff2',
+  './fonts/fredoka-700-latin.woff2',
+  './fonts/instrument-sans-400-latin-ext.woff2',
+  './fonts/instrument-sans-400-latin.woff2',
+  './fonts/instrument-sans-500-latin-ext.woff2',
+  './fonts/instrument-sans-500-latin.woff2',
+  './fonts/instrument-sans-600-latin-ext.woff2',
+  './fonts/instrument-sans-600-latin.woff2',
+  './fonts/instrument-sans-700-latin-ext.woff2',
+  './fonts/instrument-sans-700-latin.woff2',
+  './fonts/sora-400-latin-ext.woff2',
+  './fonts/sora-400-latin.woff2',
+  './fonts/sora-600-latin-ext.woff2',
+  './fonts/sora-600-latin.woff2',
+  './fonts/sora-700-latin-ext.woff2',
+  './fonts/sora-700-latin.woff2'
+];
+
 const ENGINES = [
   './vendor/supabase-js-2.112.4.js',
   './vendor/mammoth-1.8.0.browser.min.js',
@@ -24,7 +60,7 @@ self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(V)
       .then(c => c.addAll(SHELL)
-        .then(() => Promise.allSettled(ENGINES.map(u => c.add(u)))))
+        .then(() => Promise.allSettled([...FONTS, ...ENGINES].map(u => c.add(u)))))
       .then(() => self.skipWaiting())
   );
 });

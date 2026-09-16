@@ -542,9 +542,14 @@ export default async function run(state) {
     check(!offline.error && offline.bytes > 0,
       offline.error ? `offline conversion failed: ${offline.error}` : `built a real .xlsx with the network off (${offline.bytes} bytes)`);
 
+    /* Zero, not "no CDN". This used to allow fonts.googleapis.com through,
+       which meant every page load told Google when somebody opened their mail —
+       on a product whose whole claim is that messages stay yours. The fonts are
+       served from this origin now, so the honest assertion is that the app
+       contacts nobody at all, and anything reappearing here fails the build. */
     const third = [...hosts].filter(h => !h.startsWith('127.0.0.1') && !h.startsWith('localhost'));
-    check(!third.some(h => h.includes('jsdelivr') || h.includes('unpkg') || h.includes('cdn')),
-      third.length ? `no script CDN contacted (saw only: ${third.join(', ')})` : 'no third-party host contacted at all');
+    check(third.length === 0,
+      third.length ? `contacted a third party: ${third.join(', ')}` : 'no third-party host contacted at all');
 
     check(errs.length === 0, errs.length ? `page errors: ${errs.join(' | ')}` : 'no page errors throughout');
   } finally {

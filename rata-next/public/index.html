@@ -14,9 +14,7 @@
 
 <meta name="description" content="Rata — texts, email, Slack, and Discord, translated automatically and unified into one inbox. Compliance built in.">
 <title>RATA — Every message. Every language. One inbox.</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
 :root{
   --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --tint-mid:#5C7FFF; --glacier:#8FAAFF; --wash:#D9E2FF;
@@ -118,6 +116,7 @@ footer .sp{flex:1}
   <div class="nav-links">
     <a class="plain" href="#features">Features</a>
     <a class="plain" href="#download">Download</a>
+    <a class="plain" href="account.html">Licence</a>
     <a class="plain" href="#pricing">Pricing</a>
     <a class="plain" href="auth.html?mode=login">Log in</a>
     <a class="btn primary" href="auth.html?mode=signup" style="padding:9px 18px">Create account</a>
@@ -205,7 +204,7 @@ footer .sp{flex:1}
       <p style="margin-bottom:4px">Up to two mailboxes. One Center Point inbox.</p>
       <p>Both accounts arriving in a single stream — which is the whole idea — with auto-translation as mail lands, the Format Bridge that converts any document and keeps the original beside it, DLP and the audit chain, and the app on every device.</p>
       <div class="mini" style="margin-top:6px;gap:8px">
-        <a class="btn primary" id="buy-monthly" href="auth.html?mode=signup" style="padding:10px 18px">Get Base — $12.99</a>
+        <a class="btn primary" id="buy-base" href="auth.html?mode=signup" style="padding:10px 18px">Get Base — $12.99</a>
       </div>
     </div>
 
@@ -216,7 +215,7 @@ footer .sp{flex:1}
       <p style="margin-bottom:4px">More than two mailboxes, and the option to pull them apart.</p>
       <p>Connect as many accounts as you have — they still arrive in one Center Point inbox — and when it helps, put two or three of them side by side to work at once and move a file between them. AI summaries of what arrived while you were away, folders for your documents, Slack and Discord.</p>
       <div class="mini" style="margin-top:6px;gap:8px">
-        <a class="btn primary" id="buy-annual" href="auth.html?mode=signup" style="padding:10px 18px">Get Pro — $23.99</a>
+        <a class="btn primary" id="buy-pro" href="auth.html?mode=signup" style="padding:10px 18px">Get Pro — $23.99</a>
       </div>
     </div>
 
@@ -269,9 +268,14 @@ footer .sp{flex:1}
 <script src="config.js"></script>
 <script>
 const RC=window.RATA_CONFIG||{};
-const STRIPE_LINKS={monthly:RC.stripeMonthly||'',annual:RC.stripeAnnual||''};
-if(STRIPE_LINKS.monthly)document.getElementById('buy-monthly').href=STRIPE_LINKS.monthly;
-if(STRIPE_LINKS.annual)document.getElementById('buy-annual').href=STRIPE_LINKS.annual;
+/* stripeBase and stripePro, which is what /api/config emits. These read
+   stripeMonthly and stripeAnnual until now — names from a two-plan price list
+   that no longer exists — so both buttons fell through to their signup href and
+   nobody could reach checkout at all. The failure was silent: a button that
+   goes somewhere plausible looks like a working button. */
+const LINKS={base:RC.stripeBase||'',pro:RC.stripePro||''};
+if(LINKS.base)document.getElementById('buy-base').href=LINKS.base;
+if(LINKS.pro)document.getElementById('buy-pro').href=LINKS.pro;
 // If already signed in, upgrade CTAs to "Open console"
 try{
   if(localStorage.getItem('centra_session')){

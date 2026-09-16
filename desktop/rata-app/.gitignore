@@ -1,0 +1,9 @@
+# Assembled from rata-next/public by sync-ui.sh. Never edited here, never
+# committed: one interface, one copy of it.
+ui/
+
+# Build output.
+src-tauri/target/
+
+# Written by tauri-build from tauri.conf.json on every build.
+src-tauri/gen/schemas/

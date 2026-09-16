@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0A0E1A">
 <title>RATA — Sign in</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts/fonts.css">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icons/favicon-64.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -243,7 +241,16 @@ async function pbkdf2(pw,salt,iter){
 const accounts=()=>JSON.parse(localStorage.getItem('centra_accounts')||'{}');
 function err(el,m){$(el).textContent=m;$(el).classList.add('show')}
 function hideMsgs(){['#l-err','#l-ok','#s-err','#s-ok'].forEach(x=>{const n=$(x);if(n)n.classList.remove('show')})}
-function session(s){localStorage.setItem('centra_session',JSON.stringify(s));try{localStorage.setItem(RETURNING,'1')}catch(e){}location.replace('app.html')}
+/* Where to go once signed in. ?next= exists so the licence page can send
+   somebody here to log in and get them back afterwards — but it is matched
+   against a list rather than followed, because a redirect target taken from the
+   query string is an open redirect, and an open redirect on the page that
+   handles passwords is the one you least want. */
+const NEXT={account:'account.html',app:'app.html'};
+function nextPage(){
+  try{return NEXT[new URLSearchParams(location.search).get('next')]||'app.html'}catch(e){return 'app.html'}
+}
+function session(s){localStorage.setItem('centra_session',JSON.stringify(s));try{localStorage.setItem(RETURNING,'1')}catch(e){}location.replace(nextPage())}
 
 $('#login-form').addEventListener('submit',async e=>{
   e.preventDefault();hideMsgs();
