@@ -99,20 +99,63 @@ jobs:
             *) echo "::error::RATA_LICENCE_PUBLIC_KEY does not look like a PEM public key." >&2; exit 1 ;;
           esac
 
+      # Signing is opt-in, and it has to be all-or-nothing.
+      #
+      # These used to be passed straight to the build step, which looked
+      # harmless: an unset secret becomes an empty string. But an empty string
+      # is still a *set* variable, and Tauri's bundler reads APPLE_CERTIFICATE
+      # with std::env::var — which returns Ok("") and takes that as "sign this".
+      # It then handed nothing to `security import` and both macOS jobs died at
+      # the bundling step with "failed to import keychain certificate", having
+      # compiled everything successfully first. Linux and Windows were fine,
+      # which is what made it look like a macOS problem rather than a workflow
+      # one.
+      #
+      # So the variables only enter the environment when there is actually a
+      # certificate, and the log says which build you are getting.
+      - name: Configure macOS signing
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "${CERT}" ]; then
+            echo "No APPLE_CERTIFICATE secret — building unsigned."
+            echo "::warning::This macOS build is unsigned. Gatekeeper will tell whoever opens it that RATA is damaged and can't be opened, which is indistinguishable from a broken download. Set the Apple signing secrets before sending it to anybody."
+            exit 0
+          fi
+          # The heredoc form, because a certificate is base64 and a password
+          # can contain anything.
+          {
+            printf 'APPLE_CERTIFICATE<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${CERT}"
+            printf 'APPLE_CERTIFICATE_PASSWORD<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${CERT_PASSWORD}"
+            printf 'APPLE_SIGNING_IDENTITY<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${IDENTITY}"
+          } >> "$GITHUB_ENV"
+          echo "Signing with the configured Apple certificate."
+          # Notarisation is a second, separate thing: without it a signed app
+          # still warns on first open. Only switched on when all three are set,
+          # because a half-configured notary fails the build at the very end.
+          if [ -n "${NOTARY_ID}" ] && [ -n "${NOTARY_PASSWORD}" ] && [ -n "${NOTARY_TEAM}" ]; then
+            {
+              printf 'APPLE_ID<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${NOTARY_ID}"
+              printf 'APPLE_PASSWORD<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${NOTARY_PASSWORD}"
+              printf 'APPLE_TEAM_ID<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${NOTARY_TEAM}"
+            } >> "$GITHUB_ENV"
+            echo "Notarising as well."
+          else
+            echo "::warning::Signing but not notarising — APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are not all set. A signed but un-notarised app still warns on first open."
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
-          # Signing. Every one of these is optional and every one of them is
-          # worth setting before anybody else installs this: without them macOS
-          # shows Gatekeeper's "damaged and can't be opened", which is what an
-          # unsigned app looks like to somebody who has just paid, and Windows
-          # shows SmartScreen.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # The Apple variables arrive from the step above, and only when they
+          # are real. Do not add them here.
         with:
           projectPath: desktop/rata-app
           args: ${{ matrix.args }}
