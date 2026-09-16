@@ -33,7 +33,25 @@
   --bubble-them:#E8ECF4; --bubble-you:#2E5CFF; --bubble-you-ink:#fff;
   --shadow:0 1px 2px rgba(10,14,26,.04),0 4px 16px rgba(10,14,26,.05);
   --shadow-lg:0 8px 40px rgba(10,14,26,.16);
-  --r:14px; --r-sm:10px;
+  /* Depth, from the palette already here rather than new colours.
+     A surface gets three things: a tone that shifts across it, a lit top edge,
+     and a shadow tinted with its own hue instead of grey — which is what makes
+     a control look like an object you could press. */
+  --grad-tint:linear-gradient(180deg,var(--tint-mid) 0%,var(--tint) 54%,var(--tint-deep) 100%);
+  --grad-fill:linear-gradient(180deg,#FFFFFF 0%,var(--fill) 100%);
+  --grad-card:linear-gradient(180deg,var(--card) 0%,var(--card2) 100%);
+  --sheen:inset 0 1px 0 rgba(255,255,255,.32);
+  --sheen-soft:inset 0 1px 0 rgba(255,255,255,.85);
+  --edge:0 1px 2px rgba(10,14,26,.07);
+  --glow:0 4px 14px -3px rgba(46,92,255,.40);
+  --glow-hi:0 10px 26px -6px rgba(46,92,255,.55);
+  --glow-green:0 4px 14px -3px rgba(18,183,106,.45);
+  --ring:0 0 0 1px rgba(46,92,255,.16);
+  /* A touch of overshoot on the way up, none on the way down — that is what
+     reads as springy rather than merely animated. */
+  --pop:cubic-bezier(.34,1.32,.5,1);
+  --lift:transform .16s var(--pop),box-shadow .16s ease,background .16s ease,color .16s ease;
+  --r:14px; --r-sm:10px; --r-bubble:999px;
   --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
   --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 }
@@ -53,7 +71,28 @@
     --bubble-them:#1C2438; --bubble-you:#2E5CFF; --bubble-you-ink:#fff;
     --shadow:0 1px 2px rgba(0,0,0,.45),0 4px 16px rgba(0,0,0,.4);
     --shadow-lg:0 8px 40px rgba(0,0,0,.65);
+    /* On a dark ground the lit edge has to come right down or it reads as a
+       white line, and the glow has to come up or it disappears entirely. */
+    --grad-tint:linear-gradient(180deg,#7E9AFF 0%,#5C7FFF 54%,#3F63F0 100%);
+    --grad-fill:linear-gradient(180deg,#232C42 0%,#1A2235 100%);
+    --grad-card:linear-gradient(180deg,#141B2D 0%,#111827 100%);
+    --sheen:inset 0 1px 0 rgba(255,255,255,.16);
+    --sheen-soft:inset 0 1px 0 rgba(255,255,255,.07);
+    --edge:0 1px 2px rgba(0,0,0,.5);
+    --glow:0 4px 16px -3px rgba(92,127,255,.50);
+    --glow-hi:0 12px 30px -6px rgba(92,127,255,.68);
+    --glow-green:0 4px 16px -3px rgba(47,206,132,.5);
+    --ring:0 0 0 1px rgba(143,170,255,.22);
   }
+}
+@media (prefers-reduced-motion:reduce){
+  /* Keep the depth — the gradients, the lit edges, the glow — and drop only
+     the movement. The interface still reads as dimensional without anything
+     sliding under someone who asked for that not to happen. */
+  *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
+  .btn:hover,.pill:hover,.mail-row:hover,.doc-card:hover,.launch-tile:hover,#compose-btn:hover,
+  .btn:active,.pill:active,.launch-tile:active,#compose-btn:active{transform:none}
+  .launch-tile:hover .brand-glyph{transform:none}
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
@@ -74,19 +113,22 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .brand-mark{width:38px;height:38px;flex-shrink:0;display:grid;place-items:center}
 .brand-name{font-family:'Fredoka',var(--sans);font-weight:600;font-size:20px;letter-spacing:.04em;line-height:1.1}
 .brand-sub{font-size:11px;color:var(--faint)}
-.nav-item{display:flex;align-items:center;gap:11px;width:100%;padding:9px 11px;color:var(--slate);text-align:left;border-radius:var(--r-sm);margin-bottom:2px;font-weight:500;transition:background .15s,color .15s}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;padding:9px 11px;color:var(--slate);text-align:left;border-radius:12px;margin-bottom:2px;font-weight:500;transition:var(--lift)}
 .nav-item svg{width:18px;height:18px;flex-shrink:0}
 .nav-item:hover{background:var(--fill-2)}
-.nav-item.active{color:var(--tint);background:var(--tint-soft);font-weight:600}
+.nav-item.active{color:var(--tint);font-weight:600;
+  background:linear-gradient(180deg,var(--tint-wash) 0%,var(--tint-soft) 100%);
+  box-shadow:var(--ring),inset 0 1px 0 rgba(255,255,255,.4)}
 .nav-count{margin-left:auto;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .nav-item.active .nav-count{color:var(--tint)}
 .nav-group{font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);padding:14px 11px 6px}
 .rail-foot{margin-top:auto;padding:14px 10px 0;border-top:1px solid var(--hair-2)}
 .rail-profile{font-size:11px;color:var(--faint)}
 .rail-profile b{color:var(--tint);display:block;font-size:13px;margin-top:1px;font-weight:600}
-#compose-btn{width:100%;margin:2px 0 14px;padding:11px;background:var(--tint);color:#fff;font-weight:600;border-radius:12px;box-shadow:0 2px 10px rgba(46,92,255,.3);transition:filter .15s}
+#compose-btn{width:100%;margin:2px 0 14px;padding:12px;background:var(--grad-tint);color:#fff;font-weight:650;border-radius:var(--r-bubble);box-shadow:var(--glow),var(--sheen);transition:var(--lift)}
 @media (prefers-color-scheme:dark){#compose-btn{color:#fff}}
-#compose-btn:hover{filter:brightness(1.06)}
+#compose-btn:hover{transform:translateY(-1.5px);box-shadow:var(--glow-hi),var(--sheen)}
+#compose-btn:active{transform:translateY(0) scale(.985);box-shadow:var(--edge),var(--sheen);transition-duration:.06s}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .topbar{height:60px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 24px;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
@@ -107,16 +149,23 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .badge.job{color:var(--bg);background:var(--tint-mid)}
 .badge.pref{color:var(--slate);background:var(--fill)}
 .badge.trans{color:var(--tint-deep);background:var(--tint-wash)}
-.pill{font-size:13px;font-weight:500;padding:6px 14px;border-radius:999px;color:var(--slate);background:var(--fill);transition:background .15s,color .15s;white-space:nowrap}
-.pill:hover{background:var(--fill-2)}
-.pill.on{background:var(--tint);color:#fff;font-weight:600}
+.pill{font-size:13px;font-weight:500;padding:6px 14px;border-radius:var(--r-bubble);color:var(--slate);background:var(--grad-fill);
+  box-shadow:var(--sheen-soft),var(--edge);transition:var(--lift);white-space:nowrap}
+.pill:hover{transform:translateY(-1px);color:var(--ink);box-shadow:var(--sheen-soft),0 4px 10px -2px rgba(10,14,26,.13)}
+.pill:active{transform:translateY(0) scale(.97);transition-duration:.06s}
+.pill.on{background:var(--grad-tint);color:#fff;font-weight:600;box-shadow:var(--glow),var(--sheen)}
+.pill.on:hover{box-shadow:var(--glow-hi),var(--sheen)}
 @media (prefers-color-scheme:dark){.pill.on{color:#fff}}
-.btn{padding:8px 15px;border-radius:10px;background:var(--fill);font-weight:600;font-size:13px;transition:background .15s}
-.btn:hover{background:var(--fill-2)}
-.btn.primary{background:var(--tint);color:#fff;box-shadow:0 1px 6px rgba(46,92,255,.25)}
+.btn{padding:8px 16px;border-radius:var(--r-bubble);background:var(--grad-fill);color:var(--ink);font-weight:600;font-size:13px;
+  box-shadow:var(--sheen-soft),var(--edge);transition:var(--lift)}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--sheen-soft),0 4px 12px -2px rgba(10,14,26,.14)}
+.btn:active{transform:translateY(0) scale(.985);box-shadow:var(--edge);transition-duration:.06s}
+.btn.primary{background:var(--grad-tint);color:#fff;box-shadow:var(--glow),var(--sheen)}
+.btn.primary:active{box-shadow:var(--edge),var(--sheen)}
 @media (prefers-color-scheme:dark){.btn.primary{color:#fff}}
-.btn.primary:hover{filter:brightness(1.06);background:var(--tint)}
-.btn.danger{color:var(--red);background:var(--red-soft)}
+.btn.primary:hover{transform:translateY(-1.5px);box-shadow:var(--glow-hi),var(--sheen);background:var(--grad-tint)}
+.btn.danger{color:var(--red);background:var(--red-soft);box-shadow:var(--edge)}
+.btn.danger:hover{box-shadow:0 4px 14px -3px rgba(229,72,77,.4)}
 .empty{padding:60px 24px;text-align:center;color:var(--faint)}
 .empty b{display:block;color:var(--slate);margin-bottom:4px;font-size:15px}
 .mono{font-family:var(--mono)}
@@ -125,15 +174,104 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .txt:focus{box-shadow:0 0 0 3px var(--tint-soft)}
 
 /* ---------- two-pane (messages / people) ---------- */
+/* ---- the launcher ----
+   Tiles, not cards: no shadow, no heavy border. They are doors to somewhere
+   else, and should read as quieter than the message list they sit beside. The
+   accent belongs to each vendor rather than to RATA, which is the honest
+   signal that these open somebody else's application. */
+.launch-wrap{max-width:900px;margin:0 auto;padding:28px 22px 80px;display:flex;flex-direction:column;gap:26px}
+.launch-head h2{margin:0 0 6px;font-size:22px;letter-spacing:-.01em;text-wrap:balance}
+.launch-head p{margin:0;max-width:62ch;color:var(--faint);line-height:1.6;font-size:14px}
+.launch-group{display:flex;flex-direction:column;gap:10px}
+.launch-group-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.launch-group-head b{font-size:14px}
+.launch-group-head span:last-child{font-size:12.5px;color:var(--faint)}
+.launch-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;align-self:center}
+.launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:9px}
+/* Name every cell. Placing only some of them leaves the rest to
+   auto-placement, which put the app's name in the arrow's column. */
+.launch-tile{display:grid;
+  grid-template-columns:auto 1fr auto;
+  grid-template-areas:"badge name go" "badge kind go";
+  column-gap:11px;row-gap:1px;align-items:center;
+  padding:12px 13px;border:1px solid var(--hair-2);border-radius:9px;
+  background:var(--card);text-decoration:none;color:inherit;transition:var(--lift)}
+.launch-tile:hover{border-color:transparent;background:var(--grad-card);transform:translateY(-2px);
+  box-shadow:var(--ring),var(--sheen-soft),0 10px 24px -8px rgba(10,14,26,.3)}
+.launch-tile:active{transform:translateY(0) scale(.99);transition-duration:.06s}
+.launch-tile .brand-glyph{transition:transform .18s var(--pop)}
+.launch-tile:hover .brand-glyph{transform:scale(1.12)}
+.launch-tile:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+/* The mark sits on the page, not on a coloured chip: these are other people's
+   logos and a tinted square behind each one would be RATA restyling them. */
+.launch-badge{grid-area:badge;width:30px;height:30px;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+.brand-glyph{display:block}
+.launch-name{grid-area:name;font-weight:600;font-size:14px;text-align:left}
+.launch-kind{grid-area:kind;font-size:11.5px;color:var(--faint);text-align:left}
+.launch-go{grid-area:go;color:var(--faint);font-size:13px}
+.launch-tile:hover .launch-go{color:var(--tint)}
+.launch-foot{font-size:13px;line-height:1.6;color:var(--faint);border-top:1px solid var(--hair-2);padding-top:16px;max-width:66ch}
+.linkish{background:none;border:0;padding:0;font:inherit;color:var(--tint);font-weight:600;cursor:pointer;text-decoration:underline}
+.linkish:hover{color:var(--tint-deep)}
 .pane-view{flex-direction:row}
+/* Two inboxes at once. The reading pane gives way rather than squeezing three
+   columns onto a laptop, and each inbox keeps the full width it needs to be
+   readable. */
+/* Any number of inboxes beside the first. Each keeps a floor of 330px so a
+   message stays readable; past that the row scrolls sideways rather than
+   crushing every pane thinner. */
+.extra-panes{display:contents}
+body.split-on #view-inbox{overflow-x:auto;overflow-y:hidden}
+body.split-on .side-list,body.split-on .split-pane{flex:1 1 0;min-width:330px}
+.split-pane{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
+/* A class that sets display beats the browser's own [hidden] rule, so the
+   pane has to opt back out explicitly or it shows before it is asked for. */
+.split-pane[hidden]{display:none}
+/* The layout switch. Two states, both named, neither hidden among the sort
+   controls where the old toggle lived and went unnoticed. */
+.inbox-mode{display:flex;gap:4px;margin:12px 14px 2px;padding:3px;border-radius:var(--r-bubble);
+  background:var(--fill-2);box-shadow:inset 0 1px 3px rgba(10,14,26,.08)}
+.inbox-mode button{flex:1;padding:7px 10px;border-radius:var(--r-bubble);font-size:12.5px;font-weight:600;
+  color:var(--slate);transition:var(--lift)}
+.inbox-mode button:hover{color:var(--ink)}
+.inbox-mode button.on{background:var(--grad-card);color:var(--tint);box-shadow:var(--sheen-soft),var(--edge)}
+/* Locked, not hidden: the choice stays on screen, which is how anyone finds
+   out the tier above exists. */
+.inbox-mode button.locked{color:var(--faint)}
+.inbox-mode button.locked:hover{color:var(--slate)}
+/* Side by side means two peers. The left pane drops the digest, the channel
+   segments, the category tabs and the filter chips so it stops looking like
+   the main event with a sidecar attached — each pane is then a mailbox with
+   its own picker and its own list. */
+body.split-on .side-list > #digest,
+body.split-on .side-list > #sources,
+body.split-on .side-list > #ch-seg,
+body.split-on .side-list > #cat-tabs,
+body.split-on .side-list > #mail-filters,
+body.split-on .side-list > #sync-all{display:none}
+body.split-on .side-list > .sort-row{padding-top:8px}
+.split-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--hair-2)}
+/* A class that sets display beats the browser's own [hidden] rule, so the
+   header has to opt back out explicitly — otherwise an empty bar sits under
+   the mode switch whenever the inbox is not split. */
+.split-head[hidden]{display:none}
+.split-head .sel{flex:1;min-width:0}
+body.split-on #mail-detail{display:none}
+/* A flex child defaults to min-width:auto, so a long subject line would push
+   its pane past an equal share; the floor above replaces that with a
+   deliberate one, and the row scrolls when the floors do not fit. */
+body.split-on .side-list,body.split-on .split-pane{width:auto}
+.drop-live{outline:2px dashed var(--tint);outline-offset:-6px;background:var(--tint-wash)}
+.mail-row[draggable=true]{cursor:grab}
 .side-list{width:400px;flex-shrink:0;border-right:1px solid var(--hair-2);display:flex;flex-direction:column;background:var(--card)}
 .chip-row{display:flex;gap:7px;padding:12px 16px;overflow-x:auto;scrollbar-width:none;flex-shrink:0}
 .chip-row::-webkit-scrollbar{display:none}
 .side-scroll{flex:1;overflow-y:auto;padding:0 8px 20px}
 .detail-pane{flex:1;overflow-y:auto;background:var(--bg);display:flex;flex-direction:column}
-.mail-row{display:flex;gap:12px;padding:12px;border-radius:var(--r-sm);cursor:pointer;position:relative;margin-bottom:1px;transition:background .13s}
-.mail-row:hover{background:var(--fill-2)}
-.mail-row.sel{background:var(--tint-soft)}
+.mail-row{display:flex;gap:12px;padding:12px;border-radius:12px;cursor:pointer;position:relative;margin-bottom:2px;transition:var(--lift)}
+.mail-row:hover{background:var(--grad-card);box-shadow:var(--sheen-soft),0 4px 14px -6px rgba(10,14,26,.22)}
+.mail-row.sel{background:linear-gradient(180deg,var(--tint-wash) 0%,var(--tint-soft) 100%);box-shadow:var(--ring),var(--sheen-soft)}
 .mail-row.unread .m-from,.mail-row.unread .m-subj{font-weight:600}
 .mail-row.unread::before{content:'';position:absolute;left:3px;top:20px;width:7px;height:7px;border-radius:50%;background:var(--tint)}
 .avatar{width:38px;height:38px;flex-shrink:0;display:grid;place-items:center;color:#fff;font-weight:600;font-size:14px;border-radius:50%}
@@ -225,7 +363,7 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .plug-card p{font-size:12.5px;color:var(--slate)}
 .switch{margin-left:auto;width:46px;height:28px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.32,.72,.35,1)}
-.switch.on{background:var(--green)}
+.switch.on{background:linear-gradient(180deg,#38D68C 0%,var(--green) 100%);box-shadow:var(--glow-green),var(--sheen)}
 .switch.on::after{transform:translateX(18px)}
 .jobs-box{margin-top:14px}
 .job-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -238,8 +376,8 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .doc-toolbar{display:flex;gap:7px;align-items:center;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--hair-2);flex-wrap:wrap}
 .doc-grid{flex:1;overflow-y:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px;align-content:start}
 .doc-grid.listmode{display:block;padding:12px}
-.doc-card{background:var(--card);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:11px;box-shadow:var(--shadow);transition:transform .18s,box-shadow .18s}
-.doc-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.doc-card{background:var(--grad-card);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:11px;box-shadow:var(--sheen-soft),var(--shadow);transition:var(--lift)}
+.doc-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg),var(--ring)}
 .doc-ic{width:42px;height:50px;border-radius:8px;display:grid;place-items:center;font-size:9.5px;font-weight:700;letter-spacing:.02em;background:linear-gradient(150deg,var(--tint-soft),transparent 130%);color:var(--tint);border:1px solid var(--tint-soft);text-align:center;padding:0 3px}
 .doc-name{font-size:13.5px;font-weight:600;line-height:1.35;word-break:break-word}
 .doc-meta{display:flex;gap:6px;align-items:center;margin-top:auto;flex-wrap:wrap}
@@ -467,9 +605,44 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 #toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(10px) scale(.97);background:var(--glass-strong);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);color:var(--ink);padding:11px 22px;font-size:13.5px;font-weight:600;border-radius:999px;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:all .25s cubic-bezier(.32,.72,.35,1);z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 
-/* ---------- mobile ---------- */
+/* ---------- the resting reading pane ---------- */
+.rest-wrap{max-width:720px;margin:0 auto;padding:46px 30px 60px;width:100%;display:flex;flex-direction:column;gap:26px}
+.rest-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.rest-head h2{font-size:24px;font-weight:650;letter-spacing:-.02em;margin:7px 0 0;text-wrap:balance}
+.rest-sub{margin:6px 0 0;color:var(--slate);font-size:14px}
+.rest-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:10px}
+.rest-box{display:flex;flex-direction:column;gap:5px;align-items:flex-start;text-align:left;padding:14px 15px;border-radius:14px;background:var(--card);border:1px solid var(--hair-2);transition:var(--lift);width:100%}
+.rest-box:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.rest-box-top{display:flex;align-items:center;gap:9px;width:100%;min-width:0}
+.rest-box-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.rest-pip{flex:none;background:var(--tint);color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:0 6px}
+.rest-box-sub{font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.rest-warn{font-size:11.5px;color:var(--amber,#b26b00);font-weight:600}
+.rest-latest{display:flex;flex-direction:column;gap:2px}
+.rest-item{display:flex;gap:11px;align-items:flex-start;text-align:left;padding:10px 11px;border-radius:12px;transition:var(--lift);width:100%}
+.rest-item:hover{background:var(--fill-2)}
+.rest-item.un .rest-item-subj{font-weight:650;color:var(--ink)}
+.rest-item-body{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.rest-item-l1{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.rest-item-subj{font-size:13px;color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rest-item-acct{font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avatar.sm{width:30px;height:30px;font-size:11px;flex:none}
+.rest-empty{text-align:center;padding-top:80px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.rest-empty h2{font-size:21px;font-weight:650;margin:0}
+.rest-empty p{color:var(--slate);font-size:14px;max-width:44ch;margin:0}
+
+/* ---------- widths ----------
+
+   Four tiers, and the line between them is one question: is there room for a
+   list and something readable beside it? Reading needs about 480px and the
+   list about 340, so below roughly 900 the two cannot share a screen and the
+   detail becomes a full-screen layer instead. Above it they sit side by side,
+   with the rail dropping its labels until there is room for those too. */
 #mnav{display:none}
-@media (max-width:880px){
+
+/* Phone and tablet portrait: one column, detail over the top, nav at the
+   bottom where a thumb is. */
+@media (max-width:900px){
   #rail{display:none}
   #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-top:1px solid var(--hair-2);z-index:40}
   #mnav button{flex:1;padding:8px 0 max(8px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--faint)}
@@ -490,7 +663,54 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
   #compose{max-height:100vh;height:100%;border-radius:0}
   .grabber{display:none}
   .bubble-wrap{max-width:86%}
+  .rest-wrap{padding:26px 16px 40px;gap:20px}
+  .rest-head h2{font-size:20px}
 }
+
+/* Phone: the list is the point, and it was starting a screen and a half down.
+   Everything above it — the mode switch, the briefing, the per-account chips,
+   two rows of filters, the sync button — is furniture, and at 390px wide it
+   was costing more than it earned. Same controls, less air. */
+@media (max-width:600px){
+  .chip-row{padding:7px 12px;gap:6px}
+  .seg{margin:8px 12px}
+  .digest-strip{padding:10px 13px;font-size:12.5px}
+  #sources{padding:6px 12px 2px}
+  .src-chip{padding:5px 10px;font-size:11.5px}
+  .pill{padding:6px 11px;font-size:12px}
+  #sync-all{font-size:12px;padding:7px 12px;margin:0 12px 6px}
+  .mail-row{padding:11px 10px}
+  .m-prev{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+}
+
+/* Tablet portrait specifically: the same single column, but a tablet is not a
+   phone held sideways — the content gets a measure rather than running the
+   full width of a 10-inch screen, and touch targets stay generous. */
+@media (min-width:601px) and (max-width:900px){
+  .side-list > *{max-width:720px;margin-left:auto;margin-right:auto;width:100%}
+  .md-inner{padding:24px 26px 70px}
+  .mail-row{padding:14px 13px}
+  #mnav button{font-size:11px;padding:10px 0 max(10px,env(safe-area-inset-bottom))}
+  #mnav svg{width:24px;height:24px}
+}
+
+/* Tablet landscape and small laptops: both panes fit, but 232px of rail is
+   232px not being read in. Icons only until there is room for words. */
+@media (min-width:901px) and (max-width:1200px){
+  #rail{width:72px;padding:18px 10px 14px;align-items:center}
+  #rail .nav-label,#rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
+  #rail .nav-item{justify-content:center;padding:11px 0;gap:0}
+  #rail .nav-item svg{width:20px;height:20px}
+  #rail .nav-count{position:absolute;top:4px;right:10px;font-size:10px}
+  #rail .nav-item{position:relative}
+  #compose-btn{width:44px;height:44px;padding:0;border-radius:50%;font-size:0;justify-content:center}
+  #compose-btn::after{content:'+';font-size:22px;font-weight:600}
+  #btn-signout,.js-install{font-size:0;padding:9px 0}
+  #btn-signout::after{content:'⏻';font-size:15px}
+  .side-list{width:340px}
+  .rest-wrap{padding:34px 24px 50px}
+}
+
 /* ---------- app bridge (browser) ---------- */
 .browser{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
 .b-tabs{display:flex;gap:2px;background:var(--fill-2);padding:8px 8px 0;overflow-x:auto;scrollbar-width:none}
@@ -540,19 +760,21 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
   <nav id="rail">
     <div class="brand">
       <div class="brand-mark"><img class="mk" src="icons/mark-256.png" alt="" width="38" height="38"></div>
-      <div><div class="brand-name">RATA</div><div class="brand-sub">Every message. Every language.</div></div>
+      <div class="brand-text"><div class="brand-name">RATA</div><div class="brand-sub">Every message. Every language.</div></div>
     </div>
     <button id="compose-btn">Compose</button>
-    <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Messages<span class="nav-count" id="nc-inbox">0</span></button>
-    <button class="nav-item" data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>People</button>
-    <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Create</button>
-    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Documents<span class="nav-count" id="nc-docs">0</span></button>
-    <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>Search</button>
-    <div class="nav-group">Platform</div>
-    <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg>Plugins<span class="nav-count" id="nc-plug">0</span></button>
-    <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>Compliance</button>
-    <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg>Connections</button>
-    <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg>Settings</button>
+    <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg><span class="nav-label">Mail</span><span class="nav-count" id="nc-inbox">0</span></button>
+    <button class="nav-item" data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg><span class="nav-label">People</span></button>
+    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Files</span><span class="nav-count" id="nc-docs">0</span></button>
+    <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg><span class="nav-label">More</span></button>
+    <div id="nav-more" hidden>
+      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span class="nav-label">New document</span></button>
+      <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-label">Search</span></button>
+      <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg><span class="nav-label">Accounts</span></button>
+      <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg><span class="nav-label">Extras</span><span class="nav-count" id="nc-plug">0</span></button>
+      <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Privacy checks</span></button>
+    </div>
+    <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg><span class="nav-label">Settings</span></button>
     <div class="rail-foot">
       <div class="rail-profile">DLP profile<b id="rail-prof">HIPAA</b></div>
       <div class="rail-profile" style="margin-top:10px">Signed in<b id="rail-acct" style="color:var(--slate);word-break:break-all"></b></div>
@@ -578,6 +800,13 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
     <!-- MESSAGES -->
     <section class="view active pane-view" id="view-inbox">
       <div class="side-list">
+        <div class="inbox-mode" id="inbox-mode" role="group" aria-label="Inbox layout">
+          <button type="button" data-mode="one" class="on" title="Every mailbox in one inbox">Center Point</button>
+          <button type="button" data-mode="split">Side by side</button>
+        </div>
+        <div class="split-head" id="main-head" hidden>
+          <select class="sel" id="main-acct" aria-label="Which inbox to show here"></select>
+        </div>
         <div id="digest"></div>
         <div id="sources"></div>
         <div class="seg-row" id="ch-seg"></div>
@@ -588,7 +817,8 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
         <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
-      <div class="detail-pane" id="mail-detail"><div class="empty" style="padding-top:120px"><b>Your inbox is a blank slate</b>Connect Gmail in Connections, or start a thread from People — messages appear here the moment they exist.</div></div>
+      <div class="extra-panes" id="extra-panes"></div>
+      <div class="detail-pane" id="mail-detail"></div>
     </section>
 
     <!-- PEOPLE -->
@@ -603,40 +833,31 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 
     <!-- CREATE -->
     <section class="view" id="view-create">
-      <div class="create-wrap">
-        <div class="browser">
-          <div class="b-tabs" id="b-tabs"></div>
-          <div class="b-urlbar">
-            <div class="b-nav"><span>‹</span><span>›</span><span style="font-size:13px">⟳</span></div>
-            <div class="b-url" id="b-url"></div>
-            <a class="btn" id="b-real" target="_blank" rel="noopener">Open real app ↗</a>
-          </div>
-          <div class="b-frame" id="b-frame" data-skin="gdocs">
-            <div class="app-toolbar" id="app-toolbar"></div>
-            <input class="title" id="cr-title" type="text" placeholder="Untitled document">
-            <textarea id="cr-body" placeholder="Start writing…"></textarea>
-          </div>
+      <div class="launch-wrap">
+        <div class="launch-head">
+          <h2>Make something new</h2>
+          <p>RATA is not a word processor, and does not want to be. Open the app you already
+             use — it opens in its own tab, signed in as you — and what you send or receive
+             comes back to the inbox here.</p>
         </div>
-        <div class="create-card" style="margin-top:14px">
-          <div class="create-opts" style="border-top:none;padding-top:0">
-            <span class="opt-label">Save to</span>
-            <select class="sel" id="cr-dest"><option value="drive">Google Drive</option><option value="onedrive">OneDrive</option><option value="dropbox">Dropbox</option></select>
-            <span style="flex:1"></span>
-            <button class="btn primary" id="cr-save">Create file</button>
-          </div>
-          <div class="deliver-row">
-            <span class="opt-label">Create &amp; deliver to</span>
-            <select class="sel" id="cr-contact"></select>
-            <select class="sel" id="cr-channel"></select>
-            <button class="btn" id="cr-deliver">Create &amp; deliver</button>
-            <div class="autopilot-note" id="autopilot-note"></div>
-          </div>
+        <div id="launch-groups"></div>
+        <div class="launch-foot">
+          <b>Different formats, one inbox.</b> A file that arrives as .docx, .pages or .xlsx
+          can be turned into whichever format you need in <button class="linkish" data-goto="docs">Files → Format Bridge</button>,
+          and the original is kept beside the conversion rather than replaced.
         </div>
       </div>
     </section>
 
     <!-- DOCUMENTS -->
     <section class="view" id="view-docs">
+      <div class="doc-toolbar" id="folder-bar" hidden>
+        <b style="font-size:12px;letter-spacing:.04em;color:var(--faint);text-transform:uppercase">Folders</b>
+        <span id="folder-chips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        <button class="btn" id="folder-new">＋ New folder</button>
+        <span style="flex:1"></span>
+        <span id="folder-hint" style="font-size:12px;color:var(--faint)"></span>
+      </div>
       <div class="doc-toolbar">
         <button class="pill on" data-df="all">All</button>
         <button class="pill" data-df="drive">Drive</button>
@@ -674,7 +895,7 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
     <section class="view" id="view-search">
       <div class="search-head">
         <div class="search-box">
-          <input id="search-input" type="text" placeholder="Search all messages, documents, people…" autocomplete="off">
+          <input id="search-input" type="text" placeholder="Search every inbox, file and person…" autocomplete="off">
           <button class="btn primary" id="search-go">Search</button>
         </div>
       </div>
@@ -757,24 +978,33 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Reset workspace</b><span>Wipes this workspace back to a blank slate</span></div><button class="btn danger" id="btn-reset">Reset</button></div>
+          <div class="set-row" style="flex-wrap:wrap;gap:8px">
+            <div class="grow"><b>Delete account</b><span id="del-what">Removes your login, your preferences, and the encrypted password for every mailbox you connected. Your mail stays at your provider.</span></div>
+            <button class="btn danger" id="btn-delete">Delete account</button>
+          </div>
+          <div class="set-row" id="del-confirm" style="display:none;flex-wrap:wrap;gap:8px">
+            <div class="grow"><b>This cannot be undone</b><span id="del-detail"></span></div>
+            <input type="text" id="del-email" placeholder="type your email address" autocomplete="off" style="min-width:230px">
+            <button class="btn danger" id="del-go">Delete permanently</button>
+            <button class="btn" id="del-cancel">Keep my account</button>
+          </div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Linked accounts</div>
           <div id="linked-list"></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Link another account</b><span>Google links live from the browser. Microsoft and Slack link live through the RATA backend (Next.js deploy — see BACKEND-SETUP.md). Discord and phone link as identities for now.</span></div>
-            <button class="btn primary" data-addlink="google">＋ Google</button>
-            <button class="btn" data-addlink="ms">＋ Microsoft · live</button>
-            <button class="btn" data-addlink="slack">＋ Slack · live</button>
+            <div class="grow"><b>Add an account</b><span id="quota-line">Email works with any provider — Gmail, Outlook, Yahoo, your work address, anything. Chat and phone are separate.</span></div>
+            <button class="btn primary" data-addlink="mail">＋ Email account</button>
+            <button class="btn" data-addlink="slack">＋ Slack</button>
             <button class="btn" data-addlink="discord">＋ Discord</button>
             <button class="btn" data-addlink="phone">＋ Phone</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Upgrade to RATA Base</b><span>$8/month or $79/year — everything, on every device. Secure checkout by Stripe.</span></div><a class="btn primary" id="bill-monthly" target="_blank" rel="noopener" style="display:none">Monthly — $8</a><a class="btn" id="bill-annual" target="_blank" rel="noopener" style="display:none">Annual — $79</a><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
         </div>
         <div class="comp-sec">
@@ -782,8 +1012,9 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
           <div class="set-row"><div class="grow"><b>Google OAuth Client ID</b><span>Enables the real Gmail plugin. Create at console.cloud.google.com → Credentials → OAuth client (Web), add this site as an authorized JavaScript origin.</span></div><input type="text" id="cfg-gcid" placeholder="1234567890-xxxx.apps.googleusercontent.com"></div>
           <div class="set-row"><div class="grow"><b>Supabase URL</b><span>Enables real cloud accounts + cross-device sync. Free at supabase.com.</span></div><input type="text" id="cfg-sburl" placeholder="https://xxxx.supabase.co"></div>
           <div class="set-row"><div class="grow"><b>Supabase anon key</b><span>Public anon key from your Supabase project settings.</span></div><input type="text" id="cfg-sbkey" placeholder="eyJhbGciOi…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — monthly</b><span>Create in Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stm" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — annual</b><span>Same, for the $79/year price.</span></div><input type="text" id="cfg-sta" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b id="lbl-stb">Stripe payment link — Base</b><span>Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stb" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b id="lbl-stpr">Stripe payment link — Pro</b><span>Same, for the Pro price.</span></div><input type="text" id="cfg-stpr" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b>Stripe payment link — Enterprise $72</b><span>Not on sale yet — the CRM, texts and automations are not built. Set this only when they are.</span></div><input type="text" id="cfg-ste" placeholder="https://buy.stripe.com/…"></div>
           <div class="set-row"><div class="grow"><b>Stripe customer portal link</b><span>Stripe Dashboard → Settings → Billing → Customer portal → activate, copy the link.</span></div><input type="text" id="cfg-stp" placeholder="https://billing.stripe.com/p/login/…"></div>
           <div class="set-row"><div class="grow"><b>Anthropic API key</b><span>Powers real AI briefings in Rata Assist. Stored only in this browser — personal use only, never ship a key in a public product.</span></div><input type="text" id="cfg-akey" placeholder="sk-ant-…"></div>
         </div>
@@ -925,6 +1156,15 @@ const ECOS={
   plain:{label:'Plain / Markdown',doc:'MD',sheet:'CSV',note:'TXT'}
 };
 const CHANNELS={email:{label:'Email'},slack:{label:'Slack'},sms:{label:'Text'},discord:{label:'Discord'}};
+/* Looked up rather than indexed.
+
+   A contact saved before `pref` existed, imported from somewhere, or seeded by
+   a demo has no preference, and `ECOS[undefined].label` does not degrade — it
+   throws, and takes the whole People view down with it. One missing field on
+   one contact should cost that contact a badge, not everybody the screen. The
+   same for a channel this build has never heard of. */
+const chan=c=>CHANNELS[c]||{label:String(c||'message').replace(/^./,x=>x.toUpperCase())};
+const eco=p=>ECOS[p]||null;
 /* ---------------- BRAND ICON TILES (inline SVG, no assets) ---------------- */
 const _tile=(bg,inner,stroke)=>`<svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect width="40" height="40" rx="9" fill="${bg}"${stroke?` stroke="var(--hair)" stroke-width="1"`:''}/>${inner}</svg>`;
 const _slackGlyph=`<g transform="translate(8 8) scale(0.1954)"><path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z" fill="#E01E5A"/><path d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/><path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z" fill="#36C5F0"/><path d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/><path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z" fill="#2EB67D"/><path d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/><path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z" fill="#ECB22C"/><path d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22C"/></g>`;
@@ -961,17 +1201,22 @@ const PLUGINS={
 };
 
 /* ---------------- SEED DATA ---------------- */
+/* A new workspace starts with nothing switched on. Every source of messages
+   and every extra is something the user turns on deliberately, after signing
+   in to that service — so the app never shows a Slack filter to somebody who
+   has no Slack, and never implies it is reading mail it cannot see. */
 const seed=()=>({
-  v:4,
-  settings:{name:'Bear',api:'',profile:'HIPAA'},
+  v:5,
+  settings:{name:'Bear',api:'',profile:'HIPAA',plan:null},
   linked:[],
   rules:[],
-  plugins:{split:true,jobs:true,slack:true,sms:true,discord:true,autopilot:true},
+  plugins:{split:false,jobs:false,slack:false,sms:false,discord:false,autopilot:false},
   jobs:[],
   contacts:[],
   messages:[],
   documents:[],
-  connections:{gmail:true,outlook:true,imap:false,slackc:true,smsc:true,discordc:true,drive:true,onedrive:true,dropbox:true},
+  folders:[],
+  connections:{gmail:false,outlook:false,imap:false,slackc:false,smsc:false,discordc:false,drive:false,onedrive:false,dropbox:false},
   counters:{scans:0,warned:0,blocked:0,conversions:0,autopilot:0},
   audit:[]
 });
@@ -979,7 +1224,10 @@ const seed=()=>({
 /* ---------------- STATE + MIGRATION ---------------- */
 let S=null;
 function migrate(old){
-  if(old&&old.v>=3){old.v=4;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
+  /* v5 turned the defaults off for new workspaces. An existing one keeps what
+     its owner already switched on — silently disabling somebody's Slack feed
+     because the default moved would be a bug, not a preference. */
+  if(old&&old.v>=3){old.v=5;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(!Array.isArray(old.folders))old.folders=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
   const fresh=seed();
   if(!old)return fresh;
   /* v1/v2 (emails[]) → v3: carry settings/audit/docs/counters, rebuild stream */
@@ -1052,7 +1300,7 @@ function channelEnabled(ch){return ch==='email'||(ch==='slack'&&S.plugins.slack)
 
 /* ---------------- NAV ---------------- */
 let currentView='inbox';
-const TITLES={inbox:['All channels','Messages'],people:['One thread per person','People'],create:['App bridge — create anywhere','Create'],search:['Everything, one query','Universal search'],docs:['All storage providers','Documents'],plug:['Extend the platform','Plugins'],comp:['DLP · Audit','Compliance'],conn:['Providers','Connections'],set:['Workspace','Settings']};
+const TITLES={inbox:['All channels','Messages'],people:['One thread per person','People'],create:['Opens in its own tab','New document'],search:['Everything, one query','Universal search'],docs:['All storage providers','Documents'],plug:['Extend the platform','Plugins'],comp:['DLP · Audit','Compliance'],conn:['Providers','Connections'],set:['Workspace','Settings']};
 function go(v){
   currentView=v;
   $$('.view').forEach(x=>x.classList.remove('active'));
@@ -1063,14 +1311,22 @@ function go(v){
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
   if(v==='create')renderCreate();
-  if(v==='docs')renderDocs();
+  if(v==='inbox')renderSplitLock();
+  if(v==='docs'){renderFolders();renderDocs()}
   if(v==='plug')renderPlugins();
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
-  if(v==='conn')renderConn();
+  if(v==='conn'){renderConn();refreshQuota()}
   if(v==='set')renderSettings();
   if(v==='search')setTimeout(()=>$('#search-input').focus(),50);
 }
-$$('#rail .nav-item,#mnav button').forEach(b=>b.onclick=()=>go(b.dataset.view));
+$$('#rail .nav-item,#mnav button').forEach(b=>{if(b.dataset.view)b.onclick=()=>go(b.dataset.view)});
+/* The advanced views still exist and still work — they are just not the first
+   thing a new person has to make sense of. */
+(function(){
+  const t=document.getElementById('nav-more'),b=document.getElementById('nav-more-toggle');
+  if(!t||!b)return;
+  b.onclick=()=>{const open=t.hidden;t.hidden=!open;b.setAttribute('aria-expanded',String(open))};
+})();
 
 /* ---------------- MESSAGES ---------------- */
 let mailFilter='all',chFilter='all',selMail=null;
@@ -1109,7 +1365,7 @@ function renderSources(){renderDigest();
   if(!S.linked.length){el.innerHTML='';return}
   el.innerHTML='<div class="src-row">'+S.linked.map(l=>{
     const live=l.status==='live';
-    const syncable=l.type==='google'||l.type==='ms'||l.type==='slack';
+    const syncable=SYNCABLE.includes(l.type);
     return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="${syncable?'Tap to sync now':'Awaiting backend bridge'}">
       <span class="src-dot ${live?'on':''}"></span>${esc(l.label)}
       <span class="src-meta">${l.lastSync?rel(l.lastSync)+' ago':(syncable?'never synced':'pending')}</span>
@@ -1118,24 +1374,29 @@ function renderSources(){renderDigest();
   el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>{
     const l=S.linked.find(x=>x.id===b.dataset.src);if(!l)return;
     if(l.type==='google')gmailSyncAccount(l);
-    else if(l.type==='ms')serverSync('ms');
-    else if(l.type==='slack')serverSync('slack');
+    else if(SYNCABLE.includes(l.type))serverSync(l.type);
   });
 }
 function renderSyncAll(){renderSources();
   const b=$('#sync-all');if(!b)return;
   const gs=S.linked.filter(l=>l.type==='google');
-  b.style.display=S.linked.some(l=>['google','ms','slack'].includes(l.type))?'':'none';
+  b.style.display=S.linked.some(l=>SYNCABLE.includes(l.type))?'':'none';
   b.onclick=async()=>{
     b.disabled=true;
     for(const l of gs){await gmailSyncAccount(l)}
-    if(S.linked.some(l=>l.type==='ms'))await serverSync('ms');
-    if(S.linked.some(l=>l.type==='slack'))await serverSync('slack');
+    for(const t of ['ms','slack','gmail_imap','apple']){
+      if(S.linked.some(l=>l.type===t))await serverSync(t);
+    }
     b.disabled=false;
   };
 }
 function renderChSeg(){renderSyncAll();
   const defs=[['all','All'],['email','Email'],['sms','Text'],['slack','Slack'],['discord','Discord']].filter(([v])=>v==='all'||channelEnabled(v));
+  /* With one channel connected, "All 13" and "Email 13" are two buttons
+     showing the same number. The segment only earns its space once there is a
+     second channel to switch between. */
+  const seg=$('#ch-seg');
+  if(defs.length<3){seg.innerHTML='';chFilter='all';return}
   if(!defs.some(d=>d[0]===chFilter))chFilter='all';
   const cnt=v=>S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)&&(v==='all'||m.ch===v)).length;
   $('#ch-seg').innerHTML='<div class="seg">'+defs.map(([v,l])=>`<button class="${chFilter===v?'on':''}" data-c="${v}">${l}<span class="cnt">${cnt(v)}</span></button>`).join('')+'</div>';
@@ -1175,8 +1436,9 @@ function categorize(m){
   if(m.cid)return 'people';
   return 'other';
 }
-function mailPool(){
+function mailPool(acctId){
   let pool=S.messages.filter(m=>channelEnabled(m.ch));
+  if(acctId)pool=pool.filter(m=>m.acct===acctId);
   if(chFilter!=='all')pool=pool.filter(m=>m.ch===chFilter);
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
@@ -1201,15 +1463,159 @@ function bulkRefresh(){
   $('#bulk-bar').classList.toggle('on',selecting);
   $('#view-inbox').classList.toggle('selecting',selecting);
 }
-function renderMail(){
-  const pool=mailPool(),sc=$('#mail-scroll');
-  $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
-  if(!pool.length){sc.innerHTML='<div class="empty"><b>Nothing here yet</b>Connect an account in Connections or message someone from People.</div>';return}
-  bulkRefresh();
-  sc.innerHTML=pool.map(m=>{
-    const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
-    return `
-    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}">
+/* One row, used by the single inbox and by both split panes. In split mode a
+   row is draggable: dropping it on the other inbox is how a message and its
+   files move between accounts. */
+/* ---------------- TWO INBOXES SIDE BY SIDE ----------------
+   One screen, two accounts, and a message dragged from one to the other opens
+   a forward from the account it was dropped on — files and all. That is the
+   move people otherwise do by downloading an attachment out of one mailbox and
+   uploading it into another. */
+/* Which inboxes are open, in order. panes[0] is the left column — the one
+   that keeps the filter chips and the digest when it is on its own — and the
+   rest are generated beside it. Three is the ceiling: a fourth column of mail
+   on a laptop is narrower than the subject lines in it. */
+let splitOn=false,panes=[];
+const PANE_MAX=3;
+function mailAccounts(){return S.linked.filter(l=>l.type==='mail'||l.type==='google'||l.type==='ms'||l.type==='gmail_imap'||l.type==='apple')}
+function acctName(l){return l?l.label:'All inboxes together'}
+function paneAcct(i){return panes[i]||''}
+
+function acctOptions(accts,val){
+  return '<option value="">All inboxes together</option>'
+    +accts.map(l=>`<option value="${l.id}" ${l.id===val?'selected':''}>${esc(l.label)}</option>`).join('');
+}
+
+/* Open on different mailboxes: identical columns teach nobody anything. With
+   one account there is nothing to sit beside, so the first pane shows
+   everything together. */
+function seedPanes(n){
+  const accts=mailAccounts();
+  const want=Math.max(2,Math.min(n||2,PANE_MAX,Math.max(2,accts.length)));
+  const out=[];
+  for(let i=0;i<want;i++)out.push(accts[i]?accts[i].id:'');
+  return out;
+}
+
+function paneHTML(i){
+  const accts=mailAccounts();
+  const last=i===panes.length-1;
+  return `<div class="split-pane" data-pane="${i}">
+    <div class="split-head">
+      <select class="sel" data-pane-acct="${i}" aria-label="Which inbox to show in column ${i+1}">${acctOptions(accts,paneAcct(i))}</select>
+      ${last&&panes.length<PANE_MAX&&accts.length>panes.length?`<button class="btn" data-pane-add="1" title="Show another inbox beside this one">＋ Inbox</button>`:''}
+      <button class="btn" data-pane-close="${i}" title="Close this inbox">✕</button>
+    </div>
+    <div class="side-scroll" data-pane-scroll="${i}"></div>
+  </div>`;
+}
+
+function renderSplit(){
+  const host=$('#extra-panes');if(!host)return;
+  if(!splitOn){host.innerHTML='';return}
+
+  /* The left column is pane 0 and lives in the markup; the rest are drawn. */
+  const a=$('#main-acct');
+  if(a)a.innerHTML=acctOptions(mailAccounts(),paneAcct(0));
+
+  host.innerHTML=panes.slice(1).map((_,k)=>paneHTML(k+1)).join('');
+
+  panes.slice(1).forEach((_,k)=>{
+    const i=k+1;
+    const sc=host.querySelector(`[data-pane-scroll="${i}"]`);
+    const pool=mailPool(paneAcct(i)||undefined);
+    sc.innerHTML=pool.length
+      ? pool.map(m=>mailRowHTML(m)).join('')
+      : `<div class="empty" style="padding:40px 18px"><b>Nothing here yet</b>${paneAcct(i)?esc(acctName(S.linked.find(l=>l.id===paneAcct(i))))+' has no messages in RATA yet.':'Every inbox, and none of them has mail yet.'}</div>`;
+    sc.querySelectorAll('.mail-row').forEach(r=>{
+      r.onclick=()=>openMail(r.dataset.id);
+      r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+    });
+    wireDrop(sc,()=>paneAcct(i)||(mailAccounts()[0]||{}).id);
+  });
+
+  host.querySelectorAll('[data-pane-acct]').forEach(sel=>sel.onchange=()=>{
+    panes[+sel.dataset.paneAcct]=sel.value;renderSplit();
+  });
+  host.querySelectorAll('[data-pane-close]').forEach(b=>b.onclick=()=>{
+    panes.splice(+b.dataset.paneClose,1);
+    if(panes.length<2)setSplit(false);else renderSplit();
+  });
+  host.querySelectorAll('[data-pane-add]').forEach(b=>b.onclick=addPane);
+}
+
+function addPane(){
+  const accts=mailAccounts();
+  if(panes.length>=PANE_MAX)return;
+  const free=accts.find(l=>!panes.includes(l.id));
+  panes.push(free?free.id:'');
+  audit('inbox.layout',`${panes.length} inboxes side by side`);
+  renderSplit();
+}
+
+/* A drop target is another inbox, so `target` is the account a dropped
+   message should be forwarded from. */
+function wireDrop(el,targetAcct){
+  if(!el)return;
+  el.ondragover=e=>{if(e.dataTransfer.types.includes('text/rata-msg')){e.preventDefault();el.classList.add('drop-live')}};
+  el.ondragleave=()=>el.classList.remove('drop-live');
+  el.ondrop=e=>{
+    el.classList.remove('drop-live');
+    const id=e.dataTransfer.getData('text/rata-msg');
+    if(!id)return;
+    e.preventDefault();
+    transferMessage(id,typeof targetAcct==='function'?targetAcct():targetAcct);
+  };
+}
+
+/* Carry a message across: open the composer already filled in as a forward,
+   sending from the account it landed on. The user still reads it and presses
+   send — a drag should never post mail on somebody's behalf. */
+function transferMessage(msgId,targetAcctId){
+  const m=S.messages.find(x=>x.id===msgId);
+  if(!m){toast('That message is no longer here');return}
+  if(m.acct&&targetAcctId&&m.acct===targetAcctId){toast('That message is already in this inbox');return}
+  openCompose();
+  const from=$('#cmp-from');
+  if(targetAcctId&&[...from.options].some(o=>o.value===targetAcctId))from.value=targetAcctId;
+  $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
+  $('#cmp-body').value=`\n\n---------- Forwarded ----------\nFrom: ${msgFrom(m)}\nDate: ${new Date(m.ts).toLocaleString()}\n\n${m.body||m.prev||''}`;
+  if(m.atts&&m.atts.length)toast(`Forwarding with ${m.atts.length} file${m.atts.length===1?'':'s'} — add the recipient and send`);
+  else toast('Add a recipient and send');
+  $('#cmp-to').focus();
+  audit('mail.transfer',`${m.subj||'(no subject)'} moved toward ${acctName(S.linked.find(l=>l.id===targetAcctId))}`);
+}
+
+/* Show the locked state rather than a dead button: the choice stays visible,
+   which is how anyone learns the tier above exists. */
+function renderSplitLock(){
+  const btn=document.querySelector('#inbox-mode [data-mode="split"]');
+  if(!btn)return;
+  const locked=!can('split');
+  btn.classList.toggle('locked',locked);
+  btn.title=locked?needPlan('split','Inboxes side by side'):'';
+  btn.textContent=locked?'Side by side · Pro':'Side by side';
+  const one=document.querySelector('#inbox-mode [data-mode="one"]');
+  if(one)one.title='Every mailbox in one inbox — this is the Center Point inbox';
+}
+function setSplit(on){
+  /* Base is one inbox by design — every mailbox in the same stream. Putting
+     them side by side is what Pro adds. */
+  if(on&&!can('split')){toast(needPlan('split','Inboxes side by side'));renderSplitLock();return}
+  splitOn=on;
+  document.body.classList.toggle('split-on',on);
+  const head=$('#main-head');if(head)head.hidden=!on;
+  $$('#inbox-mode button').forEach(b=>b.classList.toggle('on',(b.dataset.mode==='split')===on));
+  if(on&&panes.length<2)panes=seedPanes(2);
+  renderMail();
+  renderSplit();
+}
+
+
+function mailRowHTML(m){
+  const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
+  return `
+    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
       <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
       <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
       <div class="m-body">
@@ -1217,7 +1623,7 @@ function renderMail(){
         ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:''}
         <div class="m-prev">${esc(m.prev)}</div>
         <div class="m-meta">
-          <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:CHANNELS[m.ch].label}</span>
+          <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
           ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
           ${S.plugins.split?`<span class="badge ${ctx}">${ctx}</span>`:''}
@@ -1226,11 +1632,129 @@ function renderMail(){
           ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
         </div>
       </div>
-    </div>`}).join('');
+    </div>`;
+}
+function renderMail(){
+  /* Whatever changed the list may have changed what the resting pane says. */
+  setTimeout(renderResting,0);
+  /* Side by side, the left pane belongs to its own account; on its own it
+     follows the filter chips as before. */
+  const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
+  $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
+  if(!pool.length){
+    const linked=S.linked.length;
+    sc.innerHTML=linked
+      ? '<div class="empty"><b>No messages yet</b>Your linked accounts are connected. New mail will appear here.</div>'
+      : `<div class="empty" style="padding:48px 24px">
+           <b style="font-size:19px">Let's get your email in here</b>
+           <span style="display:block;max-width:340px;margin:8px auto 20px;line-height:1.55">
+             Connect an account and your messages appear in this inbox. Nothing is sent anywhere else.
+           </span>
+           <button class="btn primary" id="empty-connect" style="font-size:15px;padding:12px 26px">Connect an email account</button>
+         </div>`;
+    const b=document.getElementById('empty-connect');
+    if(b)b.onclick=()=>{go('conn');document.getElementById('nav-more')?.removeAttribute('hidden')};
+    return}
+  bulkRefresh();
+  sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('');
   sc.querySelectorAll('.selbox').forEach(cb=>cb.onclick=e=>{e.stopPropagation();const id=cb.dataset.sel;SEL.has(id)?SEL.delete(id):SEL.add(id);cb.classList.toggle('on');cb.textContent=SEL.has(id)?'✓':'';bulkRefresh()});
-  sc.querySelectorAll('.mail-row').forEach(r=>r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)});
+  sc.querySelectorAll('.mail-row').forEach(r=>{
+    r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)};
+    r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
+  });
+  if(splitOn){
+    /* Every pane accepts what another drops on it, and forwards from its own
+       account. */
+    wireDrop(sc,()=>paneAcct(0)||(mailAccounts()[0]||{}).id);
+  }
   sc.querySelectorAll('.avatar[data-cid]').forEach(a=>a.onclick=e=>{e.stopPropagation();go('people');openPerson(a.dataset.cid)});
 }
+/* What the reading pane shows when nothing is selected.
+
+   At desktop width that pane is the biggest thing on screen — around eight
+   hundred pixels of it — and it used to hold the words "Nothing selected",
+   which is an apology taking up half the app. The obvious fix, opening the
+   newest message automatically, is the wrong one: openMail marks a message
+   read, so the app would quietly mark your newest mail read every time you
+   loaded it.
+
+   So the space holds the thing RATA is actually for instead — every mailbox
+   in one view, what is waiting in each, and what arrived last. It is the
+   Center Point, stated. */
+function renderResting(){
+  const d=$('#mail-detail');
+  if(!d||selMail)return;
+  d.classList.remove('open');
+
+  const boxes=S.linked.filter(l=>l.type==='mail'||imapKeyFor(l.type));
+  if(!boxes.length){
+    d.innerHTML=`<div class="rest-wrap"><div class="rest-empty">
+      <h2>Nothing connected yet</h2>
+      <p>RATA brings every mailbox you have into one stream — Gmail, Outlook, iCloud, a work address on your own domain. Add the first one and it starts filling in.</p>
+      <button class="btn primary" id="rest-add">＋ Add an email account</button>
+    </div></div>`;
+    const b=$('#rest-add');if(b)b.onclick=()=>{go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)};
+    return;
+  }
+
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&!m.sent);
+  const unread=pool.filter(m=>m.unread);
+  const need=unread.filter(m=>categorize(m)==='priority');
+  const latest=[...pool].sort((a,b)=>b.ts-a.ts).slice(0,5);
+
+  /* A message names its mailbox by address when it came from a live sync and
+     by linked-entry id otherwise — a seeded demo, or anything saved before the
+     server started sending the address. Accept both rather than silently
+     counting zero. */
+  const owns=(l,m)=>{
+    const a=String(m.acct||'').toLowerCase();
+    return !!a&&(a===String(l.id).toLowerCase()||a===String(l.label||'').toLowerCase());
+  };
+  const perBox=boxes.map(l=>{
+    const mine=pool.filter(m=>owns(l,m));
+    return {l,total:mine.length,unread:mine.filter(m=>m.unread).length,
+            last:mine.sort((a,b)=>b.ts-a.ts)[0]};
+  }).sort((a,b)=>b.unread-a.unread||(b.last?.ts||0)-(a.last?.ts||0));
+
+  d.innerHTML=`<div class="rest-wrap">
+    <div class="rest-head">
+      <span class="rest-kicker">Center Point</span>
+      <h2>${unread.length?`${unread.length} unread across ${boxes.length} mailbox${boxes.length===1?'':'es'}`:`All caught up across ${boxes.length} mailbox${boxes.length===1?'':'es'}`}</h2>
+      ${need.length?`<p class="rest-sub">${need.length} look${need.length===1?'s':''} like it needs you.</p>`:'<p class="rest-sub">Nothing is waiting on you right now.</p>'}
+    </div>
+
+    <div class="rest-grid">
+      ${perBox.map(b=>`<button class="rest-box" data-box="${esc(b.l.label)}">
+        <span class="rest-box-top">
+          <span class="rest-box-name">${esc(b.l.label)}</span>
+          ${b.unread?`<span class="rest-pip">${b.unread}</span>`:''}
+        </span>
+        <span class="rest-box-sub">${b.l.provLabel?esc(b.l.provLabel)+' · ':''}${b.total} message${b.total===1?'':'s'}${b.last?' · '+rel(b.last.ts)+' ago':''}</span>
+        ${b.l.needsRelink?'<span class="rest-warn">Needs its app password again</span>':''}
+      </button>`).join('')}
+    </div>
+
+    ${latest.length?`<div class="rest-latest">
+      <div class="sec-label">Latest</div>
+      ${latest.map(m=>`<button class="rest-item ${m.unread?'un':''}" data-mid="${esc(m.id)}">
+        <span class="avatar sm" style="background:${avColor(msgFrom(m))}">${initials(msgFrom(m))}</span>
+        <span class="rest-item-body">
+          <span class="rest-item-l1"><b>${esc(msgFrom(m))}</b><span class="m-time">${rel(m.ts)}</span></span>
+          <span class="rest-item-subj">${esc(m.subj||m.prev||'')}</span>
+          <span class="rest-item-acct">${esc(boxes.find(l=>owns(l,m))?.label||m.acct||'')}</span>
+        </span>
+      </button>`).join('')}
+    </div>`:''}
+  </div>`;
+
+  d.querySelectorAll('[data-mid]').forEach(b=>b.onclick=()=>openMail(b.dataset.mid));
+  /* Clicking a mailbox filters the list to it rather than opening anything —
+     the pane is a way into the inbox, not a second inbox. */
+  d.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>{
+    mailFilter=b.dataset.box;renderMailFilters();renderMail();
+  });
+}
+
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
   if((m.ch==='sms'||m.ch==='slack'||m.ch==='discord')&&m.cid){
@@ -1246,10 +1770,10 @@ function openMail(id){
   d.innerHTML=`<div class="md-inner">
     <button class="md-back" id="md-back">← Messages</button>
     <div class="md-head">
-      <h2>${esc(m.subj||CHANNELS[m.ch].label+' message')}</h2>
+      <h2>${esc(m.subj||chan(m.ch).label+' message')}</h2>
       <div class="md-fromline">
         <div class="avatar" style="background:${avColor(nm)}">${initials(nm)}</div>
-        <div class="md-fromtext"><b>${esc(nm)}</b><span>${esc(c?(m.ch==='email'?c.addr:m.ch==='slack'?c.slack:c.phone):(m.fromAddr||''))} · <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:CHANNELS[m.ch].label}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
+        <div class="md-fromtext"><b>${esc(nm)}</b><span>${esc(c?(m.ch==='email'?c.addr:m.ch==='slack'?c.slack:c.phone):(m.fromAddr||''))} · <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
       </div>
       <div class="md-actions">
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
@@ -1286,7 +1810,7 @@ function openMail(id){
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();renderMail();toast('Marked unread')};
-  $('#md-del').onclick=()=>{S.messages=S.messages.filter(x=>x.id!==id);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');d.innerHTML='<div class="empty" style="padding-top:120px"><b>Message deleted</b></div>';renderMail()};
+  $('#md-del').onclick=()=>{S.messages=S.messages.filter(x=>x.id!==id);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail()};
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
@@ -1316,9 +1840,9 @@ function renderPeople(){
         <div class="m-line1"><span class="p-name">${esc(c.nick||c.name)}</span><span class="m-time">${last?rel(last.ts):''}</span></div>
         <div class="m-prev">${last?esc(last.prev):'No messages yet'}</div>
         <div class="p-sub">
-          ${chans.map(ch=>`<span class="badge ${ch}">${CHANNELS[ch].label}</span>`).join('')}
+          ${chans.map(ch=>`<span class="badge ${ch}">${chan(ch).label}</span>`).join('')}
           ${S.plugins.split?`<span class="badge ${c.context}">${c.context}</span>`:''}
-          <span class="badge pref">${ECOS[c.pref].label}</span>
+          ${eco(c.pref)?`<span class="badge pref">${eco(c.pref).label}</span>`:''}
         </div>
       </div>
     </div>`}).join('')||'<div class="empty"><b>No people yet</b>Tap ＋ New person to add your first contact — a name and any handle is enough.</div>';
@@ -1352,7 +1876,7 @@ function toggleAddPerson(){
 function bubbleHTML(m){
   return `<div class="bubble-wrap ${m.sent?'you':'them'}">
       <div class="bubble">${m.subj?`<span class="subj">${esc(m.subj)}</span>`:''}${esc(m.body)}${m.atts.map(a=>`<span class="b-att">${a.f} · ${esc(a.n)}</span>`).join('')}</div>
-      <div class="bubble-meta"><span class="badge ${m.ch==='email'?(m.prov||'email'):m.ch}">${m.ch==='email'?'Email':CHANNELS[m.ch].label}</span>${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}${rel(m.ts)}</div>
+      <div class="bubble-meta"><span class="badge ${m.ch==='email'?(m.prov||'email'):m.ch}">${m.ch==='email'?'Email':chan(m.ch).label}</span>${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}${rel(m.ts)}</div>
     </div>`;
 }
 function webHTML(c,all,avail){
@@ -1362,9 +1886,9 @@ function webHTML(c,all,avail){
     ${nodes.map(nd=>`<line x1="220" y1="160" x2="${nd.x}" y2="${nd.y}" stroke="var(--tint)" stroke-opacity=".35" stroke-width="1.5"/>`).join('')}
     <circle cx="220" cy="160" r="40" fill="var(--tint)"/>
     <text x="220" y="167" text-anchor="middle" fill="#fff" font-size="20" font-weight="700" font-family="Sora,sans-serif">${initials(c.nick||c.name)}</text>
-    ${nodes.map(nd=>`<g class="web-node" data-ch="${nd.ch}"><circle cx="${nd.x}" cy="${nd.y}" r="28" fill="var(--card)" stroke="var(--tint)" stroke-width="2"/><text x="${nd.x}" y="${nd.y+5}" text-anchor="middle" fill="var(--tint)" font-size="15" font-weight="700" font-family="Sora,sans-serif">${nd.count}</text><text x="${nd.x}" y="${nd.y+44}" text-anchor="middle" fill="var(--slate)" font-size="10">${CHANNELS[nd.ch].label}</text></g>`).join('')}
+    ${nodes.map(nd=>`<g class="web-node" data-ch="${nd.ch}"><circle cx="${nd.x}" cy="${nd.y}" r="28" fill="var(--card)" stroke="var(--tint)" stroke-width="2"/><text x="${nd.x}" y="${nd.y+5}" text-anchor="middle" fill="var(--tint)" font-size="15" font-weight="700" font-family="Sora,sans-serif">${nd.count}</text><text x="${nd.x}" y="${nd.y+44}" text-anchor="middle" fill="var(--slate)" font-size="10">${chan(nd.ch).label}</text></g>`).join('')}
   </svg>
-  <div class="web-lists">${avail.map(x=>{const list=all.filter(m=>m.ch===x).slice(-3).reverse();return `<div class="web-col"><div class="sec-label" style="margin-bottom:8px">${CHANNELS[x].label}</div>${list.map(m=>`<div class="web-item">${m.sent?'You: ':''}${esc(m.prev.slice(0,70))}<span>${rel(m.ts)}</span></div>`).join('')||'<div class="web-item">No messages</div>'}</div>`}).join('')}</div></div>`;
+  <div class="web-lists">${avail.map(x=>{const list=all.filter(m=>m.ch===x).slice(-3).reverse();return `<div class="web-col"><div class="sec-label" style="margin-bottom:8px">${chan(x).label}</div>${list.map(m=>`<div class="web-item">${m.sent?'You: ':''}${esc(m.prev.slice(0,70))}<span>${rel(m.ts)}</span></div>`).join('')||'<div class="web-item">No messages</div>'}</div>`}).join('')}</div></div>`;
 }
 function openPerson(cid,ch){
   const c=contact(cid);if(!c)return;
@@ -1394,7 +1918,7 @@ function openPerson(cid,ch){
     </div>
     <div class="chip-row" id="pd-chips" style="flex-shrink:0">
       <button class="pill ${personCh==='all'?'on':''}" data-ch="all">All · ${all.length}</button>
-      ${avail.map(x=>`<button class="pill ${personCh===x?'on':''}" data-ch="${x}">${CHANNELS[x].label} · ${all.filter(m=>m.ch===x).length}</button>`).join('')}
+      ${avail.map(x=>`<button class="pill ${personCh===x?'on':''}" data-ch="${x}">${chan(x).label} · ${all.filter(m=>m.ch===x).length}</button>`).join('')}
     </div>
     ${personMode==='web'?webHTML(c,all,avail):`<div class="thread-scroll" id="thread-scroll">${msgs.length?msgs.map(bubbleHTML).join(''):'<div class="empty"><b>No messages yet</b>Start the thread below.</div>'}</div>`}
     <div class="dlp-inline" id="pd-dlp"></div>
@@ -1409,7 +1933,7 @@ function openPerson(cid,ch){
   $('#pd-mweb').onclick=()=>{personMode='web';openPerson(cid);audit('person.web',c.name)};
   $$('#pd-chips .pill').forEach(p=>p.onclick=()=>{personCh=p.dataset.ch;openPerson(cid)});
   d.querySelectorAll('.web-node').forEach(nd=>nd.onclick=()=>{personCh=nd.dataset.ch;personMode='thread';openPerson(cid)});
-  $('#pd-pref').onchange=e=>{c.pref=e.target.value;save();audit('contact.pref',`${c.name} → ${ECOS[c.pref].label}`);toast(`${(c.nick||c.name).split(' ')[0]} now receives ${ECOS[c.pref].label} formats`);renderPeople()};
+  $('#pd-pref').onchange=e=>{c.pref=e.target.value;save();audit('contact.pref',`${c.name} → ${eco(c.pref)?.label||c.pref}`);toast(`${(c.nick||c.name).split(' ')[0]} now receives ${eco(c.pref)?.label||c.pref} formats`);renderPeople()};
   $('#pd-ctx')&&($('#pd-ctx').onchange=e=>{c.context=e.target.value;save();audit('contact.context',`${c.name} → ${c.context}`);renderPeople()});
   $('#pd-job')&&($('#pd-job').onchange=e=>{c.job=e.target.value;save();audit('contact.job',`${c.name} → ${c.job||'none'}`);renderPeople()});
   const sendReply=async()=>{
@@ -1423,19 +1947,19 @@ function openPerson(cid,ch){
       S.counters.blocked++;save();
       bar.className='dlp-inline block';
       bar.textContent=`Blocked by ${S.settings.profile} DLP — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`;
-      await audit('dlp.block',`${CHANNELS[ch].label} to ${c.name} blocked — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`);
+      await audit('dlp.block',`${chan(ch).label} to ${c.name} blocked — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`);
       return;
     }
     if(findings.length){
       S.counters.warned++;
       bar.className='dlp-inline warn';
       bar.textContent=`Sent with ${findings.length} DLP warning(s) — logged`;
-      await audit('dlp.warn',`${CHANNELS[ch].label} to ${c.name} sent with ${findings.length} warning(s)`);
+      await audit('dlp.warn',`${chan(ch).label} to ${c.name} sent with ${findings.length} warning(s)`);
       setTimeout(()=>{bar.className='dlp-inline'},3000);
     }else{bar.className='dlp-inline'}
     S.messages.push({id:'x'+Date.now(),ch,prov:ch==='email'?'gmail':ch,cid:null,toId:cid,sent:true,subj:'',prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[]});
     save();
-    await audit('msg.send',`${CHANNELS[ch].label} to ${c.name}`);
+    await audit('msg.send',`${chan(ch).label} to ${c.name}`);
     input.value='';
     openPerson(cid);
   };
@@ -1445,111 +1969,112 @@ function openPerson(cid,ch){
 }
 
 /* ---------------- CREATE — APP BRIDGE ---------------- */
-const APPS={
-  gdoc:{name:'Google Docs',eco:'google',type:'doc',host:'docs.google.com',path:'/document/create',real:'https://docs.new',accent:'#4285F4',skin:'gdocs'},
-  gsheet:{name:'Google Sheets',eco:'google',type:'sheet',host:'docs.google.com',path:'/spreadsheets/create',real:'https://sheets.new',accent:'#0F9D58',skin:'gsheets'},
-  word:{name:'Word',eco:'microsoft',type:'doc',host:'office.com',path:'/launch/word/new',real:'https://www.office.com/launch/word',accent:'#2B579A',skin:'word'},
-  excel:{name:'Excel',eco:'microsoft',type:'sheet',host:'office.com',path:'/launch/excel/new',real:'https://www.office.com/launch/excel',accent:'#217346',skin:'excel'},
-  pages:{name:'Pages',eco:'apple',type:'doc',host:'icloud.com',path:'/pages/new',real:'https://www.icloud.com/pages/',accent:'#FF9F0A',skin:'pages'},
-  numbers:{name:'Numbers',eco:'apple',type:'sheet',host:'icloud.com',path:'/numbers/new',real:'https://www.icloud.com/numbers/',accent:'#30D158',skin:'numbers'},
-  note:{name:'Rata Notes',eco:'plain',type:'note',host:'rata.local',path:'/notes/new',real:'',accent:'#2E5CFF',skin:'note'}
+/* BRAND-ICONS:START — generated by scripts/brand-icons.mjs, do not edit by hand.
+   s:'official' is the vendor's own mark (simple-icons, CC0); s:'drawn' is a
+   recreation, used where no redistributable set carries the mark — Microsoft
+   and Adobe both had theirs removed on request. Put an official file in
+   public/brand/<key>.svg to replace one. */
+const BRAND={
+  acrobat:{h:'#EC1C24',t:"Adobe Acrobat",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4.2 14.6c.9 0 1.7-.8 2.5-2.2a18 18 0 0 1 3.3-.9c.9.7 1.7 1.1 2.4 1.1.8 0 1.3-.4 1.3-1 0-.7-.7-1.1-1.9-1.1-.6 0-1.3.1-2.1.2-.8-.8-1.5-1.8-2-2.9.3-1.1.5-2 .5-2.7 0-1-.4-1.6-1.1-1.6s-1.1.6-1.1 1.5c0 .8.3 1.8.8 2.9-.4 1.2-.9 2.4-1.5 3.6-1.5.6-2.4 1.4-2.4 2.2 0 .6.4.9 1.3.9zm.2-1.1c-.3 0-.4-.1-.4-.3 0-.3.5-.8 1.4-1.2-.4.9-.7 1.5-1 1.5zm2.4-2.5c.4-.8.7-1.6 1-2.4.4.7.9 1.4 1.4 2-.8.1-1.6.2-2.4.4zm.9-4.9c0-.4.1-.6.3-.6s.3.2.3.6c0 .4-.1 1-.3 1.6-.2-.6-.3-1.2-.3-1.6zm5 5.5c.5 0 .8.1.8.4 0 .2-.2.3-.5.3-.4 0-.9-.2-1.5-.6.5-.1.9-.1 1.2-.1z'},
+  adobeexpress:{h:'#FF3366',t:"Adobe Express",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm8 4.4-4 9.2h1.9l.8-2h2.6l.8 2H18l-4-9.2h-2zm1 2.6 .9 2.9h-1.8l.9-2.9z'},
+  adobesign:{h:'#EC1C24',t:"Adobe Acrobat Sign",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2.6 14.9h10.8v1.2H6.6v-1.2zm1.1-2.1 5.9-5.9a.8.8 0 0 1 1.1 0l1.4 1.4a.8.8 0 0 1 0 1.1l-5.9 5.9H7.7v-2.5zm7.5-4.7.9-.9a.5.5 0 0 0 0-.8l-.8-.8a.5.5 0 0 0-.8 0l-.9.9 1.6 1.6z'},
+  apple:{h:'#000000',t:"Apple",s:'official',d:'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701'},
+  docusign:{h:'#FFCC22',t:"DocuSign",s:'drawn',d:'M5 2h9l5 5v15H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm9 1.8V7h3.2L14 3.8zM8.2 10.4h3c2 0 3.4 1.3 3.4 3.3s-1.4 3.3-3.4 3.3h-3v-6.6zm1.7 1.5v3.6h1.2c1 0 1.7-.7 1.7-1.8s-.7-1.8-1.7-1.8H9.9z'},
+  dropbox:{h:'#0061FF',t:"Dropbox",s:'official',d:'M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z'},
+  excel:{h:'#217346',t:"Microsoft Excel",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8 9l1.9 3.3L7.8 16h1.9l1.2-2.3 1.2 2.3h2l-2.1-3.7L13.9 9h-1.9l-1.1 2.1L9.9 9H8z'},
+  gdocs:{h:'#4285F4',t:"Google Docs",s:'official',d:'M14.727 6.727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zm-.545 10.455H7.09v-1.364h7.09v1.364zm2.727-3.273H7.091v-1.364h9.818v1.364zm0-3.273H7.091V9.273h9.818v1.363zM14.727 6h6l-6-6v6z'},
+  gdrive:{h:'#4285F4',t:"Google Drive",s:'official',d:'M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z'},
+  gforms:{h:'#7248B9',t:"Google Forms",s:'official',d:'M14.727 6h6l-6-6v6zm0 .727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zM7.91 17.318a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm0-3.273a.819.819 0 1 1 .001-1.637.819.819 0 0 1 0 1.637zm0-3.272a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm9 6.409h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818V9.273h6.818v1.363z'},
+  gsheets:{h:'#34A853',t:"Google Sheets",s:'official',d:'M11.318 12.545H7.91v-1.909h3.41v1.91zM14.728 0v6h6l-6-6zm1.363 10.636h-3.41v1.91h3.41v-1.91zm0 3.273h-3.41v1.91h3.41v-1.91zM20.727 6.5v15.864c0 .904-.732 1.636-1.636 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.318v6.5h6.5zm-3.273 2.773H6.545v7.909h10.91v-7.91zm-6.136 4.636H7.91v1.91h3.41v-1.91z'},
+  gslides:{h:'#FBBC04',t:"Google Slides",s:'official',d:'M16.09 15.273H7.91v-4.637h8.18v4.637zm1.728-8.523h2.91v15.614c0 .904-.733 1.636-1.637 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.068v6.75h3.841zm-.363 2.523H6.545v7.363h10.91V9.273zm-2.728-5.979V6h6.001l-6-6v3.294z'},
+  icloud:{h:'#3693F3',t:"iCloud",s:'official',d:'M13.762 4.29a6.51 6.51 0 0 0-5.669 3.332 3.571 3.571 0 0 0-1.558-.36 3.571 3.571 0 0 0-3.516 3A4.918 4.918 0 0 0 0 14.796a4.918 4.918 0 0 0 4.92 4.914 4.93 4.93 0 0 0 .617-.045h14.42c2.305-.272 4.041-2.258 4.043-4.589v-.009a4.594 4.594 0 0 0-3.727-4.508 6.51 6.51 0 0 0-6.511-6.27z'},
+  keynote:{h:'#1C9BF0',t:"Keynote",s:'drawn',d:'M4 4h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-6.2l2.4 3.4-1.4 1L12 16.6l-2.8 3.8-1.4-1L10.2 16H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1.8 2.6v6.8h12.4V6.6H5.8z'},
+  numbers:{h:'#31A952',t:"Numbers",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 17V13h1.8v4H7.5zm3.2 0V9.5h1.8V17h-1.8zm3.2 0v-5.6h1.8V17h-1.8z'},
+  onedrive:{h:'#0078D4',t:"Microsoft OneDrive",s:'drawn',d:'M10.2 6.3a5.1 5.1 0 0 1 4.6 2.9 3.9 3.9 0 0 1 .7-.1 3.9 3.9 0 0 1 3.8 3.2 3.2 3.2 0 0 1-.7 6.3H6.1A4.1 4.1 0 0 1 5.4 10a5.1 5.1 0 0 1 4.8-3.7z'},
+  onenote:{h:'#7719AA',t:"Microsoft OneNote",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.4 9v8.6h1.7v-5.4l3.1 5.4h1.8V9h-1.7v5.3L10.2 9H8.4z'},
+  pages:{h:'#F2870D',t:"Pages",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 9.5h9V11h-9V9.5zm0 3h9V14h-9v-1.5zm0 3h6V17h-6v-1.5z'},
+  powerpoint:{h:'#D24726',t:"Microsoft PowerPoint",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.6 9v8.6h1.8v-2.8h1.4c1.8 0 3-1.1 3-2.9S13.6 9 11.8 9H8.6zm1.8 1.5h1.2c.9 0 1.4.5 1.4 1.4s-.5 1.4-1.4 1.4h-1.2v-2.8z'},
+  word:{h:'#2B579A',t:"Microsoft Word",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.4 9l1.1 6.2L9.7 9h1.4l1.2 6.2L13.4 9h1.5l-1.9 8.6h-1.6l-1.2-6-1.2 6H7.4L5.5 9h1.9z'},
 };
-let curApp='gdoc';
-function appToolbar(a){
-  switch(a.skin){
-    case 'gdocs':return `<div class="menu-words"><span style="color:${a.accent};font-weight:700">Docs</span><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Tools</span></div>`;
-    case 'gsheets':return `<div class="menu-words"><span style="color:${a.accent};font-weight:700">Sheets</span><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Data</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    case 'word':return `<div class="ribbon" style="background:${a.accent}"><b>W</b> Word<span>Home</span><span>Insert</span><span>Layout</span><span>References</span><span>Review</span></div>`;
-    case 'excel':return `<div class="ribbon" style="background:${a.accent}"><b>X</b> Excel<span>Home</span><span>Formulas</span><span>Data</span><span>View</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    case 'pages':return `<div class="menu-words" style="justify-content:center"><span style="color:${a.accent};font-weight:700">Pages</span><span>Insert</span><span>Table</span><span>Chart</span><span>Text</span><span>Shape</span></div>`;
-    case 'numbers':return `<div class="menu-words" style="justify-content:center"><span style="color:${a.accent};font-weight:700">Numbers</span><span>Insert</span><span>Table</span><span>Chart</span></div><div class="fx-bar"><span class="fx">fx</span><span>A1</span></div>`;
-    default:return `<div class="menu-words"><span style="color:var(--tint);font-weight:700">rata notes</span><span>Plain text · Markdown</span></div>`;
-  }
-}
+/* The drawn marks put their detail inside the body as extra subpaths, which
+   under nonzero winding fills them in and leaves a solid blob. evenodd makes
+   the inner shapes cut through. The official paths are built for nonzero and
+   are left alone. */
+const brandSVG=(k,size)=>{const b=BRAND[k];if(!b)return '';const r=b.s==='drawn'?' fill-rule="evenodd"':'';return `<svg class="brand-glyph" viewBox="0 0 24 24" width="${size||20}" height="${size||20}" role="img" aria-label="${b.t}" fill="${b.h}"${r}><path d="${b.d}"/></svg>`};
+/* BRAND-ICONS:END */
+
+/* ---------------- MAKE SOMETHING NEW ----------------
+   RATA used to carry its own document editor: a mock browser frame around a
+   textarea that wrote a file into the workspace. It was the weakest thing in
+   the product — nobody wants a worse Google Docs — and it misrepresented what
+   RATA is for. RATA holds mail and files from several accounts at once,
+   translates, and converts between formats. Making the document is somebody
+   else's job, and the user already has an account with them.
+
+   So this page is a launcher. Every tile opens the real application in its own
+   tab, signed in as whoever the user already is there. Nothing is embedded: an
+   iframe of Google Docs would be blocked anyway, and pretending otherwise is
+   how the old page got into trouble. */
+const LAUNCH=[
+  {eco:'Google', accent:'#1a73e8', note:'Opens in your Google account.', apps:[
+    {name:'Docs',   kind:'Document',     url:'https://docs.new',            icon:'gdocs'},
+    {name:'Sheets', kind:'Spreadsheet',  url:'https://sheets.new',          icon:'gsheets'},
+    {name:'Slides', kind:'Presentation', url:'https://slides.new',          icon:'gslides'},
+    {name:'Forms',  kind:'Form',         url:'https://forms.new',           icon:'gforms'},
+    {name:'Drive',  kind:'All your files', url:'https://drive.google.com',  icon:'gdrive'},
+  ]},
+  {eco:'Microsoft', accent:'#2b579a', note:'Opens in Microsoft 365 on the web.', apps:[
+    {name:'Word',       kind:'Document',     url:'https://www.office.com/launch/word',       icon:'word'},
+    {name:'Excel',      kind:'Spreadsheet',  url:'https://www.office.com/launch/excel',      icon:'excel'},
+    {name:'PowerPoint', kind:'Presentation', url:'https://www.office.com/launch/powerpoint', icon:'powerpoint'},
+    {name:'OneNote',    kind:'Notebook',     url:'https://www.office.com/launch/onenote',    icon:'onenote'},
+    {name:'OneDrive',   kind:'All your files', url:'https://onedrive.live.com',              icon:'onedrive'},
+  ]},
+  {eco:'Adobe', accent:'#e34f26', note:'PDFs, signing and design.', apps:[
+    {name:'Acrobat',      kind:'Read & edit PDF', url:'https://acrobat.adobe.com',                            icon:'acrobat'},
+    {name:'Fill & Sign',  kind:'Sign a PDF',      url:'https://acrobat.adobe.com/link/acrobat/fillsign',       icon:'adobesign'},
+    {name:'Convert',      kind:'To and from PDF', url:'https://www.adobe.com/acrobat/online/convert-pdf.html', icon:'acrobat'},
+    {name:'Express',      kind:'Design',          url:'https://new.express.adobe.com',                         icon:'adobeexpress'},
+  ]},
+  {eco:'Apple', accent:'#ff9f0a', note:'iCloud on the web — works from any browser.', apps:[
+    {name:'Pages',   kind:'Document',     url:'https://www.icloud.com/pages/',   icon:'pages'},
+    {name:'Numbers', kind:'Spreadsheet',  url:'https://www.icloud.com/numbers/', icon:'numbers'},
+    {name:'Keynote', kind:'Presentation', url:'https://www.icloud.com/keynote/', icon:'keynote'},
+  ]},
+  {eco:'Signing', accent:'#6b46c1', note:'Send something out for signature.', apps:[
+    {name:'DocuSign',     kind:'Send for signature', url:'https://app.docusign.com', icon:'docusign'},
+    {name:'Acrobat Sign', kind:'Send for signature', url:'https://sign.adobe.com',   icon:'adobesign'},
+  ]},
+];
+
 function renderCreate(){
-  const a=APPS[curApp];
-  $('#b-tabs').innerHTML=Object.entries(APPS).map(([k,ap])=>`<button class="b-tab ${k===curApp?'on':''}" data-a="${k}"><span class="b-dot" style="background:${ap.accent}"></span>${ap.name}</button>`).join('');
-  $$('#b-tabs .b-tab').forEach(t=>t.onclick=()=>{curApp=t.dataset.a;audit('bridge.open',APPS[curApp].name);renderCreate()});
-  $('#b-url').textContent='🔒 '+a.host+a.path;
-  const real=$('#b-real');
-  if(a.real){real.style.display='';real.href=a.real}else{real.style.display='none'}
-  const fr=$('#b-frame');fr.dataset.skin=a.skin;fr.classList.toggle('gridmode',a.type==='sheet');
-  $('#app-toolbar').innerHTML=appToolbar(a);
-  $('#cr-title').placeholder=a.type==='sheet'?'Untitled spreadsheet':a.type==='note'?'Untitled note':'Untitled document';
-  $('#cr-body').placeholder=a.type==='sheet'?'Name, Role, Rate\nJane Doe, Manager, 85\nJohn Smith, Analyst, 120':'Start writing…';
-  $('#cr-contact').innerHTML='<option value="">Choose a person…</option>'+S.contacts.filter(c=>c.id!=='c8').map(c=>`<option value="${c.id}">${esc(c.nick||c.name)}</option>`).join('');
-  updateDeliverUI();
+  const host=$('#launch-groups');if(!host)return;
+  host.innerHTML=LAUNCH.map(g=>`
+    <section class="launch-group">
+      <div class="launch-group-head">
+        <span class="launch-dot" style="background:${g.accent}"></span>
+        <b>${esc(g.eco)}</b>
+        <span>${esc(g.note)}</span>
+      </div>
+      <div class="launch-grid">
+        ${g.apps.map(a=>`
+          <a class="launch-tile" href="${a.url}" target="_blank" rel="noopener noreferrer"
+             data-launch="${esc(g.eco+' · '+a.name)}">
+            <span class="launch-badge">${brandSVG(a.icon,22)||`<b style="color:${g.accent}">${esc(a.name[0])}</b>`}</span>
+            <span class="launch-name">${esc(a.name)}</span>
+            <span class="launch-kind">${esc(a.kind)}</span>
+            <span class="launch-go" aria-hidden="true">↗</span>
+          </a>`).join('')}
+      </div>
+    </section>`).join('');
+  /* A real link, so it opens in a tab and can be middle-clicked or copied like
+     any other. The audit entry is the only thing added on top. */
+  host.querySelectorAll('[data-launch]').forEach(t=>t.addEventListener('click',()=>{
+    audit('app.open',t.dataset.launch);
+  }));
+  const jump=document.querySelector('[data-goto]');
+  if(jump)jump.onclick=()=>{go(jump.dataset.goto);setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)};
 }
-function updateDeliverUI(){
-  const a=APPS[curApp];
-  const cid=$('#cr-contact').value,c=cid?contact(cid):null;
-  const chSel=$('#cr-channel');
-  if(c){
-    const opts=[['email','via Email']];
-    if(S.plugins.slack&&c.slack)opts.push(['slack','via Slack']);
-    if(S.plugins.sms&&c.phone)opts.push(['sms','via Text']);
-    if(S.plugins.discord&&c.discord)opts.push(['discord','via Discord']);
-    chSel.innerHTML=opts.map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
-    const myFmt=ECOS[a.eco][a.type],theirFmt=ECOS[c.pref][a.type];
-    $('#autopilot-note').innerHTML=S.plugins.autopilot
-      ?(myFmt!==theirFmt
-        ?`<b>Format Autopilot:</b> you're working in ${a.name} (.${myFmt.toLowerCase()}); ${esc((c.nick||c.name).split(' ')[0])} receives <b>.${theirFmt.toLowerCase()}</b> (${ECOS[c.pref].label}) — converted on delivery.`
-        :`<b>Format Autopilot:</b> ${esc((c.nick||c.name).split(' ')[0])} already lives in ${ECOS[c.pref].label} — delivered as .${theirFmt.toLowerCase()}, no conversion needed.`)
-      :`Autopilot is off — delivered exactly as .${myFmt.toLowerCase()}. Turn it on in Plugins to auto-match each recipient.`;
-  }else{
-    chSel.innerHTML='<option>—</option>';
-    $('#autopilot-note').textContent='Pick a person and Rata will match the file to the ecosystem they work in.';
-  }
-}
-$('#cr-contact').addEventListener('change',updateDeliverUI);
-function sizeOf(text){const b=new Blob([text]).size;return b<1024?b+' B':(b/1024).toFixed(1)+' KB'}
-async function createFile(deliver){
-  const a=APPS[curApp];
-  const title=$('#cr-title').value.trim()||$('#cr-title').placeholder;
-  const body=$('#cr-body').value;
-  if(!body.trim()){toast('Write something first');return null}
-  const findings=runDLP(title+'\n'+body,S.settings.profile);
-  S.counters.scans++;
-  const blocks=findings.filter(f=>f.sev==='block');
-  if(deliver&&blocks.length){
-    S.counters.blocked++;save();
-    await audit('dlp.block',`File delivery blocked — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`);
-    toast('Delivery blocked by DLP — file contains '+blocks[0].name);
-    return null;
-  }
-  let eco=a.eco,fmt=ECOS[eco][a.type],convertedFor=null;
-  if(deliver){
-    const c=contact($('#cr-contact').value);
-    if(!c){toast('Pick a person to deliver to');return null}
-    if(S.plugins.autopilot&&c.pref!==eco){fmt=ECOS[c.pref][a.type];convertedFor=c;S.counters.autopilot++;S.counters.conversions++}
-  }
-  const extname=title.replace(/\.[a-z0-9]+$/i,'')+'.'+fmt.toLowerCase();
-  const doc={id:'d'+Date.now(),prov:$('#cr-dest').value,name:extname,fmt,size:sizeOf(body),ts:Date.now(),origin:'rata',app:a.name,content:body};
-  S.documents.unshift(doc);
-  save();
-  await audit('file.create',`${extname} in ${a.name} → ${doc.prov}${convertedFor?` · autopilot ${ECOS[eco][a.type]}→${fmt} for ${convertedFor.name}`:''}`);
-  return doc;
-}
-$('#cr-save').onclick=async()=>{
-  const doc=await createFile(false);
-  if(!doc)return;
-  toast(`Created ${doc.name} from ${APPS[curApp].name} → ${doc.prov}`);
-  $('#cr-title').value='';$('#cr-body').value='';
-  $('#nc-docs').textContent=S.documents.length;
-};
-$('#cr-deliver').onclick=async()=>{
-  const cid=$('#cr-contact').value;
-  if(!cid){toast('Pick a person to deliver to');return}
-  const c=contact(cid),ch=$('#cr-channel').value;
-  const doc=await createFile(true);
-  if(!doc)return;
-  S.messages.push({id:'x'+Date.now(),ch,prov:ch==='email'?'gmail':ch,cid:null,toId:cid,sent:true,subj:doc.name,prev:'Sent a file: '+doc.name,body:'Sent a file.',ts:Date.now(),unread:false,starred:false,atts:[{n:doc.name,f:doc.fmt,s:doc.size}]});
-  save();
-  await audit('file.deliver',`${doc.name} → ${c.name} via ${CHANNELS[ch].label}${S.plugins.autopilot?' (autopilot '+ECOS[c.pref].label+')':''}`);
-  toast(`Delivered to ${(c.nick||c.name).split(' ')[0]} as .${doc.fmt.toLowerCase()} via ${CHANNELS[ch].label}`);
-  $('#cr-title').value='';$('#cr-body').value='';
-  $('#nc-docs').textContent=S.documents.length;
-};
 
 /* ---------------- PLUGINS ---------------- */
 function ecoCard(o){
@@ -1568,29 +2093,34 @@ function renderEco(){
   const g=$('#eco-grid');if(!g)return;
   g.innerHTML=[
     {name:'Email',types:['google','ms'],icon:ICONS.conn_gmail||'✉️',
-     desc:'Every mail account in one stream. Each account signs in with its own OAuth token — RATA never sees a password and can only read what you consent to.',
-     actions:[['Sign in with Google','google',1],['Sign in with Microsoft','ms',0]],
-     note:'Tokens are per-account, revocable anytime from your Google/Microsoft security page.'},
+     desc:'Every mail account in one stream — Gmail, Outlook, Yahoo, your work address, anything with IMAP. Each account is added separately and can be removed on its own.',
+     actions:[['Add any email account','mail',1],['Sign in with Google','google',0],['Sign in with Microsoft','ms',0]],
+     note:'App passwords are per-account and revocable from your provider at any time — revoking one stops RATA reading that mailbox immediately.'},
     {name:'Google Workspace',types:['google'],icon:ICONS.conn_gmail||'G',
      desc:'Gmail live sync + real sending, and the Bridge delivers files Google Drive auto-converts into Docs and Sheets.',
-     actions:[['Sign in with Google','google',1],['Open Bridge','bridge',0]],
-     note:'OAuth consent screen on every new account — token-scoped to read + send mail only.'},
+     actions:[['Sign in with Google','google',1],['Add Gmail by app password','mail',0],['Open Bridge','bridge',0]],
+     note:'One-click OAuth needs a Google client ID, and public use needs Google verification. The app-password IMAP link works today with neither.'},
     {name:'Microsoft Office',types:['ms'],icon:ICONS.conn_outlook||'M',
      desc:'Outlook live sync via Microsoft Graph, and the Bridge delivers real .docx / .xlsx for Word and Excel.',
      actions:[['Sign in with Microsoft','ms',1],['Open Bridge','bridge',0]],
      note:'Microsoft consent screen · tokens held server-side, auto-refreshed, revocable at account.microsoft.com.'},
     {name:'Apple',types:[],icon:'',
      desc:'The Bridge delivers files Pages and Numbers open natively — Apple\u2019s own formats are sealed, so this is how everyone interops with Apple, including Microsoft.',
-     actions:[['Open Bridge','bridge',1]],
-     note:'iCloud Mail sign-in (app-specific password over IMAP) arrives with the RATA backend\u2019s IMAP bridge.'}
+     actions:[['Add iCloud Mail','mail',1],['Open Bridge','bridge',0]],
+     note:'iCloud Mail signs in with an app-specific password over IMAP \u2014 Apple publishes no OAuth for Mail.'}
   ].map(ecoCard).join('');
   g.querySelectorAll('[data-eco-act]').forEach(b=>b.onclick=()=>{
     const act=b.dataset.ecoAct;
     if(act==='google')googleAddAccount();
+    else if(act==='mail'){go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)}
     else if(act==='ms')linkProviderLive('ms');
     else if(act==='bridge'){go('docs');setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)}
   });
 }
+/* Which bridges are a view onto a connected account rather than a local
+   preference. Work/Personal split, job tags and Autopilot need nothing signed
+   in, so they stay free-standing switches. */
+const PLUGIN_ACCOUNT={slack:'slack',discord:'discord',sms:'phone'};
 function renderPlugins(){renderEco();
   $('#nc-plug').textContent=Object.values(S.plugins).filter(Boolean).length;
   $('#plug-grid').innerHTML=Object.entries(PLUGINS).map(([k,p])=>`
@@ -1604,6 +2134,17 @@ function renderPlugins(){renderEco();
     </div>`).join('');
   $$('#plug-grid .switch').forEach(sw=>sw.onclick=()=>{
     const k=sw.dataset.p;
+    /* A bridge with nothing behind it is a switch that does nothing: turning on
+       Slack without a Slack account would add an empty filter and imply RATA is
+       reading messages it cannot see. So switching one on sends you to sign in
+       to that service, and linking the account is what turns it on. */
+    const needs=PLUGIN_ACCOUNT[k];
+    if(!S.plugins[k]&&needs&&!S.linked.some(l=>l.type===needs)){
+      toast(`Sign in to ${PLUGINS[k].name.replace(/ Bridge$/,'')} first — then it switches itself on`);
+      go('conn');
+      setTimeout(()=>document.querySelector('[data-addlink="'+needs+'"]')?.click(),80);
+      return;
+    }
     S.plugins[k]=!S.plugins[k];save();
     audit('plugin.'+(S.plugins[k]?'enable':'disable'),PLUGINS[k].name);
     renderPlugins();
@@ -1626,6 +2167,14 @@ $('#job-add-btn').onclick=()=>{
 };
 
 /* ---------------- SEARCH ---------------- */
+/* One search box over every connected inbox. With several mailboxes the
+   answer "you have this email" is only half of it — which of your accounts it
+   is in decides where you go looking, so each hit names its mailbox. */
+function searchAcctName(m){
+  const l=m.acct?S.linked.find(x=>x.id===m.acct):null;
+  const label=l?l.label:(m.acctLabel||m.acct||'');
+  return label?' · <span class="badge">'+esc(label)+'</span>':'';
+}
 function doSearch(){
   const q=$('#search-input').value.trim();
   if(!q)return;
@@ -1644,11 +2193,11 @@ function doSearch(){
     if(c.id==='c8')continue;
     if((c.name+' '+(c.nick||'')+' '+c.addr+' '+(c.slack||'')+' '+(c.discord||'')+' '+(c.phone||'')).toLowerCase().includes(ql))hits.push({type:'person',ref:c});
   }
-  audit('search.run',`"${q}" — ${hits.length} results`);
+  audit('search.run',`"${q}" — ${hits.length} results across ${new Set(S.messages.map(m=>m.acct).filter(Boolean)).size||1} inbox(es)`);
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
   const rp=$('#res-pane');
   rp.innerHTML=hits.length?hits.map((h,i)=>h.type==='msg'
-    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${CHANNELS[h.ref.ch].label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}</div></div></div>`
+    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
     :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk([h.ref.addr,h.ref.phone,h.ref.slack,h.ref.discord].filter(Boolean).join(' · ')||'No handles')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
@@ -1664,7 +2213,7 @@ function doSearch(){
   const atts=msgs.flatMap(m=>m.atts);
   const senders={};msgs.forEach(m=>{const n=msgFrom(m);senders[n]=(senders[n]||0)+1});
   const topSenders=Object.entries(senders).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const chans=[...new Set(msgs.map(m=>CHANNELS[m.ch].label))];
+  const chans=[...new Set(msgs.map(m=>chan(m.ch).label))];
   const newest=msgs.length?rel(Math.max(...msgs.map(m=>m.ts))):'—';
   $('#sum-pane').innerHTML=`
     <div class="sum-label">Summary · "${esc(q)}"</div>
@@ -1696,21 +2245,123 @@ $('.doc-toolbar').addEventListener('click',e=>{
 });
 $('#doc-viewtoggle').onclick=()=>{docList=!docList;$('#doc-viewtoggle').textContent=docList?'Grid view':'List view';renderDocs()};
 const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOCX','PDF'],XLSX:['CSV','GSHEET','PDF'],GSHEET:['XLSX','CSV'],CSV:['XLSX','GSHEET'],MD:['PDF','DOCX'],TXT:['PDF','DOCX'],PAGES:['PDF','DOCX'],NUMBERS:['XLSX','PDF']};
+/* The plan ladder, mirroring lib/plan.js — the server enforces it, this
+   decides what to show. There is no free tier: an account with no plan is
+   unsubscribed, and is told the price rather than handed a lesser product. */
+const TIERS={
+  base:      {label:'RATA Base',      price:12.99,mail:2,sellable:true,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
+  pro:       {label:'RATA Pro',       price:23.99,mail:null,sellable:true,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
+  /* mail:null means no ceiling — Base is the only plan that has one.
+     ratamail is addresses RATA hosts at mailrata.org; domains is mail on a
+     domain the customer owns, which Pro buys at $1.50 a month each and
+     Enterprise includes without limit. */
+  /* Not on sale — see lib/plan.js. Kept so an account that somehow holds it
+     still resolves to a tier rather than to nothing. */
+  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true, ratamail:null,domains:null,sellable:false},
+};
+const DOMAIN_ADDON_PRICE=1.50;
+const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
+const tier=()=>TIERS[S.settings.plan]||null;
+const tierLabel=()=>tier()?tier().label:'No plan yet';
+const can=f=>!!(tier()&&tier()[f]);
+/* What to say when something is held back, always naming the plan that has
+   it and what that costs. */
+function needPlan(feature,what){
+  const up=Object.keys(TIERS).find(k=>TIERS[k][feature]);
+  return up?`${what} comes with ${TIERS[up].label} — $${TIERS[up].price} a month. Upgrade in Settings.`
+           :`${what} is not part of your plan.`;
+}
+
+/* ---------------- THE FILE LIBRARY ----------------
+   A business keeps files by what they are for — this client, that quarter —
+   not by which cloud they happened to arrive from. Folders are that: a plain
+   set of names, one per file, with drag to move and a chip to filter.
+
+   It is a Pro feature. On Base the rail explains what it is rather than
+   hiding, because a feature nobody can see is a feature nobody buys — but
+   nothing is filed and no file is hidden, so moving down a plan never puts a
+   document out of reach. */
+let folderFilter='all';
+function hasFileLibrary(){return can('files')}
+
+function renderFolders(){
+  const bar=$('#folder-bar');if(!bar)return;
+  bar.hidden=false;
+  const chips=$('#folder-chips'),hint=$('#folder-hint'),mk=$('#folder-new');
+  if(!hasFileLibrary()){
+    chips.innerHTML='';
+    mk.style.display='none';
+    hint.textContent=needPlan('files','Folders for your files');
+    folderFilter='all';
+    return;
+  }
+  mk.style.display='';
+  hint.textContent=S.folders.length?'Drag a file onto a folder to file it.':'';
+  const counts=Object.fromEntries(S.folders.map(f=>[f,S.documents.filter(d=>d.folder===f).length]));
+  const loose=S.documents.filter(d=>!d.folder).length;
+  chips.innerHTML=`<button class="pill ${folderFilter==='all'?'on':''}" data-fold="all">All files · ${S.documents.length}</button>`
+    +`<button class="pill ${folderFilter==='none'?'on':''}" data-fold="none">Unfiled · ${loose}</button>`
+    +S.folders.map(f=>`<button class="pill ${folderFilter===f?'on':''}" data-fold="${esc(f)}" data-folder-drop="${esc(f)}">${esc(f)} · ${counts[f]||0}<span class="fx" data-foldrm="${esc(f)}" title="Delete folder" style="margin-left:8px;opacity:.55">✕</span></button>`).join('');
+  chips.querySelectorAll('[data-fold]').forEach(b=>{
+    b.onclick=e=>{
+      if(e.target.dataset.foldrm!==undefined)return;
+      folderFilter=b.dataset.fold;renderFolders();renderDocs();
+    };
+    const name=b.dataset.folderDrop;
+    if(!name)return;
+    b.ondragover=e=>{if(e.dataTransfer.types.includes('text/rata-doc')){e.preventDefault();b.classList.add('drop-live')}};
+    b.ondragleave=()=>b.classList.remove('drop-live');
+    b.ondrop=e=>{
+      b.classList.remove('drop-live');
+      const id=e.dataTransfer.getData('text/rata-doc');if(!id)return;
+      e.preventDefault();fileInto(id,name);
+    };
+  });
+  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=e=>{
+    e.stopPropagation();
+    const f=x.dataset.foldrm;
+    if(!confirm(`Delete the folder "${f}"? The files in it stay — they go back to Unfiled.`))return;
+    S.folders=S.folders.filter(n=>n!==f);
+    S.documents.forEach(d=>{if(d.folder===f)delete d.folder});
+    if(folderFilter===f)folderFilter='all';
+    save();audit('folder.delete',f);renderFolders();renderDocs();
+  });
+}
+
+function fileInto(docId,folder){
+  const d=S.documents.find(x=>x.id===docId);if(!d)return;
+  d.folder=folder;save();
+  audit('folder.file',`${d.name} → ${folder}`);
+  renderFolders();renderDocs();
+  toast(`${d.name} filed in ${folder}`);
+}
+
 function renderDocs(){
   const g=$('#doc-grid');
   g.classList.toggle('listmode',docList);
-  const pool=S.documents.filter(d=>docFilter==='all'||(docFilter==='rata'?d.origin==='rata':d.prov===docFilter)).sort((a,b)=>b.ts-a.ts);
+  let pool=S.documents.filter(d=>docFilter==='all'||(docFilter==='rata'?d.origin==='rata':d.prov===docFilter));
+  if(hasFileLibrary()&&folderFilter!=='all')pool=pool.filter(d=>folderFilter==='none'?!d.folder:d.folder===folderFilter);
+  pool=pool.sort((a,b)=>b.ts-a.ts);
   $('#nc-docs').textContent=S.documents.length;
-  if(!pool.length){g.innerHTML='<div class="empty"><b>No files yet</b>Create one in the Create tab, or they will appear as attachments arrive.</div>';return}
+  if(!pool.length){
+    g.innerHTML=(hasFileLibrary()&&folderFilter!=='all'&&S.documents.length)
+      ?`<div class="empty"><b>Nothing in ${folderFilter==='none'?'Unfiled':esc(folderFilter)}</b>Drag a file onto a folder to put it there.</div>`
+      :'<div class="empty"><b>No files yet</b>Create one in the Create tab, or they will appear as attachments arrive.</div>';
+    return}
   g.innerHTML=pool.map(d=>`
-    <div class="doc-card">
+    <div class="doc-card" data-doc="${d.id}" draggable="${hasFileLibrary()?'true':'false'}">
       <div class="doc-ic">${d.fmt}</div>
       <div class="doc-name">${esc(d.name)}</div>
-      <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}<span class="doc-sz">${d.size}</span></div>
+      <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}${d.folder?`<span class="badge job">📁 ${esc(d.folder)}</span>`:''}<span class="doc-sz">${d.size}</span></div>
       ${d.role==='converted'&&d.fromName?`<div class="doc-pairline">⇄ translated from <b>${esc(d.fromName)}</b>${d.lang?' · '+esc(d.lang):''}</div>`:''}
       ${d.role==='source'?`<div class="doc-pairline">⇄ original — kept alongside its conversion</div>`:''}
       <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}${(CONVERT_TO[d.fmt]||[]).map(t=>`<button class="cv" data-id="${d.id}" data-to="${t}">→ ${t}</button>`).join('')||''}</div>
     </div>`).join('');
+  if(hasFileLibrary()){
+    g.querySelectorAll('.doc-card[data-doc]').forEach(c=>{
+      c.ondragstart=e=>{e.dataTransfer.setData('text/rata-doc',c.dataset.doc);e.dataTransfer.effectAllowed='move'};
+    });
+  }
   g.querySelectorAll('.cv[data-bridge]').forEach(b=>b.onclick=()=>{
     const d=S.documents.find(x=>x.id===b.dataset.bridge);if(!d)return;
     bridgeInit();
@@ -1841,8 +2492,9 @@ function renderSettings(){
   $('#cfg-sburl').value=c.supabaseUrl||'';
   $('#cfg-sbkey').value=c.supabaseKey||'';
   $('#cfg-akey').value=c.anthropicKey||'';
-  $('#cfg-stm').value=c.stripeMonthly||'';
-  $('#cfg-sta').value=c.stripeAnnual||'';
+  $('#cfg-stb').value=c.stripeBase||'';
+  $('#cfg-stpr').value=c.stripePro||'';
+  $('#cfg-ste').value=c.stripeEnterprise||'';
   $('#cfg-stp').value=c.stripePortal||'';
   renderPlan();
   renderLinked();
@@ -1854,49 +2506,239 @@ $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim
 $('#cfg-gcid').addEventListener('change',e=>{setCfg({googleClientId:e.target.value.trim()});toast('Google Client ID saved — Connect Gmail from Connections')});
 $('#cfg-sburl').addEventListener('change',e=>{setCfg({supabaseUrl:e.target.value.trim()});toast('Supabase URL saved')});
 $('#cfg-sbkey').addEventListener('change',e=>{setCfg({supabaseKey:e.target.value.trim()});toast('Supabase key saved — sign out and back in to activate cloud accounts')});
-$('#cfg-stm').addEventListener('change',e=>{setCfg({stripeMonthly:e.target.value.trim()});renderPlan();toast('Monthly checkout link saved')});
-$('#cfg-sta').addEventListener('change',e=>{setCfg({stripeAnnual:e.target.value.trim()});renderPlan();toast('Annual checkout link saved')});
+$('#cfg-stb').addEventListener('change',e=>{setCfg({stripeBase:e.target.value.trim()});renderPlan();toast('Base checkout link saved')});
+$('#cfg-stpr').addEventListener('change',e=>{setCfg({stripePro:e.target.value.trim()});renderPlan();toast('Pro checkout link saved')});
+$('#cfg-ste').addEventListener('change',e=>{setCfg({stripeEnterprise:e.target.value.trim()});renderPlan();toast('Enterprise checkout link saved')});
 $('#cfg-stp').addEventListener('change',e=>{setCfg({stripePortal:e.target.value.trim()});renderPlan();toast('Billing portal link saved')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
-  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No linked accounts yet</b><span>Link Google to transfer a real Gmail inbox in, or add the handles you use elsewhere.</span></div></div>';return}
+  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${live?'LIVE':'AWAITING BACKEND'}</span></b><span>${LINK_META[l.type][0]} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}</span></div>${['google','ms','slack'].includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:''}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'AWAITING BACKEND')}</span></b><span>${esc(l.type==='mail'?(l.provLabel||'Email')+(l.host?' · '+l.host:''):LINK_META[l.type][0])} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:(SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:'')}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
-  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(l.type==='ms')serverSync('ms');else if(l.type==='slack')serverSync('slack')});
+  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(SYNCABLE.includes(l.type))serverSync(l.type)});
+  /* Relink opens the same form with the address already in it: the thing that
+     needs replacing is the password, and making someone retype the address
+     they can see on the row is the kind of friction that ends in a support
+     email. */
+  el.querySelectorAll('[data-lkfix]').forEach(b=>b.onclick=()=>{
+    const l=S.linked.find(x=>x.id===b.dataset.lkfix);if(!l)return;
+    openMailForm(l.label,l.lastError||'');
+  });
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
 const LF_COPY={discord:['Discord handle','@yourhandle'],phone:['phone number','+1 555 555 5555']};
+/* One form for every provider. The address decides the rest — which server to
+   reach and where that provider keeps its app-password screen — so the user is
+   not asked to know any of it. Called both to add a mailbox and to repair one
+   whose app password stopped working, which is the same form with the address
+   filled in. */
+function openMailForm(email,why){
+  lfType='mail';
+  $('#lf-host').style.display='none';$('#lf-host').value='';
+  $('#lf-title').textContent=email?'Relink '+email:'Add an email account';
+  $('#lf-sub').textContent=email
+    ?(why||'That mailbox refused the sign-in. Generate a new app password with your provider and paste it here.')
+    :'Any email address — Gmail, Yahoo, Outlook, your own company domain. Enter it with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work.';
+  $('#lf-input').placeholder='you@anywhere.com';
+  $('#lf-input').value=email||'';
+  $('#lf-pass').style.display='';$('#lf-pass').value='';
+  $('#linkform').style.display='flex';
+  (email?$('#lf-pass'):$('#lf-input')).focus();
+}
+
 $$('[data-addlink]').forEach(b=>b.onclick=()=>{
   const t=b.dataset.addlink;
   if(t==='google'){googleAddAccount();return}
   if(t==='ms'){linkProviderLive('ms');return}
   if(t==='slack'){linkProviderLive('slack');return}
+  const im=t.startsWith('imap:')?IMAP_LINK[t.slice(5)]:null;
   lfType=t;
-  $('#lf-title').textContent='Link '+LF_COPY[t][0];
-  $('#lf-sub').textContent='Verified format required — this becomes part of your RATA identity.';
-  $('#lf-input').placeholder=LF_COPY[t][1];$('#lf-input').value='';
+  $('#lf-host').style.display='none';$('#lf-host').value='';
+  if(t==='mail'){
+    openMailForm();return;
+  }else if(im){
+    $('#lf-title').textContent='Link '+im.label;
+    $('#lf-sub').textContent='App-specific password — create one at '+im.help+'. Your normal password will not work.';
+    $('#lf-input').placeholder=im.ph;
+    $('#lf-pass').style.display='';$('#lf-pass').value='';
+  }else{
+    $('#lf-title').textContent='Link '+LF_COPY[t][0];
+    $('#lf-sub').textContent='Verified format required — this becomes part of your RATA identity.';
+    $('#lf-input').placeholder=LF_COPY[t][1];
+    $('#lf-pass').style.display='none';
+  }
+  $('#lf-input').value='';
   $('#linkform').style.display='flex';$('#lf-input').focus();
 });
-$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none'};
-$('#lf-save').onclick=()=>{
+$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none'};
+$('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
+  if(lfType==='mail'){await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());return}
+  if(lfType&&lfType.startsWith('imap:')){await imapLink(lfType.slice(5),v,$('#lf-pass').value);return}
   if(!validLink(lfType,v)){toast('That format doesn\u2019t look right \u2014 check and try again');return}
   const l=addLinked(lfType,v);
   if(l){$('#linkform').style.display='none';renderLinked();renderConn();toast(LINK_META[lfType][0]+' linked \u2014 live in your inbox')}
 };
 $('#lf-input').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+$('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+
+/* Link a mailbox at any provider.
+
+   The server works out which mail host serves the address, proves the password
+   against it, and only then stores anything — so a typo fails here rather than
+   as an inbox that silently never fills. Two answers need handling beyond a
+   plain error: the plan being full (402), and the server not being findable,
+   which is the one case where we ask the user for it. */
+async function mailLink(email,pass,host){
+  if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
+  const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
+  try{
+    const res=await apiFetch('/api/link/mail',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,appPassword:pass,host:host||undefined})});
+    if(!res.ok){
+      if(res.needsHost){
+        $('#lf-host').style.display='';$('#lf-host').focus();
+        $('#lf-sub').textContent=res.error;
+      }else toast(res.error||'Could not link that mailbox');
+      return;
+    }
+    $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
+    let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
+    if(l){l.status='live';l.host=res.host;l.provLabel=res.label;delete l.needsRelink;delete l.lastError;save()}
+    $('#linkform').style.display='none';
+    renderLinked();renderConn();refreshQuota();
+    await audit('mail.link',res.email+' linked ('+res.label+(res.foundBy?' · found by '+res.foundBy:'')+')');
+    toast(res.label&&res.foundBy==='mx'
+      ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
+      :res.email+' linked — pulling messages…');
+    await serverSync('mail');
+  }catch(e){
+    toast(e.message==='cloud-account-required'
+      ?'Linking mail needs a cloud account (sign up with the database connected)'
+      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+  }finally{btn.disabled=false;btn.textContent='Link'}
+}
+
+/* What the plan still allows, read from the server rather than guessed here —
+   the server is what enforces it, so this cannot drift out of agreement. A cap
+   the user only meets as a failing button is a cap that feels like a bug. */
+let QUOTA=null;
+async function refreshQuota(){
+  const line=$('#quota-line');if(!line)return;
+  try{
+    const q=await apiFetch('/api/links');
+    if(q.error)return;
+    QUOTA=q;
+    const m=q.limits.mail===null
+      ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — no limit`
+      : `${q.used.mail} of up to ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
+    const c=q.limits.chat===null?'chat workspaces without limit'
+      :q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`
+      :'no chat workspaces';
+    const full=q.limits.mail!==null&&q.remaining.mail===0;
+    line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(full?' Upgrade in Settings to add another mailbox.':'');
+  }catch(e){
+    /* A device-only account has no server to ask, which is not an error — but
+       a cloud account that cannot reach it should not leave the generic blurb
+       standing as though the allowance were unlimited. */
+    if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now — your allowance still applies.';
+  }
+}
+
+/* The server proves the credentials against the real IMAP host before storing
+   them, so a wrong password fails here rather than as an inbox that never fills. */
+async function imapLink(key,email,pass){
+  const im=IMAP_LINK[key];if(!im)return;
+  if(!/.+@.+\..+/.test(email)){toast('Enter your '+im.label+' address');return}
+  if(pass.replace(/\s+/g,'').length<8){toast('Paste the app-specific password from '+im.help);return}
+  const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
+  try{
+    const res=await apiFetch('/api/link/imap/'+key,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,appPassword:pass})});
+    if(!res.ok){toast(res.error||'Could not link '+im.label);return}
+    $('#lf-pass').value='';
+    let l=linkedFind(im.type,res.label)||addLinked(im.type,res.label);
+    if(l){l.status='live';save()}
+    $('#linkform').style.display='none';
+    renderLinked();renderConn();
+    await audit('imap.link',im.label+' linked — '+res.label);
+    toast(im.label+' linked — pulling messages…');
+    await serverSync(im.type);
+  }catch(e){
+    toast(e.message==='cloud-account-required'
+      ?'Linking mail needs a cloud account (sign up with the database connected)'
+      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+  }finally{btn.disabled=false;btn.textContent='Link'}
+}
+/* Every price on this screen is read from TIERS rather than typed into the
+   markup. Three copies of "$8" in three places is how a price change ships
+   half-done — the plan updates, a settings row still quotes last quarter's
+   number, and the customer is the one who spots it. */
+function renderPrices(){
+  const c=$('#plan-compare');
+  if(c)c.textContent=SELLABLE.map(k=>`${TIERS[k].label.replace('RATA ','')} ${money(TIERS[k].price)} — ${PLAN_ONELINE[k]}`).join(' ');
+  const lb=$('#lbl-stb'),lp=$('#lbl-stpr');
+  if(lb)lb.textContent=`Stripe payment link — Base ${money(TIERS.base.price)}`;
+  if(lp)lp.textContent=`Stripe payment link — Pro ${money(TIERS.pro.price)}`;
+}
+const ORDER=['base','pro','enterprise'];
+const SELLABLE=ORDER.filter(k=>TIERS[k].sellable);
+const PLAN_ONELINE={
+  base:'up to two mailboxes in one Center Point inbox.',
+  pro:'more than two, side by side, with summaries.',
+  enterprise:'CRM, texts and automations.',
+};
+
 function renderPlan(){
-  const c=cfg(),plan=S.settings.plan||'free';
+  renderPrices();
+  const c=cfg(),t=tier();
   const badge=$('#plan-badge'),line=$('#plan-line');
-  if(plan==='base'){badge.textContent='RATA Base';badge.className='badge work';line.textContent='Active — thank you. Everything unlocked'+(S.settings.planSince?' since '+new Date(S.settings.planSince).toLocaleDateString():'')+'.'}
-  else{badge.textContent='Free preview';badge.className='badge personal';line.textContent='Full features in preview. Upgrade to keep everything after launch.'}
-  const m=$('#bill-monthly'),an=$('#bill-annual'),p=$('#bill-portal');
-  m.style.display=c.stripeMonthly?'':'none';if(c.stripeMonthly)m.href=c.stripeMonthly;
-  an.style.display=c.stripeAnnual?'':'none';if(c.stripeAnnual)an.href=c.stripeAnnual;
-  $('#bill-nolinks').style.display=(c.stripeMonthly||c.stripeAnnual)?'none':'';
+  badge.textContent=tierLabel();
+  badge.className='badge '+(t?'work':'personal');
+  line.textContent=t
+    ?`${money(t.price)} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
+    :`No plan yet. ${TIERS.base.label} is ${money(TIERS.base.price)} a month: up to ${TIERS.base.mail} mailboxes in one Center Point inbox.`;
+  /* One button per plan that has a checkout link, and never one for the plan
+     they are already on — that is a paid-for confusion. */
+  const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};
+  const here=S.settings.plan;
+
+  /* Carry the signed-in address into checkout.
+
+     The subscription is recorded against whatever address the buyer types on
+     Stripe's page, and the app reads entitlement by the address they signed up
+     with. Left to chance those differ all the time — somebody registers with a
+     personal address and pays with the one their card is under — and the
+     payment then lands on a row nobody reads. They have been charged and see
+     no plan, which is the worst support ticket there is.
+
+     prefilled_email fills Stripe's field; client_reference_id rides along so a
+     payment can still be matched to an account if they change it anyway. */
+  const buyer=(SESSION&&SESSION.email)||'';
+  const withBuyer=u=>{
+    if(!u)return u;
+    try{
+      const url=new URL(u);
+      if(buyer)url.searchParams.set('prefilled_email',buyer);
+      if(SESSION&&SESSION.uid)url.searchParams.set('client_reference_id',SESSION.uid);
+      return url.toString();
+    }catch(e){return u}
+  };
+  /* Only plans that are on sale, and never the one they are already on. A
+     checkout button for a tier whose features do not exist yet is a paid-for
+     disappointment. */
+  $('#plan-buttons').innerHTML=SELLABLE
+    .filter(k=>links[k]&&k!==here)
+    .map((k,i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(withBuyer(links[k]))}" target="_blank" rel="noopener">${here?'Switch to ':'Get '}${esc(TIERS[k].label.replace('RATA ',''))} — ${money(TIERS[k].price)}</a>`)
+    .join('');
+  const p=$('#bill-portal');
+  $('#bill-nolinks').style.display=SELLABLE.some(k=>links[k])?'none':'';
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
 $('#cfg-akey').addEventListener('change',e=>{setCfg({anthropicKey:e.target.value.trim()});toast(e.target.value?'AI briefings enabled in Rata Assist':'AI key removed')});
@@ -1953,6 +2795,68 @@ $('#pw-change').onclick=async()=>{
     toast('Password updated');
   }finally{btn.disabled=false}
 };
+/* ---------------- DELETING THE ACCOUNT ----------------
+   The wording comes from the endpoint that does the work, so the warning
+   cannot drift from the behaviour. Two halves: the server clears what it
+   holds, and the browser clears what only it has — the workspace, the file
+   vault, the session. Neither half can do the other's. */
+async function openDelete(){
+  const box=$('#del-confirm'),detail=$('#del-detail');
+  box.style.display='flex';
+  $('#del-email').value='';$('#del-email').focus();
+  detail.textContent='Checking what this would remove…';
+  try{
+    const info=await apiFetch('/api/account');
+    if(info.error){detail.textContent=info.error;return}
+    if(info.blocked){detail.textContent=info.blocked;$('#del-go').disabled=true;return}
+    $('#del-go').disabled=false;
+    detail.textContent=`Removes ${info.removes.join(', ')}. Keeps ${info.keeps.join('; ')}.`
+      +(info.mailboxes?` ${info.mailboxes} mailbox${info.mailboxes===1?'':'es'} will be disconnected — revoke their app passwords at each provider too.`:'');
+  }catch(e){
+    /* A device-only account has no server side to ask or to clear. */
+    $('#del-go').disabled=false;
+    detail.textContent='This account exists only on this device. Deleting it clears the workspace, the files stored here, and the sign-in.';
+  }
+}
+
+async function wipeThisDevice(){
+  try{localStorage.removeItem(LS_KEY)}catch(e){}
+  try{localStorage.removeItem('centra_session')}catch(e){}
+  try{localStorage.removeItem(CFG_KEY)}catch(e){}
+  try{
+    const accts=JSON.parse(localStorage.getItem('centra_accounts')||'{}');
+    delete accts[SESSION.email];
+    localStorage.setItem('centra_accounts',JSON.stringify(accts));
+  }catch(e){}
+  /* The file vault is the one store the server has never seen, so nothing
+     else would ever remove it. */
+  try{await new Promise(res=>{const r=indexedDB.deleteDatabase('rata-files');r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
+}
+
+async function deleteAccount(){
+  const typed=$('#del-email').value.trim().toLowerCase();
+  if(typed!==String(SESSION.email||'').toLowerCase()){toast('Type your email address exactly to confirm');return}
+  const btn=$('#del-go');btn.disabled=true;btn.textContent='Deleting…';
+  try{
+    if(SESSION.mode==='supabase'){
+      const res=await apiFetch('/api/account',{method:'DELETE',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({confirm:typed})});
+      if(!res.ok){toast(res.error||'Could not delete the account');btn.disabled=false;btn.textContent='Delete permanently';return}
+    }
+    await wipeThisDevice();
+    /* Straight out, with no workspace left to render. */
+    location.replace('auth.html?mode=signup&deleted=1');
+  }catch(e){
+    btn.disabled=false;btn.textContent='Delete permanently';
+    toast('Could not delete the account — '+(e.message==='cloud-account-required'?'sign in again and retry':e.message));
+  }
+}
+
+$('#btn-delete').onclick=openDelete;
+$('#del-cancel').onclick=()=>{$('#del-confirm').style.display='none'};
+$('#del-go').onclick=deleteAccount;
+$('#del-email').addEventListener('keydown',e=>{if(e.key==='Enter')deleteAccount()});
+
 $('#btn-reset').onclick=()=>{
   if(!confirm('Wipe this workspace back to a blank slate? This cannot be undone.'))return;
   S=seed();save();
@@ -1966,9 +2870,13 @@ const ov=$('#compose-ov');
 let dlpTimer=null,lastFindings=[];
 function fillComposeFrom(){
   const sel=$('#cmp-from');
-  const gs=S.linked.filter(l=>l.type==='google');
-  sel.innerHTML=gs.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')+'<option value="local">Record only (no linked email)</option>';
-  if(gs.length)sel.value=gs[0].id;
+  /* Anything that can really send goes first, so the default is a real send
+     rather than a note to self. Mail accounts send over SMTP through the
+     server; Google accounts send through the Gmail API in the browser. */
+  const sendable=S.linked.filter(l=>l.type==='mail'||l.type==='google');
+  sel.innerHTML=sendable.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')
+    +'<option value="local">Record only (no linked email)</option>';
+  if(sendable.length)sel.value=sendable[0].id;
 }
 function b64url(str){
   return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -1994,6 +2902,22 @@ function openCompose(){
   $('#cmp-to').focus();
 }
 function closeCompose(){ov.classList.remove('open')}
+/* Two-inbox controls. */
+$$('#inbox-mode button').forEach(b=>b.onclick=()=>{
+  setSplit(b.dataset.mode==='split');
+  audit('inbox.layout',b.dataset.mode==='split'?'Side by side':'One inbox');
+});
+$('#main-acct').onchange=e=>{panes[0]=e.target.value;renderMail()};
+
+
+$('#folder-new').onclick=()=>{
+  const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);
+  if(!name)return;
+  if(S.folders.includes(name)){toast('You already have a folder with that name');return}
+  S.folders.push(name);save();audit('folder.create',name);
+  renderFolders();renderDocs();toast(`Folder "${name}" created`);
+};
+
 $('#compose-btn').onclick=openCompose;
 $('#cmp-close').onclick=closeCompose;
 ov.addEventListener('click',e=>{if(e.target===ov)closeCompose()});
@@ -2031,24 +2955,31 @@ $('#cmp-send').onclick=async()=>{
   if(lastFindings.length){S.counters.warned++;await audit('dlp.warn',`Email to ${to} sent with ${lastFindings.length} warning(s)`)}
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===to.toLowerCase());
   const acctSel=prov;
-  const gAcct=S.linked.find(l=>l.id===acctSel&&l.type==='google');
+  const acct=S.linked.find(l=>l.id===acctSel);
+  const gAcct=acct&&acct.type==='google'?acct:null;
+  const mAcct=acct&&acct.type==='mail'?acct:null;
   let realSent=false;
-  if(gAcct){
+  if(gAcct||mAcct){
     if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
     const sb=$('#cmp-send');sb.disabled=true;sb.textContent='Sending…';
     try{
-      await gmailSend(gAcct,to,subj,body);
+      if(gAcct)await gmailSend(gAcct,to,subj,body);
+      else{
+        const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({from:mAcct.label,to,subject:subj,body})});
+        if(!r.ok)throw new Error(r.error||'send failed');
+      }
       realSent=true;
     }catch(e){
       sb.disabled=false;sb.textContent='Send';
-      toast('Gmail send failed — '+(e.message||'reconnect and try again'));
+      toast((gAcct?'Gmail send failed — ':'Send failed — ')+(e.message||'reconnect and try again'));
       return;
     }
     sb.disabled=false;sb.textContent='Send';
   }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:gAcct?'gmail':'local',acct:gAcct?gAcct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[],ctx:S.plugins.split?$('#cmp-ctx').value:undefined});
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:gAcct?'gmail':(mAcct?'imap':'local'),acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[],ctx:S.plugins.split?$('#cmp-ctx').value:undefined});
   save();
-  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${gAcct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
+  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent for real via '+gAcct.label):'Recorded — link a Google account to send real email');
@@ -2064,6 +2995,70 @@ async function supa(){
   if(!SB){if(!window.supabase)await loadScript('vendor/supabase-js-2.112.4.js');SB=window.supabase.createClient(c.supabaseUrl,c.supabaseKey)}
   return SB;
 }
+/* ---------------- WHAT LEAVES THE DEVICE ----------------
+
+   RATA runs on the machine it was installed on. An account exists online so
+   you can sign in from more than one device and so billing has somewhere to
+   live — but the mail, the files and the people stay where they were read.
+
+   Only preferences travel. Mail is not uploaded because it does not need to
+   be: the mailbox is the source of truth, and every device fetches from it
+   directly, so a message shows up everywhere without RATA keeping a copy.
+   Files stay on the device that made them; a file that has travelled through
+   RATA arrives with the mail that carried it, wherever that is read.
+
+   The list below is the whole of it. If a field is not named here it never
+   leaves, which is why this is a list of what is allowed rather than a list
+   of what is stripped — a new field added to the workspace is private by
+   default rather than uploaded by oversight. */
+const CLOUD_FIELDS=['settings','plugins','connections','folders','rules','jobs','linked'];
+
+/* Per-device facts, even inside a field that does travel. An API key belongs
+   to the browser that holds it; when a mailbox last synced is true of one
+   machine and not another. */
+const CLOUD_STRIP={settings:['api'],linked:['lastSync','lastError','status','needsRelink']};
+
+function forCloud(st){
+  const out={v:st.v};
+  for(const f of CLOUD_FIELDS){
+    const v=st[f];
+    if(v===undefined)continue;
+    if(Array.isArray(v)){
+      out[f]=v.map(item=>{
+        if(!item||typeof item!=='object')return item;
+        const c={...item};
+        for(const k of (CLOUD_STRIP[f]||[]))delete c[k];
+        return c;
+      });
+    }else if(v&&typeof v==='object'){
+      const c={...v};
+      for(const k of (CLOUD_STRIP[f]||[]))delete c[k];
+      out[f]=c;
+    }else out[f]=v;
+  }
+  return out;
+}
+
+/* Preferences arrive from another device; everything read on this one stays.
+   A replace here would have wiped the local mailbox each time a second device
+   signed in. */
+function applyCloud(remote){
+  if(!remote||typeof remote!=='object')return;
+  for(const f of CLOUD_FIELDS){
+    const v=remote[f];
+    if(v===undefined)continue;
+    if(Array.isArray(v)){
+      if(f==='linked'){
+        /* Keep this device's sync state for mailboxes it already knows. */
+        const mine=Object.fromEntries((S.linked||[]).map(l=>[l.id,l]));
+        S.linked=v.map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink}:{status:'pending'}));
+      }else S[f]=v;
+    }else if(v&&typeof v==='object'){
+      S[f]=Object.assign({},S[f],v);
+    }else S[f]=v;
+  }
+}
+
 async function cloudPull(){
   if(!SESSION||SESSION.mode!=='supabase')return;
   try{
@@ -2071,9 +3066,10 @@ async function cloudPull(){
     const {data:{session}}=await sb.auth.getSession();
     if(!session){localStorage.removeItem('centra_session');location.replace('auth.html');return}
     const {data}=await sb.from('workspaces').select('data').eq('id',session.user.id).maybeSingle();
-    if(data&&data.data){S=migrate(data.data);localStorage.setItem(LS_KEY,JSON.stringify(S))}
+    if(data&&data.data){applyCloud(data.data);localStorage.setItem(LS_KEY,JSON.stringify(S))}
   }catch(e){console.warn('cloud pull failed',e)}
 }
+
 function scheduleCloudSync(){
   if(!SESSION||SESSION.mode!=='supabase')return;
   clearTimeout(syncT);
@@ -2081,7 +3077,9 @@ function scheduleCloudSync(){
     try{
       const sb=await supa();if(!sb)return;
       const {data:{session}}=await sb.auth.getSession();
-      if(session)await sb.from('workspaces').upsert({id:session.user.id,data:S,updated_at:new Date().toISOString()});
+      /* upsert replaces the whole row, so the first save after this change
+         also clears whatever an older version had uploaded. */
+      if(session)await sb.from('workspaces').upsert({id:session.user.id,data:forCloud(S),updated_at:new Date().toISOString()});
     }catch(e){console.warn('cloud sync failed',e)}
   },1500);
 }
@@ -2091,7 +3089,7 @@ function renderAcctMenu(){
   $('#am-av').textContent=initials;
   $('#am-name').textContent=S.settings.name+(S.settings.org?' · '+S.settings.org:'');
   $('#am-email').textContent=SESSION?SESSION.email:'';
-  $('#am-plan').textContent='Plan: '+((S.settings.plan||'free')==='base'?'RATA Base':'Free preview')+(SESSION&&SESSION.mode==='supabase'?' · cloud account':' · this device');
+  $('#am-plan').textContent='Plan: '+tierLabel()+(SESSION&&SESSION.mode==='supabase'?' · cloud account':' · this device');
   const live=S.linked.filter(l=>l.status==='live').length;
   $('#am-links').textContent=S.linked.length?`${S.linked.length} linked account${S.linked.length===1?'':'s'} · ${live} live`:'No linked accounts yet';
 }
@@ -2110,7 +3108,12 @@ let gTokens={};
 function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 
 /* ---- linked accounts registry ---- */
-const LINK_META={google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS']};
+const LINK_META={mail:['Email'],google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS'],gmail_imap:['Gmail — app password (IMAP)'],apple:['iCloud Mail — app password (IMAP)']};
+/* Mail linked over IMAP rather than OAuth. Apple publishes no OAuth for Mail;
+   Gmail's read scopes are restricted, so one-click Gmail needs Google verification
+   and an annual CASA assessment. An app-specific password needs neither. */
+const IMAP_LINK={gmail:{type:'gmail_imap',label:'Gmail',ph:'you@gmail.com',help:'myaccount.google.com/apppasswords — needs 2-Step Verification on'},apple:{type:'apple',label:'iCloud Mail',ph:'you@icloud.com',help:'appleid.apple.com → Sign-In and Security → App-Specific Passwords'}};
+const imapKeyFor=type=>Object.keys(IMAP_LINK).find(k=>IMAP_LINK[k].type===type)||null;
 function linkedFind(type,label){return S.linked.find(l=>l.type===type&&l.label.toLowerCase()===label.toLowerCase())}
 function validLink(type,val){
   if(type==='ms')return /.+@.+\..+/.test(val);
@@ -2124,9 +3127,9 @@ function addLinked(type,label,extra){
   S.linked.push(l);
   if(type==='google')S.connections.gmail=true;
   if(type==='ms'){S.connections.outlook=true;S.connections.onedrive=true}
-  if(type==='slack')S.connections.slackc=true;
-  if(type==='discord')S.connections.discordc=true;
-  if(type==='phone')S.connections.smsc=true;
+  if(type==='slack'){S.connections.slackc=true;S.plugins.slack=true}
+  if(type==='discord'){S.connections.discordc=true;S.plugins.discord=true}
+  if(type==='phone'){S.connections.smsc=true;S.plugins.sms=true}
   save();audit('account.link',`${LINK_META[type][0]} — ${label}`);
   return l;
 }
@@ -2138,9 +3141,9 @@ async function removeLinked(id){
   const still=t=>S.linked.some(x=>x.type===t);
   if(l.type==='google'&&!still('google'))S.connections.gmail=false;
   if(l.type==='ms'&&!still('ms')){S.connections.outlook=false;S.connections.onedrive=false}
-  if(l.type==='slack'&&!still('slack'))S.connections.slackc=false;
-  if(l.type==='discord'&&!still('discord'))S.connections.discordc=false;
-  if(l.type==='phone'&&!still('phone'))S.connections.smsc=false;
+  if(l.type==='slack'&&!still('slack')){S.connections.slackc=false;S.plugins.slack=false}
+  if(l.type==='discord'&&!still('discord')){S.connections.discordc=false;S.plugins.discord=false}
+  if(l.type==='phone'&&!still('phone')){S.connections.smsc=false;S.plugins.sms=false}
   delete gTokens[id];
   save();await audit('account.unlink',`${LINK_META[l.type][0]} — ${l.label}`);
   renderLinked();renderConn();renderMailFilters();renderMail();
@@ -2167,11 +3170,19 @@ async function linkProviderLive(p){
     toast(e.message==='cloud-account-required'?'Live linking needs a cloud account (sign up with the database connected)':'Live linking needs the RATA backend — deploy the Next.js build and see BACKEND-SETUP.md');
   }
 }
+/* Mailboxes sync together at /api/sync/mail; the older per-provider IMAP links
+   keep their own path so accounts linked before this change still work. */
+function syncPathFor(type){if(type==='mail')return '/api/sync/mail';const k=imapKeyFor(type);return k?'/api/sync/imap/'+k:'/api/sync/'+type}
+const SYNCABLE=['mail','google','ms','slack','gmail_imap','apple'];
 async function serverSync(p){
   const newIds=[];
   try{
-    const res=await apiFetch('/api/sync/'+p);
+    const res=await apiFetch(syncPathFor(p));
     if(res.error){toast(res.error);return}
+    /* /api/sync/mail answers for every mailbox at once, so the reply names the
+       accounts rather than one label. Each message already carries the address
+       it came from, which is what the combined inbox filters on. */
+    if(p==='mail'){await absorbMail(res);return}
     let l=S.linked.find(x=>x.type===p&&x.label.toLowerCase()===String(res.label||'').toLowerCase());
     if(!l)l=addLinked(p,res.label);
     if(!l)return;
@@ -2187,11 +3198,54 @@ async function serverSync(p){
     save();
     autoTranslateNew(newIds);
     await audit(p+'.sync',`${res.label} — ${added} real messages pulled via RATA backend`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();
+    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
     toast(res.label+(added?` synced — ${added} new message${added===1?'':'s'}`:' is up to date'));
   }catch(e){
     toast(e.message==='cloud-account-required'?'Live sync needs a cloud account':'Live sync needs the RATA backend — see BACKEND-SETUP.md');
   }
+}
+
+/* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
+   can be synced, removed, or filtered on its own, and a mailbox that failed
+   says so by name rather than sinking the whole refresh. */
+async function absorbMail(res){
+  const newIds=[];let added=0;
+  for(const a of (res.accounts||[])){
+    let l=linkedFind('mail',a.email)||addLinked('mail',a.email,{host:a.host||'',provLabel:a.label||''});
+    if(!l)continue;
+    l.status=a.error?'error':'live';
+    l.lastSync=Date.now();
+    if(a.error)l.lastError=a.error;else delete l.lastError;
+    /* Two different failures with two different answers. A mailbox that
+       refused the sign-in is stopped at the server until it is relinked, and
+       saying "could not be reached" about it would send the user waiting for a
+       refresh that is never going to come. */
+    if(a.needsRelink)l.needsRelink=true;else delete l.needsRelink;
+    /* Not reached this time is not an error: nothing is wrong with it, and
+       marking it would have the row claim a problem it does not have. */
+    if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
+  }
+  for(const m of (res.messages||[])){
+    if(S.messages.some(x=>x.id===m.id))continue;
+    const owner=linkedFind('mail',m.acct||'');
+    const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
+    S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
+    added++;newIds.push(m.id);
+  }
+  save();
+  autoTranslateNew(newIds);
+  const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
+  const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
+  await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
+  renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
+  const later=(res.deferred||[]).length;
+  toast(stuck.length
+    ? `${stuck.join(', ')} needs its app password again — relink it in Accounts`
+    : failed.length
+      ? `${failed.join(', ')} could not be reached — RATA will try again on the next refresh`
+      : later
+        ? `${added?added+' new — ':''}${later} more mailbox${later===1?'':'es'} on the next refresh`
+        : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
 }
 
 /* ---- Google: real OAuth per account ---- */
@@ -2213,7 +3267,7 @@ function googleOAuth(hint){
   });
 }
 async function googleAddAccount(){
-  if(!cfg().googleClientId){toast('The site needs its Google Client ID in config.js first');return}
+  if(!cfg().googleClientId){toast('Gmail needs GOOGLE_CLIENT_ID set in the site\u2019s environment settings');return}
   try{
     const token=await googleOAuth();
     const prof=await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile',{headers:{Authorization:'Bearer '+token}})).json();
@@ -2265,7 +3319,7 @@ async function gmailSyncAccount(l){
     save();
     autoTranslateNew(newIds);
     await audit('gmail.sync',`${l.label} — ${added} real messages pulled`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();
+    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
     toast(added?`${l.label} synced — ${added} new message${added===1?'':'s'}`:l.label+' is up to date');
   }catch(e){toast('Sync failed for '+l.label+' — reconnect and try again');console.error(e)}
 }
@@ -2509,7 +3563,7 @@ async function translateText(text,target){
     try{
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
         headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,
+        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:2000,
           system:'You are a translator. Reply with ONLY the translation into '+(LANGS[target]||target)+', nothing else. Also on the very first line output the ISO 639-1 code of the SOURCE language followed by ::: then the translation.',
           messages:[{role:'user',content:text.slice(0,6000)}]})});
       const d=await r.json();
@@ -2567,7 +3621,7 @@ async function summarizeMessage(id){
     try{
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
         headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,
+        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:400,
           system:'Summarize this message in 2-3 tight sentences, then a dash list of any actions/deadlines for the reader. Plain text.',
           messages:[{role:'user',content:'From: '+msgFrom(m)+'\nSubject: '+(m.subj||'')+'\n\n'+(m.orig||m.body).slice(0,6000)}]})});
       const dd=await r.json();
@@ -2604,7 +3658,7 @@ function extractTodos(){
 }
 function assistItemHTML(i){
   return `<div class="as-item" data-mid="${i.mid}">
-    <div class="as-line1"><span class="badge ${i.ch}">${CHANNELS[i.ch].label}</span><b>${esc(i.who)}</b>${i.unread?'<span class="badge trans">unread</span>':''}<span class="as-t">${rel(i.ts)}</span></div>
+    <div class="as-line1"><span class="badge ${i.ch}">${chan(i.ch).label}</span><b>${esc(i.who)}</b>${i.unread?'<span class="badge trans">unread</span>':''}<span class="as-t">${rel(i.ts)}</span></div>
     <div class="as-text">${esc(i.text)}</div>
     <div class="as-why">${i.why.map(w=>`<span class="as-chip ${w}">${w}</span>`).join('')}</div>
   </div>`;
@@ -2638,7 +3692,7 @@ async function runAIBrief(){
       method:'POST',
       headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-6',max_tokens:700,
+        model:'claude-sonnet-5',max_tokens:700,
         system:'You are Rata Assist, the briefing bot inside the Rata unified inbox. Given recent messages, produce a tight daily brief in plain text: 1) one-sentence overview, 2) TO-DOS (dash list, who + what + urgency), 3) AWAITING YOUR REPLY, 4) CAN WAIT. Be concrete and skip anything with no action.',
         messages:[{role:'user',content:'Recent messages as JSON:\n'+JSON.stringify(recent)}]
       })
@@ -2667,7 +3721,7 @@ function showWelcome(ob){
     if(cfg().googleClientId){
       rows.push('<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Gmail</b><span>Real inbox — transfers now with one Google sign-in.</span></div><button class="btn primary" id="w-gmail">Transfer inbox</button></div>');
     }else{
-      rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Gmail</b><span>Requested — the site needs its Google Client ID in config.js to sync.</span></div></div>');
+      rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Gmail</b><span>Requested — GOOGLE_CLIENT_ID must be set in the site\u2019s environment settings to sync.</span></div></div>');
     }
   }
   if(ob.connect.ms)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Microsoft — '+esc(ob.connect.ms)+'</b><span>Linked to your profile. Live Outlook/OneDrive sync arrives with the RATA backend.</span></div></div>');
@@ -2694,10 +3748,11 @@ function showWelcome(ob){
   // Stripe checkout return
   const q=new URLSearchParams(location.search);
   if(q.get('checkout')==='success'){
-    S.settings.plan='base';S.settings.planSince=S.settings.planSince||Date.now();save();
-    await audit('billing.checkout','RATA Base checkout completed via Stripe');
+    S.settings.plan=q.get('plan')&&TIERS[q.get('plan')]?q.get('plan'):'base';
+    S.settings.planSince=S.settings.planSince||Date.now();save();
+    await audit('billing.checkout',tierLabel()+' checkout completed via Stripe');
     history.replaceState(null,'',location.pathname);
-    toast('Welcome to RATA Base — payment received');
+    toast('Welcome to '+tierLabel()+' — payment received');
   }
   // Onboarding: apply signup wizard choices + offer inbox transfer
   try{
@@ -2734,15 +3789,30 @@ function showWelcome(ob){
       const sb=await supa();
       if(sb){
         const {data}=await sb.from('subscriptions').select('plan,status').eq('email',SESSION.email.toLowerCase()).maybeSingle();
-        if(data){
-          const active=['active','trialing','past_due'].includes(data.status);
-          S.settings.plan=active?(data.plan||'base'):'free';save();
-        }
+        /* The table is the authority, including when it says nothing. Only
+           acting on a row that exists left a hole: the plan set optimistically
+           on return from checkout survived forever if no subscription was ever
+           recorded, so ?checkout=success&plan=enterprise unlocked the tier
+           gates indefinitely. Absence of a row is absence of a plan.
+
+           The mailbox limit was never at risk — the server reads this same
+           table and refuses an over-limit link regardless of what the browser
+           believes — but the interface should not claim a plan nobody has. */
+        const active=data&&['active','trialing','past_due'].includes(data.status);
+        S.settings.plan=active?(data.plan||'base'):null;
+        save();
       }
     }catch(e){}
   }
   $('#rail-acct').textContent=SESSION?SESSION.email:'—';
   $('#rail-prof').textContent=S.settings.profile;
+  /* What the plan allows is the server's answer, so ask it once on boot and
+     whenever a link changes — the Accounts screen states the allowance before
+     anyone runs into it. */
+  refreshQuota();
+  renderSplitLock();
+  /* Mailboxes linked on another device belong here too. */
+  if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
   if(!S.audit.length){await audit('workspace.init','Rata standalone workspace created')}
   renderChSeg();renderMailFilters();renderMail();
   $('#nc-docs').textContent=S.documents.length;

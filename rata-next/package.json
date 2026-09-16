@@ -2,21 +2,26 @@
   "name": "rata",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "vendor:libs": "node scripts/vendor-libs.mjs",
-    "test": "node tests/run.mjs"
+    "test": "node tests/run.mjs",
+    "preview": "node scripts/build-preview.mjs",
+    "brand-icons": "node scripts/brand-icons.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "imapflow": "^1.0.164",
-    "next": "^14.2.35",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "next": "^16.3.4",
+    "nodemailer": "^10.0.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "playwright": "^1.56.1"
+    "playwright": "^1.56.1",
+    "simple-icons": "^16.31.0"
   }
 }

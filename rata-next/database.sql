@@ -50,11 +50,24 @@ create trigger workspaces_touch
 -- ------------------------------------------------------------
 create table if not exists public.subscriptions (
   email text primary key,
-  plan text not null default 'base',        -- 'base' | future: 'automations' | 'crm'
+  plan text not null default 'base',        -- 'base' | 'pro' | 'enterprise'
   status text,                              -- active | trialing | past_due | canceled
   stripe_customer text,
+  -- Custom domains bought as an add-on ($1.50/month each). Pro includes none
+  -- and buys them here; Enterprise includes them all and ignores this.
+  domain_addons integer not null default 0,
+  -- When Stripe says the event that last wrote this row happened. Deliveries
+  -- are not ordered, so this is what stops an upgrade that arrived late from
+  -- overwriting the downgrade that actually came after it.
+  event_at timestamptz,
   updated_at timestamptz not null default now()
 );
+
+-- Safe to run against a table created before the add-on existed.
+alter table public.subscriptions
+  add column if not exists domain_addons integer not null default 0;
+alter table public.subscriptions
+  add column if not exists event_at timestamptz;
 
 alter table public.subscriptions enable row level security;
 
@@ -82,12 +95,15 @@ create index if not exists subscriptions_status_idx
 -- 4. PROVIDER TOKENS — server-held credentials for live
 --    Outlook, Slack, and iCloud sync. Written and read ONLY by
 --    the RATA backend (service role). No client policies on
---    purpose. NOTE: values are stored in plaintext columns —
---    see the credential-storage note in BACKEND-SETUP.md.
+--    purpose. `access` and `refresh` hold AES-256-GCM
+--    ciphertext (see lib/secrets.js), each value bound to this
+--    row's user_id and provider so one moved to another row
+--    will not open. The key lives in TOKEN_ENC_KEY, outside
+--    this database.
 -- ------------------------------------------------------------
 create table if not exists public.provider_tokens (
   user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null,               -- 'ms' | 'slack' | 'apple'
+  provider text not null,               -- 'ms' | 'slack' | 'apple' | 'gmail_imap'
   label text,
   access text,
   refresh text,

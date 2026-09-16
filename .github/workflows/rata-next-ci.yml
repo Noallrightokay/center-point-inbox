@@ -29,10 +29,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: rata-next/package-lock.json
 
@@ -63,20 +63,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: rata-next/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      # Threshold is `critical`, not `high`, and that is deliberate rather than
-      # lax: Next 14.2.35 pins postcss 8.4.31 transitively, and the only fix npm
-      # offers is Next 16 — a major upgrade with breaking changes that does not
-      # belong to a routine CI run. Anything critical must still fail the build.
-      # Revisit the threshold when RATA moves to Next 16.
+      # Any critical advisory fails the build unless it is named in
+      # scripts/audit-gate.mjs with the reason it cannot reach this app and the
+      # test that keeps that true. That list is currently empty and should stay
+      # so — Next 16 cleared the two entries it held.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=critical
+        run: node scripts/audit-gate.mjs
+
+      # Everything below critical is reported without failing, so the count
+      # stays visible in the log rather than being silently tolerated.
+      - name: Report remaining advisories
+        if: always()
+        run: npm audit --omit=dev || true

@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { userFromRequest } from '../../../../lib/server';
+import { sealRow, openRow } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
 
+/* Microsoft rotates its tokens, so this both opens the stored pair and seals
+   the replacement. `row` arrives already decrypted. */
 async function freshToken(sb, row) {
   if (row.expires_at && Date.now() < new Date(row.expires_at).getTime() - 60000) return row.access;
   if (!row.refresh) return row.access;
@@ -16,8 +19,12 @@ async function freshToken(sb, row) {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
   })).json();
   if (!tok.access_token) return null;
-  await sb.from('provider_tokens').update({
+  const sealed = sealRow({
+    user_id: row.user_id, provider: 'ms',
     access: tok.access_token, refresh: tok.refresh_token || row.refresh,
+  });
+  await sb.from('provider_tokens').update({
+    access: sealed.access, refresh: sealed.refresh,
     expires_at: new Date(Date.now() + (tok.expires_in || 3600) * 1000).toISOString(),
     updated_at: new Date().toISOString(),
   }).eq('user_id', row.user_id).eq('provider', 'ms');
@@ -29,8 +36,12 @@ export async function GET(req) {
   if (error) return NextResponse.json({ error });
   const { data: row } = await sb.from('provider_tokens').select('*')
     .eq('user_id', user.id).eq('provider', 'ms').maybeSingle();
-  if (!row) return NextResponse.json({ error: 'Outlook isn\u2019t linked yet — link it in Settings' });
-  const token = await freshToken(sb, row);
+  if (!row) return NextResponse.json({ error: 'Outlook isn’t linked yet — link it in Settings' });
+  const opened = openRow(row, user.id);
+  if (row.access && !opened.access) {
+    return NextResponse.json({ error: 'The stored Outlook token could not be unlocked — relink Outlook in Accounts.' });
+  }
+  const token = await freshToken(sb, opened);
   if (!token) return NextResponse.json({ error: 'Microsoft session expired — link Outlook again' });
 
   const r = await (await fetch(

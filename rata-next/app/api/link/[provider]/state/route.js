@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { userFromRequest, providerReady, PROVIDERS, setLinkCookie } from '../../../../../lib/server';
 
 export async function POST(req, { params }) {
-  const provider = params.provider;
+  const { provider } = await params;
   if (!PROVIDERS[provider]) return NextResponse.json({ error: 'Unknown provider' }, { status: 400 });
   if (!providerReady(provider))
     return NextResponse.json({ error: `Backend missing ${PROVIDERS[provider].env.join(' / ')} — see BACKEND-SETUP.md` });

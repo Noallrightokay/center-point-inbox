@@ -80,12 +80,20 @@ first deploy that needs them**, and redeploy after any change:
 | `SUPABASE_URL` | Supabase → Settings → API → Project URL | accounts, linking | **shipped to browser** |
 | `SUPABASE_ANON_KEY` | Settings → API → **anon** key | accounts | **shipped to browser** |
 | `SUPABASE_SERVICE_ROLE_KEY` | Settings → API → **service_role** (SECRET) | linking | server only |
+| `TOKEN_ENC_KEY` | `openssl rand -base64 32` | linking any account | server only |
+| `TOKEN_ENC_KEY_OLD` | the previous `TOKEN_ENC_KEY`, during a rotation | linking | server only |
 | `GOOGLE_CLIENT_ID` | Google Cloud OAuth client | Gmail | **shipped to browser** |
 | `MS_CLIENT_ID` / `MS_CLIENT_SECRET` | see BACKEND-SETUP.md | Outlook | server only |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | see BACKEND-SETUP.md | Slack | server only |
 | `STRIPE_MONTHLY` / `STRIPE_ANNUAL` / `STRIPE_PORTAL` | see STRIPE-SETUP.md | billing | **shipped to browser** |
 
-**Every one of these is optional.** With none set, RATA deploys and runs on
+**Every one of these is optional**, with one condition: `TOKEN_ENC_KEY` is
+required as soon as you want anyone to link an account, because RATA will not
+store a mail credential unencrypted. Losing that key means every user relinks —
+keep it wherever you keep the service-role key, and see BACKEND-SETUP.md for
+rotating it.
+
+With none set, RATA deploys and runs on
 on-device accounts — inbox, People, Documents, DLP, audit chain and the Format
 Bridge all work; what you lose is cross-device sync and live provider linking.
 Add Supabase later by setting the variables and redeploying; nothing needs
@@ -130,7 +138,7 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
   runs entirely in the browser; tokens live in memory only, never stored.
 - **AI briefings** — each user pastes their own Anthropic key in Settings.
   (Personal secret — deliberately never in the site configuration.)
-- **Payments** — free for now. When ready to charge $8/mo · $79/yr, follow
+- **Payments** — free for now. When ready to charge $12.99/mo, follow
   **STRIPE-SETUP.md**: create the payment links, set them as `STRIPE_MONTHLY`,
   `STRIPE_ANNUAL` and `STRIPE_PORTAL`, and
   (recommended) deploy the included webhook for verified entitlements. The pricing
