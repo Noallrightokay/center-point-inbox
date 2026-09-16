@@ -82,6 +82,17 @@ export function rowForEvent(event, env = process.env) {
   const o = event?.data?.object;
   if (!type || !o) return null;
 
+  /* When Stripe says this happened.
+
+     Deliveries are not ordered and are retried for days, so an upgrade and the
+     downgrade that followed it can arrive the wrong way round — and the row
+     would end up holding whichever landed last rather than whichever happened
+     last. Carrying the event's own timestamp lets the write refuse to go
+     backwards. Stripe sends it in seconds. */
+  const at = Number.isFinite(event?.created)
+    ? new Date(event.created * 1000).toISOString()
+    : null;
+
   if (type === 'checkout.session.completed') {
     /* The only event that reliably carries the buyer's email, which is the key
        the app looks them up by. */
@@ -95,6 +106,7 @@ export function rowForEvent(event, env = process.env) {
       plan: planForPrice(priceOf(o, env), env) || 'base',
       domain_addons: domainAddonsOf(o, env),
       status: 'active',
+      event_at: at,
     };
   }
 
@@ -109,13 +121,14 @@ export function rowForEvent(event, env = process.env) {
       plan: planForPrice(priceOf(o, env), env),
       domain_addons: domainAddonsOf(o, env),
       status: LIVE_STATUSES.includes(o.status) ? o.status : (o.status || 'canceled'),
+      event_at: at,
     };
   }
 
   if (type === 'customer.subscription.deleted') {
     const customer = typeof o.customer === 'string' ? o.customer : (o.customer?.id || null);
     if (!customer) return null;
-    return { by: 'customer', stripe_customer: customer, plan: null, domain_addons: 0, status: 'canceled' };
+    return { by: 'customer', stripe_customer: customer, plan: null, domain_addons: 0, status: 'canceled', event_at: at };
   }
 
   return null;
@@ -150,4 +163,16 @@ export function domainAddonsOf(o, env = process.env) {
     if (line?.price?.id === want) n += Number(line.quantity) || 1;
   }
   return n;
+}
+
+/* Should this event be written over what is already stored?
+
+   Only when it is newer than whatever last wrote the row. A row with no
+   timestamp predates this guard and is always overwritten; an event with no
+   timestamp is assumed current, since refusing it would be worse than a rare
+   out-of-order write. */
+export function isNewer(eventAt, storedAt) {
+  if (!storedAt) return true;
+  if (!eventAt) return true;
+  return new Date(eventAt).getTime() >= new Date(storedAt).getTime();
 }

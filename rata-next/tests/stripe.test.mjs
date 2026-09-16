@@ -10,7 +10,7 @@
    tested at all — they depend on controlling the clock. */
 import { createHmac } from 'node:crypto';
 import { startServer, makeChecker } from './helpers.mjs';
-import { verifySignature, planForPrice, rowForEvent, domainAddonsOf, LIVE_STATUSES } from '../lib/stripe.js';
+import { verifySignature, planForPrice, rowForEvent, domainAddonsOf, isNewer, LIVE_STATUSES } from '../lib/stripe.js';
 
 const SECRET = 'whsec_test_secret_value';
 const ENV = {
@@ -136,6 +136,33 @@ export default async function run(state) {
       'events that change nothing are ignored rather than acted on');
     check(rowForEvent({ type: 'checkout.session.completed', data: { object: { customer_details: {} } } }, ENV) === null,
       'and a checkout with no email is not turned into a row keyed by nothing');
+  }
+
+  console.log('\n— a late delivery cannot undo a newer one —');
+  {
+    /* Stripe does not order deliveries and retries for days, so an upgrade and
+       the downgrade after it can arrive the wrong way round. Without a guard
+       the row holds whichever landed last, not whichever happened last — and
+       the customer is on the wrong plan with nothing in the logs to say why. */
+    const t = 1780000000;
+    const ev = (created, status) => ({
+      type: 'customer.subscription.updated', created,
+      data: { object: { customer: 'cus_X', status, items: { data: [{ price: { id: ENV.STRIPE_PRICE_PRO } }] } } },
+    });
+
+    const older = rowForEvent(ev(t, 'active'), ENV);
+    const newer = rowForEvent(ev(t + 3600, 'canceled'), ENV);
+    check(!!older.event_at && !!newer.event_at, `each event carries when Stripe says it happened: ${newer.event_at}`);
+    check(new Date(newer.event_at) > new Date(older.event_at), 'and the later one is later');
+
+    check(isNewer(newer.event_at, older.event_at), 'a newer delivery is applied');
+    check(!isNewer(older.event_at, newer.event_at), 'an older one arriving late is refused');
+    check(isNewer(older.event_at, older.event_at), 'a redelivery of the same event still applies, so a retry is not lost');
+    check(isNewer(newer.event_at, null), 'a row written before this guard existed is always overwritten');
+    check(isNewer(null, newer.event_at), 'and an event with no timestamp is treated as current rather than dropped');
+
+    const checkout = rowForEvent({ ...checkoutEvent('a@b.com', ENV.STRIPE_PRICE_PRO), created: t }, ENV);
+    check(!!checkout.event_at, 'checkout events are stamped too — they race the subscription ones');
   }
 
   console.log('\n— the live endpoint —');

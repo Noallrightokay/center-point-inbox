@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
-import { verifySignature, rowForEvent, LIVE_STATUSES } from '../../../../lib/stripe';
+import { verifySignature, rowForEvent, isNewer, LIVE_STATUSES } from '../../../../lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,12 +41,21 @@ export async function POST(req) {
 
   try {
     if (row.by === 'email') {
+      /* Read before writing, so a checkout event that took a long way round
+         cannot land on top of a subscription change that already happened. */
+      const { data: held } = await sb.from('subscriptions')
+        .select('event_at').eq('email', row.email).maybeSingle();
+      if (held && !isNewer(row.event_at, held.event_at)) {
+        return NextResponse.json({ received: true, acted: false, stale: true, type: event.type });
+      }
+
       const { error } = await sb.from('subscriptions').upsert({
         email: row.email,
         plan: row.plan,
         status: row.status,
         stripe_customer: row.stripe_customer,
         domain_addons: row.domain_addons || 0,
+        event_at: row.event_at,
         updated_at: now,
       });
       if (error) throw new Error(error.message);
@@ -63,12 +72,25 @@ export async function POST(req) {
        skipping the zero would leave them entitled to a domain they stopped
        paying for. */
     if (typeof row.domain_addons === 'number') patch.domain_addons = row.domain_addons;
+    if (row.event_at) patch.event_at = row.event_at;
 
-    const { data, error } = await sb.from('subscriptions')
-      .update(patch).eq('stripe_customer', row.stripe_customer).select('email');
+    /* The same guard, done in the database so two deliveries racing each other
+       cannot both pass a check and then both write. A row that has never been
+       stamped predates this and is always updated. */
+    let q = sb.from('subscriptions').update(patch).eq('stripe_customer', row.stripe_customer);
+    if (row.event_at) q = q.or(`event_at.is.null,event_at.lte.${row.event_at}`);
+
+    const { data, error } = await q.select('email');
     if (error) throw new Error(error.message);
 
     if (!data || !data.length) {
+      /* Either no row for this customer yet, or the stored one is newer. Tell
+         the two apart, because only the first is worth Stripe retrying. */
+      const { data: exists } = await sb.from('subscriptions')
+        .select('email').eq('stripe_customer', row.stripe_customer).maybeSingle();
+      if (exists) {
+        return NextResponse.json({ received: true, acted: false, stale: true, type: event.type });
+      }
       return NextResponse.json(
         { error: 'no subscription row for that customer yet', customer: row.stripe_customer },
         { status: 409 });

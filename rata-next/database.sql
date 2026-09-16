@@ -56,12 +56,18 @@ create table if not exists public.subscriptions (
   -- Custom domains bought as an add-on ($1.50/month each). Pro includes none
   -- and buys them here; Enterprise includes them all and ignores this.
   domain_addons integer not null default 0,
+  -- When Stripe says the event that last wrote this row happened. Deliveries
+  -- are not ordered, so this is what stops an upgrade that arrived late from
+  -- overwriting the downgrade that actually came after it.
+  event_at timestamptz,
   updated_at timestamptz not null default now()
 );
 
 -- Safe to run against a table created before the add-on existed.
 alter table public.subscriptions
   add column if not exists domain_addons integer not null default 0;
+alter table public.subscriptions
+  add column if not exists event_at timestamptz;
 
 alter table public.subscriptions enable row level security;
 
