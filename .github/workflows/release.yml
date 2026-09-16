@@ -1,8 +1,8 @@
 name: Release installers
 
 # The three build machines RATA needs, because one machine cannot be all three:
-# a .dmg has to be made on macOS and a .msi on Windows, and neither can be
-# produced — let alone signed — from Linux.
+# a .dmg has to be made on macOS and a Windows installer on Windows, and
+# neither can be produced — let alone signed — from Linux.
 #
 # Tag a version to cut a release, or run it by hand to get installers to test
 # without tagging anything.
@@ -48,7 +48,7 @@ jobs:
             slug: macos-intel
             os: macos-latest
             args: "--target x86_64-apple-darwin"
-          - name: Windows (.msi, .exe)
+          - name: Windows (.exe)
             slug: windows
             os: windows-latest
             args: ""
@@ -189,11 +189,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rata-${{ matrix.slug }}
+          # One pattern per thing tauri.conf.json actually builds — deb,
+          # appimage, dmg, nsis. There used to be a *.msi here too, which
+          # matched nothing because `msi` is not in that target list. It went
+          # unnoticed because if-no-files-found only fires when *every* pattern
+          # misses, so the NSIS one covered for it and the job kept promising an
+          # installer it had never produced.
           path: |
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*.deb
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*.AppImage
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*.dmg
-            desktop/rata-app/src-tauri/target/**/release/bundle/**/*.msi
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*-setup.exe
           if-no-files-found: error
           retention-days: 14

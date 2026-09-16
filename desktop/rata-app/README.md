@@ -45,7 +45,7 @@ cd src-tauri
 # discover after shipping.
 export RATA_LICENCE_PUBLIC_KEY="$(cat /path/to/licence.pub)"
 cargo build --release
-cargo tauri build                   # installers: .deb/.AppImage, .dmg, .msi
+cargo tauri build                   # installers: .deb/.AppImage, .dmg, .exe
 ```
 
 `licence.pub` is the public half of the pair in `LICENSING.md`. It is not a
@@ -54,7 +54,8 @@ build, in CI, and anywhere else convenient. The private half never leaves the
 server.
 
 Installers must be built on the platform they target — a Linux machine cannot
-produce a .dmg or a .msi, let alone sign one. That is three build machines, or
+produce a .dmg or a Windows installer, let alone sign one. That is three build
+machines, or
 three CI runners.
 
 ## Releasing
@@ -65,7 +66,8 @@ without tagging anything — a manual run attaches them to the run and creates n
 release.
 
 It builds four: Linux (.deb and .AppImage), macOS on Apple silicon, macOS on
-Intel, and Windows (.msi and .exe). A tag produces a **draft** release, because
+Intel, and Windows (an NSIS `-setup.exe`). A tag produces a **draft** release,
+because
 one that appears the moment a tag is pushed is one nobody checked.
 
 Linux builds on ubuntu-22.04 rather than the newest runner on purpose: an
