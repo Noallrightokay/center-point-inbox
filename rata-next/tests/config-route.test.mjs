@@ -1,7 +1,7 @@
 /* /config.js emits the PUBLIC site configuration from environment variables.
    The stakes are asymmetric: publishing a Supabase service_role key by mistake
-   would hand every visitor read/write over every user's data, including the
-   stored mail credentials in provider_tokens. These tests exist mainly to keep
+   would hand every visitor read/write over every user's data. These tests exist
+   every user's workspace and subscription. These tests exist mainly to keep
    that from ever regressing silently. */
 import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
 import { writeFile, rm } from 'node:fs/promises';

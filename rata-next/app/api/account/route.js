@@ -6,15 +6,20 @@ export const dynamic = 'force-dynamic';
 
 /* Deleting an account, and meaning it.
 
-   Everything RATA holds for a person comes out: the encrypted mailbox
-   credentials, the preferences, any half-finished link, the subscription
-   record, and the login itself. Three of those tables cascade from auth.users
-   anyway, but they are deleted explicitly so the reply can say what went and
-   so this keeps working if the schema's cascades ever change.
+   Everything RATA holds for a person comes out: the preferences, the
+   subscription record, and the login itself. Both tables cascade from
+   auth.users anyway, but they are deleted explicitly so the reply can say what
+   went and so this keeps working if the schema's cascades ever change.
 
-   Two things this cannot reach, and says so rather than implying otherwise:
-   the mail, which never left the customer's provider, and Stripe's billing
-   records, which Stripe is required to keep. */
+   There is much less to delete than there was, and that is the point of the
+   move to the device: the mailbox passwords RATA used to hold are in the
+   customer's own keychain now, so this route cannot reach them and no longer
+   needs to.
+
+   Three things this cannot reach, and says so rather than implying otherwise:
+   the mail, which never left the customer's provider; anything the app holds
+   on their own machine; and Stripe's billing records, which Stripe is required
+   to keep. */
 
 export async function DELETE(req) {
   const { user, sb, error } = await userFromRequest(req);
@@ -43,10 +48,6 @@ export async function DELETE(req) {
   };
 
   try {
-    /* Credentials first. If anything later fails, the thing worth losing
-       sleep over is already gone. */
-    await wipe('provider_tokens', 'user_id', user.id);
-    await wipe('link_states', 'user_id', user.id);
     await wipe('workspaces', 'id', user.id);
     await wipe('subscriptions', 'email', email);
 
@@ -58,7 +59,7 @@ export async function DELETE(req) {
       deleted: { ...removed, login: 1 },
       /* Said plainly, because a deletion confirmation that overstates itself
          is worse than none. */
-      note: 'Your mail was never stored by RATA and is untouched at your provider. Stripe keeps its billing records, which it is required to do.',
+      note: 'Your mail was never stored by RATA and is untouched at your provider. Anything the app holds is on your own computer — uninstall it to remove that. Stripe keeps its billing records, which it is required to do.',
     });
   } catch (e) {
     return NextResponse.json({
@@ -76,11 +77,8 @@ export async function GET(req) {
   const email = (user.email || '').toLowerCase();
 
   const { data: sub } = await sb.from('subscriptions').select('plan,status').eq('email', email).maybeSingle();
-  const { data: links } = await sb.from('provider_tokens').select('provider').eq('user_id', user.id);
-
   return NextResponse.json({
     email,
-    mailboxes: (links || []).length,
     subscription: sub ? { plan: sub.plan, status: sub.status } : null,
     blocked: blocksDeletion(sub),
     removes: DELETION_REMOVES,

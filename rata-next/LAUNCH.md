@@ -23,7 +23,7 @@ Neither of these can be worked around, and both fail quietly if skipped:
 
 | | What happens without it |
 |---|---|
-| **`TOKEN_ENC_KEY` is not set** | Linking any mailbox fails with "TOKEN_ENC_KEY is not set". By design — RATA refuses to store a mail password in the clear rather than doing it quietly. **Nobody can connect an inbox until this exists.** |
+| **`LICENCE_PRIVATE_KEY` is not set** | Nobody can be issued a licence, so every copy of the app stops working within thirty days and no new customer can start at all. It is a variable, not a crash: the site looks perfectly healthy. `/api/health` reports it. |
 | **Nothing since `4a19f94` is deployed** | The live site is running a build from before any of this: it still shows $8 / $79, and has no multi-mailbox linking, no MX discovery, no credential encryption and no Stripe. |
 
 ---
@@ -45,7 +45,7 @@ environment settings. Do not send it through chat, and do not commit it.
 openssl rand -base64 32
 ```
 
-Set as **`TOKEN_ENC_KEY`**.
+Set as **`LICENCE_PRIVATE_KEY`**. See LICENSING.md, which also covers the public half that goes into the app build.
 
 Then put a copy somewhere durable and **separate from your database backups** —
 a password manager is fine. Lose it and every customer has to relink every
@@ -82,7 +82,7 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 |---|---|
 | `SUPABASE_URL` | your Supabase URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | the service-role key |
-| `TOKEN_ENC_KEY` | from step 2 |
+| `LICENCE_PRIVATE_KEY` | from step 2 |
 | `STRIPE_WEBHOOK_SECRET` | the `whsec_…` |
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
@@ -103,10 +103,10 @@ Public — these are emitted to every visitor, which is correct for all of them:
 and logs why. That refusal is covered by a test, but check the browser console
 after deploying anyway.
 
-Leave unset unless you mean them: `GOOGLE_CLIENT_ID` (one-click Gmail stays off
-without it; the app-password path works for Gmail regardless),
-`MS_CLIENT_ID`/`MS_CLIENT_SECRET`, `SLACK_*`, and `RATA_MAIL_HOST` (RATA-hosted
-mailboxes — see `MAIL-HOSTING.md`; there is no mail server yet).
+Leave unset unless you mean them: `GOOGLE_CLIENT_ID` (one-click sign-in stays
+off without it). The Microsoft and Slack variables are gone — those links are
+made in the desktop app now, and the server has no route that reads anybody's
+messages.
 
 ## 5. Deploy
 
@@ -130,7 +130,7 @@ In this order, because each depends on the last:
    that it is device-only.
 3. **Link a mailbox** — a Gmail or iCloud address with an app password. It
    should report which provider it found. *If this errors about
-   `TOKEN_ENC_KEY`, stop and finish step 2.*
+   `LICENCE_PRIVATE_KEY`, stop and finish step 2.*
 4. **Link a second mailbox** on Base — must be refused with the Pro price named.
 5. **Pay** with a test card. Stripe's webhook log shows `200`; the
    `subscriptions` row appears; reload and the plan shows in Settings.
@@ -177,8 +177,8 @@ turn it off, and the whole class goes away.
 
 - **Enterprise** — defined, not for sale. The CRM, texts and automations it
   advertises do not exist. `sellable` in `lib/plan.js` turns it back on.
-- **RATA-hosted mailboxes** — the app side is built and inert; there is no mail
-  server. `MAIL-HOSTING.md`.
+- **RATA-hosted mailboxes** — there is no mail server, and the code that
+  anticipated one went with the rest of the server-side mail handling.
 - **Google one-click sign-in** — no client id. Gmail still links by app
   password, which is the path most people take anyway.
 - **The affiliate programme** — modelled, not built.

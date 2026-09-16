@@ -28,7 +28,6 @@ export function blocksDeletion(sub) {
 /* What deletion takes and what it cannot reach. Written once, so the warning
    shown in the app is generated from the same place as the behaviour. */
 export const DELETION_REMOVES = [
-  'the encrypted password for every mailbox you connected',
   'your preferences and folder names',
   'your subscription record',
   'your login',
@@ -36,6 +35,7 @@ export const DELETION_REMOVES = [
 
 export const DELETION_KEEPS = [
   'your mail, which stays at your provider',
+  'your mailbox passwords, which are in your own computer\u2019s keychain and never reached RATA',
   "Stripe's billing records, which Stripe must keep",
   'anything already on this device, until you clear it here',
 ];

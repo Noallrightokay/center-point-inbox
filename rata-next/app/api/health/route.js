@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { admin } from '../../../lib/server';
-import { encryptionReady } from '../../../lib/secrets';
+import { issue } from '../../../lib/licence';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,13 +11,16 @@ export const dynamic = 'force-dynamic';
    An uptime check on `/` answers 200 for as long as the web server is alive,
    which is the least interesting thing that can be true. It says nothing about
    the two failures that actually take RATA down without taking the site down:
-   Supabase unreachable, so nobody can sign in or be billed; and TOKEN_ENC_KEY
-   missing, so every attempt to link a mailbox is refused — the product's whole
-   purpose, broken, behind a page that loads perfectly.
+   Supabase unreachable, so nobody can sign in or be billed; and
+   LICENCE_PRIVATE_KEY missing, so nobody can get a licence and every copy of
+   the app stops working within thirty days — the product's whole purpose,
+   broken, behind a page that loads perfectly.
 
-   The second one is the reason this exists. It is not a crash, it is a
-   variable, and a variable can go missing on any redeploy without a single
-   error anywhere.
+   The second one is the reason this exists. It used to be TOKEN_ENC_KEY, for
+   exactly the same reason: it is not a crash, it is a variable, and a variable
+   can go missing on any redeploy without a single error anywhere. The mailbox
+   credentials it protected now live on the customer's own machine, so the
+   variable that can silently end the product is the signing key instead.
 
    Two audiences, so two levels of detail. Anyone may ask whether RATA is up —
    that is what a monitor needs and it gives nothing away. Which piece is
@@ -67,23 +70,28 @@ export async function GET(req) {
   const started = Date.now();
 
   const database = await checkDatabase();
-  /* encryptionReady throws on a malformed key rather than returning false, so
-     a key of the wrong length reads as broken here rather than as fine until
-     somebody tries to link a mailbox. */
-  let encryption;
+  /* Issuing a licence is tried rather than assumed: a key that is present but
+     malformed reads as broken here, rather than as fine until the first
+     customer who has paid cannot get a licence. Nothing is stored — the token
+     is signed and thrown away. */
+  let licensing;
   try {
-    encryption = encryptionReady()
-      ? { ok: true }
-      : { ok: false, detail: 'TOKEN_ENC_KEY is not set — no mailbox can be linked' };
+    issue({ email: 'health@rata.invalid', plan: 'base' });
+    licensing = { ok: true };
   } catch (e) {
-    encryption = { ok: false, detail: e.message };
+    licensing = {
+      ok: false,
+      detail: /LICENCE_PRIVATE_KEY/.test(e.message)
+        ? 'LICENCE_PRIVATE_KEY is not set — no licence can be issued, so the app stops working for everyone within thirty days'
+        : e.message,
+    };
   }
 
   const billing = process.env.STRIPE_WEBHOOK_SECRET
     ? { ok: true }
     : { ok: false, detail: 'STRIPE_WEBHOOK_SECRET is not set — payments will not be recorded' };
 
-  const checks = { database, encryption, billing };
+  const checks = { database, licensing, billing };
 
   /* `up` and `ready` are different questions and a monitor wants both. The app
      is up when the database answers; it is ready when everything the product

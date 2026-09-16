@@ -40,7 +40,7 @@ This is where every registered account and workspace lives.
 1. supabase.com → New project → copy **Project URL** + **anon public key**
    (Settings → API).
 2. SQL editor → paste the whole of **`database.sql`** from this project → Run.
-   That creates `workspaces`, `subscriptions`, `provider_tokens`, and `link_states`
+   That creates `workspaces` and `subscriptions`
    with row-level security on all four. It is safe to re-run.
 3. Settings → API → also copy the **`service_role`** key. You need it in step 3.
    It bypasses RLS — treat it like a root password. It goes in
@@ -80,18 +80,16 @@ first deploy that needs them**, and redeploy after any change:
 | `SUPABASE_URL` | Supabase → Settings → API → Project URL | accounts, linking | **shipped to browser** |
 | `SUPABASE_ANON_KEY` | Settings → API → **anon** key | accounts | **shipped to browser** |
 | `SUPABASE_SERVICE_ROLE_KEY` | Settings → API → **service_role** (SECRET) | linking | server only |
-| `TOKEN_ENC_KEY` | `openssl rand -base64 32` | linking any account | server only |
-| `TOKEN_ENC_KEY_OLD` | the previous `TOKEN_ENC_KEY`, during a rotation | linking | server only |
+| `LICENCE_PRIVATE_KEY` | see LICENSING.md | issuing licences | server only |
 | `GOOGLE_CLIENT_ID` | Google Cloud OAuth client | Gmail | **shipped to browser** |
-| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` | see BACKEND-SETUP.md | Outlook | server only |
-| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | see BACKEND-SETUP.md | Slack | server only |
 | `STRIPE_MONTHLY` / `STRIPE_ANNUAL` / `STRIPE_PORTAL` | see STRIPE-SETUP.md | billing | **shipped to browser** |
 
-**Every one of these is optional**, with one condition: `TOKEN_ENC_KEY` is
-required as soon as you want anyone to link an account, because RATA will not
-store a mail credential unencrypted. Losing that key means every user relinks —
-keep it wherever you keep the service-role key, and see BACKEND-SETUP.md for
-rotating it.
+**Every one of these is optional**, with one condition: `LICENCE_PRIVATE_KEY` is
+required as soon as you want anyone to *use* the app, because nothing else can
+issue a licence. Losing it does not break existing licences — they verify
+against the public half until they expire — but no new one can be issued until
+it is replaced, and replacing it means a new app build. Keep it wherever you
+keep the service-role key. See LICENSING.md.
 
 With none set, RATA deploys and runs on
 on-device accounts — inbox, People, Documents, DLP, audit chain and the Format
@@ -128,9 +126,9 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
 
 ## Optional integrations (any time)
 
-- **Outlook + Slack live sync** — server-side OAuth. Follow **BACKEND-SETUP.md**.
-- **iCloud Mail** — no setup on your side; each user adds their own iCloud address
-  and an app-specific password in Settings.
+- **Mailboxes of any kind** — no setup on your side, and none possible: linking,
+  syncing and sending happen in the desktop app, on the customer's own machine.
+  The server has no route that touches a mailbox.
 - **Real Gmail inbox** — Google Cloud → OAuth client ID (Web) with your domain as an
   authorized origin → set as `GOOGLE_CLIENT_ID`. Add BOTH scopes on the consent screen:
   `gmail.readonly` and `gmail.send`. Users then link Google accounts in Settings —
@@ -149,7 +147,7 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
 |---|---|
 | Accounts registered to your database, cross-device workspaces | **Real** (Supabase) |
 | Blank-slate inboxes, People, Documents, DLP, audit chain, Assist | **Real**, in-app |
-| Outlook, Slack, iCloud feeds | **Real** on a Node.js Web App deploy (see BACKEND-SETUP.md) |
+| Any mailbox — IMAP, Gmail, Outlook, iCloud | **Real**, in the desktop app. The website no longer fetches anybody's mail |
 | Gmail feed | **Real** with a Google client ID — browser-side, no server needed |
 | Stripe checkout, portal, entitlements | **Ready** — activates when links added |
 | Discord / SMS live feeds | Pending. Discord's API does not permit reading user DMs via OAuth; SMS needs a telephony provider. UI and threading are built and waiting. |
