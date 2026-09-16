@@ -83,10 +83,17 @@ moves:
 1. `bridge.js` is injected after `config.js`.
 2. `config.js` is replaced with a device one — no Supabase, so `app.html` falls
    into the on-device account mode it already has.
-3. The Google Fonts links are removed. A local-first mail app that contacts
-   Google on every launch tells Google when its customer opens their mail. **The
-   interface falls back to the system font until the three families are
-   vendored** — a visible difference, and a known one.
+3. The fonts are checked, not stripped. They used to be stripped, because a
+   local-first mail app that contacts Google on every launch tells Google when
+   its customer opens their mail — they are vendored now, in
+   `rata-next/public/fonts`, so there is nothing to remove. A page that
+   reintroduced a Google link would put that request back into an app with no
+   network, where the content security policy would block it silently, so the
+   script fails on one instead.
+
+Run `sync-ui.sh` **before** `cargo build`, not after. Tauri compiles the web
+assets into the binary, so building first produces an app carrying whatever was
+in `ui/` last time — which looks exactly like a change that did not take.
 
 The interface reaches the outside world through one function, `apiFetch`, and
 `bridge.js` answers it. That is the entire desktop-specific frontend.
@@ -136,7 +143,6 @@ deliberate trade, and `LICENCE_DAYS` is the one place to change it.
 
 ## What is not done yet
 
-- **The fonts are not vendored** — see above.
 - **OAuth providers** (Outlook, Slack, Google sign-in) need a server to receive
   the redirect. The bridge says so plainly. Every IMAP mailbox, Gmail and
   Outlook included, links here with an app password.

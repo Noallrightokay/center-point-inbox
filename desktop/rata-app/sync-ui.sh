@@ -15,8 +15,11 @@ out="$here/ui"
 
 rm -rf "$out"
 mkdir -p "$out"
-cp -r "$src/vendor" "$src/icons" "$out/"
+cp -r "$src/vendor" "$src/icons" "$src/fonts" "$out/"
 cp "$src/manifest.json" "$out/"
+
+# The typefaces travel with the app; it must render correctly with no network.
+[ -f "$out/fonts/fonts.css" ] || { echo "no vendored fonts at $src/fonts — run rata-next/scripts/vendor-fonts.mjs" >&2; exit 1; }
 cp "$here/ui-src/bridge.js" "$out/bridge.js"
 
 # The desktop app IS the app: it opens straight into it rather than the
@@ -43,17 +46,16 @@ s = open(p, encoding='utf-8').read()
 anchor = '<script src="config.js"></script>'
 s = s.replace(anchor, anchor + '\n<script src="bridge.js"></script>', 1)
 
-# Google Fonts, removed rather than allowed through the CSP.
-#
-# A local-first mail app that contacts Google on every launch tells Google when
-# its customer opens their mail, which is the sort of thing this product exists
-# not to do. The interface falls back to the system UI font until the three
-# families are vendored — that is a visible difference and a known one.
+# The fonts used to be stripped here, because a local-first mail app that
+# contacts Google on every launch tells Google when its customer opens their
+# mail. They are vendored now, so there is nothing to strip — but a page that
+# reintroduced a Google link would put that request back into an app that is
+# supposed to work with no network at all, and the content security policy would
+# block it silently. Fail here instead.
 import re
-before = s
-s = re.sub(r'\s*<link[^>]*fonts\.(googleapis|gstatic)\.com[^>]*>', '', s)
-if s == before:
-    print('note: no Google Fonts links found — either already vendored or moved', file=sys.stderr)
+if re.search(r'fonts\.(googleapis|gstatic)\.com', s):
+    sys.exit('app.html loads fonts from Google; the desktop build has no network for them '
+             '(see rata-next/scripts/vendor-fonts.mjs)')
 open(p, 'w', encoding='utf-8').write(s)
 PY
 
