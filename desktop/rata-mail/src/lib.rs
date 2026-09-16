@@ -15,14 +15,24 @@
 //!   domain that points at Google or Microsoft rather than running a mail
 //!   server, so the domain's own DNS is asked instead of guessed at.
 //! * **Naming a mailbox** (`key`) — one stable identifier per address.
+//! * **Reading it** (`imap`) — connect, sign in, fetch, and tell a wrong
+//!   password apart from an unreachable server, because retrying the first is
+//!   how a provider decides to lock an account.
+//! * **Making a header readable** (`words`) — imapflow did this for free and
+//!   nothing here does.
 
 pub mod discover;
 pub mod guard;
+pub mod imap;
 pub mod key;
+pub mod resolve;
+pub mod words;
 
 pub use guard::{check_literal, check_resolved, is_public, HostVerdict};
 pub use discover::{
     conventional, is_auth_failure, mx_rule, no_imap, smtp_candidates, table, Candidate, MailHost,
     MxRule, Source, IMAP_PORT, SMTP_PORTS,
 };
+pub use imap::{fetch_inbox, verify, Account, Fetched, Message, Verified, Verify};
 pub use key::{domain_of, mail_key};
+pub use resolve::{check_host, discover, resolve_public, Discovery, Resolver};
