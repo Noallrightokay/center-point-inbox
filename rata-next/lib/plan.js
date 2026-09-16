@@ -45,6 +45,7 @@ export const PLANS = {
        does not hand out new ones. */
     ratamail: 0,
     domains: 0,
+    sellable: true,
     blurb: 'Up to two mailboxes in one Center Point inbox, translated as they arrive, and any file converted to any format.',
   },
   pro: {
@@ -64,6 +65,7 @@ export const PLANS = {
        somewhere else. Their own domain is the paid add-on below. */
     ratamail: UNLIMITED,
     domains: 0,
+    sellable: true,
     blurb: 'Everything in Base, with more than two mailboxes, the option to view them side by side, summaries of what arrived, and your own @mailrata.org addresses.',
   },
   enterprise: {
@@ -81,6 +83,17 @@ export const PLANS = {
     automations: true,
     ratamail: UNLIMITED,
     domains: UNLIMITED,
+    /* Not on sale.
+
+       Enterprise is the only tier whose headline features — the CRM, texts and
+       automations — are flags nothing in the app reads yet. Selling it would
+       mean taking $72 a month for three things that do not exist, so it stays
+       defined (the shape is settled, and a webhook still has to understand the
+       price if one is ever created) and stays out of every checkout, pricing
+       page and upgrade prompt until the features are real.
+
+       Flipping this to true is the whole change when they are. */
+    sellable: false,
     blurb: 'Everything in Pro, plus mail on as many of your own domains as you like, the CRM, texts, automations and a shared view across the team.',
   },
 };
@@ -119,6 +132,12 @@ export const DOMAIN_ADDON = {
 };
 
 export const ORDER = ['base', 'pro', 'enterprise'];
+
+/* The plans somebody can actually buy today, in order. Every price list,
+   checkout button and "upgrade to…" sentence reads this rather than ORDER —
+   pointing a customer at a plan with no way to buy it is worse than not
+   mentioning it. */
+export const SELLABLE = ORDER.filter(p => PLANS[p].sellable);
 export const CHAT_TYPES = ['slack', 'discord', 'phone'];
 
 export function planDef(plan) {
@@ -153,7 +172,11 @@ export function countLinks(rows) {
 export function nextFor(plan, bucket) {
   const from = ORDER.indexOf(plan);
   const cap = planDef(plan)[bucket];
-  return ORDER.slice(from + 1).find(p => PLANS[p][bucket] > cap) || null;
+  /* Sellable only: "upgrade to Enterprise" is not advice while Enterprise
+     cannot be bought — it is a dead end with a price on it. When nothing
+     available lifts the limit, the refusal says what the limit is and stops,
+     which is the honest version. */
+  return ORDER.slice(from + 1).find(p => PLANS[p].sellable && PLANS[p][bucket] > cap) || null;
 }
 
 /* Returns null when the link is allowed, or the sentence to show when it is
@@ -206,7 +229,10 @@ export function domainRefusal(plan, used, purchased = 0) {
   const have = purchased
     ? `You are hosting ${used} domain${used === 1 ? '' : 's'}.`
     : `${planDef(plan).label} includes addresses at mailrata.org rather than mail on your own domain.`;
-  return `${have} Add ${purchased ? 'another' : 'one'} for ${money(DOMAIN_ADDON.price)} a month, or ${PLANS.enterprise.label} (${money(PLANS.enterprise.price)}/month) includes as many as you like.`;
+  const alt = PLANS.enterprise.sellable
+    ? ` Or ${PLANS.enterprise.label} (${money(PLANS.enterprise.price)}/month) includes as many as you like.`
+    : '';
+  return `${have} Add ${purchased ? 'another' : 'one'} for ${money(DOMAIN_ADDON.price)} a month.${alt}`;
 }
 
 /* The user's plan, read from the subscriptions table the Stripe webhook

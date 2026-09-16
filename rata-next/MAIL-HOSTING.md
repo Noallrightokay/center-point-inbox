@@ -20,7 +20,7 @@ on the server.
 |---|---|---|
 | Base ($12.99) | — | — |
 | Pro ($23.99) | yes | $1.50 / month per domain |
-| Enterprise ($72) | yes | included, no limit |
+| Enterprise ($72) — *not on sale yet* | yes | included, no limit |
 
 ## What has to exist
 

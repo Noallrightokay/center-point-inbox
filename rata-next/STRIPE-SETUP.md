@@ -22,7 +22,7 @@ with a **recurring monthly** price:
 |---|---|---|
 | RATA Base | $12.99 / month | Up to two mailboxes in one Center Point inbox |
 | RATA Pro | $23.99 / month | More than two mailboxes, side by side, summaries |
-| RATA Enterprise | $72 / month | CRM, texts, automations |
+| ~~RATA Enterprise~~ | ~~$72 / month~~ | **Not on sale.** The CRM, texts and automations are not built, so there is no product to charge for yet. Create this one when they are. |
 
 And one add-on, which is not a plan:
 
@@ -34,7 +34,7 @@ Create the add-on price with **"Customers can adjust the quantity"** enabled —
 somebody with three domains pays for three, carried as a quantity on the same
 subscription rather than as three subscriptions.
 
-Open each price and copy its **price ID** (`price_…`). You need all four.
+Open each price and copy its **price ID** (`price_…`). You need Base, Pro and the add-on — three. Enterprise waits until its features exist; `sellable` in `lib/plan.js` is what turns it back on.
 
 ## 2. A payment link for each
 

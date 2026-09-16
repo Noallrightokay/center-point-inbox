@@ -8,7 +8,7 @@
 import { startServer, makeChecker } from './helpers.mjs';
 import { describe, candidateHosts, discoverHosts, mailHostForMx, mailKey, isMailKey, domainOf, checkHost, isAuthFailure, smtpCandidates, isRatamail, ratamailDomain } from '../lib/mail.js';
 import { allowed, failed, succeeded, reset, LINK_ATTEMPTS, waitPhrase } from '../lib/ratelimit.js';
-import { PLANS, UNLIMITED, bucketOf, countLinks, refusal, domainRefusal, domainsAllowed, money, DOMAIN_ADDON } from '../lib/plan.js';
+import { PLANS, UNLIMITED, SELLABLE, bucketOf, countLinks, refusal, domainRefusal, domainsAllowed, money, DOMAIN_ADDON } from '../lib/plan.js';
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -292,8 +292,10 @@ export default async function run(state) {
        would be both wrong and a good way to lose them. */
     const ask = domainRefusal('pro', 0, 0);
     check(/\$1\.50/.test(ask), `Pro is offered the add-on, with its price: "${ask}"`);
-    check(!/^RATA Enterprise/.test(ask) && /Enterprise/.test(ask),
-      'with Enterprise mentioned as the alternative rather than the answer');
+    /* It used to name Enterprise as the alternative. It must not while
+       Enterprise cannot be bought — the add-on is the whole answer now. */
+    check(!/Enterprise/.test(ask),
+      'and does not send them to a plan that is not on sale');
     check(domainRefusal('pro', 1, 1) === null ? false : /another/.test(domainRefusal('pro', 1, 1)),
       'a second domain on top of one bought is offered as another add-on');
     check(domainRefusal('pro', 0, 1) === null, 'and a domain already paid for is simply allowed');
@@ -310,6 +312,36 @@ export default async function run(state) {
     check(!/\$\d+\.\d(?!\d)/.test(ask), 'and no refusal quotes a price with a digit missing');
   }
 
+  console.log('\n— nothing offers a plan that cannot be bought —');
+  {
+    /* Enterprise's three headline features are flags nothing in the app reads.
+       Until they exist, taking $72 a month for them is the problem — so it
+       stays defined and stays out of everything that sells. */
+    check(SELLABLE.join(',') === 'base,pro', `on sale: ${SELLABLE.join(', ')}`);
+    check(PLANS.enterprise.sellable === false, 'Enterprise is defined but not for sale');
+    check(!!PLANS.enterprise.crm, 'and still defined, so an account holding it resolves to a tier');
+
+    /* The trap this closes: a limit whose only way out is a plan with no way
+       to buy it. Better to state the limit and stop. */
+    const chat = refusal('pro', 'chat', 3);
+    check(!/Enterprise/.test(chat), `a Pro chat limit does not point at Enterprise: "${chat}"`);
+    check(/RATA Pro includes up to 3/.test(chat), 'it just says what the limit is');
+
+    const dom = domainRefusal('pro', 0, 0);
+    check(!/Enterprise/.test(dom) && /\$1\.50/.test(dom),
+      `nor does the domain add-on: "${dom}"`);
+
+    /* Base -> Pro still works, or the ladder would have no rungs at all. */
+    check(/RATA Pro/.test(refusal('base', 'mail', 2)), 'Base is still told about Pro');
+
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const here = fileURLToPath(new URL('.', import.meta.url));
+    const visible = readFileSync(here + '../public/index.html', 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+    check(!/RATA Enterprise/.test(visible), 'and the pricing page does not advertise it');
+    check(/RATA Base/.test(visible) && /RATA Pro/.test(visible), 'while still selling the two that are real');
+  }
+
   console.log('\n— the price on the website is the price in the product —');
   {
     /* These were three separate copies of the same numbers, and a price change
@@ -320,7 +352,7 @@ export default async function run(state) {
     const here = fileURLToPath(new URL('.', import.meta.url));
     const home = readFileSync(here + '../public/index.html', 'utf8');
 
-    for (const k of ['base', 'pro', 'enterprise']) {
+    for (const k of SELLABLE) {
       const shown = money(PLANS[k].price);
       check(home.includes(shown), `the pricing page quotes ${PLANS[k].label} at ${shown}`);
     }
