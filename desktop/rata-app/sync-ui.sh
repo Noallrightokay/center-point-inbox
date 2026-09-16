@@ -21,30 +21,47 @@ cp "$src/manifest.json" "$out/"
 # The typefaces travel with the app; it must render correctly with no network.
 [ -f "$out/fonts/fonts.css" ] || { echo "no vendored fonts at $src/fonts — run rata-next/scripts/vendor-fonts.mjs" >&2; exit 1; }
 cp "$here/ui-src/bridge.js" "$out/bridge.js"
+cp "$here/ui-src/bridge.css" "$out/bridge.css"
 
-# The desktop app IS the app: it opens straight into it rather than the
-# marketing page, so app.html is what index.html means here.
-cp "$src/app.html" "$out/index.html"
+# Three pages, because the interface navigates between them by name.
+#
+# This was one page — app.html copied over index.html — and it was wrong in a
+# way that only shows on a machine that has never run RATA before: with no
+# account yet, app.html sends you to auth.html, and auth.html sends you back to
+# app.html afterwards. Neither existed in the bundle, so a first run ended on a
+# blank page. Ship the names the interface actually asks for.
+cp "$src/app.html" "$out/app.html"
+cp "$src/auth.html" "$out/auth.html"
+
+# index.html is the entry point Tauri opens, and it is a signpost rather than a
+# third copy of a quarter-megabyte file.
+cat > "$out/index.html" <<'HTML'
+<!doctype html><meta charset="utf-8"><title>RATA</title>
+<meta http-equiv="refresh" content="0;url=app.html">
+<script>location.replace('app.html')</script>
+HTML
 
 # The hook the bridge attaches to. If this ever disappears from app.html the
 # desktop build must fail here rather than ship an app whose every action
 # silently does nothing.
-grep -q '__RATA_NATIVE__' "$out/index.html" || {
+grep -q '__RATA_NATIVE__' "$out/app.html" || {
   echo "app.html has no __RATA_NATIVE__ hook in apiFetch — the desktop bridge has nothing to attach to" >&2
   exit 1
 }
 
 # Load the bridge before anything else runs.
-grep -q '<script src="config.js"></script>' "$out/index.html" || {
+grep -q '<script src="config.js"></script>' "$out/app.html" || {
   echo "app.html no longer loads config.js — the bridge injection point has moved" >&2
   exit 1
 }
-python3 - "$out/index.html" <<'PY'
+# Only app.html gets the bridge. On auth.html it would put a licence box over
+# the sign-up form, which is neither the right moment nor the right screen.
+python3 - "$out/app.html" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 anchor = '<script src="config.js"></script>'
-s = s.replace(anchor, anchor + '\n<script src="bridge.js"></script>', 1)
+s = s.replace(anchor, anchor + '\n<link rel="stylesheet" href="bridge.css">\n<script src="bridge.js"></script>', 1)
 
 # The fonts used to be stripped here, because a local-first mail app that
 # contacts Google on every launch tells Google when its customer opens their

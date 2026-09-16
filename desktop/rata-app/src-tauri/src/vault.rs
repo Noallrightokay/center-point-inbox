@@ -24,7 +24,11 @@ use std::sync::Mutex;
 
 /// The name RATA's credentials appear under in the OS credential store, where
 /// the customer can see and remove them without going through this app.
-pub const SERVICE: &str = "org.mailrata.app";
+///
+/// The same string as the bundle identifier, and kept that way: it is what
+/// Keychain Access shows beside the entry, and an app whose credentials are
+/// filed under a different name than the app itself is one nobody can audit.
+pub const SERVICE: &str = "org.mailrata.desktop";
 
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;

@@ -206,28 +206,19 @@
     if (document.getElementById('rata-licence')) return;
     const wrap = document.createElement('div');
     wrap.id = 'rata-licence';
-    wrap.setAttribute('style', [
-      'position:fixed;inset:0;z-index:99999',
-      'background:rgba(15,15,20,.72)',
-      'display:flex;align-items:center;justify-content:center',
-      'font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif',
-    ].join(';'));
+    /* Classes, never a style attribute. Tauri nonces the page's style-src, and
+       a nonce in style-src makes CSP ignore 'unsafe-inline' — style attributes
+       cannot carry a nonce, so they are dropped. See ui-src/bridge.css. */
+    wrap.className = 'rata-lic';
     wrap.innerHTML = `
-      <div style="background:#fff;color:#18181b;max-width:420px;width:calc(100% - 40px);
-                  padding:28px;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
-        <h2 style="margin:0 0 10px;font-size:19px">Your licence key</h2>
-        <p style="margin:0 0 16px;color:#52525b" id="rata-licence-why"></p>
-        <input id="rata-licence-input" placeholder="v1.…" autocomplete="off" spellcheck="false"
-               style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d4d4d8;
-                      border-radius:9px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace">
-        <p id="rata-licence-error" style="margin:10px 0 0;color:#b91c1c;min-height:20px;font-size:13px"></p>
-        <div style="display:flex;gap:10px;margin-top:14px">
-          <button id="rata-licence-save"
-                  style="flex:1;padding:11px;border:0;border-radius:9px;background:#18181b;color:#fff;
-                         font-weight:600;cursor:pointer">Use this licence</button>
-        </div>
-        <p style="margin:16px 0 0;font-size:13px;color:#71717a">
-          Sign in at <a href="https://mailrata.org/account" style="color:#18181b">mailrata.org</a>
+      <div class="rata-lic-card">
+        <h2>Your licence key</h2>
+        <p id="rata-licence-why"></p>
+        <input id="rata-licence-input" placeholder="v1.…" autocomplete="off" spellcheck="false">
+        <p class="rata-lic-error" id="rata-licence-error"></p>
+        <button id="rata-licence-save">Use this licence</button>
+        <p class="rata-lic-note">
+          Sign in at <a href="https://mailrata.org/account">mailrata.org</a>
           to find your key. RATA keeps working offline for thirty days at a time.
         </p>
       </div>`;

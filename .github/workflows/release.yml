@@ -1,0 +1,145 @@
+name: Release installers
+
+# The three build machines RATA needs, because one machine cannot be all three:
+# a .dmg has to be made on macOS and a .msi on Windows, and neither can be
+# produced — let alone signed — from Linux.
+#
+# Tag a version to cut a release, or run it by hand to get installers to test
+# without tagging anything.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A manual run builds the installers and attaches them to the run without
+  # creating a release, which is what you want when you just need something to
+  # install and try.
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installers:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # One platform failing must not cancel the other two: a macOS signing
+      # problem is not a reason to throw away a finished Windows build.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (.deb, .AppImage)
+            os: ubuntu-22.04
+            args: ""
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - name: macOS (Intel)
+            os: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - name: Windows (.msi, .exe)
+            os: windows-latest
+            args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu 22.04 rather than 24.04, deliberately: an AppImage built against
+      # a newer glibc will not start on an older distribution, and the point of
+      # an AppImage is that it runs anywhere. Build on the oldest thing you are
+      # willing to support.
+      - name: Install the system webview
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+          key: ${{ matrix.args }}
+
+      # Before the build, not after: Tauri compiles the web assets into the
+      # binary, so building first would package whatever ui/ held last time.
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        shell: bash
+        working-directory: desktop/rata-app
+
+      # Refused rather than built without one. A build with no licence key
+      # refuses every licence — which is the right way for it to fail, and
+      # exactly the wrong thing to hand a customer who has paid.
+      - name: Check the licence key is present
+        shell: bash
+        env:
+          RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
+        run: |
+          if [ -z "${RATA_LICENCE_PUBLIC_KEY}" ]; then
+            echo "::error::RATA_LICENCE_PUBLIC_KEY is not set. Add it as a repository secret." >&2
+            echo "Without it every installer this workflow produces refuses every licence." >&2
+            echo "It is the public half — see rata-next/LICENSING.md — and is not a secret;" >&2
+            echo "it lives in Actions secrets so it cannot be changed by accident." >&2
+            exit 1
+          fi
+          case "${RATA_LICENCE_PUBLIC_KEY}" in
+            *"BEGIN PUBLIC KEY"*) ;;
+            *) echo "::error::RATA_LICENCE_PUBLIC_KEY does not look like a PEM public key." >&2; exit 1 ;;
+          esac
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
+          # Signing. Every one of these is optional and every one of them is
+          # worth setting before anybody else installs this: without them macOS
+          # shows Gatekeeper's "damaged and can't be opened", which is what an
+          # unsigned app looks like to somebody who has just paid, and Windows
+          # shows SmartScreen.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: desktop/rata-app
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: RATA ${{ github.ref_name }}
+          releaseBody: |
+            Install RATA, then paste the licence key from
+            https://mailrata.org/account.
+
+            Your mailbox passwords stay on this computer, in its own keychain.
+          releaseDraft: true
+          # Published by hand. A release that appears the moment a tag is
+          # pushed is a release nobody checked.
+          prerelease: false
+          # A tag publishes a draft release; a manual run just leaves the
+          # installers attached to the run for testing.
+          includeUpdaterJson: false
+
+      - name: Keep the installers on the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: rata-${{ matrix.os }}${{ matrix.args }}
+          path: |
+            desktop/rata-app/src-tauri/target/**/release/bundle/**/*.deb
+            desktop/rata-app/src-tauri/target/**/release/bundle/**/*.AppImage
+            desktop/rata-app/src-tauri/target/**/release/bundle/**/*.dmg
+            desktop/rata-app/src-tauri/target/**/release/bundle/**/*.msi
+            desktop/rata-app/src-tauri/target/**/release/bundle/**/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14
