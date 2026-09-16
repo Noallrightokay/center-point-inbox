@@ -84,6 +84,13 @@ The build works without the signing secrets and the installers install; they
 just arrive looking untrustworthy, which for a product whose pitch is "your mail
 stays yours" is worth more than the certificates cost.
 
+Signing is all-or-nothing, and set up that way after it bit: the Apple variables
+are only put into the environment when a certificate is actually configured. An
+unset secret becomes an empty string, an empty string is still a *set* variable,
+and Tauri's bundler reads `APPLE_CERTIFICATE` with `std::env::var` — `Ok("")`
+reads as "sign this", and it hands nothing to `security import`. Both macOS jobs
+compiled cleanly and then died at bundling.
+
 ## CI
 
 `.github/workflows/desktop-ci.yml`, in two jobs. **Mail layer** needs nothing
