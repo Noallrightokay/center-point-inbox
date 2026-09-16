@@ -29,12 +29,13 @@ export default async function run(state) {
   console.log('\n— up and ready are different questions —');
   {
     /* The failure this endpoint exists for: everything serves, the site loads,
-       and no mailbox can be linked because a variable went missing. */
+       and nobody can be issued a licence because a variable went missing — so
+       every copy of the app stops working within thirty days. */
     const s = await startServer({ env: { SUPABASE_URL: 'https://db.example.com', SUPABASE_SERVICE_ROLE_KEY: 'x' } });
     try {
       const b = await (await fetch(s.url + '/api/health')).json();
-      check(b.ready === false, 'with no encryption key it is not ready');
-      check(Array.isArray(b.failing) && b.failing.includes('encryption'),
+      check(b.ready === false, 'with no signing key it is not ready');
+      check(Array.isArray(b.failing) && b.failing.includes('licensing'),
         `and names which piece: ${JSON.stringify(b.failing)}`);
     } finally { await s.stop(); }
   }
@@ -45,7 +46,7 @@ export default async function run(state) {
     try {
       const open = await (await fetch(s.url + '/api/health')).json();
       check(open.checks === undefined, 'no detail without the token');
-      check(!JSON.stringify(open).includes('TOKEN_ENC_KEY'),
+      check(!JSON.stringify(open).includes('LICENCE_PRIVATE_KEY'),
         'and no environment variable is named in the public body');
       check(Array.isArray(open.failing) && open.failing.length > 0,
         `only the names of what is failing: ${JSON.stringify(open.failing)}`);
@@ -55,8 +56,8 @@ export default async function run(state) {
 
       const ok = await (await fetch(s.url + '/api/health?token=correct-horse-battery-staple')).json();
       check(!!ok.checks && !!ok.checks.database, 'the right one gets the detail');
-      check(/TOKEN_ENC_KEY/.test(ok.checks.encryption.detail || ''),
-        `including the variable to go and set: "${ok.checks.encryption.detail}"`);
+      check(/LICENCE_PRIVATE_KEY/.test(ok.checks.licensing.detail || ''),
+        `including the variable to go and set: "${ok.checks.licensing.detail}"`);
       check(typeof ok.tookMs === 'number', 'and how long the checks took');
 
       const hdr = await (await fetch(s.url + '/api/health', {

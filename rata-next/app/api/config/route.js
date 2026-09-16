@@ -31,10 +31,11 @@ const PUBLIC_CONFIG = [
 ];
 
 /* A service-role key in the public config would hand every visitor read/write
-   over every user's data — including the stored mail credentials in
-   provider_tokens. It is an easy paste to get wrong (the two keys sit next to
-   each other on the same Supabase settings page and look alike), and the damage
-   is silent, so refuse it outright rather than serve it. */
+   over
+   every user's workspace and subscription. It is an easy paste to get wrong
+   (the two keys sit next to each other on the same Supabase settings page and
+   look alike), and the damage is silent, so refuse it outright rather than
+   serve it. */
 function isSecretKey(v) {
   if (!v) return false;
   if (v.startsWith('sb_secret_')) return true;          // current-style secret key

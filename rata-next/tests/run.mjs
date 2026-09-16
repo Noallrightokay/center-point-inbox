@@ -2,10 +2,6 @@
    already run — CI builds first, and so should you locally. */
 const SUITES = [
   ['config route',       './config-route.test.mjs'],
-  ['OAuth state binding', './oauth-state.test.mjs'],
-  ['IMAP mail link',     './imap-link.test.mjs'],
-  ['mail links & plans', './mail-links.test.mjs'],
-  ['stored credentials', './secrets.test.mjs'],
   ['Stripe webhook',     './stripe.test.mjs'],
   ['account deletion',   './account-delete.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],

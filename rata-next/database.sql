@@ -92,36 +92,28 @@ create index if not exists subscriptions_status_idx
 -- both with RLS enabled (shield icon).
 
 -- ------------------------------------------------------------
--- 4. PROVIDER TOKENS — server-held credentials for live
---    Outlook, Slack, and iCloud sync. Written and read ONLY by
---    the RATA backend (service role). No client policies on
---    purpose. `access` and `refresh` hold AES-256-GCM
---    ciphertext (see lib/secrets.js), each value bound to this
---    row's user_id and provider so one moved to another row
---    will not open. The key lives in TOKEN_ENC_KEY, outside
---    this database.
+-- 4. RETIRED — provider_tokens and link_states
+--
+--    RATA used to hold everybody's mailbox passwords, encrypted
+--    with TOKEN_ENC_KEY, so a server could read their mail for
+--    them. It does not any more: the app runs on the customer's
+--    own machine and their passwords are in that machine's
+--    keychain, where a breach here cannot reach them.
+--
+--    Nothing in the application reads these two tables now. They
+--    are left standing rather than dropped in the same breath,
+--    because this file is run against live databases and a
+--    `drop table` in it would take real rows with it the next
+--    time somebody applied the schema.
+--
+--    Drop them deliberately, when you are satisfied the desktop
+--    app is working and nobody needs a second look at what was
+--    there:
+--
+--      drop table if exists public.provider_tokens;
+--      drop table if exists public.link_states;
+--
+--    Those rows are ciphertext and are worthless without
+--    TOKEN_ENC_KEY, so the safest order is to drop the tables
+--    first and destroy the key afterwards.
 -- ------------------------------------------------------------
-create table if not exists public.provider_tokens (
-  user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null,               -- 'ms' | 'slack' | 'apple' | 'gmail_imap'
-  label text,
-  access text,
-  refresh text,
-  extra jsonb,
-  expires_at timestamptz,
-  updated_at timestamptz not null default now(),
-  primary key (user_id, provider)
-);
-alter table public.provider_tokens enable row level security;
-
--- ------------------------------------------------------------
--- 5. LINK STATES — short-lived one-time states for OAuth flows
--- ------------------------------------------------------------
-create extension if not exists pgcrypto;
-create table if not exists public.link_states (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null,
-  created_at timestamptz not null default now()
-);
-alter table public.link_states enable row level security;

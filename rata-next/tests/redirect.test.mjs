@@ -18,7 +18,7 @@ export default async function run(state) {
       for (const [path, want] of [
         ['/', 'https://mailrata.org/'],
         ['/app', 'https://mailrata.org/app'],
-        ['/api/sync/imap/gmail', 'https://mailrata.org/api/sync/imap/gmail'],
+        ['/api/licence', 'https://mailrata.org/api/licence'],
       ]) {
         const r = await hit(path);
         check(r.status === 308 && r.loc === want, `${path} -> ${r.status} ${r.loc}`);
@@ -39,7 +39,7 @@ export default async function run(state) {
     try {
       const r = await fetch(s.url + '/', { redirect: 'manual' });
       check(r.status !== 308, `already on the destination -> ${r.status}, no loop`);
-      const api = await fetch(s.url + '/api/sync/imap/gmail', { redirect: 'manual' });
+      const api = await fetch(s.url + '/api/licence', { redirect: 'manual' });
       check(api.status !== 308, `/api on the destination -> ${api.status}, no loop`);
     } finally { await s.stop(); }
   }
@@ -72,7 +72,7 @@ export default async function run(state) {
     try {
       const r = await fetch(s.url + '/', { redirect: 'manual' });
       check(r.status === 200, `/ -> ${r.status}`);
-      const api = await fetch(s.url + '/api/sync/imap/gmail');
+      const api = await fetch(s.url + '/api/licence');
       const body = await api.json().catch(() => null);
       check(!!body && typeof body.error === 'string', `/api still answers as JSON: ${JSON.stringify(body?.error)}`);
     } finally { await s.stop(); }

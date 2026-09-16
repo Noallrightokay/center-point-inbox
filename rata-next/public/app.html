@@ -2616,9 +2616,7 @@ async function mailLink(email,pass,host){
       :res.email+' linked — pulling messages…');
     await serverSync('mail');
   }catch(e){
-    toast(e.message==='cloud-account-required'
-      ?'Linking mail needs a cloud account (sign up with the database connected)'
-      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }finally{btn.disabled=false;btn.textContent='Link'}
 }
 
@@ -2641,10 +2639,12 @@ async function refreshQuota(){
     const full=q.limits.mail!==null&&q.remaining.mail===0;
     line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(full?' Upgrade in Settings to add another mailbox.':'');
   }catch(e){
-    /* A device-only account has no server to ask, which is not an error — but
-       a cloud account that cannot reach it should not leave the generic blurb
-       standing as though the allowance were unlimited. */
-    if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now — your allowance still applies.';
+    /* On the website there is nothing to ask any more: plans are enforced by
+       the licence the app checks, and saying "could not check just now" would
+       promise a later answer that is never coming. A device-only account has
+       nothing to ask either, which is not an error. */
+    if(e.message==='needs-the-app')line.textContent='Your plan applies in the RATA app — open it to see what is in use.';
+    else if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now — your allowance still applies.';
   }
 }
 
@@ -2669,9 +2669,7 @@ async function imapLink(key,email,pass){
     toast(im.label+' linked — pulling messages…');
     await serverSync(im.type);
   }catch(e){
-    toast(e.message==='cloud-account-required'
-      ?'Linking mail needs a cloud account (sign up with the database connected)'
-      :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
+    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }finally{btn.disabled=false;btn.textContent='Link'}
 }
 /* Every price on this screen is read from TIERS rather than typed into the
@@ -2970,7 +2968,9 @@ $('#cmp-send').onclick=async()=>{
       realSent=true;
     }catch(e){
       sb.disabled=false;sb.textContent='Send';
-      toast((gAcct?'Gmail send failed — ':'Send failed — ')+(e.message||'reconnect and try again'));
+      toast(e.message==='needs-the-app'
+        ? 'Sending from a linked mailbox happens in the RATA app — download it at mailrata.org.'
+        : (gAcct?'Gmail send failed — ':'Send failed — ')+(e.message||'reconnect and try again'));
       return;
     }
     sb.disabled=false;sb.textContent='Send';
@@ -3149,13 +3149,28 @@ async function removeLinked(id){
 }
 
 /* ---- RATA backend (Next.js API routes): live Outlook + Slack ---- */
+/* What the website still answers for.
+
+   Everything else on this list used to be a server route: linking a mailbox,
+   syncing it, sending from it. Those are gone, because the server that did them
+   held everybody's mail password and was therefore worth attacking once for all
+   of them. The app on your own machine does that work now.
+
+   The account and the licence stay on the server because that is where the
+   subscription is: one is a record of who you are to us, the other a signature
+   saying you have paid. Neither can touch a mailbox. */
+const WEB_ANSWERS=/^\/api\/(account|licence)(\/|$|\?)/;
+
 async function apiFetch(path,opts){
-  /* The desktop build answers these itself — the mailboxes, the mail and the
-     passwords are all on the machine the app is running on, and there is no
+  /* The desktop build answers all of these itself — the mailboxes, the mail and
+     the passwords are all on the machine the app is running on, and there is no
      server in the picture. One seam, so the interface stays a single file
      rather than growing a second copy that drifts. See
      desktop/rata-app/ui-src/bridge.js. */
   if(window.__RATA_NATIVE__)return window.__RATA_NATIVE__(path,opts);
+  /* Refused here rather than fetched and 404'd, so the message says where the
+     feature went instead of reading like an outage. */
+  if(!WEB_ANSWERS.test(path))throw new Error('needs-the-app');
   if(!SESSION||SESSION.mode!=='supabase')throw new Error('cloud-account-required');
   const sb=await supa();if(!sb)throw new Error('cloud-account-required');
   const {data:{session}}=await sb.auth.getSession();
@@ -3168,10 +3183,10 @@ async function apiFetch(path,opts){
 async function linkProviderLive(p){
   try{
     const res=await apiFetch('/api/link/'+p+'/state',{method:'POST'});
-    if(!res.state){toast(res.error||'Backend not configured — see BACKEND-SETUP.md');return}
+    if(!res.state){toast(res.error||'Outlook and Slack are linked in the RATA app — download it at mailrata.org.');return}
     location.href='/api/link/'+p+'/start?state='+encodeURIComponent(res.state);
   }catch(e){
-    toast(e.message==='cloud-account-required'?'Live linking needs a cloud account (sign up with the database connected)':'Live linking needs the RATA backend — deploy the Next.js build and see BACKEND-SETUP.md');
+    toast('Outlook and Slack are linked in the RATA app, on your own computer — download it at mailrata.org.');
   }
 }
 /* Mailboxes sync together at /api/sync/mail; the older per-provider IMAP links
@@ -3205,7 +3220,7 @@ async function serverSync(p){
     renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
     toast(res.label+(added?` synced — ${added} new message${added===1?'':'s'}`:' is up to date'));
   }catch(e){
-    toast(e.message==='cloud-account-required'?'Live sync needs a cloud account':'Live sync needs the RATA backend — see BACKEND-SETUP.md');
+    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }
 }
 

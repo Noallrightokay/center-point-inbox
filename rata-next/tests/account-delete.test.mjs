@@ -33,8 +33,15 @@ export default async function run(state) {
 
   console.log('\n— the warning is generated, not written twice —');
   {
-    check(DELETION_REMOVES.some(r => /mailbox/i.test(r)) && DELETION_REMOVES.some(r => /login/i.test(r)),
-      `removes: ${DELETION_REMOVES.length} things, including the mailbox credentials and the login`);
+    check(DELETION_REMOVES.some(r => /login/i.test(r)) && DELETION_REMOVES.some(r => /subscription/i.test(r)),
+      `removes: ${DELETION_REMOVES.length} things, including the subscription and the login`);
+    /* And no longer claims to remove a mailbox password, because there is not
+       one here to remove — that is the whole point of the move to the device,
+       and a deletion notice that overstates itself is worse than none. */
+    check(!DELETION_REMOVES.some(r => /mailbox|password|credential/i.test(r)),
+      'and claims nothing about mailbox passwords, which RATA no longer holds');
+    check(DELETION_KEEPS.some(k => /keychain/i.test(k)),
+      'while saying where they actually are');
     check(DELETION_KEEPS.some(k => /your provider/i.test(k)),
       'and is honest that the mail is not RATA\'s to delete');
     check(DELETION_KEEPS.some(k => /Stripe/.test(k)),
