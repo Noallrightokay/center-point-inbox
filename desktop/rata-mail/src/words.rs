@@ -128,7 +128,7 @@ fn find_seq(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// Base64, ignoring anything outside the alphabet. Written out rather than
 /// pulled in: it is twenty lines, and a dependency in the app that reads the
 /// customer's mail is a dependency worth not having.
-fn base64(input: &[u8]) -> Vec<u8> {
+pub fn base64(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len() * 3 / 4);
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
@@ -188,6 +188,69 @@ fn hex(a: u8, b: u8) -> Option<u8> {
         _ => None,
     };
     Some(n(a)? * 16 + n(b)?)
+}
+
+/// Base64, as the encoders in this crate need it. The counterpart of
+/// [`base64`], written out for the same reason.
+pub fn base64_encode(input: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b1 = *chunk.first().unwrap_or(&0) as u32;
+        let b2 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b3 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b1 << 16) | (b2 << 8) | b3;
+        out.push(A[(n >> 18) as usize & 63] as char);
+        out.push(A[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// A header value safe to put in a message, encoded if it has to be.
+///
+/// Two jobs in one function because they must not be separable. The first is
+/// encoding: a subject with an accent or an emoji in it has to go out as an
+/// RFC 2047 encoded-word or the receiving server is entitled to mangle it.
+///
+/// The second is the one that matters. A carriage return or newline inside a
+/// header value **ends that header and starts another** — so a subject
+/// containing `\r\nBcc: everyone@example.com` sends the customer's message to
+/// everyone@example.com, and nothing in the interface would show it. Every
+/// header value in this crate goes through here, and the control characters are
+/// removed before anything else happens, so there is no path where a value is
+/// encoded but not sanitised.
+pub fn encode_header(value: &str) -> String {
+    // Tabs and spaces are legal inside a header; CR, LF and NUL are not, and
+    // neither is any other control character.
+    let clean: String = value
+        .chars()
+        .filter(|c| *c == '\t' || !c.is_control())
+        .collect();
+    let clean = clean.trim();
+
+    if clean.is_ascii() {
+        return clean.to_string();
+    }
+
+    // An encoded-word may not exceed 75 characters, so the text is cut into
+    // pieces small enough that the base64 of each still fits. Cut on character
+    // boundaries: splitting a multi-byte character across two words produces
+    // two broken ones.
+    let mut words: Vec<String> = Vec::new();
+    let mut piece = String::new();
+    for ch in clean.chars() {
+        if piece.len() + ch.len_utf8() > 30 {
+            words.push(format!("=?UTF-8?B?{}?=", base64_encode(piece.as_bytes())));
+            piece.clear();
+        }
+        piece.push(ch);
+    }
+    if !piece.is_empty() {
+        words.push(format!("=?UTF-8?B?{}?=", base64_encode(piece.as_bytes())));
+    }
+    words.join(" ")
 }
 
 /// A body down to something showable in a one-line preview: tags out,
@@ -284,6 +347,60 @@ mod tests {
     fn an_unknown_charset_still_produces_readable_text() {
         // Rather than an error or an empty subject.
         assert_eq!(d("=?koi8-r?B?dGVzdA==?="), "test");
+    }
+
+    #[test]
+    fn what_is_encoded_comes_back_out_again() {
+        for original in [
+            "Invoice – March",
+            "Café fermé",
+            "🎉 Done",
+            "A subject long enough to need splitting across several encoded words: ünicode",
+        ] {
+            let header = encode_header(original);
+            assert_eq!(decode(header.as_bytes()), original, "{original:?} -> {header:?}");
+        }
+    }
+
+    #[test]
+    fn plain_ascii_is_not_encoded_for_the_sake_of_it() {
+        assert_eq!(encode_header("Invoice for March"), "Invoice for March");
+        assert_eq!(encode_header("  padded  "), "padded");
+    }
+
+    #[test]
+    fn no_encoded_word_exceeds_the_length_a_header_allows() {
+        let long = "ü".repeat(200);
+        for word in encode_header(&long).split(' ') {
+            assert!(word.len() <= 75, "{} chars: {word}", word.len());
+        }
+    }
+
+    #[test]
+    fn a_newline_in_a_header_cannot_start_another_one() {
+        // The whole reason encode_header exists. Without this, a subject line
+        // is a way to add a Bcc to somebody else's message.
+        for attack in [
+            "Hello\r\nBcc: everyone@example.com",
+            "Hello\nBcc: everyone@example.com",
+            "Hello\rBcc: everyone@example.com",
+            "Hello\u{0}Bcc: everyone@example.com",
+        ] {
+            let out = encode_header(attack);
+            assert!(!out.contains('\r') && !out.contains('\n') && !out.contains('\u{0}'), "{out:?}");
+            // And it must not have been smuggled through the encoder either.
+            let round = decode(out.as_bytes());
+            assert!(!round.contains('\r') && !round.contains('\n'), "{round:?}");
+        }
+    }
+
+    #[test]
+    fn base64_round_trips() {
+        for raw in ["", "f", "fo", "foo", "foob", "fooba", "foobar", "🎉 Done"] {
+            assert_eq!(base64(base64_encode(raw.as_bytes()).as_bytes()), raw.as_bytes());
+        }
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_encode(b"f"), "Zg==");
     }
 
     #[test]

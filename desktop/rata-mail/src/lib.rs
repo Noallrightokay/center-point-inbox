@@ -18,14 +18,19 @@
 //! * **Reading it** (`imap`) — connect, sign in, fetch, and tell a wrong
 //!   password apart from an unreachable server, because retrying the first is
 //!   how a provider decides to lock an account.
+//! * **Sending** (`smtp`, `compose`) — the protocol spoken directly, because
+//!   every SMTP crate resolves the hostname itself and that would undo the
+//!   guarantee above.
 //! * **Making a header readable** (`words`) — imapflow did this for free and
 //!   nothing here does.
 
+pub mod compose;
 pub mod discover;
 pub mod guard;
 pub mod imap;
 pub mod key;
 pub mod resolve;
+pub mod smtp;
 pub mod words;
 
 pub use guard::{check_literal, check_resolved, is_public, HostVerdict};
@@ -36,3 +41,5 @@ pub use discover::{
 pub use imap::{fetch_inbox, verify, Account, Fetched, Message, Verified, Verify};
 pub use key::{domain_of, mail_key};
 pub use resolve::{check_host, discover, resolve_public, Discovery, Resolver};
+pub use compose::{Address, Outgoing};
+pub use smtp::{send, Sent};

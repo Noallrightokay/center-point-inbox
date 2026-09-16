@@ -174,17 +174,8 @@ async fn open(resolver: &Resolver, host: &str, port: u16) -> Result<Client<Tls>,
         Err(verdict) => return Err(Trouble::Host(verdict.explain(host))),
     };
 
-    let server = ServerName::try_from(name.clone())
-        .map_err(|_| Trouble::Host(HostVerdict::Malformed.explain(host)))?;
-    let config = tls().map_err(Trouble::Host)?;
-
-    let tcp = connect_any(&addrs, port, host).await?;
-    // The certificate is checked against the name, not the address — which is
-    // what makes connecting by address safe rather than a way around TLS.
-    let stream = timeout(CONNECT, TlsConnector::from(config).connect(server, tcp))
-        .await
-        .map_err(|_| Trouble::Net(format!("{host} did not finish its security handshake in time.")))?
-        .map_err(|e| Trouble::Net(format!("{host} could not be trusted: {e}")))?;
+    let tcp = dial(&addrs, port, host).await.map_err(Trouble::Net)?;
+    let stream = wrap_tls(tcp, &name, host).await.map_err(Trouble::Net)?;
 
     let mut client = Client::new(stream);
     // IMAP servers speak first; nothing may be sent before they have.
@@ -196,10 +187,14 @@ async fn open(resolver: &Resolver, host: &str, port: u16) -> Result<Client<Tls>,
     }
 }
 
-/// Try each vetted address in turn — a name with both an IPv4 and an IPv6
-/// answer is common, and on a network with only one of the two the other is a
-/// dead end rather than a failure.
-async fn connect_any(addrs: &[IpAddr], port: u16, host: &str) -> Result<TcpStream, Trouble> {
+/// Open a socket to one of the vetted addresses.
+///
+/// Each in turn, because a name with both an IPv4 and an IPv6 answer is common
+/// and on a network carrying only one of the two the other is a dead end rather
+/// than a failure. Shared with [`crate::smtp`], which needs exactly the same
+/// guarantee: the socket goes to an address that was judged, never to a name
+/// that gets resolved a second time.
+pub(crate) async fn dial(addrs: &[IpAddr], port: u16, host: &str) -> Result<TcpStream, String> {
     let mut last = String::new();
     for ip in addrs {
         match timeout(CONNECT, TcpStream::connect(SocketAddr::new(*ip, port))).await {
@@ -208,11 +203,27 @@ async fn connect_any(addrs: &[IpAddr], port: u16, host: &str) -> Result<TcpStrea
             Err(_) => last = "timed out".into(),
         }
     }
-    Err(Trouble::Net(if last.is_empty() {
+    Err(if last.is_empty() {
         format!("{host} could not be reached.")
     } else {
         format!("{host} could not be reached: {last}")
-    }))
+    })
+}
+
+/// Wrap a socket in TLS.
+///
+/// The certificate is checked against `name` — the hostname — not against the
+/// address the socket went to. That is what makes connecting by address safe
+/// rather than a way around TLS: the address decides where the packets go, the
+/// certificate decides who is allowed to be there.
+pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<Tls, String> {
+    let server = ServerName::try_from(name.to_string())
+        .map_err(|_| HostVerdict::Malformed.explain(host))?;
+    let config = tls()?;
+    timeout(CONNECT, TlsConnector::from(config).connect(server, tcp))
+        .await
+        .map_err(|_| format!("{host} did not finish its security handshake in time."))?
+        .map_err(|e| format!("{host} could not be trusted: {e}"))
 }
 
 /// Sign in. A `NO` from the server during LOGIN is the server refusing the
