@@ -922,7 +922,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare">Base $8 — up to two mailboxes in one Center Point inbox. Pro $16 — more than two, and the option to view them side by side, with summaries. Enterprise $72 — CRM, texts and automations.</span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
         </div>
         <div class="comp-sec">
@@ -930,8 +930,8 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
           <div class="set-row"><div class="grow"><b>Google OAuth Client ID</b><span>Enables the real Gmail plugin. Create at console.cloud.google.com → Credentials → OAuth client (Web), add this site as an authorized JavaScript origin.</span></div><input type="text" id="cfg-gcid" placeholder="1234567890-xxxx.apps.googleusercontent.com"></div>
           <div class="set-row"><div class="grow"><b>Supabase URL</b><span>Enables real cloud accounts + cross-device sync. Free at supabase.com.</span></div><input type="text" id="cfg-sburl" placeholder="https://xxxx.supabase.co"></div>
           <div class="set-row"><div class="grow"><b>Supabase anon key</b><span>Public anon key from your Supabase project settings.</span></div><input type="text" id="cfg-sbkey" placeholder="eyJhbGciOi…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — Base $8</b><span>Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stb" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — Pro $16</b><span>Same, for the Pro price.</span></div><input type="text" id="cfg-stpr" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b id="lbl-stb">Stripe payment link — Base</b><span>Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stb" placeholder="https://buy.stripe.com/…"></div>
+          <div class="set-row"><div class="grow"><b id="lbl-stpr">Stripe payment link — Pro</b><span>Same, for the Pro price.</span></div><input type="text" id="cfg-stpr" placeholder="https://buy.stripe.com/…"></div>
           <div class="set-row"><div class="grow"><b>Stripe payment link — Enterprise $72</b><span>Same, for the Enterprise price.</span></div><input type="text" id="cfg-ste" placeholder="https://buy.stripe.com/…"></div>
           <div class="set-row"><div class="grow"><b>Stripe customer portal link</b><span>Stripe Dashboard → Settings → Billing → Customer portal → activate, copy the link.</span></div><input type="text" id="cfg-stp" placeholder="https://billing.stripe.com/p/login/…"></div>
           <div class="set-row"><div class="grow"><b>Anthropic API key</b><span>Powers real AI briefings in Rata Assist. Stored only in this browser — personal use only, never ship a key in a public product.</span></div><input type="text" id="cfg-akey" placeholder="sk-ant-…"></div>
@@ -2065,8 +2065,8 @@ const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOC
    decides what to show. There is no free tier: an account with no plan is
    unsubscribed, and is told the price rather than handed a lesser product. */
 const TIERS={
-  base:      {label:'RATA Base',      price:8,  mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
-  pro:       {label:'RATA Pro',       price:16, mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
+  base:      {label:'RATA Base',      price:12.99,mail:2,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
+  pro:       {label:'RATA Pro',       price:23.99,mail:null,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
   /* mail:null means no ceiling — Base is the only plan that has one.
      ratamail is addresses RATA hosts at mailrata.org; domains is mail on a
      domain the customer owns, which Pro buys at $1.50 a month each and
@@ -2490,14 +2490,33 @@ async function imapLink(key,email,pass){
       :'Linking mail needs the RATA backend — see BACKEND-SETUP.md');
   }finally{btn.disabled=false;btn.textContent='Link'}
 }
+/* Every price on this screen is read from TIERS rather than typed into the
+   markup. Three copies of "$8" in three places is how a price change ships
+   half-done — the plan updates, a settings row still quotes last quarter's
+   number, and the customer is the one who spots it. */
+function renderPrices(){
+  const c=$('#plan-compare');
+  if(c)c.textContent=ORDER.map(k=>`${TIERS[k].label.replace('RATA ','')} ${money(TIERS[k].price)} — ${PLAN_ONELINE[k]}`).join(' ');
+  const lb=$('#lbl-stb'),lp=$('#lbl-stpr');
+  if(lb)lb.textContent=`Stripe payment link — Base ${money(TIERS.base.price)}`;
+  if(lp)lp.textContent=`Stripe payment link — Pro ${money(TIERS.pro.price)}`;
+}
+const ORDER=['base','pro','enterprise'];
+const PLAN_ONELINE={
+  base:'up to two mailboxes in one Center Point inbox.',
+  pro:'more than two, side by side, with summaries.',
+  enterprise:'CRM, texts and automations.',
+};
+
 function renderPlan(){
+  renderPrices();
   const c=cfg(),t=tier();
   const badge=$('#plan-badge'),line=$('#plan-line');
   badge.textContent=tierLabel();
   badge.className='badge '+(t?'work':'personal');
   line.textContent=t
-    ?`$${t.price} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
-    :'No plan yet. RATA Base is $8 a month: up to two mailboxes in one Center Point inbox.';
+    ?`${money(t.price)} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
+    :`No plan yet. ${TIERS.base.label} is ${money(TIERS.base.price)} a month: up to ${TIERS.base.mail} mailboxes in one Center Point inbox.`;
   /* One button per plan that has a checkout link, and never one for the plan
      they are already on — that is a paid-for confusion. */
   const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};

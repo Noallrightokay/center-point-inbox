@@ -217,8 +217,8 @@ export default async function run(state) {
 
   console.log('\n— what each plan includes —');
   {
-    check(PLANS.base.price === 8 && PLANS.pro.price === 16 && PLANS.enterprise.price === 72,
-      `the ladder: $${PLANS.base.price} / $${PLANS.pro.price} / $${PLANS.enterprise.price}`);
+    check(PLANS.base.price === 12.99 && PLANS.pro.price === 23.99 && PLANS.enterprise.price === 72,
+      `the ladder: ${money(PLANS.base.price)} / ${money(PLANS.pro.price)} / ${money(PLANS.enterprise.price)}`);
     check(!('free' in PLANS), 'there is no free tier to fall back to');
 
     check(PLANS.base.mail === 2, 'Base: two mailboxes');
@@ -254,7 +254,7 @@ export default async function run(state) {
     check(refusal('base', 'mail', 1) === null, 'one mailbox on Base: the second is allowed');
     const stop = refusal('base', 'mail', 2);
     check(!!stop, 'the third is refused');
-    check(/RATA Pro/.test(stop) && /\$16/.test(stop),
+    check(/RATA Pro/.test(stop) && /\$23\.99/.test(stop),
       `and names the plan that lifts it, with its price: "${stop}"`);
     check(/up to 2/.test(stop), 'Base is up to two mailboxes, stated as a ceiling not a quota');
 
@@ -266,7 +266,7 @@ export default async function run(state) {
     check(refusal('enterprise', 'chat', 99) === null, 'nor Enterprise of chat workspaces');
 
     const none = refusal(null, 'mail', 0);
-    check(/Choose a plan/.test(none) && /\$8/.test(none),
+    check(/Choose a plan/.test(none) && /\$12\.99/.test(none),
       `an account with no plan is told the price, not handed a free tier: "${none}"`);
 
     const noChat = refusal('base', 'chat', 0);
@@ -301,9 +301,36 @@ export default async function run(state) {
     check(/Choose a plan/.test(domainRefusal(null, 0, 0)), 'an account with no plan is told what to buy first');
 
     /* $1.50, never $1.5. */
-    check(money(1.5) === '$1.50' && money(8) === '$8' && money(72) === '$72',
-      `prices are quoted whole: ${money(8)} / ${money(1.5)} / ${money(72)}`);
+    check(money(1.5) === '$1.50' && money(12.99) === '$12.99' && money(72) === '$72',
+      `prices are quoted whole: ${money(12.99)} / ${money(1.5)} / ${money(72)}`);
+    /* The one that actually bites with .99 pricing: a price ending in a zero
+       renders as "$12.9" under raw interpolation. */
+    check(money(12.9) === '$12.90' && money(23.5) === '$23.50',
+      `a trailing zero survives: ${money(12.9)} / ${money(23.5)}`);
     check(!/\$\d+\.\d(?!\d)/.test(ask), 'and no refusal quotes a price with a digit missing');
+  }
+
+  console.log('\n— the price on the website is the price in the product —');
+  {
+    /* These were three separate copies of the same numbers, and a price change
+       that updates the plan but not the pricing page is a change the customer
+       finds first. The product is the source; the page has to agree with it. */
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const here = fileURLToPath(new URL('.', import.meta.url));
+    const home = readFileSync(here + '../public/index.html', 'utf8');
+
+    for (const k of ['base', 'pro', 'enterprise']) {
+      const shown = money(PLANS[k].price);
+      check(home.includes(shown), `the pricing page quotes ${PLANS[k].label} at ${shown}`);
+    }
+    for (const stale of ['$8<', '$16<', 'from $8/', 'Get Base — $8', 'Get Pro — $16']) {
+      check(!home.includes(stale), `and no longer says "${stale}"`);
+    }
+
+    const app = readFileSync(here + '../public/app.html', 'utf8');
+    check(/price:12\.99/.test(app) && /price:23\.99/.test(app),
+      'and the client tier table carries the same numbers as lib/plan.js');
   }
 
   console.log('\n— the endpoints exist and refuse strangers —');

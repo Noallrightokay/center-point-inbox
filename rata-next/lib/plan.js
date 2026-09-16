@@ -28,7 +28,7 @@ export const UNLIMITED = Infinity;
 export const PLANS = {
   base: {
     label: 'RATA Base',
-    price: 8,
+    price: 12.99,
     mail: 2,
     chat: 0,
     /* One Center Point inbox: both mailboxes in the same stream. Pulling them
@@ -49,7 +49,7 @@ export const PLANS = {
   },
   pro: {
     label: 'RATA Pro',
-    price: 16,
+    price: 23.99,
     mail: UNLIMITED,
     chat: 3,
     split: true,
@@ -93,7 +93,7 @@ export const NO_PLAN = {
   split: false, translate: false, convert: false, ai: false,
   files: false, crm: false, sms: false, automations: false,
   ratamail: 0, domains: 0,
-  blurb: 'Choose a plan to connect a mailbox. RATA Base is $8 a month.',
+  blurb: 'Choose a plan to connect a mailbox. RATA Base is $12.99 a month.',
 };
 
 /* Mail on your own domain, for a plan that does not include it.
@@ -105,8 +105,9 @@ export const NO_PLAN = {
 
    Priced per domain and per month, so somebody with three domains pays for
    three. Stripe carries it as a quantity on the same subscription. */
-/* $8 and $1.50, not $8.00 and $1.5. Written once so no price in the product
-   can be quoted with a stray digit missing. */
+/* $12.99 and $72, not $12.99000001 and $72.00 — and never $12.9, which is
+   what raw interpolation gives for a price ending in a zero. Written once so
+   no price in the product can be quoted with a digit missing. */
 export function money(n) {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }
@@ -167,12 +168,12 @@ export function refusal(plan, bucket, used) {
   const many = bucket === 'mail' ? 'mailboxes' : 'chat workspaces';
 
   if (!PLANS[plan]) {
-    return `Choose a plan to connect a ${one}. RATA Base is $${PLANS.base.price} a month and includes up to ${PLANS.base.mail} ${many} in one Center Point inbox.`;
+    return `Choose a plan to connect a ${one}. RATA Base is ${money(PLANS.base.price)} a month and includes up to ${PLANS.base.mail} ${many} in one Center Point inbox.`;
   }
 
   const up = nextFor(plan, bucket);
   const lift = up
-    ? ` ${PLANS[up].label} ($${PLANS[up].price}/month) includes ${PLANS[up][bucket] === UNLIMITED ? 'more than that' : PLANS[up][bucket]} — upgrade in Settings.`
+    ? ` ${PLANS[up].label} (${money(PLANS[up].price)}/month) includes ${PLANS[up][bucket] === UNLIMITED ? 'more than that' : PLANS[up][bucket]} — upgrade in Settings.`
     : '';
 
   if (cap === 0) return `${def.label} does not include ${many}.${lift}`;

@@ -267,7 +267,7 @@ export default async function run(state) {
     await page.evaluate(() => { renderSplitLock(); });
     check(await page.isHidden('#main-head'),
       'and no empty header bar sits under the switch while the inbox is whole');
-    check(/RATA Pro/.test(locked.why) && /\$16/.test(locked.why),
+    check(/RATA Pro/.test(locked.why) && /\$23\.99/.test(locked.why),
       `and says what unlocks it: "${locked.why}"`);
     await page.click('#inbox-mode [data-mode="split"]');
     check(await page.evaluate(() => document.querySelectorAll('#extra-panes .split-pane').length) === 0,
@@ -465,7 +465,7 @@ export default async function run(state) {
       chips: document.querySelectorAll('#folder-chips .pill').length,
     }));
     check(free.barShown, 'on Base the rail is still visible, not hidden');
-    check(/RATA Pro/.test(free.hint) && /\$16/.test(free.hint), `and says what it is: "${free.hint}"`);
+    check(/RATA Pro/.test(free.hint) && /\$23\.99/.test(free.hint), `and says what it is: "${free.hint}"`);
     check(free.newBtn === 'none' && free.chips === 0, 'but no folders to make or use');
 
     await page.evaluate(() => { S.settings.plan = 'pro'; save(); renderFolders(); renderDocs(); });

@@ -212,8 +212,8 @@ const harness = `
   <span class="pv-tag">Preview · not the live site</span>
   <span class="pv-sep"></span>
   <span class="pv-tag">Plan</span>
-  <button type="button" id="pv-base" data-plan="base">Base $8</button>
-  <button type="button" id="pv-pro" data-plan="pro">Pro $16</button>
+  <button type="button" id="pv-base" data-plan="base">Base $12.99</button>
+  <button type="button" id="pv-pro" data-plan="pro">Pro $23.99</button>
   <button type="button" id="pv-enterprise" data-plan="enterprise">Enterprise $72</button>
   <span class="pv-sep"></span>
   <button type="button" id="pv-reset">Reload demo</button>

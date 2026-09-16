@@ -138,7 +138,7 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
   runs entirely in the browser; tokens live in memory only, never stored.
 - **AI briefings** — each user pastes their own Anthropic key in Settings.
   (Personal secret — deliberately never in the site configuration.)
-- **Payments** — free for now. When ready to charge $8/mo · $79/yr, follow
+- **Payments** — free for now. When ready to charge $12.99/mo, follow
   **STRIPE-SETUP.md**: create the payment links, set them as `STRIPE_MONTHLY`,
   `STRIPE_ANNUAL` and `STRIPE_PORTAL`, and
   (recommended) deploy the included webhook for verified entitlements. The pricing

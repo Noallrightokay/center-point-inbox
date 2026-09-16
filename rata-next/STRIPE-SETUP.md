@@ -20,8 +20,8 @@ with a **recurring monthly** price:
 
 | Product | Price | What it is |
 |---|---|---|
-| RATA Base | $8 / month | Up to two mailboxes in one Center Point inbox |
-| RATA Pro | $16 / month | More than two mailboxes, side by side, summaries |
+| RATA Base | $12.99 / month | Up to two mailboxes in one Center Point inbox |
+| RATA Pro | $23.99 / month | More than two mailboxes, side by side, summaries |
 | RATA Enterprise | $72 / month | CRM, texts, automations |
 
 And one add-on, which is not a plan:

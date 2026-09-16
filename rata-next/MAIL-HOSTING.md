@@ -18,8 +18,8 @@ on the server.
 
 | | Addresses at mailrata.org | Mail on a domain you own |
 |---|---|---|
-| Base ($8) | — | — |
-| Pro ($16) | yes | $1.50 / month per domain |
+| Base ($12.99) | — | — |
+| Pro ($23.99) | yes | $1.50 / month per domain |
 | Enterprise ($72) | yes | included, no limit |
 
 ## What has to exist
@@ -93,7 +93,7 @@ if the price is ever revisited.
 
 ## Two things to settle before it is public, not after
 
-**Sending caps per account.** Selling a mailbox for $16 means somebody will buy
+**Sending caps per account.** Selling a mailbox for $23.99 means somebody will buy
 one in order to send from it. One spam run gets `mailrata.org` blocklisted, and
 a blocklisted domain does not damage the spammer — it damages every honest
 customer's mail at once, including any RATA sends itself. A per-account daily
