@@ -95,8 +95,8 @@ const demo = {
   plugins: { split: false, jobs: false, slack: false, sms: false, discord: false, autopilot: false },
   jobs: [],
   contacts: [
-    { id: 'c1', name: 'Dana Whitfield', nick: '', addr: 'dana@brightpathdental.com', phone: '', slack: '', discord: '', context: 'work', job: '' },
-    { id: 'c2', name: 'Marcus Reyes', nick: 'Dad', addr: 'm.reyes@shaw.ca', phone: '', slack: '', discord: '', context: 'personal', job: '' },
+    { id: 'c1', name: 'Dana Whitfield', nick: '', addr: 'dana@brightpathdental.com', phone: '', slack: '', discord: '', pref: 'microsoft', context: 'work', job: '' },
+    { id: 'c2', name: 'Marcus Reyes', nick: 'Dad', addr: 'm.reyes@shaw.ca', phone: '', slack: '', discord: '', pref: 'google', context: 'personal', job: '' },
   ],
   messages: [
     { id: 'm1', ch: 'email', prov: 'imap', acct: WORK, real: true, cid: 'c1', fromName: 'Dana Whitfield', fromAddr: 'dana@brightpathdental.com',
