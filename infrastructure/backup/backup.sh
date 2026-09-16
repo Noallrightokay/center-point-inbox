@@ -49,9 +49,18 @@ docker compose exec -T "$DB_SERVICE" \
         --passphrase "$BACKUP_PASSPHRASE" -o "$OUT"
 
 SIZE=$(stat -c%s "$OUT")
-# A dump that came out suspiciously small is a failure that looks like a
-# success — an empty database, or a pg_dumpall that errored into the pipe.
-[ "$SIZE" -gt 65536 ] || fail "dump is only $SIZE bytes; refusing to call that a backup"
+# A dump that produced nothing is a failure that looks like a success. The
+# floor is deliberately low, because it is guarding against an empty pipe and
+# not against a small database: measured through this exact pipeline, an empty
+# pipe encrypts to 86 bytes and a valid-but-empty cluster to 172, while a real
+# RATA with fifty users is 8-20 KB. A floor set for a mature database would
+# reject every legitimate backup until enough customers existed — failing
+# nightly from launch, which is how an operator learns to ignore this job.
+#
+# The first line of defence is `pipefail` at the top: pg_dumpall exiting
+# non-zero already aborts. This only catches "exited 0 and wrote nothing".
+MIN_BYTES="${MIN_BYTES:-1024}"
+[ "$SIZE" -gt "$MIN_BYTES" ] || fail "dump is only $SIZE bytes; refusing to call that a backup"
 
 echo "[$(date -u +%FT%TZ)] $OUT ($SIZE bytes) — uploading"
 rclone copy "$OUT" "$RCLONE_REMOTE/" --contimeout 30s --retries 3
