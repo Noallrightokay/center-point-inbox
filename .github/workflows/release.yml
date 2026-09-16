@@ -31,16 +31,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `slug` names the artifact and keys the cache. It is written out
+          # rather than derived from `os` and `args`, which produced
+          # "rata-macos-latest--target aarch64-apple-darwin" — a build flag and
+          # a runner label, spaces and all, in the name of the thing somebody
+          # downloads.
           - name: Linux (.deb, .AppImage)
+            slug: linux
             os: ubuntu-22.04
             args: ""
           - name: macOS (Apple silicon)
+            slug: macos-apple-silicon
             os: macos-latest
             args: "--target aarch64-apple-darwin"
           - name: macOS (Intel)
+            slug: macos-intel
             os: macos-latest
             args: "--target x86_64-apple-darwin"
           - name: Windows (.msi, .exe)
+            slug: windows
             os: windows-latest
             args: ""
 
@@ -70,7 +79,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/rata-app/src-tauri
-          key: ${{ matrix.args }}
+          # The two macOS entries share a runner and build different targets,
+          # so they must not share a cache.
+          key: ${{ matrix.slug }}
 
       # Before the build, not after: Tauri compiles the web assets into the
       # binary, so building first would package whatever ui/ held last time.
@@ -177,7 +188,7 @@ jobs:
       - name: Keep the installers on the run
         uses: actions/upload-artifact@v4
         with:
-          name: rata-${{ matrix.os }}${{ matrix.args }}
+          name: rata-${{ matrix.slug }}
           path: |
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*.deb
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*.AppImage
