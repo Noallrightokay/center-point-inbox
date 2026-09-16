@@ -163,6 +163,27 @@ export default async function run(state) {
     check(/private network/i.test((await checkHost('169.254.169.254')).error),
       'and the refusal says why rather than looking like a lookup failure');
 
+    /* The bypass that made the first version of this guard useless: an
+       IPv4-mapped address written in hex is the same address as one written in
+       dotted quad, and a dual-stack host connects it straight to IPv4. Text
+       matching caught one spelling and waved the others through. */
+    for (const [same, why] of [
+      ['::ffff:7f00:1', '127.0.0.1 in hex'],
+      ['0:0:0:0:0:ffff:127.0.0.1', '127.0.0.1 uncompressed'],
+      ['::ffff:a9fe:a9fe', '169.254.169.254, the metadata address'],
+      ['::ffff:c0a8:1', '192.168.0.1'],
+      ['::ffff:0a00:0001', '10.0.0.1'],
+      ['64:ff9b::7f00:1', '127.0.0.1 behind the NAT64 prefix'],
+      ['2002:7f00:1::1', '127.0.0.1 behind the 6to4 prefix'],
+      ['::0.0.0.0', 'the unspecified address the long way round'],
+      ['fd00::1', 'unique local'], ['fe80::1', 'link local'], ['ff02::1', 'multicast'],
+    ]) {
+      const r = await checkHost(same);
+      check(!r.ok && !r.notFound, `${same} — refused (${why})`);
+    }
+    check((await checkHost('2606:4700:4700::1111')).ok, 'while a real public IPv6 resolver is allowed');
+    check(!(await checkHost('::ffff:7f00:1:::2')).ok, 'and a malformed literal is refused rather than guessed at');
+
     check((await checkHost('8.8.8.8')).ok, 'a public address is allowed');
     check((await checkHost('imap.gmail.com')).ok, 'and so is a real mail server');
 

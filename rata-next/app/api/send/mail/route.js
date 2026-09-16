@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { userFromRequest } from '../../../../lib/server';
-import { mailKey, smtpCandidates, SMTP_PORTS, isMailKey } from '../../../../lib/mail';
+import { mailKey, smtpCandidates, checkHost, SMTP_PORTS, isMailKey } from '../../../../lib/mail';
 import { decryptSecret } from '../../../../lib/secrets';
 
 export const dynamic = 'force-dynamic';
@@ -46,6 +46,17 @@ export async function POST(req) {
 
   outer:
   for (const host of hosts) {
+    /* The same check reading does, and for a reason reading does not have:
+       these hostnames were never validated. smtpCandidates derives new names
+       from the stored one — imap.example.com becomes smtp.example.com, which
+       nothing has ever looked at — and a host stored months ago is whatever
+       its DNS says today. Sending was the one egress path without a guard. */
+    const allowed = await checkHost(host);
+    if (!allowed.ok) {
+      if (!allowed.notFound) lastError = allowed.error;
+      continue;
+    }
+
     for (const { port, secure } of SMTP_PORTS) {
       const tx = nodemailer.createTransport({
         host, port, secure,
@@ -67,6 +78,9 @@ export async function POST(req) {
     }
   }
   const host = hosts[0];
+  if (/not a public mail server/i.test(lastError)) {
+    return NextResponse.json({ error: lastError });
+  }
 
   return NextResponse.json({
     error: refused

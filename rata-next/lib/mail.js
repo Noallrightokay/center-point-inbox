@@ -423,14 +423,52 @@ function v4Private(ip) {
   return false;
 }
 
+/* IPv6, expanded to its eight groups before anything is decided about it.
+
+   Pattern-matching the text does not work, and the way it fails is silent.
+   ::ffff:127.0.0.1 and ::ffff:7f00:1 are the same address; so is
+   0:0:0:0:0:ffff:127.0.0.1. A check that only recognises the dotted spelling
+   blocks one and waves the other two through, and a dual-stack host connects
+   an IPv4-mapped address straight to the IPv4 one. Canonicalise, then judge. */
+function v6Groups(ip) {
+  let s = String(ip).toLowerCase().split('%')[0].replace(/^\[|\]$/g, '');
+  if (!s) return null;
+
+  /* A trailing dotted quad is two groups written the other way round. Rewrite
+     it as hex so the rest of this deals with one notation. */
+  const dq = s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dq) {
+    const p = dq[1].split('.').map(Number);
+    if (p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    s = s.slice(0, s.length - dq[1].length) +
+        (((p[0] << 8) | p[1]).toString(16) + ':' + ((p[2] << 8) | p[3]).toString(16));
+  }
+
+  const parts = s.split('::');
+  if (parts.length > 2) return null;
+  const head = parts[0] ? parts[0].split(':') : [];
+  const tail = parts.length === 2 ? (parts[1] ? parts[1].split(':') : []) : [];
+  if (parts.length === 1 ? head.length !== 8 : head.length + tail.length > 7) return null;
+
+  const fill = new Array(8 - head.length - tail.length).fill('0');
+  const groups = head.concat(fill, tail).map(h => (/^[0-9a-f]{1,4}$/.test(h) ? parseInt(h, 16) : NaN));
+  return groups.some(n => !Number.isInteger(n)) ? null : groups;
+}
+
 function v6Private(ip) {
-  const s = String(ip).toLowerCase().split('%')[0].replace(/^\[|\]$/g, '');
-  if (s === '::' || s === '::1') return true;
-  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return v4Private(mapped[1]);
-  if (/^f[cd]/.test(s)) return true;      // unique local
-  if (/^fe[89ab]/.test(s)) return true;   // link local
-  if (/^ff/.test(s)) return true;         // multicast
+  const g = v6Groups(ip);
+  if (!g) return true;                                   // unparseable: refuse
+  const zeroTo = n => g.slice(0, n).every(x => x === 0);
+  const embedded = (a, b) => v4Private([a >> 8, a & 255, b >> 8, b & 255].join('.'));
+
+  if (zeroTo(7) && (g[7] === 0 || g[7] === 1)) return true;      // :: and ::1
+  if (zeroTo(5) && g[5] === 0xffff) return embedded(g[6], g[7]); // ::ffff:a.b.c.d
+  if (zeroTo(6)) return embedded(g[6], g[7]);                     // ::a.b.c.d (deprecated)
+  if (g[0] === 0x64 && g[1] === 0xff9b) return true;              // 64:ff9b::/96 NAT64
+  if (g[0] === 0x2002) return embedded(g[1], g[2]);               // 2002::/16 6to4
+  if ((g[0] & 0xfe00) === 0xfc00) return true;                    // fc00::/7 unique local
+  if ((g[0] & 0xffc0) === 0xfe80) return true;                    // fe80::/10 link local
+  if ((g[0] & 0xff00) === 0xff00) return true;                    // ff00::/8 multicast
   return false;
 }
 
