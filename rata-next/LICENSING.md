@@ -46,20 +46,48 @@ shipping a new app build with a new public key.
 `LAUNCH.md`. Hosting panels mangle multi-line values, so the loader accepts the
 PEM either with real newlines or with them written as `\n`.
 
-## 3. The flow
+## 3. Put the public half in the app build
+
+The desktop app checks licences against a key compiled into it:
+
+```bash
+RATA_LICENCE_PUBLIC_KEY="$(cat licence.pub)" cargo build --release
+```
+
+A build without it refuses every licence. That is the safe direction to fail in
+— the alternative, treating a missing key as "no checking needed", turns a build
+mistake into a free product — but it is not a thing to discover after shipping,
+so check one installer before releasing.
+
+## 4. The flow
 
 1. Customer buys through the Stripe payment link. The webhook writes
    `subscriptions` as it does today — nothing changes there.
-2. They sign in on the website and download the app.
-3. The app calls `GET /api/licence` with their session. The server looks up the
-   subscription for that address and signs a licence for it.
-4. The app stores the token and checks it locally from then on.
-5. Whenever it is next online it asks again, and gets a fresh 30 days.
+2. They sign in on the website. `GET /api/licence` signs a licence for the
+   subscription on that account and the page shows them the key.
+3. They paste it into the app once. From then on it is checked locally, with no
+   network at all.
+4. Whenever the app is online and the licence is inside its last week, it posts
+   the licence it holds to `POST /api/licence/renew` and gets a fresh 30 days.
+   Nobody is asked to do anything.
 
-The licence is issued against the **signed-in account**, never an address in
-the request body — the subscription is keyed on email, so accepting a
+The first licence is issued against the **signed-in account**, never an address
+in the request body — the subscription is keyed on email, so accepting a
 caller-supplied one would hand a licence to anyone who could guess a customer's
 address.
+
+### Why renewal has no sign-in
+
+Because the old licence is the credential. It is signed with a key only the
+server holds, so presenting one proves it was issued here, and the address
+inside it is the address the subscription is keyed on. An expired licence is
+accepted deliberately: renewing an expired licence is the entire job.
+
+The worst somebody with a stolen token can do is obtain a copy of a token they
+already have — the endpoint returns a licence for the address inside the licence
+presented, and nothing else. Asking a customer to type an email and password
+every month to keep reading mail already on their computer would undo the reason
+for signing the licence in the first place.
 
 ## Why 30 days, and not the subscription's length
 

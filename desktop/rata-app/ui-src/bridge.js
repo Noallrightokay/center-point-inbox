@@ -132,11 +132,22 @@
     },
 
     async '/api/links'() {
-      /* Honest rather than convenient. Plan limits are enforced by whoever
-         issues the licence, and the device does not check one yet — so this
-         says it cannot answer instead of reporting "no limit", which would be
-         a claim rather than a fact. */
-      return cannot('Plan limits are not checked on this device yet.');
+      const s = await invoke('licence_status');
+      if (!s.licensed) return cannot(s.message);
+      return {
+        planLabel: s.plan.label,
+        limits: { mail: s.limit === null ? null : s.limit, chat: s.plan.chat },
+        used: { mail: s.used, chat: 0 },
+        remaining: { mail: s.limit === null ? null : Math.max(0, s.limit - s.used), chat: 0 },
+      };
+    },
+
+    async '/api/licence'(opts) {
+      if ((opts?.method || 'GET').toUpperCase() === 'POST') {
+        const b = body(opts);
+        return invoke('set_licence', { licence: b.licence ?? null });
+      }
+      return invoke('licence_status');
     },
 
     async '/api/account'() {
@@ -151,6 +162,118 @@
      browser window that opens and goes nowhere. */
   const NO_OAUTH =
     'Signing in to Outlook, Slack or Google needs the RATA website. Mailboxes with an app password — which is every IMAP provider, including Gmail and Outlook — link here directly.';
+
+  /* Renewal.
+
+     The licence is good for thirty days with no contact at all, and this is how
+     the thirty-first day arrives without anybody noticing. The old token is the
+     credential — it is signed with a key only the server holds, so presenting
+     one proves where it came from, and an expired one is accepted because
+     renewing an expired licence is the entire job.
+
+     Done here rather than in Rust on purpose: the app then needs no HTTP client
+     at all, and the one address it may contact is the one line in the content
+     security policy that allows it. */
+  const RENEW = 'https://mailrata.org/api/licence/renew';
+
+  async function renew(current) {
+    if (!current) return null;
+    try {
+      const r = await fetch(RENEW, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licence: current }),
+      });
+      const d = await r.json();
+      if (d.licensed && d.licence) return invoke('set_licence', { licence: d.licence });
+      /* A cancelled subscription is a real answer and the app should stop
+         asking. A server having a bad morning is not — the licence still has
+         days left on it, so nothing is touched and it tries again tomorrow. */
+      if (d.reason === 'no-subscription') return { licensed: false, message: d.message };
+      return null;
+    } catch {
+      /* Offline. Exactly the case the whole design exists for. */
+      return null;
+    }
+  }
+
+  /* Ask for the key, once, when there is no usable licence.
+
+     Deliberately part of the desktop bridge rather than the interface: the
+     website has no licence key to type, and giving app.html a field that only
+     ever appears in one of the two builds is how one interface becomes two. */
+  function askForKey(standing) {
+    if (document.getElementById('rata-licence')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'rata-licence';
+    wrap.setAttribute('style', [
+      'position:fixed;inset:0;z-index:99999',
+      'background:rgba(15,15,20,.72)',
+      'display:flex;align-items:center;justify-content:center',
+      'font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif',
+    ].join(';'));
+    wrap.innerHTML = `
+      <div style="background:#fff;color:#18181b;max-width:420px;width:calc(100% - 40px);
+                  padding:28px;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <h2 style="margin:0 0 10px;font-size:19px">Your licence key</h2>
+        <p style="margin:0 0 16px;color:#52525b" id="rata-licence-why"></p>
+        <input id="rata-licence-input" placeholder="v1.…" autocomplete="off" spellcheck="false"
+               style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d4d4d8;
+                      border-radius:9px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace">
+        <p id="rata-licence-error" style="margin:10px 0 0;color:#b91c1c;min-height:20px;font-size:13px"></p>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button id="rata-licence-save"
+                  style="flex:1;padding:11px;border:0;border-radius:9px;background:#18181b;color:#fff;
+                         font-weight:600;cursor:pointer">Use this licence</button>
+        </div>
+        <p style="margin:16px 0 0;font-size:13px;color:#71717a">
+          Sign in at <a href="https://mailrata.org/account" style="color:#18181b">mailrata.org</a>
+          to find your key. RATA keeps working offline for thirty days at a time.
+        </p>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector('#rata-licence-why').textContent = standing.message;
+
+    const input = wrap.querySelector('#rata-licence-input');
+    const err = wrap.querySelector('#rata-licence-error');
+    const save = wrap.querySelector('#rata-licence-save');
+    input.focus();
+
+    async function submit() {
+      err.textContent = '';
+      save.disabled = true;
+      const next = await invoke('set_licence', { licence: input.value.trim() });
+      save.disabled = false;
+      if (next.licensed) {
+        wrap.remove();
+        location.reload();
+        return;
+      }
+      err.textContent = next.message;
+    }
+    save.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+  }
+
+  /* On launch: check, renew if it is getting on, and ask only if there is
+     still no licence after that. Asking first would put a box in front of
+     somebody whose licence was about to fix itself. */
+  async function settleLicence() {
+    let standing = await invoke('licence_status');
+    if (standing.token && (standing.renewSoon || !standing.licensed)) {
+      const after = await renew(standing.token);
+      if (after) standing = after.licensed ? after : await invoke('licence_status');
+    }
+    if (!standing.licensed) askForKey(standing);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', settleLicence);
+  } else {
+    settleLicence();
+  }
 
   window.__RATA_NATIVE__ = async function (path, opts) {
     const route = ROUTES[path];

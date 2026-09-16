@@ -38,9 +38,20 @@ with extra steps.
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
 ./sync-ui.sh                        # assemble ui/ from rata-next/public
-cd src-tauri && cargo build --release
+cd src-tauri
+
+# The licence key must be compiled in. A build without it refuses every
+# licence — which is the safe direction to fail in, and not one you want to
+# discover after shipping.
+export RATA_LICENCE_PUBLIC_KEY="$(cat /path/to/licence.pub)"
+cargo build --release
 cargo tauri build                   # installers: .deb/.AppImage, .dmg, .msi
 ```
+
+`licence.pub` is the public half of the pair in `LICENSING.md`. It is not a
+secret — it can only check signatures, not make them — so it belongs in the
+build, in CI, and anywhere else convenient. The private half never leaves the
+server.
 
 Installers must be built on the platform they target — a Linux machine cannot
 produce a signed .dmg or .msi. That is three build machines, or three CI runners.
@@ -69,19 +80,44 @@ arbitrary HTTP. A script that somehow reached a rendered message can ask to
 refresh the mail; it cannot ask to read `~/.ssh`.
 
 ```
-link_mailbox  list_mailboxes  unlink_mailbox  retry_mailbox  refresh_mail  send_mail
+licence_status  set_licence  link_mailbox  list_mailboxes
+unlink_mailbox  retry_mailbox  refresh_mail  send_mail
 ```
 
 Verified rather than assumed: `ui-src/probe.html` calls each one and also asks
 for a command that does not exist. Copy it over `ui/index.html`, run the app,
 and read the answers — the last one should say `Command read_file not found`.
 
+## The licence
+
+Signed, not looked up. The app reads mail straight from the customer's mail
+server, so making it ask us for permission would mean their mail stops working
+when we do — and would be useless on a train. Instead the server issues a small
+Ed25519-signed token and the app checks it locally, with no network.
+
+`src/licence.rs` is the other half of `rata-next/lib/licence.js`, and there is a
+test here that verifies a token produced by that file. Two implementations of
+one signature check that disagree is precisely the bug that locks paying
+customers out, and neither codebase's own tests would find it.
+
+**What a licence gates.** Linking a mailbox, refreshing, and sending. There is
+no free tier — someone without a subscription is not on a cheaper plan, they are
+unsubscribed — so all three stop. What does *not* stop is reading what is
+already on the machine: the account list, the stored passwords and the
+downloaded mail all stay exactly where they are, because they are theirs.
+
+**Thirty days offline**, then it renews itself. The old token is the credential
+for renewal — it is signed with a key only the server holds, so presenting one
+proves where it came from, and an expired one is accepted because renewing an
+expired licence is the whole job. The request is made from `bridge.js` rather
+than from Rust, so the app needs no HTTP client and the single address it may
+contact is one line of the content security policy.
+
+So a cancelled subscription keeps working for up to a month. That is the
+deliberate trade, and `LICENCE_DAYS` is the one place to change it.
+
 ## What is not done yet
 
-- **The licence is not checked.** `rata-next/lib/licence.js` issues Ed25519
-  tokens and the verifier is written, but nothing in this app reads one, so
-  nothing is gated. `/api/links` reports that plan limits are unchecked rather
-  than claiming "no limit", which would be a claim rather than a fact.
 - **The fonts are not vendored** — see above.
 - **OAuth providers** (Outlook, Slack, Google sign-in) need a server to receive
   the redirect. The bridge says so plainly. Every IMAP mailbox, Gmail and
@@ -90,4 +126,10 @@ and read the answers — the last one should say `Command read_file not found`.
   has been packaged or signed for any platform.
 - **No mailbox has been opened for real.** The container this was written in
   blocks 993, 465 and 587, so every network path is tested up to the socket and
-  no further.
+  no further. Renewal has not been exercised against a live server either: the
+  endpoint has tests, but no app has renewed against a deployed `mailrata.org`.
+- **The interface has no licence screen of its own.** `bridge.js` puts up a box
+  asking for the key when there is no usable one. That is desktop-only on
+  purpose — the website has no key to type, and giving `app.html` a field that
+  appears in one build of two is how one interface becomes two — but it is a
+  plain box rather than a designed screen.

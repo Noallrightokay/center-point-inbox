@@ -101,4 +101,55 @@ export default async function run(state) {
       check_(!!anon.error, `no session, no licence: ${JSON.stringify(anon.error)}`);
     } finally { await s.stop(); }
   }
+
+  /* Renewal is what makes "RATA renews itself whenever it is online" true, and
+     it is the one endpoint with no sign-in behind it — the old licence is the
+     credential. So what is worth testing is that presenting a licence nobody
+     issued gets nothing, and that the signature is what decides. */
+  console.log('\n— renewing, with the old licence as the credential —');
+  {
+    const s = await startServer({ env: { LICENCE_PUBLIC_KEY: keys.publicKey, LICENCE_PRIVATE_KEY: keys.privateKey } });
+    const post = async licence => (await fetch(s.url + '/api/licence/renew', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ licence }),
+    })).json();
+
+    try {
+      check_(!!(await post('')).error, 'nothing to renew is refused');
+      check_(!!(await post('not-a-licence')).message, 'a licence that is not one is refused');
+
+      /* The attack: mint a licence with your own key and present it. Forging
+         requires the private key, which is the whole point of signing. */
+      const theirs = issue({ email: 'attacker@example.com', plan: 'enterprise' }, other.privateKey);
+      const r = await post(theirs);
+      check_(!r.licensed, `a licence signed by somebody else's key gets nothing back: ${JSON.stringify(r.message || r.error)}`);
+      check_(!r.licence, 'and certainly no token');
+
+      /* A real, expired licence must be *accepted* for renewal — refusing one
+         would mean the only licences that can be renewed are the ones that did
+         not need it. Without a database configured the answer stops at "not
+         configured", which still proves the signature check let it through. */
+      const mine = issue({ email: 'buyer@example.com', plan: 'pro', days: 30, now: Date.UTC(2020, 0, 1) }, keys.privateKey);
+      const expired = await post(mine);
+      check_(!/could not be read/.test(expired.message || ''),
+        `an expired licence is accepted for renewal rather than dismissed: ${JSON.stringify(expired.error || expired.message)}`);
+    } finally { await s.stop(); }
+  }
+
+  /* A deployment with no signing key must say so rather than telling every
+     paying customer they have not paid. */
+  console.log('\n— a misconfigured deployment does not read as "you have not paid" —');
+  {
+    const s = await startServer();
+    try {
+      const r = await fetch(s.url + '/api/licence/renew', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licence: issue({ email: 'buyer@example.com', plan: 'pro' }, keys.privateKey) }),
+      });
+      const d = await r.json();
+      check_(r.status === 500, `no LICENCE_PUBLIC_KEY is a server fault (${r.status}), not a refusal`);
+      check_(!/have not paid|no active subscription/i.test(JSON.stringify(d)),
+        `and never blames the customer: ${JSON.stringify(d.message || d.error)}`);
+    } finally { await s.stop(); }
+  }
 }

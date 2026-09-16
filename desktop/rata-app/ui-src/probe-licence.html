@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>licence probe</title>
+<style>body{font:14px/1.5 system-ui;padding:18px;margin:0}pre{background:#f4f4f5;padding:8px;border-radius:6px;white-space:pre-wrap;font-size:12px;margin:4px 0}b{display:block;margin-top:10px}</style>
+<div id=o>running…</div>
+<script>
+const o=document.getElementById('o');const L=[];
+function say(k,v){L.push('<b>'+k+'</b><pre>'+String(v).replace(/[<&]/g,c=>({'<':'&lt;','&':'&amp;'}[c]))+'</pre>');o.innerHTML=L.join('')}
+const PRO='v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwcm8iLCJpYXQiOjE3ODk1NzMyMzUsImV4cCI6NDM4MTU3MzIzNX0.cSIyj1Xy5bhvD5sph49VZPSnPZkzvRd5zEERGN5b76g-pTJ4IobTVQBfSDDXMSAqHlNx3G14NYoT5OdK6hvUDw';
+const BASE='v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJiYXNlIiwiaWF0IjoxNzg5NTczMjM1LCJleHAiOjQzODE1NzMyMzV9.tcfOa11iI2hOD5wozS1wS4if109Eg0lW5SuHi6XB0ZH8s0Yo4nBi9-g-av9MKjT4-xomtg3aa3xu1B9ngjXODg';
+(async()=>{
+  const invoke=window.__TAURI__.core.invoke;
+  await invoke('set_licence',{licence:null});
+  let s=await invoke('licence_status');
+  say('1. no licence', JSON.stringify({licensed:s.licensed, reason:s.reason, msg:s.message}));
+  say('1b. refresh while unlicensed', JSON.stringify(await invoke('refresh_mail',{limit:5})));
+  const lk=await invoke('link_mailbox',{email:'a@gmail.com',password:'apppassword',host:null});
+  say('1c. link while unlicensed', JSON.stringify(lk));
+
+  s=await invoke('set_licence',{licence:PRO.replace('cSIy','XXXX')});
+  say('2. forged licence', JSON.stringify({licensed:s.licensed, reason:s.reason, msg:s.message}));
+
+  s=await invoke('set_licence',{licence:BASE});
+  say('3. real Base licence', JSON.stringify({licensed:s.licensed, plan:s.plan.label, limit:s.limit, used:s.used, msg:s.message}));
+
+  s=await invoke('set_licence',{licence:PRO});
+  say('4. real Pro licence', JSON.stringify({licensed:s.licensed, plan:s.plan.label, limit:s.limit, split:s.plan.split, renewSoon:s.renewSoon}));
+  say('4b. refresh now licensed', JSON.stringify(await invoke('refresh_mail',{limit:5})));
+  say('4c. token returned for renewal', (s.token||'').slice(0,24)+'…');
+})().catch(e=>say('THREW', e));
+</script>

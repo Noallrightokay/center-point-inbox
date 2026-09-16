@@ -41,12 +41,19 @@ struct Contents {
     version: u32,
     #[serde(default)]
     mailboxes: Vec<Mailbox>,
+    /// The licence token. It lives here rather than in the keychain because it
+    /// is not a secret: it is signed, not encrypted, and deliberately readable
+    /// — a customer being able to see what they were issued is a feature the
+    /// first time something goes wrong.
+    #[serde(default)]
+    licence: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct Store {
     path: PathBuf,
     boxes: Vec<Mailbox>,
+    licence: Option<String>,
 }
 
 impl Store {
@@ -58,12 +65,15 @@ impl Store {
     /// mailboxes again, and the passwords are in the keychain either way.
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let boxes = fs::read_to_string(&path)
+        let held = fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Contents>(&raw).ok())
-            .map(|c| c.mailboxes)
             .unwrap_or_default();
-        Store { path, boxes }
+        Store {
+            path,
+            boxes: held.mailboxes,
+            licence: held.licence,
+        }
     }
 
     /// Write the list out, atomically.
@@ -78,10 +88,28 @@ impl Store {
         let body = serde_json::to_string_pretty(&Contents {
             version: 1,
             mailboxes: self.boxes.clone(),
+            licence: self.licence.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, body)?;
         fs::rename(&tmp, &self.path)
+    }
+
+    #[cfg(test)]
+    pub fn path_for_test(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    pub fn licence(&self) -> Option<&str> {
+        self.licence.as_deref()
+    }
+
+    /// Keep a licence token, or forget it. Not validated here — [`Store`]
+    /// stores things and `licence::check` judges them, and mixing the two
+    /// would mean a token that stopped verifying could not even be read back
+    /// to say whose it was.
+    pub fn set_licence(&mut self, token: Option<String>) {
+        self.licence = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     }
 
     pub fn list(&self) -> &[Mailbox] {
@@ -239,6 +267,24 @@ mod tests {
         assert_eq!(s.find("owner@example.com").unwrap().auth_failed_at, None);
         // Marking one that is not there is a no-op, not a panic.
         s.mark_auth("nobody@example.com", Some(1));
+    }
+
+    #[test]
+    fn a_licence_survives_a_restart_and_can_be_cleared() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.set_licence(Some("  v1.aaa.bbb  ".into()));
+            s.save().unwrap();
+        }
+        let mut s = Store::open(&file);
+        assert_eq!(s.licence(), Some("v1.aaa.bbb"), "and trimmed on the way in");
+        s.set_licence(Some("   ".into()));
+        assert_eq!(s.licence(), None, "whitespace is not a licence");
+        s.set_licence(None);
+        s.save().unwrap();
+        assert_eq!(Store::open(&file).licence(), None);
     }
 
     #[test]

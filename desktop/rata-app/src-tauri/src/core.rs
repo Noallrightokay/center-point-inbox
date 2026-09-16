@@ -13,6 +13,7 @@ use rata_mail::{
 };
 use serde::Serialize;
 
+use crate::licence::{self, Licence, Plan, Reason};
 use crate::store::{now, Mailbox, Store};
 use crate::vault::Vault;
 
@@ -26,6 +27,11 @@ pub struct Rata {
     store: Mutex<Store>,
     vault: Box<dyn Vault>,
     resolver: Resolver,
+    /// The key licences are checked against. Passed in rather than read from
+    /// `licence::PUBLIC_KEY` directly so the tests can carry a key of their
+    /// own — otherwise every test here would have to run against whatever key
+    /// the build happened to be compiled with.
+    public_key: Option<&'static str>,
 }
 
 /// What linking a mailbox produced.
@@ -43,6 +49,11 @@ pub enum Linked {
 /// What one refresh brought back.
 #[derive(Debug, Default, Serialize)]
 pub struct Refreshed {
+    /// Set when nothing was tried because this copy is not licensed. Separate
+    /// from `problems` because it is not a mailbox's fault and no mailbox
+    /// should be marked broken for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlicensed: Option<String>,
     pub messages: Vec<Message>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
@@ -58,12 +69,118 @@ pub struct Problem {
     pub error: String,
 }
 
+/// Whether this copy of RATA is paid for, in the shape the interface needs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Standing {
+    pub licensed: bool,
+    pub plan: Option<Plan>,
+    pub licence: Option<Licence>,
+    /// The token as stored, so renewal can present it. Not a secret: it is
+    /// signed rather than encrypted, and readable on purpose.
+    pub token: Option<String>,
+    pub reason: Option<Reason>,
+    pub message: String,
+    /// Mailboxes in use, and how many more this plan allows. `None` is no
+    /// limit — so the interface can say "no limit" rather than guessing.
+    pub used: u32,
+    pub limit: Option<u32>,
+    /// True once the licence is inside its last week, so the app knows to try
+    /// renewing rather than waiting for it to lapse.
+    pub renew_soon: bool,
+}
+
+/// A licence inside its last week should be renewed while there is still time
+/// to notice a problem — not on the morning it stops working.
+const RENEW_WITHIN: i64 = 7 * 86400;
+
 impl Rata {
-    pub fn new(store: Store, vault: Box<dyn Vault>, resolver: Resolver) -> Self {
+    pub fn new(
+        store: Store,
+        vault: Box<dyn Vault>,
+        resolver: Resolver,
+        public_key: Option<&'static str>,
+    ) -> Self {
         Rata {
             store: Mutex::new(store),
             vault,
             resolver,
+            public_key,
+        }
+    }
+
+    /// Where the licence is read. Everything that costs money to run asks this
+    /// first.
+    pub fn standing(&self) -> Standing {
+        let used = self.mailboxes().len() as u32;
+        let token = self
+            .store
+            .lock()
+            .ok()
+            .and_then(|s| s.licence().map(str::to_string));
+        let now_secs = now() as i64;
+
+        match licence::check(token.as_deref().unwrap_or(""), self.public_key, now_secs) {
+            Ok(l) => {
+                let held = token.clone();
+                let plan = licence::plan_def(&l.plan);
+                let renew_soon = l.exp - now_secs < RENEW_WITHIN;
+                Standing {
+                    licensed: true,
+                    message: format!(
+                        "Licensed for {} until {}.",
+                        plan.label,
+                        crate::licence::on_day(l.exp)
+                    ),
+                    plan: Some(plan),
+                    licence: Some(l),
+                    token: held,
+                    reason: None,
+                    used,
+                    limit: plan.mail,
+                    renew_soon,
+                }
+            }
+            Err(rejected) => Standing {
+                licensed: false,
+                plan: None,
+                message: rejected.reason.explain().to_string(),
+                licence: rejected.licence,
+                token,
+                reason: Some(rejected.reason),
+                used,
+                limit: Some(0),
+                // An expired licence is the case renewal exists for.
+                renew_soon: rejected.reason == Reason::Expired,
+            },
+        }
+    }
+
+    pub fn set_licence(&self, token: Option<String>) -> Result<Standing, String> {
+        {
+            let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+            store.set_licence(token);
+            store
+                .save()
+                .map_err(|e| format!("The licence could not be saved: {e}"))?;
+        }
+        Ok(self.standing())
+    }
+
+    /// The one sentence every paid action shares.
+    ///
+    /// There is no free tier, and that is a decision rather than an oversight:
+    /// somebody without a subscription is not on a cheaper plan, they are
+    /// unsubscribed, and handing them a stripped-down RATA would leave them
+    /// thinking that is what RATA is. So linking, refreshing and sending all
+    /// stop. What does *not* stop is reading what is already on the machine —
+    /// the mail already downloaded stays exactly where it is, because it is
+    /// theirs and taking it away would be a different thing entirely.
+    fn licensed(&self) -> Result<Plan, String> {
+        let standing = self.standing();
+        match standing.plan {
+            Some(plan) => Ok(plan),
+            None => Err(standing.message),
         }
     }
 
@@ -83,6 +200,27 @@ impl Rata {
             return Linked::Failed {
                 error: "Enter the app password for this mailbox.".into(),
             };
+        }
+
+        let plan = match self.licensed() {
+            Ok(p) => p,
+            Err(error) => return Linked::Failed { error },
+        };
+        // Relinking a mailbox that is already here is not a new one, so it must
+        // not be refused for being over the limit — that would strand somebody
+        // at their cap with a mailbox they cannot repair.
+        let already = self.store.lock().map(|s| s.find(&email).is_some()).unwrap_or(false);
+        if !already && let Some(limit) = plan.mail {
+            let used = self.mailboxes().len() as u32;
+            if used >= limit {
+                return Linked::Failed {
+                    error: format!(
+                        "{} includes {limit} mailbox{}. Upgrade at mailrata.org to add another.",
+                        plan.label,
+                        if limit == 1 { "" } else { "es" }
+                    ),
+                };
+            }
         }
 
         match verify(&self.resolver, &email, password, host_override).await {
@@ -133,6 +271,10 @@ impl Rata {
     /// Read every linked mailbox.
     pub async fn refresh(&self, limit: u32) -> Refreshed {
         let mut out = Refreshed::default();
+        if let Err(error) = self.licensed() {
+            out.unlicensed = Some(error);
+            return out;
+        }
         let mut work: Vec<Mailbox> = Vec::new();
 
         for m in self.mailboxes() {
@@ -206,6 +348,7 @@ impl Rata {
         body: &str,
         in_reply_to: Option<String>,
     ) -> Result<String, String> {
+        self.licensed()?;
         let from_addr = Address::parse(from)
             .ok_or_else(|| "Which account should this come from?".to_string())?;
         let to_list = Address::parse_list(to).ok_or_else(|| {
@@ -287,11 +430,28 @@ mod tests {
         dir.join("mailboxes.json")
     }
 
+    /// A key pair made by `rata-next/lib/licence.js`, with licences that do not
+    /// expire until 2108 — a fixture that stops working in a year is a test
+    /// that fails on a morning nobody expects it to.
+    const KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA+pogY6bod0k5ez7c/lE4N1/X2/5sbonmcLhIb7Oqrzs=\n-----END PUBLIC KEY-----";
+    const BASE: &str = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJiYXNlIiwiaWF0IjoxNzg5NTczMjM1LCJleHAiOjQzODE1NzMyMzV9.tcfOa11iI2hOD5wozS1wS4if109Eg0lW5SuHi6XB0ZH8s0Yo4nBi9-g-av9MKjT4-xomtg3aa3xu1B9ngjXODg";
+    const PRO: &str = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwcm8iLCJpYXQiOjE3ODk1NzMyMzUsImV4cCI6NDM4MTU3MzIzNX0.cSIyj1Xy5bhvD5sph49VZPSnPZkzvRd5zEERGN5b76g-pTJ4IobTVQBfSDDXMSAqHlNx3G14NYoT5OdK6hvUDw";
+    const NEWER_PLAN: &str = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwbGF0aW51bSIsImlhdCI6MTc4OTU3MzIzNSwiZXhwIjo0MzgxNTczMjM1fQ.DRdw1eNBBxGhJTg73ttAEr3rd49rk-7pa1IL-147WftHD7duCSwkhazGo9VPk5qLilIEgi8Mw7DMwN9uHH7cCQ";
+    const LAPSED: &str = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwcm8iLCJpYXQiOjE1Nzc4MzY4MDAsImV4cCI6MTU4MDQyODgwMH0.BlRlIy2nCmo9WsLkPb_8pCzY9dZFyjGyb_I085xtyQp2UmHu-3QJHUMPs9-VPSEglg4Qn235BJzLt8uQE4TlAA";
+
+    /// A licensed app, which is what most of these tests are about.
     fn rata(file: std::path::PathBuf) -> Rata {
+        let app = unlicensed(file);
+        app.set_licence(Some(PRO.into())).unwrap();
+        app
+    }
+
+    fn unlicensed(file: std::path::PathBuf) -> Rata {
         Rata::new(
             Store::open(file),
             Box::new(Memory::default()),
             Resolver::system().expect("resolver"),
+            Some(KEY),
         )
     }
 
@@ -445,6 +605,158 @@ mod tests {
     }
 
     #[test]
+    fn without_a_licence_nothing_that_costs_money_to_run_happens() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("unlicensed"));
+            assert!(!app.standing().licensed);
+
+            match app.link("someone@gmail.com", "app-password", None).await {
+                Linked::Failed { error } => assert!(error.contains("licence key"), "{error}"),
+                other => panic!("linking without a licence: {other:?}"),
+            }
+            let out = app.refresh(15).await;
+            assert!(out.unlicensed.is_some(), "refreshing without a licence");
+            assert!(out.messages.is_empty());
+            // Not recorded as a mailbox problem: no mailbox is broken, and
+            // marking them would have every account claim a fault it does not
+            // have.
+            assert!(out.problems.is_empty() && out.skipped.is_empty());
+
+            let e = app
+                .send("owner@example.com", "them@elsewhere.org", "hi", "x", None)
+                .await
+                .unwrap_err();
+            assert!(e.contains("licence key"), "{e}");
+        });
+    }
+
+    #[test]
+    fn mail_already_on_the_machine_is_never_taken_away() {
+        // Losing a subscription stops the service; it does not confiscate what
+        // has already been downloaded. The mailbox list stays readable and the
+        // messages live in the interface's own storage, untouched.
+        let file = tmpfile("lapsed");
+        let app = rata(file.clone());
+        linked(&app, "owner@example.com", "imap.example.com");
+
+        app.set_licence(Some(LAPSED.into())).unwrap();
+        let s = app.standing();
+        assert!(!s.licensed);
+        assert_eq!(s.reason, Some(Reason::Expired));
+        assert!(s.renew_soon, "an expired licence is exactly what renewal is for");
+        // Still readable, so the app knows whose licence to renew.
+        assert_eq!(s.licence.unwrap().sub, "buyer@example.com");
+        assert_eq!(app.mailboxes().len(), 1, "the account list survives");
+        assert!(app.vault.get("owner@example.com").is_ok(), "and so does the password");
+    }
+
+    #[test]
+    fn base_stops_at_two_mailboxes_and_says_where_to_go() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("baselimit"));
+            app.set_licence(Some(BASE.into())).unwrap();
+            let s = app.standing();
+            assert_eq!(s.limit, Some(2));
+            assert_eq!(s.plan.unwrap().label, "RATA Base");
+
+            linked(&app, "one@example.com", "imap.example.com");
+            linked(&app, "two@example.com", "imap.example.com");
+            assert_eq!(app.standing().used, 2);
+
+            match app.link("three@gmail.com", "app-password", None).await {
+                Linked::Failed { error } => {
+                    assert!(error.contains("2 mailboxes"), "{error}");
+                    assert!(error.contains("mailrata.org"), "{error}");
+                }
+                other => panic!("the third should have been refused: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn being_at_the_limit_never_stops_you_repairing_what_you_have() {
+        rt().block_on(async {
+            // The nasty version of a cap: two mailboxes on Base, one of them
+            // needs its app password again, and the limit refuses the relink —
+            // leaving somebody stuck with a broken mailbox they have paid for.
+            let app = unlicensed(tmpfile("relink"));
+            app.set_licence(Some(BASE.into())).unwrap();
+            linked(&app, "one@example.com", "imap.example.com");
+            linked(&app, "someone@proton.me", "imap.example.com");
+
+            // Proton is refused for its own reason, which proves the limit was
+            // not what stopped it.
+            match app.link("someone@proton.me", "app-password", None).await {
+                Linked::Failed { error } => assert!(error.contains("no IMAP server"), "{error}"),
+                other => panic!("{other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn the_token_comes_back_with_the_standing_so_it_can_be_renewed() {
+        // Including when it has expired — that is the only case renewal is
+        // for, and it is exactly the case where a naive implementation drops
+        // the token on the floor and leaves nothing to renew with.
+        let app = unlicensed(tmpfile("token"));
+        app.set_licence(Some(LAPSED.into())).unwrap();
+        let s = app.standing();
+        assert!(!s.licensed);
+        assert_eq!(s.token.as_deref(), Some(LAPSED));
+    }
+
+    #[test]
+    fn pro_has_no_mailbox_limit() {
+        let app = rata(tmpfile("pro"));
+        let s = app.standing();
+        assert!(s.licensed);
+        assert_eq!(s.limit, None, "no limit, rather than a large one");
+        assert_eq!(s.plan.unwrap().label, "RATA Pro");
+        assert!(s.plan.unwrap().split && s.plan.unwrap().ai);
+        assert!(!s.renew_soon, "a licence good for decades is not due for renewal");
+        assert!(s.message.contains("Licensed for RATA Pro"), "{}", s.message);
+    }
+
+    #[test]
+    fn a_plan_this_build_has_never_heard_of_still_works() {
+        // An old app and a new price list. The signature is what proves the
+        // licence genuine, and only we can make one — so being generous here
+        // costs nothing, and being strict would lock a paying customer out for
+        // not having updated.
+        let app = unlicensed(tmpfile("newplan"));
+        let s = app.set_licence(Some(NEWER_PLAN.into())).unwrap();
+        assert!(s.licensed, "{}", s.message);
+        assert_eq!(s.limit, None);
+    }
+
+    #[test]
+    fn a_forged_licence_is_refused_and_a_real_one_replaces_it() {
+        let app = unlicensed(tmpfile("forged"));
+        let forged = PRO.replace("cSIy", "XXXX");
+        let s = app.set_licence(Some(forged)).unwrap();
+        assert!(!s.licensed);
+        assert_eq!(s.reason, Some(Reason::BadSignature));
+        // Not accused of forging when it is merely stale — different words.
+        assert!(s.message.contains("could not be read"), "{}", s.message);
+
+        let s = app.set_licence(Some(PRO.into())).unwrap();
+        assert!(s.licensed);
+        // And it survives a restart.
+        assert!(rata_reopen(&app).licensed);
+    }
+
+    fn rata_reopen(app: &Rata) -> Standing {
+        let path = app.store.lock().unwrap().path_for_test();
+        Rata::new(
+            Store::open(path),
+            Box::new(Memory::default()),
+            Resolver::system().unwrap(),
+            Some(KEY),
+        )
+        .standing()
+    }
+
+    #[test]
     fn everything_survives_the_app_being_closed_and_opened() {
         let file = tmpfile("restart");
         {
@@ -455,6 +767,7 @@ mod tests {
             Store::open(&file),
             Box::new(Memory::default()),
             Resolver::system().unwrap(),
+            Some(KEY),
         );
         assert_eq!(app.mailboxes().len(), 1);
         assert_eq!(app.mailboxes()[0].email, "owner@example.com");

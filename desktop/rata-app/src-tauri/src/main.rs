@@ -15,6 +15,7 @@
 
 mod commands;
 mod core;
+mod licence;
 mod store;
 mod vault;
 
@@ -40,10 +41,17 @@ fn main() {
             let resolver = rata_mail::Resolver::system()
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            app.manage(Arc::new(Rata::new(store, Box::new(Keychain), resolver)));
+            app.manage(Arc::new(Rata::new(
+                store,
+                Box::new(Keychain),
+                resolver,
+                licence::PUBLIC_KEY,
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::licence_status,
+            commands::set_licence,
             commands::link_mailbox,
             commands::list_mailboxes,
             commands::unlink_mailbox,

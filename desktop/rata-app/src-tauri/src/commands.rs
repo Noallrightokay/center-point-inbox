@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::core::{Linked, Rata, Refreshed};
+use crate::core::{Linked, Rata, Refreshed, Standing};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -27,6 +27,20 @@ pub async fn link_mailbox(
 ) -> Result<Linked, String> {
     let host = host.filter(|h| !h.trim().is_empty());
     Ok(app.link(&email, &password, host.as_deref()).await)
+}
+
+/// Whether this copy is paid for. Checked locally against the key compiled
+/// into the build — no network, so it answers on a train.
+#[tauri::command]
+pub fn licence_status(app: App<'_>) -> Standing {
+    app.standing()
+}
+
+/// Store a licence, or clear it with `null`. Returns the standing that
+/// results, so the interface never has to ask twice.
+#[tauri::command]
+pub fn set_licence(app: App<'_>, licence: Option<String>) -> Result<Standing, String> {
+    app.set_licence(licence)
 }
 
 #[tauri::command]
