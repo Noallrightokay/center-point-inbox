@@ -112,11 +112,10 @@ messages.
 
 Deploy `rata-next` to the Hostinger Node.js site, from the current branch.
 
-> **Do not run the `Deploy` GitHub workflow.** It belongs to the abandoned
-> microservices architecture under `src/` and `infrastructure/kubernetes/` —
-> it deploys ApiGateway, AuthService and the rest to a Kubernetes cluster at
-> `centerpoint-inbox.com`, none of which is this product. The RATA CI workflow
-> (`rata-next-ci.yml`) is the one that matters, and it builds and tests only.
+> There is no deploy workflow, deliberately. The one that used to exist pushed
+> an abandoned Kubernetes architecture to `centerpoint-inbox.com` and has been
+> deleted along with the code it deployed. `rata-next-ci.yml` builds and tests
+> only; `release.yml` cuts desktop installers. Neither touches the live site.
 
 The build command is `npm run build`, the start command `npm start`, Node 22.
 

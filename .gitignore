@@ -1,19 +1,11 @@
-# .NET
-bin/
-obj/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-project.lock.json
-*.nuget.props
-*.nuget.targets
+# Rust. The desktop crates carry their own rules for generated interface
+# assets and Tauri's build output.
+target/
 
 # Node
 node_modules/
 .next/
 out/
-.env*.local
 
 # IDE
 .idea/
@@ -25,17 +17,9 @@ out/
 .DS_Store
 Thumbs.db
 
-# Docker
-docker-compose.override.yml
-
-# Secrets
-*.pfx
+# Secrets. The licence signing key is a .pem and must never be committed —
+# the public half is passed to the build as RATA_LICENCE_PUBLIC_KEY instead.
 *.pem
-appsettings.Development.json
+*.pfx
 .env
-
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
+.env*.local
