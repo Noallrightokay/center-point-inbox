@@ -20,6 +20,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Creating the release and attaching installers to it is a write to the
+# repository's contents, so the default read-only token is not enough.
+permissions:
+  contents: write
+
 jobs:
   installers:
     name: ${{ matrix.name }}
@@ -164,6 +169,13 @@ jobs:
 
       - uses: tauri-apps/tauri-action@v0
         env:
+          # Required whenever this runs from a tag, because that is when the
+          # action creates the release and uploads to it. Its absence was
+          # invisible for two runs: a manual dispatch leaves tagName empty, so
+          # the action skips the release entirely and never asks for a token.
+          # The first tag push failed on all four platforms — after every
+          # installer had been built — with "GITHUB_TOKEN is required".
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
           # The Apple variables arrive from the step above, and only when they
           # are real. Do not add them here.
@@ -185,7 +197,12 @@ jobs:
           # installers attached to the run for testing.
           includeUpdaterJson: false
 
+      # `always()` because the installers are worth keeping precisely when
+      # something went wrong. Without it a failure in the step above — which
+      # runs *after* the bundles are built — threw away four finished
+      # installers and left nothing to download anywhere.
       - name: Keep the installers on the run
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rata-${{ matrix.slug }}
