@@ -82,6 +82,13 @@ pub struct Message {
     pub ts: i64,
     pub unread: bool,
     pub starred: bool,
+    /// The server's number for this message, and the mailbox generation it
+    /// belongs to. Together they are the only safe way to act on it later: a
+    /// UID means nothing once UIDVALIDITY has changed, and could then name a
+    /// different message entirely. Zero means unknown, and an unknown message
+    /// is never acted on.
+    pub uid: u32,
+    pub uidvalidity: u32,
 }
 
 /// What a successful link found.
@@ -451,6 +458,7 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         }
     };
 
+    let generation = mailbox.uid_validity.unwrap_or(0);
     let total = mailbox.exists;
     if total == 0 || limit == 0 {
         let _ = timeout(COMMAND, session.logout()).await;
@@ -479,7 +487,11 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         // as the inbox would be a refresh that silently lost mail.
         loop {
             match timeout(COMMAND, stream.next()).await {
-                Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched)),
+                // A message flagged \Deleted is on its way out — deleted
+                // by RATA on a server without UIDPLUS, or by another client —
+                // and showing it would undo the delete on screen.
+                Ok(Some(Ok(fetched))) if fetched.flags().any(|f| f == Flag::Deleted) => {}
+                Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, generation)),
                 Ok(Some(Err(ImapError::Io(e)))) => {
                     return Fetched::Net(unreachable_msg(
                         acct,
@@ -509,6 +521,220 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
     Fetched::Messages(messages)
 }
 
+// ----------------------------------------------------------------------- act
+
+/// Something the customer did to a message in RATA, done to the real mailbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Action {
+    Read,
+    Unread,
+    Star,
+    Unstar,
+    /// Moved to the server's Trash — never deleted outright.
+    Trash,
+    /// Moved to the server's Archive (Gmail: "All Mail", which takes it out
+    /// of the inbox and keeps it).
+    Archive,
+}
+
+/// How acting on a message went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "outcome", content = "why", rename_all = "kebab-case")
+)]
+pub enum Acted {
+    Ok,
+    /// The message is not where RATA last saw it — moved or deleted by another
+    /// client, or the mailbox was rebuilt so its numbers mean something else
+    /// now. Nothing was touched, which is the point.
+    Gone(String),
+    /// There is nowhere safe to put it: no Trash or Archive folder. Nothing was
+    /// done rather than deleting the message for good.
+    NoPlace(String),
+    Auth(String),
+    Host(String),
+    Net(String),
+}
+
+/// Do `action` to one message in the inbox of `acct`.
+///
+/// Two rules make this safe to run against somebody's real mail. It never
+/// permanently deletes: "delete" is a move to the server's own Trash, and a
+/// server without one is refused rather than expunged. And it never acts on a
+/// number it cannot vouch for: the mailbox's UIDVALIDITY must still be the one
+/// the message was fetched under, and the message must still be there,
+/// otherwise the same number could name a different email.
+pub async fn act(
+    resolver: &Resolver,
+    acct: &Account,
+    uid: u32,
+    uidvalidity: u32,
+    action: Action,
+) -> Acted {
+    if uid == 0 || uidvalidity == 0 {
+        return Acted::Gone(format!(
+            "RATA does not have a server reference for this message, so {} was left unchanged. Refresh and try again.",
+            acct.email
+        ));
+    }
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Acted::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Acted::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Acted::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Acted::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let done = apply(&mut session, uid, uidvalidity, action).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    done
+}
+
+/// The part of [`act`] that talks to an already-signed-in session. Generic
+/// over the stream so it can be driven by a scripted server in tests.
+async fn apply<T>(session: &mut Session<T>, uid: u32, uidvalidity: u32, action: Action) -> Acted
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let failed = |what: &str, e: ImapError| Acted::Net(format!("The server would not {what}: {e}"));
+
+    let mailbox = match timeout(COMMAND, session.select("INBOX")).await {
+        Ok(Ok(m)) => m,
+        Ok(Err(e)) => return failed("open the inbox", e),
+        Err(_) => return Acted::Net("The server did not open the inbox in time.".into()),
+    };
+    if mailbox.uid_validity != Some(uidvalidity) {
+        return Acted::Gone(
+            "The mailbox has been reorganised since RATA last read it, so its message numbers no longer match. Nothing was changed — refresh and try again.".into(),
+        );
+    }
+
+    // Still there? A STORE or MOVE naming a UID that no longer exists succeeds
+    // and does nothing, which would be reported as done.
+    let present = match timeout(COMMAND, session.uid_fetch(uid.to_string(), "UID")).await {
+        Ok(Ok(stream)) => {
+            let found: Vec<_> = stream.collect().await;
+            found
+                .iter()
+                .any(|f| matches!(f, Ok(f) if f.uid == Some(uid)))
+        }
+        Ok(Err(e)) => return failed("look the message up", e),
+        Err(_) => return Acted::Net("The server did not answer in time.".into()),
+    };
+    if !present {
+        return Acted::Gone(
+            "That message is no longer in the inbox — it was probably moved or deleted from another device.".into(),
+        );
+    }
+
+    let flag = |sign: char, name: &str| format!("{sign}FLAGS.SILENT ({name})");
+    let stored = match action {
+        Action::Read => Some(flag('+', "\\Seen")),
+        Action::Unread => Some(flag('-', "\\Seen")),
+        Action::Star => Some(flag('+', "\\Flagged")),
+        Action::Unstar => Some(flag('-', "\\Flagged")),
+        Action::Trash | Action::Archive => None,
+    };
+    if let Some(change) = stored {
+        return match timeout(COMMAND, store(session, uid, &change)).await {
+            Ok(Ok(())) => Acted::Ok,
+            Ok(Err(e)) => failed("update the message", e),
+            Err(_) => Acted::Net("The server did not answer in time.".into()),
+        };
+    }
+
+    let Some(dest) = destination(session, action).await else {
+        let what = if action == Action::Trash {
+            "a Trash folder, so RATA left the message where it is rather than delete it for good"
+        } else {
+            "an Archive folder, so RATA left the message in the inbox"
+        };
+        return Acted::NoPlace(format!("This mailbox does not have {what}."));
+    };
+
+    let caps = match timeout(COMMAND, session.capabilities()).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return failed("list what it supports", e),
+        Err(_) => return Acted::Net("The server did not answer in time.".into()),
+    };
+    let set = uid.to_string();
+    let moved = if caps.has_str("MOVE") {
+        timeout(COMMAND, session.uid_mv(&set, &dest)).await
+    } else {
+        // COPY, then flag the original. Expunged only by UID: a plain EXPUNGE
+        // would also remove every other message anybody had flagged \Deleted
+        // in this inbox, which is not this action's to decide. Without
+        // UIDPLUS the original simply stays flagged, and RATA hides it.
+        timeout(COMMAND, async {
+            session.uid_copy(&set, &dest).await?;
+            store(session, uid, "+FLAGS.SILENT (\\Deleted)").await?;
+            if caps.has_str("UIDPLUS") {
+                session.uid_expunge(&set).await?.collect::<Vec<_>>().await;
+            }
+            Ok(())
+        })
+        .await
+    };
+    match moved {
+        Ok(Ok(())) => Acted::Ok,
+        Ok(Err(e)) => failed("move the message", e),
+        Err(_) => Acted::Net("The server did not answer in time.".into()),
+    }
+}
+
+/// `UID STORE`, with the response stream drained so the session is ready for
+/// the next command.
+async fn store<T>(session: &mut Session<T>, uid: u32, change: &str) -> Result<(), ImapError>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let stream = session.uid_store(uid.to_string(), change).await?;
+    for item in stream.collect::<Vec<_>>().await {
+        item?;
+    }
+    Ok(())
+}
+
+/// Where a Trash or Archive goes on this server, by the folder's declared
+/// purpose (RFC 6154) rather than its name — "Trash", "Deleted Items",
+/// "[Gmail]/Bin" and "Papierkorb" are all the same folder to a server that
+/// says so. Archive falls back to Gmail's "All Mail", where moving a message
+/// out of the inbox is exactly what archiving means.
+async fn destination<T>(session: &mut Session<T>, action: Action) -> Option<String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::types::NameAttribute as A;
+    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
+        .await
+        .ok()?
+        .ok()?;
+    let names: Vec<_> = stream.collect().await;
+    let with = |want: &A| {
+        names
+            .iter()
+            .flatten()
+            .find(|n| n.attributes().contains(want) && !n.attributes().contains(&A::NoSelect))
+    };
+    let found = match action {
+        Action::Trash => with(&A::Trash),
+        Action::Archive => with(&A::Archive).or_else(|| with(&A::All)),
+        _ => None,
+    };
+    found.map(|n| n.name().to_string())
+}
+
 /// A refresh that failed for a reason worth keeping. The cause is carried
 /// through rather than summarised away: "could not be reached" is the same
 /// sentence for an expired certificate, a blocked port and a dead wifi
@@ -531,7 +757,7 @@ fn revoked_msg(acct: &Account, why: &str) -> String {
 }
 
 /// One IMAP response into one message.
-fn build(acct: &Account, f: &async_imap::types::Fetch) -> Message {
+fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Message {
     let env = f.envelope();
     let sender = env.and_then(|e| e.from.as_ref()).and_then(|a| a.first());
 
@@ -609,12 +835,290 @@ fn build(acct: &Account, f: &async_imap::types::Fetch) -> Message {
         ts,
         unread,
         starred,
+        // Not `uid` above, which falls back to the sequence number for the
+        // id's sake. Acting on a sequence number as though it were a UID is
+        // how the wrong message gets deleted.
+        uid: f.uid.unwrap_or(0),
+        uidvalidity: generation,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------- act tests
+    //
+    // A scripted IMAP server that answers like a real one and records every
+    // command RATA sends. These tests are about what RATA *says* to somebody's
+    // mailbox — above all, what it never says when something doesn't match.
+
+    struct Script {
+        caps: &'static str,
+        list: &'static str,
+        uidvalidity: u32,
+        present: bool,
+    }
+
+    async fn scripted_session(
+        script: Script,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                log.lock().unwrap().push(cmd.to_string());
+                let up = cmd.to_ascii_uppercase();
+                let body = if up.starts_with("SELECT") {
+                    format!(
+                        "* 3 EXISTS\r\n* OK [UIDVALIDITY {}] ok\r\n",
+                        script.uidvalidity
+                    )
+                } else if up.starts_with("UID FETCH") && script.present {
+                    "* 1 FETCH (UID 42)\r\n".to_string()
+                } else if up.starts_with("LIST") {
+                    script.list.to_string()
+                } else if up.starts_with("CAPABILITY") {
+                    format!("* CAPABILITY IMAP4rev1 {}\r\n", script.caps)
+                } else if up.starts_with("LOGOUT") {
+                    "* BYE\r\n".to_string()
+                } else {
+                    String::new()
+                };
+                let reply = format!("{body}{tag} OK done\r\n");
+                if w.write_all(reply.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        let session = client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap();
+        (session, seen)
+    }
+
+    fn rt_act() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    const TRASH: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"Deleted Items\"\r\n";
+    const GMAIL: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\All \\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n";
+    const NO_FOLDERS: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n";
+
+    fn changed(log: &[String]) -> Vec<&String> {
+        log.iter()
+            .filter(|c| {
+                let u = c.to_ascii_uppercase();
+                u.starts_with("UID STORE")
+                    || u.starts_with("UID MOVE")
+                    || u.starts_with("UID COPY")
+                    || u.contains("EXPUNGE")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn marking_read_sets_seen_on_that_one_message() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE",
+                list: TRASH,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Read).await, Acted::Ok);
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter()
+                    .any(|c| c == "UID STORE 42 +FLAGS.SILENT (\\Seen)"),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_rebuilt_mailbox_is_never_touched() {
+        rt_act().block_on(async {
+            // Fetched under generation 9; the server is now on 7. UID 42 may
+            // be a different email entirely.
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE",
+                list: TRASH,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert!(matches!(
+                apply(&mut s, 42, 9, Action::Trash).await,
+                Acted::Gone(_)
+            ));
+            let log = log.lock().unwrap();
+            assert!(
+                changed(&log).is_empty(),
+                "changed a mailbox it could not vouch for: {log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_message_that_is_no_longer_there_is_not_reported_as_done() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE",
+                list: TRASH,
+                uidvalidity: 7,
+                present: false,
+            })
+            .await;
+            assert!(matches!(
+                apply(&mut s, 42, 7, Action::Trash).await,
+                Acted::Gone(_)
+            ));
+            assert!(changed(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    #[test]
+    fn delete_moves_to_the_folder_the_server_calls_trash() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: TRASH,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter().any(|c| c == "UID MOVE 42 \"Deleted Items\""),
+                "{log:?}"
+            );
+            assert!(
+                !log.iter()
+                    .any(|c| c.to_ascii_uppercase().contains("EXPUNGE")),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn with_no_trash_folder_nothing_is_deleted() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: NO_FOLDERS,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert!(matches!(
+                apply(&mut s, 42, 7, Action::Trash).await,
+                Acted::NoPlace(_)
+            ));
+            assert!(changed(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    #[test]
+    fn gmail_archive_goes_to_all_mail_and_delete_to_its_trash() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: GMAIL,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Archive).await, Acted::Ok);
+            assert!(
+                log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c == "UID MOVE 42 \"[Gmail]/All Mail\"")
+            );
+        });
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: GMAIL,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert!(
+                log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c == "UID MOVE 42 \"[Gmail]/Trash\"")
+            );
+        });
+    }
+
+    #[test]
+    fn without_move_only_that_message_is_ever_expunged() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "UIDPLUS",
+                list: TRASH,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter().any(|c| c == "UID COPY 42 \"Deleted Items\""),
+                "{log:?}"
+            );
+            assert!(
+                log.iter()
+                    .any(|c| c == "UID STORE 42 +FLAGS.SILENT (\\Deleted)"),
+                "{log:?}"
+            );
+            assert!(log.iter().any(|c| c == "UID EXPUNGE 42"), "{log:?}");
+            // A bare EXPUNGE would take every \Deleted message with it.
+            assert!(
+                !log.iter().any(|c| c.eq_ignore_ascii_case("EXPUNGE")),
+                "{log:?}"
+            );
+        });
+        rt_act().block_on(async {
+            // No UIDPLUS either: nothing is expunged at all.
+            let (mut s, log) = scripted_session(Script {
+                caps: "",
+                list: TRASH,
+                uidvalidity: 7,
+                present: true,
+            })
+            .await;
+            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert!(
+                !log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().contains("EXPUNGE"))
+            );
+        });
+    }
 
     #[test]
     fn a_server_asking_for_time_is_not_refusing_the_password() {

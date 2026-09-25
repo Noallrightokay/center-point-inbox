@@ -4,16 +4,29 @@ name: Release installers
 # a .dmg has to be made on macOS and a Windows installer on Windows, and
 # neither can be produced — let alone signed — from Linux.
 #
-# Tag a version to cut a release, or run it by hand to get installers to test
-# without tagging anything.
+# A release happens when `main` carries a version that has not been released
+# yet: bump `version` in desktop/rata-app/src-tauri/tauri.conf.json (and the
+# window title and Cargo.toml beside it), merge, and v<version> is built and
+# published. Nobody creates a tag by hand. That step failed three times out of
+# four in the GitHub UI — a tag field that rejects spaces, a dropdown that
+# offers the old tag first, a "Publish" that did not publish — and it is also
+# the one step an assistant session cannot do (tag pushes return 403 for it).
+# The tag is created by this workflow's own token, when the release is
+# published.
+#
+# Pushing a v* tag still works, and a manual run still builds installers to
+# try without releasing anything.
 
 on:
   push:
+    branches: [main]
+    # A merge that cannot change the app does not need to be looked at.
+    paths:
+      - "desktop/**"
+      - "rata-next/public/**"
+      - ".github/workflows/release.yml"
     tags:
       - "v*"
-  # A manual run builds the installers and attaches them to the run without
-  # creating a release, which is what you want when you just need something to
-  # install and try.
   workflow_dispatch:
 
 concurrency:
@@ -26,8 +39,103 @@ permissions:
   contents: write
 
 jobs:
+  # Whether this run releases anything, and under which tag.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('desktop/rata-app/src-tauri/tauri.conf.json'))['version'])")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # 0.x is beta: marked pre-release so nobody mistakes it for finished.
+          case "${version}" in 0.*) pre=true ;; *) pre=false ;; esac
+          echo "prerelease=${pre}" >> "$GITHUB_OUTPUT"
+
+          if [ "${EVENT}" = "workflow_dispatch" ]; then
+            echo "Manual run: installers only, no release."
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "tag=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "${REF_TYPE}" = "tag" ]; then
+            echo "Tag ${REF_NAME} pushed: releasing it."
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "tag=${REF_NAME}" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          tag="v${version}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} is already released — nothing to build. Bump the version to release."
+            echo "build=false" >> "$GITHUB_OUTPUT"; echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "${tag} has not been released yet — building and releasing it."
+            echo "build=true" >> "$GITHUB_OUTPUT"; echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # One release, made before the builds rather than by them: four builds each
+  # finding no release and creating one is a race that leaves duplicates. Made
+  # as a draft so nobody sees an empty release while the installers build, and
+  # reused if a draft for this tag already exists, so a re-run does not add a
+  # second one.
+  create-release:
+    name: Create release
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+    steps:
+      - id: release
+        uses: actions/github-script@v7
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        with:
+          script: |
+            const { TAG, VERSION, PRERELEASE } = process.env;
+            const pre = PRERELEASE === 'true';
+            // listReleases includes drafts; getReleaseByTag does not.
+            const all = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            const found = all.find((r) => r.tag_name === TAG);
+            if (found) {
+              core.info(`Reusing release ${found.id} for ${TAG} (draft: ${found.draft}).`);
+              core.setOutput('id', String(found.id));
+              return;
+            }
+            const made = await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: TAG,
+              target_commitish: context.sha,
+              name: pre ? `RATA ${VERSION} beta` : `RATA ${VERSION}`,
+              body: [
+                'Install RATA, then paste your licence key.',
+                '',
+                'Your mailbox passwords stay on this computer, in its own keychain.',
+                ...(pre ? ['', 'This is a beta. How to test it and how to report a problem: https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/blob/main/BETA.md'] : []),
+              ].join('\n'),
+              draft: true,
+              prerelease: pre,
+            });
+            core.info(`Created draft release ${made.data.id} for ${TAG} at ${context.sha}.`);
+            core.setOutput('id', String(made.data.id));
+
   installers:
     name: ${{ matrix.name }}
+    needs: [plan, create-release]
+    # create-release is skipped for a build-only run, and a skipped need would
+    # otherwise skip this job too.
+    if: >-
+      always() && needs.plan.outputs.build == 'true' &&
+      (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -182,19 +290,9 @@ jobs:
         with:
           projectPath: desktop/rata-app
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: RATA ${{ github.ref_name }}
-          releaseBody: |
-            Install RATA, then paste the licence key from
-            https://mailrata.org/account.
-
-            Your mailbox passwords stay on this computer, in its own keychain.
-          releaseDraft: true
-          # Published by hand. A release that appears the moment a tag is
-          # pushed is a release nobody checked.
-          prerelease: false
-          # A tag publishes a draft release; a manual run just leaves the
-          # installers attached to the run for testing.
+          # The release made by create-release, or nothing for a build-only
+          # run — with no release id and no tag the action only builds.
+          releaseId: ${{ needs.create-release.outputs.id }}
           includeUpdaterJson: false
 
       # `always()` because the installers are worth keeping precisely when
@@ -219,3 +317,36 @@ jobs:
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*-setup.exe
           if-no-files-found: error
           retention-days: 14
+
+  # Out of draft once the installers are on it. Publishing is also what
+  # creates the tag, at the commit the release was made from. A release with
+  # nothing attached stays a draft: an empty release page is worse than none.
+  # A partial one is published — one platform's upload failing (the Linux
+  # AppImage did, once, with "Error saving asset") must not hold back the rest.
+  publish:
+    name: Publish release
+    needs: [plan, create-release, installers]
+    if: always() && needs.create-release.result == 'success' && needs.installers.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          ID: ${{ needs.create-release.outputs.id }}
+        with:
+          script: |
+            const release_id = Number(process.env.ID);
+            const { data: r } = await github.rest.repos.getRelease({ ...context.repo, release_id });
+            const names = r.assets.map((a) => a.name);
+            core.info(`Attached: ${names.join(', ') || 'nothing'}`);
+            if (!names.length) {
+              core.setFailed(`No installers were attached to ${r.tag_name}, so it was left as a draft.`);
+              return;
+            }
+            if (!names.some((n) => n.endsWith('-setup.exe'))) core.warning('No Windows installer on this release.');
+            if (!names.some((n) => n.endsWith('.dmg'))) core.warning('No macOS installer on this release.');
+            if (!r.draft) {
+              core.info(`${r.tag_name} is already published.`);
+              return;
+            }
+            await github.rest.repos.updateRelease({ ...context.repo, release_id, draft: false });
+            core.info(`Published ${r.tag_name}: https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${r.tag_name}`);
