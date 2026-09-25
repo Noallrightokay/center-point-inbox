@@ -79,9 +79,12 @@ gone too.
 
 Don't spend time reporting these — they are known and planned:
 
-- Only the **newest ~15 messages** of the **inbox** are shown, fetched fresh
-  each time. Nothing is stored between launches; no search; no read/unread.
-- No other folders; no archive, delete or flag.
+- Each refresh fetches the **newest ~15** inbox messages. RATA keeps what it
+  has fetched between launches, so history builds up from the day you link —
+  but older mail from before that is not pulled in yet.
+- Read/unread, delete and star work **inside RATA only** — they do not change
+  your real mailbox yet. A message deleted in RATA stays deleted in RATA.
+- No other folders; no archive.
 - Plain text only: no HTML rendering, no attachments.
 - Buttons for Slack, the AI assistant and file browsing lead nowhere.
 - No auto-update — new betas are a new download.
