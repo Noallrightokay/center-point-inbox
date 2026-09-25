@@ -55,9 +55,11 @@ have bitten:
   check the licence public key, `org.mailrata.desktop`, and that no
   `fonts.googleapis`/`fonts.gstatic` string is present.
 
-Current release: **v0.1.1**, four of five files (the Linux `.AppImage` upload
-failed with `Error saving asset`, probably transient; the bundle built fine and
-is on the run as an artifact).
+Released: **v0.1.1**, four of five files (the Linux `.AppImage` upload failed
+with `Error saving asset`, probably transient; the bundle built fine and is on
+the run as an artifact). **v0.1.2 is the beta build** — the app version lives in
+both `tauri.conf.json` (`version` *and* the window `title`, which is how testers
+report it) and `src-tauri/Cargo.toml`; bump all three together.
 
 ## Permissions in this environment
 
@@ -78,6 +80,16 @@ A build without the public key rejects every licence; a build with the wrong one
 rejects every legitimate licence with a signature error.
 
 ## Status
+
+**In beta.** Testers follow `BETA.md` and report through the *Beta bug* issue
+template. A report's exact error text is the primary evidence — read it before
+theorising, and prefer a failing test that reproduces it to a guess.
+
+The ten findings of the 2026-09-23 code review are fixed on the way to v0.1.2:
+auth classification now only believes permanent refusals during sign-in (SMTP
+5xx, IMAP `NO` without a "come back later"), a locked keychain is `keychain`
+rather than `auth`, Remove really removes, discovery continues past a refused
+host, partial fetches and lapsed licences no longer report success.
 
 Works: licence verification (incl. offline and renewal), adding a mailbox by
 address and app password, server discovery via SRV → MX → conventional names,

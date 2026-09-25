@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::licence::{self, Licence, Plan, Reason};
 use crate::store::{Mailbox, Store, now};
-use crate::vault::Vault;
+use crate::vault::{Unreadable, Vault};
 
 /// How many mailboxes are read at once. Four was the server's number and the
 /// reasoning holds: enough that ten mailboxes do not refresh one at a time,
@@ -343,7 +343,13 @@ impl Rata {
             kind: kind.into(),
             error,
         };
-        let pass = self.vault.get(&m.email).map_err(|e| problem("auth", e))?;
+        // Neither case is the server refusing anything, so neither is "auth":
+        // only a real rejection may park a mailbox. A missing entry needs a
+        // relink; a locked keychain needs nothing but time.
+        let pass = self.vault.get(&m.email).map_err(|e| match e {
+            Unreadable::Missing(why) => problem("missing", why),
+            Unreadable::Locked(why) => problem("keychain", why),
+        })?;
 
         let acct = Account {
             email: m.email.clone(),
@@ -615,12 +621,47 @@ mod tests {
 
             let out = app.refresh(15).await;
             assert_eq!(out.problems.len(), 1);
-            assert_eq!(out.problems[0].kind, "auth");
+            assert_eq!(out.problems[0].kind, "missing");
             assert!(
                 out.problems[0].error.contains("relink"),
                 "{:?}",
                 out.problems[0]
             );
+            // Nothing was refused by a server, so nothing is parked: the
+            // moment it is relinked, it syncs.
+            assert!(app.mailboxes().iter().all(|m| m.auth_failed_at.is_none()));
+        });
+    }
+
+    #[test]
+    fn a_locked_keychain_is_not_a_rejected_password() {
+        rt().block_on(async {
+            let app = Rata::new(
+                Store::open(tmpfile("locked")),
+                Box::new(crate::vault::Locked),
+                Resolver::system().expect("resolver"),
+                Some(KEY),
+            );
+            app.set_licence(Some(PRO.into())).unwrap();
+            app.remember(Mailbox {
+                email: "owner@example.com".into(),
+                host: "imap.example.com".into(),
+                port: 993,
+                label: "Owner".into(),
+                help: None,
+                source: "mx".into(),
+                added_at: 1,
+                auth_failed_at: None,
+            })
+            .unwrap();
+
+            let out = app.refresh(15).await;
+            assert_eq!(out.problems.len(), 1);
+            assert_eq!(out.problems[0].kind, "keychain", "{:?}", out.problems[0]);
+            // The whole point: a keychain that was not ready at login must not
+            // leave the mailbox demanding a relink once it is.
+            assert!(app.mailboxes().iter().all(|m| m.auth_failed_at.is_none()));
+            assert!(app.refresh(15).await.skipped.is_empty());
         });
     }
 

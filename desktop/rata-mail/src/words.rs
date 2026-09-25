@@ -267,22 +267,36 @@ pub fn encode_header(value: &str) -> String {
 
 /// A body down to something showable in a one-line preview: tags out,
 /// whitespace collapsed.
+///
+/// Only what is shaped like a tag is removed — a `<` followed by a letter,
+/// `/`, `!` or `?`, closed by a `>` before any other `<`. The preview comes from
+/// a body whose type is not known here, and in plain text a `<` is just a
+/// character: "if a < b" or a lone "<3" used to switch stripping on and
+/// swallow the rest of the message.
 pub fn plain(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
-    let mut in_tag = false;
-    for ch in text.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => {
-                in_tag = false;
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<' && tag_starts(chars.get(i + 1)) {
+            let rest = &chars[i + 1..];
+            if let Some(end) = rest.iter().position(|&c| c == '>' || c == '<')
+                && rest[end] == '>'
+            {
                 out.push(' ');
+                i += end + 2;
+                continue;
             }
-            _ if in_tag => {}
-            _ => out.push(ch),
         }
+        out.push(chars[i]);
+        i += 1;
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tag_starts(next: Option<&char>) -> bool {
+    matches!(next, Some(c) if c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
 }
 
 /// Cut to `n` characters, not bytes — slicing a String by bytes panics in the
@@ -439,6 +453,35 @@ mod tests {
             "Hello there again"
         );
         assert_eq!(plain(b"   "), "");
+    }
+
+    #[test]
+    fn a_less_than_sign_in_plain_text_does_not_swallow_the_message() {
+        // Each of these used to switch tag-stripping on at the `<` and drop
+        // everything after it.
+        assert_eq!(
+            plain(b"If the total is < 100 we ship today. Thanks!"),
+            "If the total is < 100 we ship today. Thanks!"
+        );
+        assert_eq!(
+            plain(b"See you soon <3 Love, Mum"),
+            "See you soon <3 Love, Mum"
+        );
+        assert_eq!(
+            plain(b"x<y means less. Then the rest of the email."),
+            "x<y means less. Then the rest of the email."
+        );
+        // A tag-shaped start that never closes is text, not a tag.
+        assert_eq!(plain(b"a <b and no end"), "a <b and no end");
+    }
+
+    #[test]
+    fn real_markup_is_still_removed() {
+        assert_eq!(
+            plain(b"<!DOCTYPE html><html><body><p class=\"x\">Hi</p></body></html>"),
+            "Hi"
+        );
+        assert_eq!(plain(b"line one<br/>line two"), "line one line two");
     }
 
     #[test]

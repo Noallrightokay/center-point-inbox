@@ -58,8 +58,14 @@
     async '/api/link/mail'(opts) {
       if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
         const { email } = body(opts);
-        await invoke('unlink_mailbox', { email });
-        return { ok: true, email };
+        /* Answered rather than thrown: the caller keeps the row on screen
+           when this fails, and needs the reason to say why. */
+        try {
+          await invoke('unlink_mailbox', { email });
+          return { ok: true, email };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
       }
       const b = body(opts);
       const res = await invoke('link_mailbox', {
@@ -91,12 +97,21 @@
 
     async '/api/sync/mail'() {
       const res = await invoke('refresh_mail', { limit: 15 });
+      /* Nothing was read, because this copy is not licensed. Said as an error
+         so the interface leaves what it has alone — building an answer from
+         the empty lists below would report every mailbox as live and freshly
+         synced, with "up to date" on top. */
+      if (res.unlicensed) return { error: res.unlicensed, unlicensed: true };
       const accounts = [];
       for (const p of res.skipped) {
         accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink: true, deferred: false });
       }
       for (const p of res.problems) {
-        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink: p.kind === 'auth', deferred: false });
+        /* "auth": the server refused the password. "missing": the keychain has
+           no password for it. Both are fixed by relinking. "keychain": the
+           keychain would not open yet — nothing to relink, it clears itself. */
+        const needsRelink = p.kind === 'auth' || p.kind === 'missing';
+        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink, deferred: false });
       }
       const counts = {};
       for (const m of res.messages) counts[m.acct] = (counts[m.acct] || 0) + 1;
@@ -105,13 +120,16 @@
         accounts.push({ email: box.email, label: box.label, count: counts[box.email] || 0, error: null, needsRelink: false, deferred: false });
       }
       const failures = accounts.filter((a) => a.error).map((a) => ({ email: a.email, error: a.error, needsRelink: a.needsRelink }));
+      /* Never a top-level error, even when every mailbox failed. The
+         interface treats `error` as "nothing to absorb" and returns early,
+         which skipped the per-account marking — so with one mailbox (the
+         usual case) a refused password produced a toast and never a Relink
+         button. Per-account failures travel in `accounts` and `partial`,
+         where the interface already words each one correctly. */
       return {
         messages: res.messages.map(asMessage),
         accounts,
         ...(failures.length ? { partial: failures } : {}),
-        /* Only a refresh where every mailbox failed is an error. One that lost
-           a single account still delivered the rest. */
-        ...(failures.length && failures.length === accounts.length ? { error: failures[0].error } : {}),
       };
     },
 
@@ -233,14 +251,22 @@
     async function submit() {
       err.textContent = '';
       save.disabled = true;
-      const next = await invoke('set_licence', { licence: input.value.trim() });
-      save.disabled = false;
-      if (next.licensed) {
-        wrap.remove();
-        location.reload();
-        return;
+      /* set_licence rejects when the key cannot be saved at all. Without the
+         catch that rejection skipped both the re-enable and the message,
+         leaving a dead button and a silent box. */
+      try {
+        const next = await invoke('set_licence', { licence: input.value.trim() });
+        if (next.licensed) {
+          wrap.remove();
+          location.reload();
+          return;
+        }
+        err.textContent = next.message;
+      } catch (e) {
+        err.textContent = `That licence could not be saved: ${e}`;
+      } finally {
+        save.disabled = false;
       }
-      err.textContent = next.message;
     }
     save.addEventListener('click', submit);
     input.addEventListener('keydown', (e) => {
