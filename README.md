@@ -116,11 +116,14 @@ refuses to appear, this is why.
 differences loudly, in one script you can read. Do not create a second
 `app.html`. The generated `ui/` directory is never committed.
 
-**Inline `style="..."` attributes are silently dropped in the shipped app.**
-Tauri adds a nonce to `style-src`, and per CSP a nonce makes `'unsafe-inline'`
-ignored — even though the config asks for it. Styling must go in a stylesheet
-(`bridge.css`). This does not reproduce in `tauri dev`; it only bites the
-packaged build, which is the worst possible place to find it.
+**Inline `style="..."` attributes used to be silently dropped in the shipped
+app.** Tauri adds a nonce to `style-src`, and per CSP a nonce makes
+`'unsafe-inline'` ignored — even though the config asks for it. It never
+reproduced in `tauri dev`, only in the packaged build, and it shipped in v0.1.2
+as a first screen with two forms on it. `tauri.conf.json` now sets
+`dangerousDisableAssetCspModification: ["style-src"]` so the declared policy is
+the one that applies; scripts keep Tauri's protection. Leave it there, and check
+interface changes in a packaged build.
 
 **`bridge.js` replaces the browser's `fetch`.**
 The interface was written to call a server. Rather than rewrite it, the bridge
