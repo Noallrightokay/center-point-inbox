@@ -3132,9 +3132,19 @@ function addLinked(type,label,extra){
   return l;
 }
 async function removeLinked(id){
-  const i=S.linked.findIndex(l=>l.id===id);if(i<0)return;
-  const l=S.linked[i];
+  const l=S.linked.find(x=>x.id===id);if(!l)return;
   if(!confirm(`Remove ${l.label}? Messages already in your workspace stay; live sync for this account stops.`))return;
+  /* In the desktop app a mailbox's password lives in this computer's keychain,
+     and Remove has to take it out of there — not just off the screen. Asked
+     first, so a failure leaves the row in place instead of showing a mailbox
+     as gone while its password stays behind (and the next sync puts it back). */
+  if(l.type==='mail'&&window.__RATA_NATIVE__){
+    let r;
+    try{r=await apiFetch('/api/link/mail',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label})})}
+    catch(e){r={ok:false,error:String(e&&e.message||e)}}
+    if(!r||!r.ok){toast('Could not remove '+l.label+': '+((r&&r.error)||'try again'));return}
+  }
+  const i=S.linked.findIndex(x=>x.id===id);if(i<0)return;
   S.linked.splice(i,1);
   const still=t=>S.linked.some(x=>x.type===t);
   if(l.type==='google'&&!still('google'))S.connections.gmail=false;
@@ -3233,7 +3243,9 @@ async function absorbMail(res){
     let l=linkedFind('mail',a.email)||addLinked('mail',a.email,{host:a.host||'',provLabel:a.label||''});
     if(!l)continue;
     l.status=a.error?'error':'live';
-    l.lastSync=Date.now();
+    /* Only a mailbox that was actually read is "synced". Stamping a failed one
+       had its row say "synced just now" beside the error explaining it wasn't. */
+    if(!a.error)l.lastSync=Date.now();
     if(a.error)l.lastError=a.error;else delete l.lastError;
     /* Two different failures with two different answers. A mailbox that
        refused the sign-in is stopped at the server until it is relinked, and

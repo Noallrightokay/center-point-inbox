@@ -76,8 +76,20 @@ impl Reply {
     fn permanent(&self) -> bool {
         self.code >= 500
     }
-    fn is_auth(&self) -> bool {
-        matches!(self.code, 530 | 534 | 535 | 538) || crate::discover::is_auth_failure(&self.text)
+    /// Whether this reply is the server rejecting the password.
+    ///
+    /// Only ever a permanent (5xx) reply. A 4xx during sign-in — Gmail's
+    /// `454 4.7.0 Too many login attempts, please try again later` — is the
+    /// server asking for time, and calling it a wrong password marks the
+    /// mailbox as needing a relink over what is really a rate limit.
+    ///
+    /// The codes are definitive wherever they appear. The words ("login",
+    /// "password"…) are only believed while signing in: elsewhere they turn
+    /// up in refusals that are about something else entirely.
+    fn is_auth(&self, signing_in: bool) -> bool {
+        self.permanent()
+            && (matches!(self.code, 530 | 534 | 535 | 538)
+                || (signing_in && crate::discover::is_auth_failure(&self.text)))
     }
 }
 
@@ -314,9 +326,24 @@ async fn attempt(
 
 /// Send a command and turn an unhappy answer into the right kind of failure.
 async fn step(wire: &mut Wire, command: &str, host: &str) -> Result<Reply, Sent> {
+    exchange(wire, command, host, false).await
+}
+
+/// The same, for the commands that carry the credentials — the only place a
+/// refusal's wording is allowed to decide that the password was wrong.
+async fn sign_in_step(wire: &mut Wire, command: &str, host: &str) -> Result<Reply, Sent> {
+    exchange(wire, command, host, true).await
+}
+
+async fn exchange(
+    wire: &mut Wire,
+    command: &str,
+    host: &str,
+    signing_in: bool,
+) -> Result<Reply, Sent> {
     match timeout(COMMAND, wire.ask(command)).await {
         Ok(Ok(r)) if r.ok() => Ok(r),
-        Ok(Ok(r)) if r.is_auth() => Err(Sent::Auth(refused(host, &r.text))),
+        Ok(Ok(r)) if r.is_auth(signing_in) => Err(Sent::Auth(refused(host, &r.text))),
         Ok(Ok(r)) if r.permanent() => Err(Sent::Rejected(format!("{host} refused: {}", r.text))),
         // 4xx is the server asking to be tried again later, so the next
         // candidate is worth a go.
@@ -388,14 +415,14 @@ async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -
         secret.push(0);
         secret.extend_from_slice(acct.pass.as_bytes());
         let command = format!("AUTH PLAIN {}", words::base64_encode(&secret));
-        step(wire, &command, host).await?;
+        sign_in_step(wire, &command, host).await?;
         return Ok(());
     }
 
     if upper.contains("AUTH") && upper.contains("LOGIN") {
-        step(wire, "AUTH LOGIN", host).await?;
-        step(wire, &words::base64_encode(user.as_bytes()), host).await?;
-        step(wire, &words::base64_encode(acct.pass.as_bytes()), host).await?;
+        sign_in_step(wire, "AUTH LOGIN", host).await?;
+        sign_in_step(wire, &words::base64_encode(user.as_bytes()), host).await?;
+        sign_in_step(wire, &words::base64_encode(acct.pass.as_bytes()), host).await?;
         return Ok(());
     }
 
@@ -593,13 +620,54 @@ mod tests {
         assert!(r(250, "OK").ok());
         assert!(r(354, "Start mail input").ok());
         assert!(!r(535, "5.7.8 Username and Password not accepted").ok());
-        assert!(r(535, "5.7.8 Username and Password not accepted").is_auth());
-        assert!(r(530, "5.7.0 Authentication Required").is_auth());
+        assert!(r(535, "5.7.8 Username and Password not accepted").is_auth(true));
+        assert!(r(530, "5.7.0 Authentication Required").is_auth(true));
+        // The codes are definitive even outside sign-in.
+        assert!(r(530, "5.7.0 Authentication Required").is_auth(false));
         // Permanent means the customer has to change something.
         assert!(r(550, "5.1.1 No such user").permanent());
-        assert!(!r(550, "5.1.1 No such user").is_auth());
+        assert!(!r(550, "5.1.1 No such user").is_auth(true));
         // 4xx is "come back later", so another candidate is worth trying.
         assert!(!r(451, "4.7.1 Try again later").permanent());
+    }
+
+    #[test]
+    fn being_asked_to_slow_down_is_not_a_wrong_password() {
+        let r = |code, text: &str| Reply {
+            code,
+            text: text.into(),
+        };
+        // Exactly what Gmail sends when rate-limiting sign-ins. It says
+        // "login", and it is a 4xx: come back later, not "wrong password".
+        let slow = r(
+            454,
+            "4.7.0 Too many login attempts, please try again later.",
+        );
+        assert!(
+            !slow.is_auth(true),
+            "a rate limit read as a rejected password"
+        );
+        assert!(!slow.permanent());
+        assert!(!r(454, "4.7.0 Temporary authentication failure").is_auth(true));
+        assert!(!r(421, "4.7.0 Try again later, closing connection. (EHLO)").is_auth(false));
+    }
+
+    #[test]
+    fn auth_words_outside_sign_in_do_not_condemn_the_password() {
+        let r = |code, text: &str| Reply {
+            code,
+            text: text.into(),
+        };
+        // A refused recipient whose explanation happens to mention a login
+        // page. It is about the recipient, not about this mailbox's password.
+        let rcpt = r(
+            550,
+            "5.7.1 Recipient rejected, see https://example.com/login for policy",
+        );
+        assert!(!rcpt.is_auth(false));
+        assert!(rcpt.permanent());
+        // During sign-in the same wording is believed.
+        assert!(r(550, "5.7.1 Invalid login or password").is_auth(true));
     }
 
     /// A server that says exactly what it is told to, so the client's half of
@@ -660,7 +728,7 @@ mod tests {
             .await;
             let r = wire.hear().await.unwrap();
             assert_eq!(r.code, 535);
-            assert!(!r.ok() && r.is_auth(), "{r:?}");
+            assert!(!r.ok() && r.is_auth(true), "{r:?}");
         });
     }
 

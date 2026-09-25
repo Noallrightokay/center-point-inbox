@@ -155,11 +155,42 @@ pub enum Discovery {
     Refuse(String),
 }
 
+/// Forgive the ways people paste a server address: a scheme in front, a port
+/// or a path after. `imaps://imap.example.com:993/` means `imap.example.com`.
+/// Bracketed IPv6 literals keep their colons.
+fn tidy_typed_host(raw: &str) -> &str {
+    let mut h = raw.trim();
+    if let Some(i) = h.find("://") {
+        h = &h[i + 3..];
+    }
+    if let Some(i) = h.find('/') {
+        h = &h[..i];
+    }
+    if !h.starts_with('[')
+        && let Some((name, port)) = h.rsplit_once(':')
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && !name.contains(':')
+    {
+        h = name;
+    }
+    h
+}
+
 /// Everything worth trying for an address, best first.
 pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&str>) -> Discovery {
     let domain = domain_of(email);
 
-    if let Some(given) = host_override.and_then(normalise) {
+    // A server address the customer typed is honoured or refused out loud —
+    // never quietly replaced by discovery, which would link whatever the
+    // domain's DNS suggests instead of the server they asked for.
+    let typed = host_override.map(str::trim).filter(|h| !h.is_empty());
+    if let Some(raw) = typed {
+        let Some(given) = normalise(tidy_typed_host(raw)) else {
+            return Discovery::Refuse(format!(
+                "\"{raw}\" is not a server address RATA can use. Enter just the name, like imap.example.com."
+            ));
+        };
         return Discovery::Candidates {
             hosts: vec![Candidate {
                 host: given,
@@ -293,6 +324,39 @@ mod tests {
                 }
                 other => panic!("{other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn a_pasted_server_address_is_tidied_rather_than_dropped() {
+        assert_eq!(tidy_typed_host("imap.example.com"), "imap.example.com");
+        assert_eq!(tidy_typed_host("imap.example.com:993"), "imap.example.com");
+        assert_eq!(
+            tidy_typed_host("imaps://imap.example.com:993/"),
+            "imap.example.com"
+        );
+        assert_eq!(
+            tidy_typed_host("https://mail.example.com/login"),
+            "mail.example.com"
+        );
+        assert_eq!(tidy_typed_host("[2001:db8::1]"), "[2001:db8::1]");
+    }
+
+    #[test]
+    fn a_server_address_that_cannot_be_used_is_refused_not_ignored() {
+        rt().block_on(async {
+            let r = Resolver::system().expect("resolver");
+            // Used to fall through to discovery and quietly link a server the
+            // customer never typed.
+            match discover(&r, "me@example.com", Some("imap example com")).await {
+                Discovery::Refuse(why) => assert!(why.contains("not a server address"), "{why}"),
+                other => panic!("a bad override was not refused: {other:?}"),
+            }
+            // Blank means "no override", not "a bad one".
+            assert!(!matches!(
+                discover(&r, "me@gmail.com", Some("   ")).await,
+                Discovery::Refuse(_)
+            ));
         });
     }
 

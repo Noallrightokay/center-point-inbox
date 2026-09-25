@@ -238,9 +238,18 @@ pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<T
 async fn sign_in(client: Client<Tls>, email: &str, pass: &str) -> Result<Session<Tls>, Trouble> {
     match timeout(COMMAND, client.login(email, pass)).await {
         Ok(Ok(session)) => Ok(session),
-        Ok(Err((ImapError::No(why), _))) | Ok(Err((ImapError::Bad(why), _))) => {
-            Err(Trouble::Auth(why))
-        }
+        // A NO that says, in so many words, that the *server* is the problem
+        // right now — RFC 5530's UNAVAILABLE, INUSE and LIMIT, or a plain
+        // "try again later". Reading those as a wrong password parks the
+        // mailbox behind a relink the customer does not need.
+        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => Err(Trouble::Net(why)),
+        Ok(Err((ImapError::No(why), _))) => Err(Trouble::Auth(why)),
+        // BAD is a complaint about the conversation, not the credentials: the
+        // server did not understand what was sent. It says nothing about the
+        // password, so it must not be read as a verdict on it.
+        Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
+            "the server did not understand the sign-in: {why}"
+        ))),
         Ok(Err((e, _))) => {
             let msg = e.to_string();
             if is_auth_failure(&msg) {
@@ -251,6 +260,29 @@ async fn sign_in(client: Client<Tls>, email: &str, pass: &str) -> Result<Session
         }
         Err(_) => Err(Trouble::Net("the sign-in did not finish in time".into())),
     }
+}
+
+/// Whether a `NO` to LOGIN is the server declining for now rather than
+/// refusing the password. The response code is the reliable part where a
+/// server sends one; the wording is the fallback where it does not.
+fn is_temporary_refusal(why: &str) -> bool {
+    let w = why.to_ascii_lowercase();
+    // An explicit verdict on the credentials wins over any wording after it:
+    // "[AUTHENTICATIONFAILED] … try again" is still a wrong password.
+    if w.contains("authenticationfailed") || w.contains("authorizationfailed") {
+        return false;
+    }
+    [
+        "unavailable",
+        "inuse",
+        "[limit]",
+        "try again",
+        "temporar",
+        "too many",
+        "later",
+    ]
+    .iter()
+    .any(|needle| w.contains(needle))
 }
 
 // -------------------------------------------------------------------- verify
@@ -275,6 +307,7 @@ pub async fn verify(
 
     let mut tried: Vec<String> = Vec::new();
     let mut last_net: Option<String> = None;
+    let mut blocked: Option<String> = None;
 
     for cand in &hosts {
         // Recorded before the attempt, not after it. Only a host that reached
@@ -285,9 +318,14 @@ pub async fn verify(
 
         let client = match open(resolver, &cand.host, cand.port).await {
             Ok(c) => c,
-            // Refused rather than unreachable: stop, and say so. Continuing
-            // would be trying to reach the same place by another name.
-            Err(Trouble::Host(why)) => return Verify::Failed(why),
+            // Refused by the guard: this *name* points somewhere RATA will
+            // not connect. A different name is a different place — a stale
+            // private `imap.` record must not stop a public `mail.` from being
+            // tried, which is exactly how `smtp::send` already behaves.
+            Err(Trouble::Host(why)) => {
+                blocked.get_or_insert(why);
+                continue;
+            }
             Err(Trouble::Net(why) | Trouble::Auth(why)) => {
                 last_net = Some(why);
                 continue;
@@ -313,6 +351,12 @@ pub async fn verify(
                 continue;
             }
         }
+    }
+
+    // Nothing answered, and at least one name pointed somewhere forbidden.
+    // That is the more useful thing to say: it names a concrete problem.
+    if let Some(why) = blocked {
+        return Verify::Failed(why);
     }
 
     if let Some(given) = host_override {
@@ -430,10 +474,32 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         futures::pin_mut!(stream);
         // A message that will not parse is skipped rather than failing the
         // refresh: one malformed message must not cost the customer the other
-        // fourteen.
-        while let Ok(Some(item)) = timeout(COMMAND, stream.next()).await {
-            if let Ok(fetched) = item {
-                messages.push(build(acct, &fetched));
+        // fourteen. A connection that stops answering is different — what
+        // arrived so far is an arbitrary slice of the inbox, and presenting it
+        // as the inbox would be a refresh that silently lost mail.
+        loop {
+            match timeout(COMMAND, stream.next()).await {
+                Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched)),
+                Ok(Some(Err(ImapError::Io(e)))) => {
+                    return Fetched::Net(unreachable_msg(
+                        acct,
+                        &format!("the connection failed partway through the inbox ({e})"),
+                    ));
+                }
+                Ok(Some(Err(ImapError::ConnectionLost))) => {
+                    return Fetched::Net(unreachable_msg(
+                        acct,
+                        "the connection was lost partway through the inbox",
+                    ));
+                }
+                Ok(Some(Err(_))) => {}
+                Ok(None) => break,
+                Err(_) => {
+                    return Fetched::Net(unreachable_msg(
+                        acct,
+                        "the server stopped answering partway through the inbox",
+                    ));
+                }
             }
         }
     }
@@ -549,6 +615,39 @@ fn build(acct: &Account, f: &async_imap::types::Fetch) -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_asking_for_time_is_not_refusing_the_password() {
+        use super::is_temporary_refusal as temp;
+        // The shape async-imap hands over, around what real servers say.
+        assert!(temp(
+            r#"code: None, info: Some("[UNAVAILABLE] Temporary System Problem")"#
+        ));
+        assert!(temp(
+            r#"code: None, info: Some("[ALERT] Too many simultaneous connections. (Failure)")"#
+        ));
+        assert!(temp(
+            r#"code: None, info: Some("[INUSE] Mailbox in use, try again later")"#
+        ));
+        assert!(temp(
+            r#"code: None, info: Some("[LIMIT] Too many connections")"#
+        ));
+    }
+
+    #[test]
+    fn a_refused_password_is_still_a_refused_password() {
+        use super::is_temporary_refusal as temp;
+        // Gmail, wrong app password.
+        assert!(!temp(
+            r#"code: None, info: Some("[AUTHENTICATIONFAILED] Invalid credentials (Failure)")"#
+        ));
+        // Outlook.
+        assert!(!temp(r#"code: None, info: Some("LOGIN failed.")"#));
+        // A credential verdict followed by friendly advice is still a verdict.
+        assert!(!temp(
+            r#"code: None, info: Some("[AUTHENTICATIONFAILED] Invalid credentials, try again")"#
+        ));
+    }
 
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()

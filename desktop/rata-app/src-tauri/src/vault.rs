@@ -32,8 +32,38 @@ pub const SERVICE: &str = "org.mailrata.desktop";
 
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;
-    fn get(&self, email: &str) -> Result<String, String>;
+    fn get(&self, email: &str) -> Result<String, Unreadable>;
     fn forget(&self, email: &str) -> Result<(), String>;
+}
+
+/// Why a stored password could not be read. The two cases need opposite
+/// answers, which is why they are not one string.
+///
+/// Reporting a locked keychain as a rejected password — which this used to do —
+/// parked the mailbox behind a relink the customer did not need, over what was
+/// only the keychain not being ready yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unreadable {
+    /// Nothing is stored for this address. Relinking puts it back.
+    Missing(String),
+    /// The keychain itself would not answer — locked, or its service not
+    /// running yet. Nothing is wrong with the password; the next refresh will
+    /// very likely work.
+    Locked(String),
+}
+
+impl std::fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unreadable::Missing(why) | Unreadable::Locked(why) => f.write_str(why),
+        }
+    }
+}
+
+impl From<Unreadable> for String {
+    fn from(u: Unreadable) -> String {
+        u.to_string()
+    }
 }
 
 /// The real one.
@@ -50,8 +80,12 @@ impl Vault for Keychain {
         Self::entry(email)?.set_password(password).map_err(explain)
     }
 
-    fn get(&self, email: &str) -> Result<String, String> {
-        Self::entry(email)?.get_password().map_err(explain)
+    fn get(&self, email: &str) -> Result<String, Unreadable> {
+        let entry = Self::entry(email).map_err(Unreadable::Locked)?;
+        entry.get_password().map_err(|e| match e {
+            keyring::Error::NoEntry => Unreadable::Missing(explain(e)),
+            other => Unreadable::Locked(explain(other)),
+        })
     }
 
     fn forget(&self, email: &str) -> Result<(), String> {
@@ -98,13 +132,17 @@ impl Vault for Memory {
         Ok(())
     }
 
-    fn get(&self, email: &str) -> Result<String, String> {
+    fn get(&self, email: &str) -> Result<String, Unreadable> {
         self.0
             .lock()
-            .map_err(|_| "vault poisoned".to_string())?
+            .map_err(|_| Unreadable::Locked("vault poisoned".into()))?
             .get(&email.trim().to_ascii_lowercase())
             .cloned()
-            .ok_or_else(|| format!("{email} has no stored password — relink the account."))
+            .ok_or_else(|| {
+                Unreadable::Missing(format!(
+                    "{email} has no stored password — relink the account."
+                ))
+            })
     }
 
     fn forget(&self, email: &str) -> Result<(), String> {
@@ -113,6 +151,25 @@ impl Vault for Memory {
             .map_err(|_| "vault poisoned".to_string())?
             .remove(&email.trim().to_ascii_lowercase());
         Ok(())
+    }
+}
+
+/// A keychain that will not open — the locked-at-login case. Test only.
+#[cfg(test)]
+pub struct Locked;
+
+#[cfg(test)]
+impl Vault for Locked {
+    fn put(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("keychain locked".into())
+    }
+    fn get(&self, _: &str) -> Result<String, Unreadable> {
+        Err(Unreadable::Locked(
+            "This computer's keychain could not be reached.".into(),
+        ))
+    }
+    fn forget(&self, _: &str) -> Result<(), String> {
+        Err("keychain locked".into())
     }
 }
 
@@ -140,6 +197,7 @@ mod tests {
     fn a_missing_password_says_what_to_do_about_it() {
         let v = Memory::default();
         let why = v.get("nobody@example.com").unwrap_err();
-        assert!(why.contains("relink"), "{why}");
+        assert!(matches!(why, Unreadable::Missing(_)), "{why:?}");
+        assert!(why.to_string().contains("relink"), "{why}");
     }
 }
