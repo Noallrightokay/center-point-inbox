@@ -32,10 +32,16 @@ or a translation worker is a ghost — report it.
 - `desktop/rata-app/` → run `./sync-ui.sh` **before** `cargo build`, every time.
   Tauri compiles the interface into the binary; without this you are testing the
   previous build and nothing warns you.
-- Styling in the desktop app goes in `bridge.css`. Inline `style=` attributes are
-  silently dropped in the packaged build (Tauri nonces `style-src`, which makes
-  `'unsafe-inline'` ignored) but work fine in `tauri dev` — so this only shows up
-  after packaging.
+- Do not remove `"dangerousDisableAssetCspModification": ["style-src"]` from
+  `tauri.conf.json`. Without it Tauri nonces `style-src`, a nonce makes
+  `'unsafe-inline'` ignored, and every inline `style=` attribute is silently
+  dropped — in the packaged build only, never in `tauri dev`. That shipped in
+  v0.1.2: `auth.html` hides panels with `style="display:none"`, so the first
+  screen showed a password-reset form over the sign-up form. Only `style-src`
+  is exempted; scripts keep Tauri's nonce and hash protection.
+- Check UI changes in a **packaged** build (`cargo build --release --features
+  tauri/custom-protocol`), not `tauri dev`: the two differ in exactly the ways
+  that ship bugs.
 - `bridge.js` replaces the browser's `fetch` to route the interface's server
   calls into Rust. Read it before touching either side.
 
