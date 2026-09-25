@@ -38,6 +38,10 @@
       ts: m.ts,
       unread: m.unread,
       starred: m.starred,
+      /* The server's own reference, kept so a delete or a mark-read can later
+         be done to this exact message in the real mailbox. */
+      uid: m.uid,
+      uidvalidity: m.uidvalidity,
     };
   }
 
@@ -131,6 +135,22 @@
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };
+    },
+
+    /* Do to the real mailbox what was done in RATA. One call per mailbox and
+       generation, however many messages — the grouping is the interface's. */
+    async '/api/mail/act'(opts) {
+      const b = body(opts);
+      try {
+        return await invoke('change_messages', {
+          email: b.email,
+          uids: b.uids,
+          uidvalidity: b.uidvalidity,
+          action: b.action,
+        });
+      } catch (e) {
+        return { ok: false, kind: 'error', error: String(e) };
+      }
     },
 
     async '/api/send/mail'(opts) {

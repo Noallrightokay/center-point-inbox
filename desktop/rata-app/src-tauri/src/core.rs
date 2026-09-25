@@ -9,7 +9,8 @@
 use std::sync::Mutex;
 
 use rata_mail::{
-    Account, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, fetch_inbox, send, verify,
+    Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, act,
+    fetch_inbox, send, verify,
 };
 use serde::Serialize;
 
@@ -75,6 +76,34 @@ pub struct Problem {
     pub email: String,
     pub kind: String,
     pub error: String,
+}
+
+/// What doing something to messages on the server came to, in the shape the
+/// interface needs. `gone` is not a failure: those messages had already left
+/// the inbox from another device, so what the customer wanted already holds.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Changed {
+    pub ok: bool,
+    pub done: Vec<u32>,
+    pub gone: Vec<u32>,
+    /// Why not, for the interface to word: "stale", "no-place", "auth",
+    /// "host", "net", "missing", "keychain", "unlicensed" or "unknown".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Changed {
+    fn failed(kind: &str, error: String) -> Self {
+        Changed {
+            ok: false,
+            done: vec![],
+            gone: vec![],
+            kind: Some(kind.into()),
+            error: Some(error),
+        }
+    }
 }
 
 /// Whether this copy of RATA is paid for, in the shape the interface needs.
@@ -438,6 +467,65 @@ impl Rata {
         }
     }
 
+    /// Do to the real mailbox what the customer did in RATA: read, unread,
+    /// star, unstar, trash or archive, for messages of one mailbox fetched
+    /// under one UIDVALIDITY. All of them on one connection.
+    pub async fn change(
+        &self,
+        email: &str,
+        uids: &[u32],
+        uidvalidity: u32,
+        action: Action,
+    ) -> Changed {
+        if let Err(error) = self.licensed() {
+            return Changed::failed("unlicensed", error);
+        }
+        let Some(m) = self.store.lock().ok().and_then(|s| s.find(email).cloned()) else {
+            return Changed::failed("unknown", format!("{email} is not linked in RATA."));
+        };
+        // Parked after a refused sign-in. Sending the same password again to
+        // flag a message is exactly the repeated failure that gets an account
+        // locked, so it waits for the relink like refresh does.
+        if m.auth_failed_at.is_some() {
+            return Changed::failed(
+                "auth",
+                format!(
+                    "{} needs relinking — its app password was rejected.",
+                    m.email
+                ),
+            );
+        }
+        let pass = match self.vault.get(&m.email) {
+            Ok(p) => p,
+            Err(Unreadable::Missing(why)) => return Changed::failed("missing", why),
+            Err(Unreadable::Locked(why)) => return Changed::failed("keychain", why),
+        };
+        let acct = Account {
+            email: m.email.clone(),
+            pass,
+            host: m.host.clone(),
+            port: m.port,
+            label: m.label.clone(),
+        };
+        match act(&self.resolver, &acct, uids, uidvalidity, action).await {
+            Acted::Done { done, gone } => Changed {
+                ok: true,
+                done,
+                gone,
+                kind: None,
+                error: None,
+            },
+            Acted::Stale(why) => Changed::failed("stale", why),
+            Acted::NoPlace(why) => Changed::failed("no-place", why),
+            Acted::Auth(why) => {
+                self.note_auth_failure(&m.email);
+                Changed::failed("auth", why)
+            }
+            Acted::Host(why) => Changed::failed("host", why),
+            Acted::Net(why) => Changed::failed("net", why),
+        }
+    }
+
     /// Try a mailbox again after its password has been replaced.
     pub fn clear_auth_failure(&self, email: &str) {
         if let Ok(mut store) = self.store.lock() {
@@ -630,6 +718,49 @@ mod tests {
             // Nothing was refused by a server, so nothing is parked: the
             // moment it is relinked, it syncs.
             assert!(app.mailboxes().iter().all(|m| m.auth_failed_at.is_none()));
+        });
+    }
+
+    #[test]
+    fn changing_messages_refuses_before_ever_dialling() {
+        rt().block_on(async {
+            // Unlicensed.
+            let app = unlicensed(tmpfile("chg-unlic"));
+            let c = app.change("owner@example.com", &[1], 7, Action::Read).await;
+            assert_eq!(c.kind.as_deref(), Some("unlicensed"), "{c:?}");
+
+            // A mailbox RATA does not have.
+            let app = rata(tmpfile("chg-unknown"));
+            let c = app
+                .change("nobody@example.com", &[1], 7, Action::Trash)
+                .await;
+            assert_eq!(c.kind.as_deref(), Some("unknown"), "{c:?}");
+
+            // Parked after a refused password: never sent again.
+            let app = rata(tmpfile("chg-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let c = app
+                .change("owner@example.com", &[1], 7, Action::Trash)
+                .await;
+            assert_eq!(c.kind.as_deref(), Some("auth"), "{c:?}");
+            assert!(!c.ok);
+
+            // No stored password.
+            let app = rata(tmpfile("chg-nopass"));
+            app.remember(Mailbox {
+                email: "ghost@example.com".into(),
+                host: "imap.example.com".into(),
+                port: 993,
+                label: "Ghost".into(),
+                help: None,
+                source: "mx".into(),
+                added_at: 1,
+                auth_failed_at: None,
+            })
+            .unwrap();
+            let c = app.change("ghost@example.com", &[1], 7, Action::Read).await;
+            assert_eq!(c.kind.as_deref(), Some("missing"), "{c:?}");
         });
     }
 

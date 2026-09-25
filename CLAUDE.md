@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard. Standalone, knows nothing about the app. 73 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 36 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions. Standalone, knows nothing about the app. 89 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 38 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -73,7 +73,9 @@ Traps, all of which have bitten:
 
 Released: **v0.1.1**, four of five files (the Linux `.AppImage` upload failed
 with `Error saving asset`, probably transient; the bundle built fine and is on
-the run as an artifact). **v0.1.2 is the beta build.** An upload that fails
+the run as an artifact). v0.1.2 shipped with a broken first screen (see the
+CSP note above) and must not be given to anyone. **v0.1.3 is the beta build
+testers started on**; v0.1.4 adds server-side read/star/delete/archive. An upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
 
@@ -113,15 +115,20 @@ fetching newest messages from INBOX across several mailboxes, sending with
 correct reply threading, and a guard stopping a hostile server redirecting the
 app at the local network.
 
-Stored, but not synced: the interface keeps every fetched message in one
-`localStorage` blob (`save()` in `app.html`), so mail persists between launches,
-is searchable, and has local read/unread, star and delete (deletions are
-remembered in `S.gone` so sync does not restore them). What is missing is the
-server side and scale: none of those actions reach the real mailbox; each
-refresh fetches only the newest ~15, with no backfill of older mail; and the
-single blob hits `localStorage`'s few-MB cap after heavy use — **the largest
-gap**, fixed by a per-message store (IndexedDB) plus server-side actions.
-Also not built: INBOX only, no archive; plain text only, no HTML or
+Stored, and acted on for real: the interface keeps every fetched message in
+one `localStorage` blob (`save()` in `app.html`), so mail persists between
+launches and is searchable. Read, unread, star, delete and archive change RATA's
+copy at once and then the real mailbox (`serverAct` → `/api/mail/act` →
+`change_messages` → `rata_mail::imap::act`), one connection per mailbox for a
+whole selection. `act` never permanently deletes (Trash is a move to the
+server's declared `\Trash`; none means refused) and never acts on a UID it
+cannot vouch for (UIDVALIDITY must match; only UIDs still present are touched).
+Deletions are also remembered in `S.gone` so sync does not restore them, and a
+sync takes the server's read/starred for messages it already holds. What is
+missing is scale: each refresh fetches only the newest ~15, with no backfill of
+older mail, and the single blob hits `localStorage`'s few-MB cap after heavy
+use — **the largest gap**, fixed by a per-message store (IndexedDB).
+Also not built: INBOX only; plain text only, no HTML or
 attachments; the interface still shows Slack, AI and file
 browsing controls that now refuse; no auto-update; no code signing.
 

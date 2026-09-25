@@ -39,7 +39,9 @@ pub use discover::{
     mx_rule, no_imap, smtp_candidates, table,
 };
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
-pub use imap::{Account, Fetched, Message, Verified, Verify, fetch_inbox, verify};
+pub use imap::{
+    Account, Acted, Action, Fetched, Message, Verified, Verify, act, fetch_inbox, verify,
+};
 pub use key::{domain_of, mail_key};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
 pub use smtp::{Sent, send};
