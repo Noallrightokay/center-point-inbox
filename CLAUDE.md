@@ -41,32 +41,42 @@ or a translation worker is a ghost — report it.
 
 ## Releases
 
-Tag → build → installers attach to the release page. The traps, all of which
-have bitten:
+**To release, bump the version and merge.** `release.yml` runs on every merge
+to `main` that touches the app; if `v<version>` from `tauri.conf.json` has not
+been released, it builds the four installers into a draft pre-release (0.x is
+beta) and publishes it once installers are attached — publishing is what
+creates the tag, with the workflow's own token. A merge without a version bump
+builds nothing. Nobody creates a tag by hand: that step failed three times in
+four through the GitHub UI, and an assistant session cannot do it at all.
 
-- The tag **must** start with `v` (`v0.1.1`). The workflow ignores anything else.
-- Tag and title are different fields. The tag takes no spaces; the title does.
-- A manual `workflow_dispatch` produces artifacts but **no release** — it leaves
-  `tagName` empty and skips that step. This hid the missing `GITHUB_TOKEN` for
-  two runs.
-- A tag build uses the workflow **as it existed at that tag**. Fixing the
-  workflow does not fix an existing tag; cut a new one.
+The version lives in three places, bumped together: `tauri.conf.json`
+(`version` *and* the window `title`, which is how testers report their build)
+and `src-tauri/Cargo.toml`.
+
+Traps, all of which have bitten:
+
+- A manual `workflow_dispatch` produces artifacts but **no release**. This hid
+  a missing `GITHUB_TOKEN` for two runs.
+- A tag build uses the workflow **as it existed at that tag**; fixing the
+  workflow does not fix an existing tag.
+- Pushing a `v*` tag by hand still works. It must start with `v`, and in the
+  GitHub UI the tag and title are separate fields — the tag takes no spaces.
 - After a release, verify the shipped binary rather than assuming: extract it and
   check the licence public key, `org.mailrata.desktop`, and that no
   `fonts.googleapis`/`fonts.gstatic` string is present.
 
 Released: **v0.1.1**, four of five files (the Linux `.AppImage` upload failed
 with `Error saving asset`, probably transient; the bundle built fine and is on
-the run as an artifact). **v0.1.2 is the beta build** — the app version lives in
-both `tauri.conf.json` (`version` *and* the window `title`, which is how testers
-report it) and `src-tauri/Cargo.toml`; bump all three together.
+the run as an artifact). **v0.1.2 is the beta build.** An upload that fails
+still leaves the installer on the run as an artifact, and the release is still
+published with whatever did attach.
 
 ## Permissions in this environment
 
-An assistant session here can push branches, open PRs and merge them. It
-**cannot** push or delete tags, create or delete releases, or dispatch
-workflows — all return 403. Do not discover this mid-task and hand it back;
-say so immediately and ask whether to get a token instead.
+An assistant session here can push branches, open PRs and merge them — which
+is all a release needs now. It **cannot** push or delete tags, create or delete
+releases directly, or dispatch workflows — all return 403. Do not discover this
+mid-task and hand it back; say so immediately.
 
 ## Licensing
 

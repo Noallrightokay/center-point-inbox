@@ -60,15 +60,16 @@ three CI runners.
 
 ## Releasing
 
-`.github/workflows/release.yml` is the three build machines. Push a `v*` tag to
-cut a release, or run it by hand from the Actions tab to get installers to try
-without tagging anything — a manual run attaches them to the run and creates no
-release.
+`.github/workflows/release.yml` is the three build machines. **Bump the
+version and merge to `main`**: when `main` carries a version that has not been
+released, the workflow builds the installers into a draft, publishes it once
+they are attached, and that creates the `v<version>` tag. Pushing a `v*` tag by
+hand also works; running it by hand from the Actions tab builds installers to
+try and releases nothing.
 
 It builds four: Linux (.deb and .AppImage), macOS on Apple silicon, macOS on
-Intel, and Windows (an NSIS `-setup.exe`). A tag produces a **draft** release,
-because
-one that appears the moment a tag is pushed is one nobody checked.
+Intel, and Windows (an NSIS `-setup.exe`). A 0.x version is published as a
+pre-release, because it is a beta.
 
 Linux builds on ubuntu-22.04 rather than the newest runner on purpose: an
 AppImage linked against a newer glibc will not start on an older distribution,
