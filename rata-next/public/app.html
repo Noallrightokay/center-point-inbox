@@ -1260,6 +1260,33 @@ function dropMessages(ids){
   return before-S.messages.length;
 }
 const isGone=id=>!!(S.gone&&S.gone[id]);
+/* In the desktop app, what the customer does to a message happens to the real
+   mailbox too: read, unread, star, delete (to the server's Trash) and archive.
+   RATA's own copy changes first, so the screen never waits on a server; the
+   server follows. Grouped per mailbox so a bulk action is one sign-in, not one
+   per message. Messages fetched before RATA kept a server reference have none,
+   and are changed in RATA only. Resolves to a list of problems, one line per
+   mailbox that could not be updated. */
+async function serverAct(msgs,action){
+  if(!window.__RATA_NATIVE__)return [];
+  const groups=new Map();
+  for(const m of msgs){
+    if(m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
+    const email=(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
+    if(!email)continue;
+    const k=email+'|'+m.uidvalidity;
+    if(!groups.has(k))groups.set(k,{email,uidvalidity:m.uidvalidity,uids:[]});
+    groups.get(k).uids.push(m.uid);
+  }
+  const problems=[];
+  for(const g of groups.values()){
+    let r;
+    try{r=await apiFetch('/api/mail/act',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({action},g))})}
+    catch(e){r={ok:false,error:String(e&&e.message||e)}}
+    if(!r||!r.ok)problems.push(g.email+': '+((r&&r.error)||'no answer'));
+  }
+  return problems;
+}
 const contact=id=>S.contacts.find(c=>c.id===id);
 const msgFrom=m=>m.sent?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
 const msgCtx=m=>m.ctx||contact(m.cid)?.context||'work';
@@ -1352,17 +1379,26 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
   if(!SEL.size){toast('Select some messages first');return}
   const n=SEL.size;
   if(act==='del'&&!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
-  if(act==='del')dropMessages([...SEL]);
-  else for(const id of [...SEL]){
-    const i=S.messages.findIndex(m=>m.id===id);if(i<0)continue;
-    if(act==='read')S.messages[i].unread=false;
-    else if(act==='unread'){if(!S.messages[i].sent)S.messages[i].unread=true}
-    else if(act==='star')S.messages[i].starred=!S.messages[i].starred;
+  const picked=S.messages.filter(m=>SEL.has(m.id)).map(m=>Object.assign({},m));
+  const pending=[];
+  if(act==='del'){dropMessages([...SEL]);pending.push(serverAct(picked,'trash'))}
+  else{
+    for(const id of [...SEL]){
+      const i=S.messages.findIndex(m=>m.id===id);if(i<0)continue;
+      if(act==='read')S.messages[i].unread=false;
+      else if(act==='unread'){if(!S.messages[i].sent)S.messages[i].unread=true}
+      else if(act==='star')S.messages[i].starred=!S.messages[i].starred;
+    }
+    if(act==='read'||act==='unread')pending.push(serverAct(picked,act));
+    /* Star toggles each message, so the selection splits into two changes. */
+    if(act==='star'){pending.push(serverAct(picked.filter(m=>!m.starred),'star'));pending.push(serverAct(picked.filter(m=>m.starred),'unstar'))}
   }
   SEL.clear();save();
   await audit('mail.bulk',act+' × '+n);
   renderChSeg();renderMailFilters();renderMail();
-  toast(({read:'Marked read',unread:'Marked unread',star:'Star toggled',del:'Deleted'})[act]+' — '+n);
+  const done=({read:'Marked read',unread:'Marked unread',star:'Star toggled',del:'Deleted'})[act]+' — '+n;
+  const problems=(await Promise.all(pending)).flat();
+  toast(problems.length?done+' in RATA, but your mailbox was not updated — '+problems[0]:done);
 });
 function renderDigest(){
   const el=$('#digest');if(!el)return;
@@ -1777,7 +1813,7 @@ function openMail(id){
   }
   selMail=id;
   const c=contact(m.cid);
-  if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`)}
+  if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`);serverAct([m],'read')}
   const d=$('#mail-detail');
   d.classList.add('open');
   const nm=msgFrom(m);
@@ -1798,6 +1834,7 @@ function openMail(id){
         <button class="btn" id="md-sum">✦ Summarize</button>
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
+        ${m.prov==='imap'&&m.uid?'<button class="btn" id="md-archive">Archive</button>':''}
         <button class="btn danger" id="md-del">Delete</button>
       </div>
     </div>
@@ -1822,9 +1859,19 @@ function openMail(id){
   });
   $('#md-translate').onclick=()=>translateMessage(m.id);
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
-  $('#md-star').onclick=()=>{m.starred=!m.starred;save();openMail(id);renderMail()};
-  $('#md-unread').onclick=()=>{m.unread=true;save();renderMail();toast('Marked unread')};
-  $('#md-del').onclick=()=>{dropMessages([id]);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail()};
+  $('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
+  $('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
+  /* Delete and Archive take the message off the screen at once, then tell the
+     mailbox. If the mailbox cannot be told, say so — "gone from RATA but still
+     in your inbox" is worth knowing, and the next attempt will work. */
+  const leave=async(action,verb)=>{
+    const copy=Object.assign({},m);
+    dropMessages([id]);selMail=null;save();audit('msg.'+action,m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail();
+    const problems=await serverAct([copy],action);
+    toast(problems.length?verb+' in RATA, but your mailbox was not updated — '+problems[0]:verb);
+  };
+  $('#md-del').onclick=()=>leave('trash','Deleted');
+  if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
@@ -3273,7 +3320,12 @@ async function absorbMail(res){
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   for(const m of (res.messages||[])){
-    if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
+    if(isGone(m.id))continue;
+    /* Already here: take the server's word on read and starred — it is the
+       real mailbox, and another device may have changed it — and pick up the
+       server reference that messages saved before v0.1.4 do not have. */
+    const have=S.messages.find(x=>x.id===m.id);
+    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}continue}
     const owner=linkedFind('mail',m.acct||'');
     const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
     S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));

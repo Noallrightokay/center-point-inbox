@@ -192,13 +192,13 @@ Be realistic about this before promising anything to a customer.
 
 **Not built yet:**
 
-- **Mail is stored, but not synced back.** The interface keeps everything it
-  has fetched, so mail persists between launches and is searchable — but
-  read/unread, star and delete only change RATA's copy, never the real
-  mailbox. Each refresh fetches the newest ~15, older mail is never backfilled,
-  and everything sits in one `localStorage` blob with a size cap of a few MB.
-  A per-message store and server-side actions are the largest gap by far.
-- **INBOX only.** No other folders, no archive.
+- **Mail is stored, but only the newest arrives.** The interface keeps
+  everything it has fetched, so mail persists between launches and is
+  searchable, and read/unread, star, delete (to the server's Trash) and archive
+  reach the real mailbox. But each refresh fetches the newest ~15, older mail
+  is never backfilled, and everything sits in one `localStorage` blob with a
+  size cap of a few MB. A per-message store is the largest gap.
+- **INBOX only.** No other folders are shown.
 - **Plain text only.** No HTML rendering, no attachments in either direction.
 - The interface still shows controls for Slack, the AI assistant and file
   browsing. All of them now refuse with a message. They should be removed.

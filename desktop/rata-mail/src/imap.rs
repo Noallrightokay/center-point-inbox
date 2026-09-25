@@ -539,45 +539,50 @@ pub enum Action {
     Archive,
 }
 
-/// How acting on a message went.
+/// How acting on messages went.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(tag = "outcome", content = "why", rename_all = "kebab-case")
-)]
 pub enum Acted {
-    Ok,
-    /// The message is not where RATA last saw it — moved or deleted by another
-    /// client, or the mailbox was rebuilt so its numbers mean something else
-    /// now. Nothing was touched, which is the point.
-    Gone(String),
-    /// There is nowhere safe to put it: no Trash or Archive folder. Nothing was
-    /// done rather than deleting the message for good.
+    /// `done` were changed. `gone` were no longer in the inbox — moved or
+    /// deleted from another device — and were left alone; that is not a
+    /// failure, the customer's intent already holds for them.
+    Done {
+        done: Vec<u32>,
+        gone: Vec<u32>,
+    },
+    /// The mailbox was rebuilt since RATA read it, so its message numbers now
+    /// mean something else — or RATA never had a server reference. Nothing was
+    /// touched, which is the point.
+    Stale(String),
+    /// There is nowhere safe to put them: no Trash or Archive folder. Nothing
+    /// was done rather than deleting anything for good.
     NoPlace(String),
     Auth(String),
     Host(String),
     Net(String),
 }
 
-/// Do `action` to one message in the inbox of `acct`.
+/// Do `action` to messages `uids` in the inbox of `acct`, on one connection.
+///
+/// One sign-in for the whole set: a bulk delete of twenty is one conversation,
+/// not twenty logins, which is what gets a mailbox rate-limited.
 ///
 /// Two rules make this safe to run against somebody's real mail. It never
 /// permanently deletes: "delete" is a move to the server's own Trash, and a
 /// server without one is refused rather than expunged. And it never acts on a
 /// number it cannot vouch for: the mailbox's UIDVALIDITY must still be the one
-/// the message was fetched under, and the message must still be there,
-/// otherwise the same number could name a different email.
+/// the messages were fetched under, and only the UIDs still present are
+/// touched, otherwise the same number could name a different email.
 pub async fn act(
     resolver: &Resolver,
     acct: &Account,
-    uid: u32,
+    uids: &[u32],
     uidvalidity: u32,
     action: Action,
 ) -> Acted {
-    if uid == 0 || uidvalidity == 0 {
-        return Acted::Gone(format!(
-            "RATA does not have a server reference for this message, so {} was left unchanged. Refresh and try again.",
+    let uids: Vec<u32> = uids.iter().copied().filter(|u| *u != 0).collect();
+    if uids.is_empty() || uidvalidity == 0 {
+        return Acted::Stale(format!(
+            "RATA does not have a server reference for this in {}, so the mailbox was left unchanged. Refresh and try again.",
             acct.email
         ));
     }
@@ -596,14 +601,14 @@ pub async fn act(
             return Acted::Net(unreachable_msg(acct, &why));
         }
     };
-    let done = apply(&mut session, uid, uidvalidity, action).await;
+    let done = apply(&mut session, &uids, uidvalidity, action).await;
     let _ = timeout(COMMAND, session.logout()).await;
     done
 }
 
 /// The part of [`act`] that talks to an already-signed-in session. Generic
 /// over the stream so it can be driven by a scripted server in tests.
-async fn apply<T>(session: &mut Session<T>, uid: u32, uidvalidity: u32, action: Action) -> Acted
+async fn apply<T>(session: &mut Session<T>, uids: &[u32], uidvalidity: u32, action: Action) -> Acted
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
@@ -615,28 +620,32 @@ where
         Err(_) => return Acted::Net("The server did not open the inbox in time.".into()),
     };
     if mailbox.uid_validity != Some(uidvalidity) {
-        return Acted::Gone(
+        return Acted::Stale(
             "The mailbox has been reorganised since RATA last read it, so its message numbers no longer match. Nothing was changed — refresh and try again.".into(),
         );
     }
 
-    // Still there? A STORE or MOVE naming a UID that no longer exists succeeds
-    // and does nothing, which would be reported as done.
-    let present = match timeout(COMMAND, session.uid_fetch(uid.to_string(), "UID")).await {
+    // Which of them are still there? A STORE or MOVE naming a UID that no
+    // longer exists succeeds and does nothing, which would be reported as done.
+    let asked = join(uids);
+    let present: Vec<u32> = match timeout(COMMAND, session.uid_fetch(&asked, "UID")).await {
         Ok(Ok(stream)) => {
             let found: Vec<_> = stream.collect().await;
-            found
-                .iter()
-                .any(|f| matches!(f, Ok(f) if f.uid == Some(uid)))
+            let seen: Vec<u32> = found.iter().filter_map(|f| f.as_ref().ok()?.uid).collect();
+            uids.iter().copied().filter(|u| seen.contains(u)).collect()
         }
-        Ok(Err(e)) => return failed("look the message up", e),
+        Ok(Err(e)) => return failed("look the messages up", e),
         Err(_) => return Acted::Net("The server did not answer in time.".into()),
     };
-    if !present {
-        return Acted::Gone(
-            "That message is no longer in the inbox — it was probably moved or deleted from another device.".into(),
-        );
+    let gone: Vec<u32> = uids
+        .iter()
+        .copied()
+        .filter(|u| !present.contains(u))
+        .collect();
+    if present.is_empty() {
+        return Acted::Done { done: vec![], gone };
     }
+    let set = join(&present);
 
     let flag = |sign: char, name: &str| format!("{sign}FLAGS.SILENT ({name})");
     let stored = match action {
@@ -647,18 +656,21 @@ where
         Action::Trash | Action::Archive => None,
     };
     if let Some(change) = stored {
-        return match timeout(COMMAND, store(session, uid, &change)).await {
-            Ok(Ok(())) => Acted::Ok,
-            Ok(Err(e)) => failed("update the message", e),
+        return match timeout(COMMAND, store(session, &set, &change)).await {
+            Ok(Ok(())) => Acted::Done {
+                done: present,
+                gone,
+            },
+            Ok(Err(e)) => failed("update the messages", e),
             Err(_) => Acted::Net("The server did not answer in time.".into()),
         };
     }
 
     let Some(dest) = destination(session, action).await else {
         let what = if action == Action::Trash {
-            "a Trash folder, so RATA left the message where it is rather than delete it for good"
+            "a Trash folder, so RATA left the messages where they are rather than delete them for good"
         } else {
-            "an Archive folder, so RATA left the message in the inbox"
+            "an Archive folder, so RATA left the messages in the inbox"
         };
         return Acted::NoPlace(format!("This mailbox does not have {what}."));
     };
@@ -668,17 +680,16 @@ where
         Ok(Err(e)) => return failed("list what it supports", e),
         Err(_) => return Acted::Net("The server did not answer in time.".into()),
     };
-    let set = uid.to_string();
     let moved = if caps.has_str("MOVE") {
         timeout(COMMAND, session.uid_mv(&set, &dest)).await
     } else {
-        // COPY, then flag the original. Expunged only by UID: a plain EXPUNGE
+        // COPY, then flag the originals. Expunged only by UID: a plain EXPUNGE
         // would also remove every other message anybody had flagged \Deleted
         // in this inbox, which is not this action's to decide. Without
-        // UIDPLUS the original simply stays flagged, and RATA hides it.
+        // UIDPLUS the originals simply stay flagged, and RATA hides them.
         timeout(COMMAND, async {
             session.uid_copy(&set, &dest).await?;
-            store(session, uid, "+FLAGS.SILENT (\\Deleted)").await?;
+            store(session, &set, "+FLAGS.SILENT (\\Deleted)").await?;
             if caps.has_str("UIDPLUS") {
                 session.uid_expunge(&set).await?.collect::<Vec<_>>().await;
             }
@@ -687,19 +698,30 @@ where
         .await
     };
     match moved {
-        Ok(Ok(())) => Acted::Ok,
-        Ok(Err(e)) => failed("move the message", e),
+        Ok(Ok(())) => Acted::Done {
+            done: present,
+            gone,
+        },
+        Ok(Err(e)) => failed("move the messages", e),
         Err(_) => Acted::Net("The server did not answer in time.".into()),
     }
 }
 
+/// A UID set in IMAP's own syntax: `42,43,57`.
+fn join(uids: &[u32]) -> String {
+    uids.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// `UID STORE`, with the response stream drained so the session is ready for
 /// the next command.
-async fn store<T>(session: &mut Session<T>, uid: u32, change: &str) -> Result<(), ImapError>
+async fn store<T>(session: &mut Session<T>, set: &str, change: &str) -> Result<(), ImapError>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let stream = session.uid_store(uid.to_string(), change).await?;
+    let stream = session.uid_store(set, change).await?;
     for item in stream.collect::<Vec<_>>().await {
         item?;
     }
@@ -857,7 +879,8 @@ mod tests {
         caps: &'static str,
         list: &'static str,
         uidvalidity: u32,
-        present: bool,
+        /// The UIDs the scripted inbox still holds.
+        present: &'static [u32],
     }
 
     async fn scripted_session(
@@ -882,8 +905,16 @@ mod tests {
                         "* 3 EXISTS\r\n* OK [UIDVALIDITY {}] ok\r\n",
                         script.uidvalidity
                     )
-                } else if up.starts_with("UID FETCH") && script.present {
-                    "* 1 FETCH (UID 42)\r\n".to_string()
+                } else if up.starts_with("UID FETCH") {
+                    // Answer only for the asked-for UIDs this inbox still has.
+                    let asked = cmd.split_whitespace().nth(2).unwrap_or("");
+                    asked
+                        .split(',')
+                        .filter_map(|u| u.parse::<u32>().ok())
+                        .filter(|u| script.present.contains(u))
+                        .enumerate()
+                        .map(|(i, u)| format!("* {} FETCH (UID {u})\r\n", i + 1))
+                        .collect()
                 } else if up.starts_with("LIST") {
                     script.list.to_string()
                 } else if up.starts_with("CAPABILITY") {
@@ -933,6 +964,51 @@ mod tests {
             .collect()
     }
 
+    fn done(uids: &[u32]) -> Acted {
+        Acted::Done {
+            done: uids.to_vec(),
+            gone: vec![],
+        }
+    }
+
+    #[test]
+    fn a_bulk_action_touches_only_the_messages_still_there_on_one_connection() {
+        rt_act().block_on(async {
+            // 43 was deleted from a phone since RATA last looked.
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: TRASH,
+                uidvalidity: 7,
+                present: &[42, 57],
+            })
+            .await;
+            assert_eq!(
+                apply(&mut s, &[42, 43, 57], 7, Action::Trash).await,
+                Acted::Done {
+                    done: vec![42, 57],
+                    gone: vec![43]
+                }
+            );
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter().any(|c| c == "UID MOVE 42,57 \"Deleted Items\""),
+                "{log:?}"
+            );
+            assert!(
+                !log.iter()
+                    .any(|c| c.contains("43") && !c.starts_with("UID FETCH")),
+                "{log:?}"
+            );
+            // One sign-in for the lot.
+            assert_eq!(
+                log.iter()
+                    .filter(|c| c.to_ascii_uppercase().starts_with("LOGIN"))
+                    .count(),
+                1
+            );
+        });
+    }
+
     #[test]
     fn marking_read_sets_seen_on_that_one_message() {
         rt_act().block_on(async {
@@ -940,10 +1016,10 @@ mod tests {
                 caps: "MOVE",
                 list: TRASH,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Read).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Read).await, done(&[42]));
             let log = log.lock().unwrap();
             assert!(
                 log.iter()
@@ -962,12 +1038,12 @@ mod tests {
                 caps: "MOVE",
                 list: TRASH,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
             assert!(matches!(
-                apply(&mut s, 42, 9, Action::Trash).await,
-                Acted::Gone(_)
+                apply(&mut s, &[42], 9, Action::Trash).await,
+                Acted::Stale(_)
             ));
             let log = log.lock().unwrap();
             assert!(
@@ -984,13 +1060,17 @@ mod tests {
                 caps: "MOVE",
                 list: TRASH,
                 uidvalidity: 7,
-                present: false,
+                present: &[],
             })
             .await;
-            assert!(matches!(
-                apply(&mut s, 42, 7, Action::Trash).await,
-                Acted::Gone(_)
-            ));
+            // Not a failure: what the customer wanted is already true.
+            assert_eq!(
+                apply(&mut s, &[42], 7, Action::Trash).await,
+                Acted::Done {
+                    done: vec![],
+                    gone: vec![42]
+                }
+            );
             assert!(changed(&log.lock().unwrap()).is_empty());
         });
     }
@@ -1002,10 +1082,10 @@ mod tests {
                 caps: "MOVE UIDPLUS",
                 list: TRASH,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
             let log = log.lock().unwrap();
             assert!(
                 log.iter().any(|c| c == "UID MOVE 42 \"Deleted Items\""),
@@ -1026,11 +1106,11 @@ mod tests {
                 caps: "MOVE UIDPLUS",
                 list: NO_FOLDERS,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
             assert!(matches!(
-                apply(&mut s, 42, 7, Action::Trash).await,
+                apply(&mut s, &[42], 7, Action::Trash).await,
                 Acted::NoPlace(_)
             ));
             assert!(changed(&log.lock().unwrap()).is_empty());
@@ -1044,10 +1124,10 @@ mod tests {
                 caps: "MOVE UIDPLUS",
                 list: GMAIL,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Archive).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Archive).await, done(&[42]));
             assert!(
                 log.lock()
                     .unwrap()
@@ -1060,10 +1140,10 @@ mod tests {
                 caps: "MOVE UIDPLUS",
                 list: GMAIL,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
             assert!(
                 log.lock()
                     .unwrap()
@@ -1080,10 +1160,10 @@ mod tests {
                 caps: "UIDPLUS",
                 list: TRASH,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
             let log = log.lock().unwrap();
             assert!(
                 log.iter().any(|c| c == "UID COPY 42 \"Deleted Items\""),
@@ -1107,10 +1187,10 @@ mod tests {
                 caps: "",
                 list: TRASH,
                 uidvalidity: 7,
-                present: true,
+                present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, 42, 7, Action::Trash).await, Acted::Ok);
+            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
             assert!(
                 !log.lock()
                     .unwrap()

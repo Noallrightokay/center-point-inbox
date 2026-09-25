@@ -113,15 +113,20 @@ fetching newest messages from INBOX across several mailboxes, sending with
 correct reply threading, and a guard stopping a hostile server redirecting the
 app at the local network.
 
-Stored, but not synced: the interface keeps every fetched message in one
-`localStorage` blob (`save()` in `app.html`), so mail persists between launches,
-is searchable, and has local read/unread, star and delete (deletions are
-remembered in `S.gone` so sync does not restore them). What is missing is the
-server side and scale: none of those actions reach the real mailbox; each
-refresh fetches only the newest ~15, with no backfill of older mail; and the
-single blob hits `localStorage`'s few-MB cap after heavy use — **the largest
-gap**, fixed by a per-message store (IndexedDB) plus server-side actions.
-Also not built: INBOX only, no archive; plain text only, no HTML or
+Stored, and acted on for real: the interface keeps every fetched message in
+one `localStorage` blob (`save()` in `app.html`), so mail persists between
+launches and is searchable. Read, unread, star, delete and archive change RATA's
+copy at once and then the real mailbox (`serverAct` → `/api/mail/act` →
+`change_messages` → `rata_mail::imap::act`), one connection per mailbox for a
+whole selection. `act` never permanently deletes (Trash is a move to the
+server's declared `\Trash`; none means refused) and never acts on a UID it
+cannot vouch for (UIDVALIDITY must match; only UIDs still present are touched).
+Deletions are also remembered in `S.gone` so sync does not restore them, and a
+sync takes the server's read/starred for messages it already holds. What is
+missing is scale: each refresh fetches only the newest ~15, with no backfill of
+older mail, and the single blob hits `localStorage`'s few-MB cap after heavy
+use — **the largest gap**, fixed by a per-message store (IndexedDB).
+Also not built: INBOX only; plain text only, no HTML or
 attachments; the interface still shows Slack, AI and file
 browsing controls that now refuse; no auto-update; no code signing.
 

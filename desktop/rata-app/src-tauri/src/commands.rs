@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::core::{Linked, Rata, Refreshed, Standing};
+use rata_mail::Action;
+
+use crate::core::{Changed, Linked, Rata, Refreshed, Standing};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -73,4 +75,17 @@ pub async fn send_mail(
     in_reply_to: Option<String>,
 ) -> Result<String, String> {
     app.send(&from, &to, &subject, &body, in_reply_to).await
+}
+
+/// Read, unread, star, unstar, trash or archive — on the real mailbox, for
+/// messages of one mailbox fetched under one UIDVALIDITY.
+#[tauri::command]
+pub async fn change_messages(
+    app: App<'_>,
+    email: String,
+    uids: Vec<u32>,
+    uidvalidity: u32,
+    action: Action,
+) -> Result<Changed, String> {
+    Ok(app.change(&email, &uids, uidvalidity, action).await)
 }

@@ -82,15 +82,19 @@ Don't spend time reporting these — they are known and planned:
 - Each refresh fetches the **newest ~15** inbox messages. RATA keeps what it
   has fetched between launches, so history builds up from the day you link —
   but older mail from before that is not pulled in yet.
-- Read/unread, delete and star work **inside RATA only** — they do not change
-  your real mailbox yet. A message deleted in RATA stays deleted in RATA.
-- No other folders; no archive.
+- No other folders yet — only the inbox is shown.
 - Plain text only: no HTML rendering, no attachments.
 - Buttons for Slack, the AI assistant and file browsing lead nowhere.
 - No auto-update — new betas are a new download.
 
 What *should* work: adding a mailbox, seeing recent mail from several
-mailboxes, sending (including replies), removing a mailbox, the licence.
+mailboxes, sending (including replies), removing a mailbox, the licence — and,
+from v0.1.4, **read, unread, star, delete and archive reach your real
+mailbox**. Delete moves the message to your provider's Trash (never deletes it
+for good); Archive moves it to your Archive folder, or Gmail's All Mail. Please
+check the result in your provider's own webmail or phone app — that is the
+real test. Mail that was already in RATA before v0.1.4 is changed in RATA only
+until the next refresh picks up its server reference.
 
 ## 6. Reporting a bug
 
