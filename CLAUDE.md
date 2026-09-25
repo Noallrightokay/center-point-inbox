@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard. Standalone, knows nothing about the app. 73 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 36 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions. Standalone, knows nothing about the app. 89 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 38 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -73,7 +73,9 @@ Traps, all of which have bitten:
 
 Released: **v0.1.1**, four of five files (the Linux `.AppImage` upload failed
 with `Error saving asset`, probably transient; the bundle built fine and is on
-the run as an artifact). **v0.1.2 is the beta build.** An upload that fails
+the run as an artifact). v0.1.2 shipped with a broken first screen (see the
+CSP note above) and must not be given to anyone. **v0.1.3 is the beta build
+testers started on**; v0.1.4 adds server-side read/star/delete/archive. An upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
 
