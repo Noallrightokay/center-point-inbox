@@ -97,10 +97,16 @@ fetching newest messages from INBOX across several mailboxes, sending with
 correct reply threading, and a guard stopping a hostile server redirecting the
 app at the local network.
 
-Not built: **no local message store** (nothing persists between launches, ~15
-newest messages only, no offline reading, no search, no read/unread, no
-threading — the largest gap by far); INBOX only, no archive/delete/flag; plain
-text only, no HTML or attachments; the interface still shows Slack, AI and file
+Stored, but not synced: the interface keeps every fetched message in one
+`localStorage` blob (`save()` in `app.html`), so mail persists between launches,
+is searchable, and has local read/unread, star and delete (deletions are
+remembered in `S.gone` so sync does not restore them). What is missing is the
+server side and scale: none of those actions reach the real mailbox; each
+refresh fetches only the newest ~15, with no backfill of older mail; and the
+single blob hits `localStorage`'s few-MB cap after heavy use — **the largest
+gap**, fixed by a per-message store (IndexedDB) plus server-side actions.
+Also not built: INBOX only, no archive; plain text only, no HTML or
+attachments; the interface still shows Slack, AI and file
 browsing controls that now refuse; no auto-update; no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

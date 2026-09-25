@@ -1244,6 +1244,22 @@ function migrate(old){
 }
 function load(){try{const raw=localStorage.getItem(LS_KEY);S=migrate(raw?JSON.parse(raw):null)}catch(e){S=seed()}}
 function save(){try{localStorage.setItem(LS_KEY,JSON.stringify(S))}catch(e){toast('Storage full — export and reset')}scheduleCloudSync()}
+/* Deleting a message has to survive the next sync. Sync adds anything it has
+   not seen, and a deleted message is by definition not there any more — so
+   without a record of the deletion, the next refresh put it straight back.
+   Kept per id with the time, and trimmed so it cannot grow without bound. */
+const GONE_MAX=5000;
+function dropMessages(ids){
+  const drop=new Set(ids);if(!drop.size)return 0;
+  const before=S.messages.length;
+  S.messages=S.messages.filter(m=>!drop.has(m.id));
+  S.gone=S.gone||{};const now=Date.now();
+  for(const id of drop)S.gone[id]=now;
+  const keys=Object.keys(S.gone);
+  if(keys.length>GONE_MAX){keys.sort((a,b)=>S.gone[a]-S.gone[b]).slice(0,keys.length-GONE_MAX).forEach(k=>delete S.gone[k])}
+  return before-S.messages.length;
+}
+const isGone=id=>!!(S.gone&&S.gone[id]);
 const contact=id=>S.contacts.find(c=>c.id===id);
 const msgFrom=m=>m.sent?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
 const msgCtx=m=>m.ctx||contact(m.cid)?.context||'work';
@@ -1336,12 +1352,12 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
   if(!SEL.size){toast('Select some messages first');return}
   const n=SEL.size;
   if(act==='del'&&!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
-  for(const id of [...SEL]){
+  if(act==='del')dropMessages([...SEL]);
+  else for(const id of [...SEL]){
     const i=S.messages.findIndex(m=>m.id===id);if(i<0)continue;
     if(act==='read')S.messages[i].unread=false;
     else if(act==='unread'){if(!S.messages[i].sent)S.messages[i].unread=true}
     else if(act==='star')S.messages[i].starred=!S.messages[i].starred;
-    else if(act==='del')S.messages.splice(i,1);
   }
   SEL.clear();save();
   await audit('mail.bulk',act+' × '+n);
@@ -1808,7 +1824,7 @@ function openMail(id){
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();renderMail();toast('Marked unread')};
-  $('#md-del').onclick=()=>{S.messages=S.messages.filter(x=>x.id!==id);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail()};
+  $('#md-del').onclick=()=>{dropMessages([id]);selMail=null;save();audit('msg.delete',m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail()};
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
@@ -3218,7 +3234,7 @@ async function serverSync(p){
     l.status='live';
     let added=0;
     for(const m of (res.messages||[])){
-      if(S.messages.some(x=>x.id===m.id))continue;
+      if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
       const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
       S.messages.push(Object.assign({cid:match?match.id:null,acct:l.id,real:true,atts:[]},m));
       added++;newIds.push(m.id);
@@ -3257,7 +3273,7 @@ async function absorbMail(res){
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   for(const m of (res.messages||[])){
-    if(S.messages.some(x=>x.id===m.id))continue;
+    if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
     const owner=linkedFind('mail',m.acct||'');
     const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
     S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
