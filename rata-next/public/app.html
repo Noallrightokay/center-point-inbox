@@ -1530,14 +1530,9 @@ function transferMessage(msgId,targetAcctId){
   const m=S.messages.find(x=>x.id===msgId);
   if(!m){toast('That message is no longer here');return}
   if(m.acct&&targetAcctId&&m.acct===targetAcctId){toast('That message is already in this inbox');return}
-  openCompose();
-  const from=$('#cmp-from');
-  if(targetAcctId&&[...from.options].some(o=>o.value===targetAcctId))from.value=targetAcctId;
-  $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
-  $('#cmp-body').value=`\n\n---------- Forwarded ----------\nFrom: ${msgFrom(m)}\nDate: ${new Date(m.ts).toLocaleString()}\n\n${m.body||m.prev||''}`;
-  if(m.atts&&m.atts.length)toast(`Forwarding with ${m.atts.length} file${m.atts.length===1?'':'s'} — add the recipient and send`);
-  else toast('Add a recipient and send');
-  $('#cmp-to').focus();
+  forwardMessage(m,targetAcctId).then(()=>toast(CMP_FWD&&CMP_FWD.atts.length
+    ?`Forwarding with ${CMP_FWD.atts.length} file${CMP_FWD.atts.length===1?'':'s'} — add the recipient and send`
+    :'Add a recipient and send'));
   audit('mail.transfer',`${m.subj||'(no subject)'} moved toward ${acctName(S.linked.find(l=>l.id===targetAcctId))}`);
 }
 
@@ -1742,6 +1737,7 @@ function openMail(id){
       </div>
       <div class="md-actions">
         ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
+        ${!m.sent?'<button class="btn" id="md-forward">Forward</button>':''}
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
         <div class="md-sortwrap"><button class="btn" id="md-move">Sort ▾</button><div class="md-sortmenu" id="md-sortmenu">${Object.entries(CATS).map(([c,l])=>`<button data-mv="${c}">${l}</button>`).join('')}<label><input type="checkbox" id="mv-always"> Always from this sender</label></div></div>
@@ -1775,6 +1771,7 @@ function openMail(id){
     save();$('#md-sortmenu').classList.remove('open');renderCats();renderMail();
   });
   if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
+  if($('#md-forward'))$('#md-forward').onclick=()=>forwardMessage(m);
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
@@ -2463,14 +2460,38 @@ let REPLYING=null;
 /* Files picked to send with the message being written. Held as the browser's
    own File objects and read only when Send is pressed. */
 let CMP_FILES=[];
+/* Attachments carried over from a message being forwarded: the message's place
+   on the server and which of its attachments. The app fetches them from the
+   mailbox at send time, so a forward never routes files through this page. */
+let CMP_FWD=null;
+async function forwardMessage(m,targetAcctId){
+  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&m.uid&&m.uidvalidity;
+  /* A forward should carry the whole message. If what is stored may be only
+     the start of it, or its attachment list may be partial, fetch it first. */
+  if(native&&m.bodyV===2&&!OPENED.get(m.id)&&(m.truncated||(m.atts||[]).length)){toast('Fetching the whole message to forward\u2026');await openWhole(m)}
+  const whole=OPENED.get(m.id);
+  openCompose();
+  const from=$('#cmp-from'),want=targetAcctId||m.acct;
+  if(want&&[...from.options].some(o=>o.value===want))from.value=want;
+  $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
+  const text=whole&&!whole.error?whole.text:String(m.body||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
+  $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
+  const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
+  if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
+  renderCmpFiles();liveScan();
+  const b=$('#cmp-body');b.setSelectionRange(0,0);b.scrollTop=0;
+  $('#cmp-to').focus();
+}
 const ATTACH_MAX=18*1024*1024;
 const kb=n=>n<1024?n+' B':n<1048576?Math.round(n/1024)+' KB':(n/1048576).toFixed(1)+' MB';
 function renderCmpFiles(){
   const el=$('#cmp-files');if(!el)return;
   const total=CMP_FILES.reduce((t,f)=>t+f.size,0);
-  el.innerHTML=CMP_FILES.map((f,i)=>`<span class="cmp-file"><span>${esc(f.name)}</span><span class="sz">${kb(f.size)}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
+  const fwd=CMP_FWD?CMP_FWD.atts:[];
+  el.innerHTML=fwd.map((a,i)=>`<span class="cmp-file" title="From the message being forwarded"><span>↪ ${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><button type="button" data-rmfwd="${i}" aria-label="Remove ${esc(a.n)}">✕</button></span>`).join('')+CMP_FILES.map((f,i)=>`<span class="cmp-file"><span>${esc(f.name)}</span><span class="sz">${kb(f.size)}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
     +(total>ATTACH_MAX?`<span class="cmp-file" style="color:var(--red,#c33)">${kb(total)} in all — over the ${kb(ATTACH_MAX)} most providers accept</span>`:'');
   el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);renderCmpFiles()});
+  el.querySelectorAll('[data-rmfwd]').forEach(b=>b.onclick=()=>{CMP_FWD.atts.splice(+b.dataset.rmfwd,1);renderCmpFiles()});
 }
 async function fileBase64(f){
   const u8=new Uint8Array(await f.arrayBuffer());
@@ -2481,7 +2502,7 @@ async function fileBase64(f){
 $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.target.files]);e.target.value='';renderCmpFiles()});
 function openCompose(){
   REPLYING=null;
-  CMP_FILES=[];renderCmpFiles();
+  CMP_FILES=[];CMP_FWD=null;renderCmpFiles();
   /* Only the app can send, so only the app offers to attach. */
   const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
   fillComposeFrom();
@@ -2562,7 +2583,8 @@ $('#cmp-send').onclick=async()=>{
   const mAcct=acct&&acct.type==='mail'?acct:null;
   let realSent=false;
   const files=CMP_FILES.slice();
-  if(files.length&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
+  const fwd=CMP_FWD&&CMP_FWD.atts.length?CMP_FWD:null;
+  if((files.length||fwd)&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
   if(files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX){toast('Those files are too large to send together — most providers refuse mail over 25 MB. Remove some, or send a link instead.');return}
   if(mAcct){
     if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
@@ -2572,7 +2594,8 @@ $('#cmp-send').onclick=async()=>{
       for(const f of files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
       sb.textContent='Sending…';
       const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments})});
+        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
+          forward:fwd?{email:fwd.email,uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
       if(!r.ok)throw new Error(r.error||'send failed');
       realSent=true;
     }catch(e){
@@ -2585,7 +2608,7 @@ $('#cmp-send').onclick=async()=>{
     sb.disabled=false;sb.textContent='Send';
   }
   S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
-    atts:realSent?files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)})):[]});
+    atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');

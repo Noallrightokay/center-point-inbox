@@ -232,12 +232,15 @@
       const b = body(opts);
       try {
         const via = await invoke('send_mail', {
-          from: b.from,
-          to: b.to,
-          subject: b.subject || '',
-          body: b.body || '',
-          inReplyTo: b.inReplyTo || null,
-          attachments: b.attachments || [],
+          draft: {
+            from: b.from,
+            to: b.to,
+            subject: b.subject || '',
+            body: b.body || '',
+            inReplyTo: b.inReplyTo || null,
+            attachments: b.attachments || [],
+            forward: b.forward || null,
+          },
         });
         return { ok: true, via };
       } catch (e) {

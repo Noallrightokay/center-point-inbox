@@ -91,6 +91,32 @@ pub struct Opened {
     pub attachments: Vec<body::Attachment>,
 }
 
+/// A message ready to go, as the composer hands it over.
+#[derive(Debug, Default)]
+pub struct Draft {
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    /// The Message-ID being replied to, so the answer threads.
+    pub in_reply_to: Option<String>,
+    /// Files picked on this computer.
+    pub attachments: Vec<File>,
+    /// Attachments carried over from a message being forwarded.
+    pub forward: Option<Forwarded>,
+}
+
+/// Attachments to carry over from a message being forwarded: that message, by
+/// its place on the server, and which of its attachments. The files are read
+/// from the mailbox here, never passed through the page.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Forwarded {
+    pub email: String,
+    pub uid: u32,
+    pub uidvalidity: u32,
+    pub indexes: Vec<u32>,
+}
+
 /// Where an attachment was saved.
 #[derive(Debug, Serialize)]
 pub struct Saved {
@@ -453,6 +479,29 @@ impl Rata {
         self.answer(&acct.email, found)
     }
 
+    /// The attachments of a message being forwarded, fetched from its mailbox.
+    async fn forwarded_files(&self, fw: &Forwarded) -> Result<Vec<File>, String> {
+        let raw = self
+            .whole(&fw.email, fw.uid, fw.uidvalidity)
+            .await
+            .map_err(|p| format!("The attachments could not be forwarded: {}", p.error))?;
+        fw.indexes
+            .iter()
+            .map(|&i| {
+                body::attachment(&raw, i)
+                    .map(|(info, data)| File {
+                        name: info.name,
+                        mime: info.mime,
+                        data,
+                    })
+                    .ok_or_else(|| {
+                        "An attachment of the message being forwarded is no longer in it."
+                            .to_string()
+                    })
+            })
+            .collect()
+    }
+
     /// One message in full: all of its text and every attachment.
     pub async fn open_message(
         &self,
@@ -598,16 +647,21 @@ impl Rata {
     }
 
     /// Send from one of the linked mailboxes.
-    pub async fn send(
-        &self,
-        from: &str,
-        to: &str,
-        subject: &str,
-        body: &str,
-        in_reply_to: Option<String>,
-        attachments: Vec<File>,
-    ) -> Result<String, String> {
+    pub async fn send(&self, draft: Draft) -> Result<String, String> {
+        let Draft {
+            from,
+            to,
+            subject,
+            body,
+            in_reply_to,
+            mut attachments,
+            forward,
+        } = draft;
+        let (from, to) = (from.as_str(), to.as_str());
         self.licensed()?;
+        if let Some(fw) = forward.filter(|f| !f.indexes.is_empty()) {
+            attachments.extend(self.forwarded_files(&fw).await?);
+        }
         // Checked before anything is dialled: a message the provider is going
         // to refuse for its size should fail here, in words, not after the
         // upload as a bare 552.
@@ -1121,17 +1175,47 @@ mod tests {
                 data: vec![0; ATTACH_MAX + 1],
             };
             let e = app
-                .send(
-                    "owner@example.com",
-                    "a@example.org",
-                    "Hi",
-                    "x",
-                    None,
-                    vec![big],
-                )
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "a@example.org".into(),
+                    subject: "Hi".into(),
+                    body: "x".into(),
+                    attachments: vec![big],
+                    ..Draft::default()
+                })
                 .await
                 .unwrap_err();
             assert!(e.contains("25 MB"), "{e}");
+        });
+    }
+
+    #[test]
+    fn forwarding_attachments_refuses_before_dialling_when_the_mailbox_cannot_be_read() {
+        rt().block_on(async {
+            let app = rata(tmpfile("fwd-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let fw = Forwarded {
+                email: "owner@example.com".into(),
+                uid: 5,
+                uidvalidity: 7,
+                indexes: vec![1],
+            };
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "a@example.org".into(),
+                    subject: "Fwd: x".into(),
+                    body: "x".into(),
+                    forward: Some(fw),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(
+                e.contains("could not be forwarded") && e.contains("relinking"),
+                "{e}"
+            );
         });
     }
 
@@ -1237,14 +1321,13 @@ mod tests {
         rt().block_on(async {
             let app = rata(tmpfile("send"));
             let e = app
-                .send(
-                    "nobody@example.com",
-                    "them@elsewhere.org",
-                    "hi",
-                    "hello",
-                    None,
-                    vec![],
-                )
+                .send(Draft {
+                    from: "nobody@example.com".into(),
+                    to: "them@elsewhere.org".into(),
+                    subject: "hi".into(),
+                    body: "hello".into(),
+                    ..Draft::default()
+                })
                 .await
                 .unwrap_err();
             assert!(e.contains("not linked"), "{e}");
@@ -1258,7 +1341,13 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             for bad in ["", "nonsense", "a@b.com\r\nBcc: sneak@example.net"] {
                 let e = app
-                    .send("owner@example.com", bad, "hi", "hello", None, vec![])
+                    .send(Draft {
+                        from: "owner@example.com".into(),
+                        to: bad.into(),
+                        subject: "hi".into(),
+                        body: "hello".into(),
+                        ..Draft::default()
+                    })
                     .await
                     .unwrap_err();
                 assert!(e.contains("valid recipient"), "{bad:?} gave {e}");
@@ -1285,14 +1374,13 @@ mod tests {
             assert!(out.problems.is_empty() && out.skipped.is_empty());
 
             let e = app
-                .send(
-                    "owner@example.com",
-                    "them@elsewhere.org",
-                    "hi",
-                    "x",
-                    None,
-                    vec![],
-                )
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "them@elsewhere.org".into(),
+                    subject: "hi".into(),
+                    body: "x".into(),
+                    ..Draft::default()
+                })
                 .await
                 .unwrap_err();
             assert!(e.contains("licence key"), "{e}");

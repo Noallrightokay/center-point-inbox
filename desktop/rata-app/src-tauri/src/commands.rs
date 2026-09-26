@@ -18,7 +18,9 @@ use tauri::{AppHandle, Manager, State};
 
 use rata_mail::{Action, File, Message};
 
-use crate::core::{Changed, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing};
+use crate::core::{
+    Changed, Draft, Forwarded, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing,
+};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -68,18 +70,11 @@ pub async fn refresh_mail(app: App<'_>, limit: Option<u32>) -> Result<Refreshed,
     Ok(app.refresh(limit.unwrap_or(15)).await)
 }
 
+/// Send one message. Everything the composer has comes as one draft.
 #[tauri::command]
-pub async fn send_mail(
-    app: App<'_>,
-    from: String,
-    to: String,
-    subject: String,
-    body: String,
-    in_reply_to: Option<String>,
-    attachments: Option<Vec<Upload>>,
-) -> Result<String, String> {
-    let files = attachments
-        .unwrap_or_default()
+pub async fn send_mail(app: App<'_>, draft: Outbound) -> Result<String, String> {
+    let attachments = draft
+        .attachments
         .into_iter()
         .map(|u| File {
             name: u.name,
@@ -87,8 +82,34 @@ pub async fn send_mail(
             data: rata_mail::words::base64(u.data.as_bytes()),
         })
         .collect();
-    app.send(&from, &to, &subject, &body, in_reply_to, files)
-        .await
+    app.send(Draft {
+        from: draft.from,
+        to: draft.to,
+        subject: draft.subject,
+        body: draft.body,
+        in_reply_to: draft.in_reply_to,
+        attachments,
+        forward: draft.forward,
+    })
+    .await
+}
+
+/// The composer's message, as the page sends it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Outbound {
+    from: String,
+    to: String,
+    #[serde(default)]
+    subject: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    in_reply_to: Option<String>,
+    #[serde(default)]
+    attachments: Vec<Upload>,
+    #[serde(default)]
+    forward: Option<Forwarded>,
 }
 
 /// A file the customer picked to send, as the page hands it over: its bytes as

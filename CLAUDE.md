@@ -19,7 +19,7 @@ or a mail password on a server, it is wrong, however convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments. Standalone, knows nothing about the app. 138 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 45 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 46 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -82,7 +82,8 @@ v0.1.8 opens whole messages and saves attachments; v0.1.9 sends
 attachments; v0.1.10 shrinks the window to fit small screens (it opened
 1280×860, taller than a 1366×768 laptop, with Send below the edge — see
 `fit_to_screen` in `main.rs`, which has to use the configured size because
-the window reports 0×0 during setup). An
+the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
+the original's attachments. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -183,8 +184,15 @@ headers (`compose::file_name`: no path, no control characters, at most 150
 bytes so every header line stays under 998) and sent both as encoded-words in
 `filename=` — what Gmail and Outlook send and read — and as RFC 2231
 `filename*`. SMTP DATA gets a minute plus a second per 64 KiB.
-Also not built: INBOX only; no HTML rendering; forwarding does not carry the
-original's attachments; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**Forwarding (v0.1.11).** `forwardMessage` fetches the whole message first if
+the stored copy may be partial, and the composer holds `CMP_FWD`: the
+original's mailbox, UID, UIDVALIDITY and attachment indexes — never bytes.
+`send_mail` takes one `draft` (clippy's 7-argument limit; `core::Draft`), and
+`core::send` fetches those attachments from the mailbox (`forwarded_files`)
+before the size check. The drag-between-panes forward uses the same path; it
+used to announce files it never sent.
+Also not built: INBOX only; no HTML rendering; no auto-update; no code
+signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
