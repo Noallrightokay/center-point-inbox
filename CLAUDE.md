@@ -86,7 +86,8 @@ the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
 the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
 keeps mail in IndexedDB, one record per message, with no storage cap;
 v0.1.14 opens links in the browser, asking first for links in formatted mail;
-v0.1.15 keeps a closed draft whole. An
+v0.1.15 keeps a closed draft whole; v0.1.16 draws only the rows of the
+list that are on screen. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -167,9 +168,24 @@ If IndexedDB will not open (5 s timeout) mail stays in the entry the old
 way and `loadOlder` keeps its `STORE_SOFT_CAP`; the two halves merge the
 next time it opens. Deleting the account deletes this database too.
 Verified in the packaged WebKit build: 1 500 messages (12 MB) written,
-the app killed and restarted, all back with bodies and a star intact. What
-does not scale yet is the rendering: `renderMail` draws every row (~0.8 s
-at 10 000), and start-up parses every message.
+the app killed and restarted, all back with bodies and a star intact.
+What does not scale yet is memory: start-up parses every message (~0.7 s
+at 10 000 / 45 MB) and all of it stays in `S.messages`.
+**The list draws a screenful (v0.1.16).** `vlist(sc,pool,tail)` puts a
+spacer as tall as every row in a list and draws only the rows in view plus
+`VL_MARGIN` either side, moved with `translateY`; `vlDraw` redraws on
+scroll (one per frame), resize, and a `ResizeObserver` width change. Every
+row is one height — subject, preview and badges each one line
+(`.m-meta` no longer wraps; a missing subject shows "(no subject)") — set
+as `--vl-h` from a measured row, so row i is at i × stride. A list that is
+hidden when drawn (no height to measure) draws its first `VL_BLIND` rows
+until it is shown. Clicks, ticks and drags are handled on the list
+(`wireRows`), not per row, since rows come and go; ticks live in `SEL`, so
+they survive scrolling. `vlist` restores the spacer's height before the
+scroll position, or a redraw (a star) jumps to the top. At 10 000
+messages drawing the list takes ~12 ms (it was ~800) and a star click
+~30 ms in all. Side-by-side columns use the same list; a column that is
+rebuilt drops its listeners when it finds itself detached.
 **Bodies are decoded (v0.1.7).** Fetch takes `BODY.PEEK[]<0.65536>` — headers
 and the start of the message, since the text cannot be decoded without the
 headers that declare its encoding — and `body::read` parses it with

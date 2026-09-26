@@ -243,7 +243,14 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .m-time{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .m-subj{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m-prev{font-size:13px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.m-meta{display:flex;gap:6px;margin-top:5px;align-items:center;flex-wrap:wrap}
+.m-meta{display:flex;gap:6px;margin-top:5px;align-items:center;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+.m-subj.none{color:var(--faint);font-style:italic}
+/* The list draws only what is in view (vlist): a spacer as tall as every row,
+   and a window of real rows moved to where the eye is. Every row is the same
+   height — each line of it is one line — measured once from a drawn row. */
+.vl-space{position:relative}
+.vl-win{position:absolute;left:0;right:0;top:0;will-change:transform}
+.vl-win .mail-row{height:var(--vl-h,auto);box-sizing:border-box;overflow:hidden}
 .clip{font-size:11px;color:var(--faint)}
 .md-inner{max-width:780px;margin:0 auto;padding:28px 30px 60px;width:100%}
 .md-head{background:var(--card);border-radius:var(--r) var(--r) 0 0;padding:24px 26px;box-shadow:var(--shadow)}
@@ -1633,13 +1640,8 @@ function renderSplit(){
     const i=k+1;
     const sc=host.querySelector(`[data-pane-scroll="${i}"]`);
     const pool=mailPool(paneAcct(i)||undefined);
-    sc.innerHTML=pool.length
-      ? pool.map(m=>mailRowHTML(m)).join('')
-      : `<div class="empty" style="padding:40px 18px"><b>Nothing here yet</b>${paneAcct(i)?esc(acctName(S.linked.find(l=>l.id===paneAcct(i))))+' has no messages in RATA yet.':'Every inbox, and none of them has mail yet.'}</div>`;
-    sc.querySelectorAll('.mail-row').forEach(r=>{
-      r.onclick=()=>openMail(r.dataset.id);
-      r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
-    });
+    if(pool.length){vlist(sc,pool);wireRows(sc,false)}
+    else sc.innerHTML=`<div class="empty" style="padding:40px 18px"><b>Nothing here yet</b>${paneAcct(i)?esc(acctName(S.linked.find(l=>l.id===paneAcct(i))))+' has no messages in RATA yet.':'Every inbox, and none of them has mail yet.'}</div>`;
     wireDrop(sc,()=>paneAcct(i)||(mailAccounts()[0]||{}).id);
   });
 
@@ -1724,7 +1726,7 @@ function mailRowHTML(m){
       <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
       <div class="m-body">
         <div class="m-line1"><span class="m-from">${esc(nm)}</span><span class="m-time">${rel(m.ts)}</span></div>
-        ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:''}
+        ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:'<div class="m-subj none">(no subject)</div>'}
         <div class="m-prev">${esc(m.prev)}</div>
         <div class="m-meta">
           <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>
@@ -1758,21 +1760,106 @@ function renderMail(){
     if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
-  sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('')+
-    (window.__RATA_NATIVE__&&olderCandidates().length?'<div style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
+  vlist(sc,pool,window.__RATA_NATIVE__&&olderCandidates().length?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
   const lo=document.getElementById('load-older');
   if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await loadOlder()}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
-  sc.querySelectorAll('.selbox').forEach(cb=>cb.onclick=e=>{e.stopPropagation();const id=cb.dataset.sel;SEL.has(id)?SEL.delete(id):SEL.add(id);cb.classList.toggle('on');cb.textContent=SEL.has(id)?'✓':'';bulkRefresh()});
-  sc.querySelectorAll('.mail-row').forEach(r=>{
-    r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)};
-    r.ondragstart=e=>{e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy'};
-  });
+  wireRows(sc,true);
   if(splitOn){
     /* Every pane accepts what another drops on it, and forwards from its own
        account. */
     wireDrop(sc,()=>paneAcct(0)||(mailAccounts()[0]||{}).id);
   }
-  sc.querySelectorAll('.avatar[data-cid]').forEach(a=>a.onclick=e=>{e.stopPropagation();go('people');openPerson(a.dataset.cid)});
+}
+/* ---------------- THE LIST, A SCREENFUL AT A TIME ----------------
+   Every row used to be drawn on every change — a star, a read, a sync — which
+   took most of a second at ten thousand messages. Now a list holds a spacer
+   as tall as all its rows and draws only those in view, plus a margin, moving
+   them as it scrolls. Every row is one height (--vl-h, measured from a drawn
+   row, again whenever the list changes width), so row i sits at i×height.
+   What the rows do is handled on the list itself (wireRows), not row by row,
+   since rows come and go. Where the list is not what scrolls — the page is —
+   the part of it on screen is what counts, and the most that costs is
+   drawing all of it, as before. */
+const VL=new WeakMap(),VL_MARGIN=12,VL_BLIND=40;
+function vlist(sc,pool,tail){
+  let st=VL.get(sc);
+  if(!st){
+    st={};VL.set(sc,st);
+    /* A side-by-side column is rebuilt whenever the columns change; once its
+       list is gone from the page, it lets go of the window. */
+    const later=()=>{
+      if(!sc.isConnected){removeEventListener('scroll',later);removeEventListener('resize',resized);if(ro)ro.disconnect();return}
+      if(!st.raf)st.raf=requestAnimationFrame(()=>{st.raf=0;vlDraw(sc)});
+    };
+    const resized=()=>{st.stride=0;later()};
+    sc.addEventListener('scroll',later,{passive:true});
+    addEventListener('scroll',later,{passive:true});
+    addEventListener('resize',resized);
+    const ro=window.ResizeObserver?new ResizeObserver(()=>{if(sc.clientWidth!==st.width){st.stride=0;later()}}):null;
+    if(ro)ro.observe(sc);
+  }
+  st.pool=pool;
+  /* Redrawn in place: the spacer gets its height back before the scroll
+     position does, or the browser would pull the list back to the top. */
+  const keep=sc.scrollTop;
+  sc.innerHTML='<div class="vl-space"><div class="vl-win"></div></div>'+(tail||'');
+  if(st.stride)sc.querySelector('.vl-space').style.height=(pool.length*st.stride)+'px';
+  sc.scrollTop=keep;
+  st.from=st.to=-1;
+  vlDraw(sc,true);
+}
+function vlDraw(sc,force){
+  const st=VL.get(sc);if(!st||!st.pool)return;
+  const space=sc.querySelector('.vl-space'),win=sc.querySelector('.vl-win');if(!space||!win)return;
+  const n=st.pool.length;
+  if(!st.stride&&n){
+    /* Measured without the fixed height, from a real row. */
+    sc.style.removeProperty('--vl-h');
+    win.innerHTML=mailRowHTML(st.pool[0]);
+    const r=win.firstElementChild,h=r.getBoundingClientRect().height;
+    if(h>0){
+      st.stride=h+(parseFloat(getComputedStyle(r).marginBottom)||0);
+      st.width=sc.clientWidth;
+      sc.style.setProperty('--vl-h',h+'px');
+    }
+    st.from=st.to=-1;force=true;
+  }
+  let from=0,to=Math.min(n,VL_BLIND);
+  if(st.stride){
+    const box=space.getBoundingClientRect(),view=sc.getBoundingClientRect();
+    const top=Math.max(view.top,0)-box.top,bottom=Math.min(view.bottom,innerHeight)-box.top;
+    from=Math.max(0,Math.floor(top/st.stride)-VL_MARGIN);
+    to=Math.min(n,Math.max(from,Math.ceil(bottom/st.stride)+VL_MARGIN));
+    space.style.height=(n*st.stride)+'px';
+  }else space.style.height='';
+  if(!force&&from===st.from&&to===st.to)return;
+  st.from=from;st.to=to;
+  win.style.transform=st.stride?`translateY(${from*st.stride}px)`:'';
+  win.style.position=st.stride?'':'static';
+  win.innerHTML=st.pool.slice(from,to).map(mailRowHTML).join('');
+}
+/* A drawn row, if the list is showing it. */
+function rowEl(id){return [...document.querySelectorAll('.vl-win .mail-row')].find(r=>r.dataset.id===id)||null}
+/* Clicks, ticks and drags for every row a list will ever draw. `selectable`
+   is the main list, where Select mode turns a click into a tick. */
+function wireRows(sc,selectable){
+  sc.onclick=e=>{
+    const a=e.target.closest('.avatar[data-cid]');
+    if(a){e.stopPropagation();go('people');openPerson(a.dataset.cid);return}
+    const cb=selectable&&e.target.closest('.selbox');
+    const r=e.target.closest('.mail-row');if(!r)return;
+    if(cb||(selectable&&selecting)){
+      const id=r.dataset.id,box=r.querySelector('.selbox');
+      SEL.has(id)?SEL.delete(id):SEL.add(id);
+      if(box){box.classList.toggle('on',SEL.has(id));box.textContent=SEL.has(id)?'✓':''}
+      bulkRefresh();return;
+    }
+    openMail(r.dataset.id);
+  };
+  sc.ondragstart=e=>{
+    const r=e.target.closest&&e.target.closest('.mail-row');if(!r)return;
+    e.dataTransfer.setData('text/rata-msg',r.dataset.id);e.dataTransfer.effectAllowed='copy';
+  };
 }
 /* What the reading pane shows when nothing is selected.
 
