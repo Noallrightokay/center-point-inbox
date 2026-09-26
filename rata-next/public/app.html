@@ -253,7 +253,8 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .md-fromtext b{display:block;font-size:14px}
 .md-fromtext span{font-size:12.5px;color:var(--faint)}
 .md-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
-.md-content{background:var(--card);padding:26px;font-size:15px;line-height:1.65;white-space:pre-line;border-top:1px solid var(--hair-2);box-shadow:var(--shadow)}
+.md-note{margin-top:10px;font-size:12.5px;color:var(--faint);padding:0 4px}
+.md-content{background:var(--card);padding:26px;font-size:15px;line-height:1.65;white-space:pre-line;overflow-wrap:anywhere;border-top:1px solid var(--hair-2);box-shadow:var(--shadow)}
 .md-content:last-child{border-radius:0 0 var(--r) var(--r)}
 .md-atts{background:var(--card);border-radius:0 0 var(--r) var(--r);border-top:1px solid var(--hair-2);padding:18px 26px;display:flex;gap:10px;flex-wrap:wrap;box-shadow:var(--shadow)}
 .att-card{display:flex;align-items:center;gap:10px;border-radius:12px;padding:10px 14px;background:var(--fill-2);font-size:13px}
@@ -1102,6 +1103,49 @@ async function loadOlder(only,quiet){
   if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
   if(!quiet&&finished)toast('That\u2019s everything in your inbox');
 }
+/* Message bodies are decoded from MIME since 0.1.7 (bodyV 2). Mail stored by an
+   earlier build holds the raw wire text — boundaries, =20s, base64 — and a
+   refresh only re-fetches the newest few, so it would stay unreadable. It is
+   re-read from the server instead: a batch per mailbox after each sync, and at
+   once when such a message is opened. */
+const REREAD_PAGE=50;
+function takeBody(have,m){
+  if(m.bodyV!==2||have.bodyV===2)return false;
+  have.body=m.body;have.prev=m.prev;have.truncated=!!m.truncated;have.bodyV=2;
+  if(m.messageId)have.messageId=m.messageId;
+  if(m.replyTo)have.replyTo=m.replyTo;
+  return true;
+}
+function staleBodies(){return S.messages.filter(m=>m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2&&!isGone(m.id))}
+async function rereadBodies(msgs){
+  if(!window.__RATA_NATIVE__||!msgs.length)return 0;
+  const groups=new Map();
+  for(const m of msgs){
+    const k=mailEmailOf(m)+'|'+m.uidvalidity;
+    if(!groups.has(k))groups.set(k,[]);
+    groups.get(k).push(m);
+  }
+  let fixed=0;
+  for(const [k,list] of groups){
+    const [email,uv]=k.split('|');
+    const pick=list.sort((a,b)=>b.ts-a.ts).slice(0,REREAD_PAGE);
+    let r;
+    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,uids:pick.map(m=>m.uid),uidvalidity:+uv})})}
+    catch(e){continue}
+    if(!r||r.error)continue;
+    for(const got of (r.messages||[])){
+      const have=S.messages.find(x=>x.id===got.id);
+      if(have&&takeBody(have,got))fixed++;
+    }
+  }
+  if(fixed){save();renderMail()}
+  return fixed;
+}
+let rereading=false;
+async function upgradeBodies(){
+  if(rereading)return;rereading=true;
+  try{await rereadBodies(staleBodies())}finally{rereading=false}
+}
 /* In the desktop app, what the customer does to a message happens to the real
    mailbox too: read, unread, star, delete (to the server's Trash) and archive.
    RATA's own copy changes first, so the screen never waits on a server; the
@@ -1632,6 +1676,9 @@ function openMail(id){
   selMail=id;
   const c=contact(m.cid);
   if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`);serverAct([m],'read')}
+  if(m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2){
+    rereadBodies([m]).then(n=>{if(n&&selMail===id)openMail(id)});
+  }
   const d=$('#mail-detail');
   d.classList.add('open');
   const nm=msgFrom(m);
@@ -1656,6 +1703,7 @@ function openMail(id){
       </div>
     </div>
     <div class="md-content" id="md-body">${esc(m.body)}</div>
+    ${m.truncated?`<div class="md-note">This is the start of a long message. The rest is in your mailbox — open it in your provider’s own app to read all of it.</div>`:''}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${m.atts.length?`<div class="md-atts">${m.atts.map(a=>`<div class="att-card"><span class="fmt">${a.f}</span><span>${esc(a.n)}</span><span class="sz">${a.s}</span></div>`).join('')}</div>`:''}
   </div>`;
@@ -2684,14 +2732,15 @@ async function absorbMail(res){
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
-    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}continue}
+    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);continue}
     const owner=linkedFind('mail',m.acct||'');
     const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
     S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
     added++;newIds.push(m.id);
   }
   save();
-    const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
+  setTimeout(upgradeBodies,0);
+  const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
   const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
   await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
   renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();

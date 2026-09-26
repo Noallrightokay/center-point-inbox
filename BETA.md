@@ -86,12 +86,17 @@ Don't spend time reporting these — they are known and planned:
   depending on how long they are) and says so; a
   larger store is coming.
 - No other folders yet — only the inbox is shown.
-- **Opening a message can show raw MIME** — lines like `--000000abc` and
-  `Content-Type: text/plain`, `=20` in place of spaces, or a block of base64 —
-  and only the start of a long message. RATA does not decode message bodies
-  yet; that is the next thing being built. The preview in the list is usually
-  readable; the full message is often not.
-- No HTML rendering, no attachments.
+- **Mail is shown as text, not as its designed layout.** From v0.1.7 every
+  message is decoded — a newsletter or receipt reads as its words, with each
+  link's address in `<angle brackets>` after the link text so you can copy it.
+  Pictures, colours and layout are not shown, and there are no attachments
+  yet. A very long message shows its start and says the rest is in your
+  mailbox. **Please report any message that still shows raw code** — lines
+  like `--000abc`, `Content-Type:` or `=20` — with its sender (a newsletter
+  name is fine); that is a decoding bug.
+- Mail that arrived under an older beta is re-read and cleaned up after the
+  first refresh on v0.1.7, 50 messages per mailbox at a time, and any one you
+  open is fixed at once.
 - No auto-update — new betas are a new download.
 
 What *should* work: adding a mailbox, seeing recent mail from several

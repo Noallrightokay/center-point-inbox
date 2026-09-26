@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 98 tests, no network required
+cargo test          # 123 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 39 tests
+cargo test          # 40 tests
 ```
 
 On Linux you need the system webview first:
@@ -206,11 +206,11 @@ Be realistic about this before promising anything to a customer.
   in one `localStorage` blob with a cap of a few MB, so loading older mail
   stops near it. A per-message store is the largest gap.
 - **INBOX only.** No other folders are shown.
-- **Message bodies are not decoded.** A refresh fetches the first 2 KB of each
-  message's raw body and strips tags from it; there is no MIME parsing and no
-  quoted-printable or base64 decoding. Most real mail is multipart, so the
-  reading pane shows MIME boundaries and encoded text. This is the next gap to
-  close, and HTML rendering and attachments follow from the same work.
+- **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
+  — MIME, quoted-printable, base64, any charset — and an HTML-only message is
+  turned into text with its links' addresses kept (`body.rs`, `html.rs`). There
+  is no HTML rendering and no attachments yet, and a message longer than what
+  is fetched shows its start with a note saying so.
 - No auto-update, and no code signing.
 
 ### What has never been tested
