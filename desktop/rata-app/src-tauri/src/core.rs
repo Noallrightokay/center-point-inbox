@@ -89,6 +89,12 @@ pub struct Opened {
     pub text: String,
     pub truncated: bool,
     pub attachments: Vec<body::Attachment>,
+    /// The HTML version, already sanitised, for the interface's sandboxed
+    /// frame. `None` for a message written as plain text.
+    pub html: Option<String>,
+    /// Whether that HTML asks for pictures from the internet, which are not
+    /// loaded unless the customer says so.
+    pub remote_images: bool,
 }
 
 /// A message ready to go, as the composer hands it over.
@@ -511,10 +517,13 @@ impl Rata {
     ) -> Result<Opened, Problem> {
         let raw = self.whole(email, uid, uidvalidity).await?;
         let b = body::read_whole(&raw);
+        let remote_images = b.html.as_ref().is_some_and(|h| h.remote_images);
         Ok(Opened {
             text: b.text,
             truncated: b.truncated,
             attachments: b.attachments,
+            html: b.html.map(|h| h.html),
+            remote_images,
         })
     }
 

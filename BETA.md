@@ -86,10 +86,12 @@ Don't spend time reporting these — they are known and planned:
   depending on how long they are) and says so; a
   larger store is coming.
 - No other folders yet — only the inbox is shown.
-- **Mail is shown as text, not as its designed layout.** From v0.1.7 every
-  message is decoded — a newsletter or receipt reads as its words, with each
-  link's address in `<angle brackets>` after the link text so you can copy it.
-  Pictures, colours and layout are not shown. From v0.1.8, opening a long
+- **HTML mail is shown formatted from v0.1.12** — layout, colours, tables and
+  the pictures carried inside the message. Pictures from the internet stay off
+  until you click **Load images** (loading them tells the sender you opened
+  it). Links in the formatted view do not open; switch to **Text** to see each
+  link's address and copy it. Report any message that looks broken
+  formatted — with its sender — as well as any that shows raw code. From v0.1.8, opening a long
   message loads all of it, and **attachments** are listed on the message —
   click one to save it to your Downloads folder (RATA never opens it for you).
   From v0.1.9 you can **attach files** when writing, with 📎 Attach — up to

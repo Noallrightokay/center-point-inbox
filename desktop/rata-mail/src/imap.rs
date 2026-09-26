@@ -96,6 +96,8 @@ pub struct Message {
     /// Attachments whose headers were in what was fetched. Opening the message
     /// gives the full list.
     pub attachments: Vec<body::Attachment>,
+    /// Whether it has an HTML version, which opening it will show.
+    pub html: bool,
     /// Where the sender asked for replies to go, when that is not the From
     /// address — a mailing list, a ticket system. Empty means reply to
     /// `from_addr`.
@@ -1219,6 +1221,7 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
         },
         truncated: text.truncated,
         attachments: text.attachments,
+        html: text.has_html,
         preview,
         ts,
         unread,

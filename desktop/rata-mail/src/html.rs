@@ -523,6 +523,200 @@ fn named(name: &str) -> Option<&'static str> {
     })
 }
 
+// ---------------------------------------------------------------- formatted
+
+/// An HTML email made safe to show as HTML, and whether it asks for pictures
+/// from the internet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Safe {
+    pub html: String,
+    /// True when it has `http(s)` images. They are not loaded unless the
+    /// customer asks: loading one tells the sender the mail was opened, when,
+    /// and from what IP address.
+    pub remote_images: bool,
+}
+
+/// The largest picture carried inside a message that is shown inline, and the
+/// most of them in total. Past these the picture is simply not shown.
+const INLINE_ONE: usize = 1024 * 1024;
+const INLINE_ALL: usize = 4 * 1024 * 1024;
+
+/// An HTML email, cleaned.
+///
+/// This is the first of two locks. Everything that can run or submit goes —
+/// scripts, event handlers, `javascript:` links, forms, frames, objects,
+/// `<meta>` refreshes, `<base>` — using ammonia, a sanitiser built on a real
+/// HTML parser, because a hand-written one is how the tricks get through.
+/// Layout survives: tables and their old attributes, fonts, colours, and
+/// `<style>` blocks, which is what makes a receipt look like a receipt. The
+/// second lock is in the interface: the result is shown in a sandboxed frame
+/// with scripts off and no way to reach the page around it.
+///
+/// `inline` maps a Content-ID to the picture carried in the message under it;
+/// `cid:` references become `data:` URLs so those pictures show without any
+/// request being made.
+pub fn safe(html: &str, inline: &[(String, String, Vec<u8>)]) -> Safe {
+    let mut html = html.to_string();
+    let mut budget = INLINE_ALL;
+    for (cid, mime, data) in inline {
+        let image = matches!(
+            mime.as_str(),
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+        );
+        let reference = format!("cid:{cid}");
+        if !image || data.len() > INLINE_ONE || data.len() > budget || !html.contains(&reference) {
+            continue;
+        }
+        budget -= data.len();
+        let url = format!("data:{mime};base64,{}", crate::words::base64_encode(data));
+        html = html.replace(&reference, &url);
+    }
+    let cleaned = cleaner().clean(&html).to_string();
+    // Quotes and spaces vary with how the sanitiser writes a value back out.
+    // This only decides whether to offer "Load images"; what actually stops a
+    // remote picture loading is the frame's content security policy.
+    let flat: String = cleaned
+        .to_ascii_lowercase()
+        .replace("&quot;", "")
+        .replace("&#39;", "")
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\'' | ' ' | '\t' | '\n'))
+        .collect();
+    let remote_images = ["src=http", "url(http", "background=http", "srcset=http"]
+        .iter()
+        .any(|p| flat.contains(p));
+    Safe {
+        html: cleaned,
+        remote_images,
+    }
+}
+
+fn cleaner() -> ammonia::Builder<'static> {
+    let mut b = ammonia::Builder::default();
+    b.add_tags([
+        "center", "font", "style", "big", "small", "u", "s", "strike", "tt",
+    ])
+    .rm_clean_content_tags(["style"])
+    .add_clean_content_tags([
+        "title", "noscript", "template", "xml", "textarea", "select", "option", "button",
+    ])
+    .add_generic_attributes([
+        "style",
+        "align",
+        "valign",
+        "bgcolor",
+        "width",
+        "height",
+        "dir",
+        "class",
+        "border",
+        "background",
+    ])
+    .add_tag_attributes(
+        "table",
+        [
+            "cellpadding",
+            "cellspacing",
+            "border",
+            "bgcolor",
+            "width",
+            "align",
+        ],
+    )
+    .add_tag_attributes(
+        "td",
+        [
+            "colspan", "rowspan", "nowrap", "bgcolor", "width", "height", "align", "valign",
+        ],
+    )
+    .add_tag_attributes(
+        "th",
+        [
+            "colspan", "rowspan", "nowrap", "bgcolor", "width", "height", "align", "valign",
+        ],
+    )
+    .add_tag_attributes("img", ["src", "alt", "width", "height", "border"])
+    .add_tag_attributes("font", ["color", "face", "size"])
+    // Links are shown but go nowhere: followed inside the frame, a link
+    // would put the sender's page — a login form, say — in the reading
+    // pane. The addresses are in the text version, to read and copy.
+    .rm_tag_attributes("a", ["href"])
+    .rm_tags(["area", "map"])
+    .link_rel(None)
+    .add_url_schemes(["data"])
+    .url_relative(ammonia::UrlRelative::Deny)
+    .filter_style_properties(STYLE_PROPERTIES.iter().copied().collect())
+    .strip_comments(true);
+    b
+}
+
+/// The CSS allowed in a `style` attribute: what lays out and colours a
+/// message. Nothing here can run anything; the list exists so that nothing
+/// new and unknown gets through by default.
+const STYLE_PROPERTIES: &[&str] = &[
+    "color",
+    "background",
+    "background-color",
+    "background-image",
+    "background-position",
+    "background-repeat",
+    "background-size",
+    "border",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-color",
+    "border-style",
+    "border-width",
+    "border-radius",
+    "border-collapse",
+    "border-spacing",
+    "margin",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "padding",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "width",
+    "min-width",
+    "max-width",
+    "height",
+    "min-height",
+    "max-height",
+    "display",
+    "vertical-align",
+    "text-align",
+    "text-decoration",
+    "text-transform",
+    "text-indent",
+    "font",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+    "line-height",
+    "letter-spacing",
+    "word-spacing",
+    "white-space",
+    "word-break",
+    "overflow-wrap",
+    "list-style",
+    "list-style-type",
+    "table-layout",
+    "opacity",
+    "float",
+    "clear",
+    "overflow",
+    "direction",
+    "box-sizing",
+    "mso-line-height-rule",
+];
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -718,6 +912,129 @@ pub(crate) mod tests {
         assert_eq!(
             to_text(r#"<img src="x.png" alt="Shop the sale"><p>Ends Sunday</p>"#),
             "Shop the sale\nEnds Sunday"
+        );
+    }
+
+    // ------------------------------------------------------------- formatted
+
+    fn clean(html: &str) -> Safe {
+        safe(html, &[])
+    }
+
+    #[test]
+    fn nothing_that_can_run_survives() {
+        for hostile in [
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+            "<a href=\"javascript:alert(1)\">x</a>",
+            "<a href=\"JaVaScRiPt:alert(1)\">x</a>",
+            "<svg><script>alert(1)</script></svg>",
+            "<iframe src=\"https://evil.example\"></iframe>",
+            "<object data=\"x\"></object><embed src=\"x\">",
+            "<form action=\"https://evil.example\"><input name=p></form>",
+            "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">",
+            "<base href=\"https://evil.example/\">",
+            "<body onload=alert(1)>",
+            "<div style=\"background:url(javascript:alert(1))\">x</div>",
+            "<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>",
+            "<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">",
+        ] {
+            let out = clean(hostile).html.to_ascii_lowercase();
+            for bad in [
+                "<script",
+                "onerror",
+                "onload",
+                "javascript:",
+                "<iframe",
+                "<object",
+                "<embed",
+                "<form",
+                "<meta",
+                "<base",
+                "<input",
+            ] {
+                assert!(!out.contains(bad), "{hostile:?} left {bad:?} in {out:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_receipt_keeps_its_layout() {
+        let out = clean(
+            "<html><head><title>Receipt</title><style>.total{font-weight:bold}</style></head><body>\
+             <table width=\"600\" cellpadding=\"4\" bgcolor=\"#ffffff\"><tr><td align=\"right\" style=\"color:#333;padding:8px\">\
+             <font face=\"Arial\" color=\"#111\">Total</font></td><td class=\"total\">$18.00</td></tr></table></body></html>",
+        )
+        .html;
+        for kept in [
+            "<table",
+            "width=\"600\"",
+            "cellpadding=\"4\"",
+            "bgcolor=\"#ffffff\"",
+            "align=\"right\"",
+            "color:#333",
+            "<font",
+            "face=\"Arial\"",
+            "<style>",
+            ".total{font-weight:bold}",
+            "class=\"total\"",
+            "$18.00",
+        ] {
+            assert!(out.contains(kept), "lost {kept:?}: {out}");
+        }
+        assert!(
+            !out.contains("Receipt"),
+            "the title is not body text: {out}"
+        );
+    }
+
+    #[test]
+    fn remote_pictures_are_noticed_and_embedded_ones_carried() {
+        let tracked = clean("<p>Hi</p><img src=\"https://t.example/open.gif\" width=1 height=1>");
+        assert!(tracked.remote_images);
+        let styled = clean("<div style=\"background: url('https://t.example/bg.png')\">x</div>");
+        assert!(styled.remote_images, "{}", styled.html);
+        let plain = clean("<p>Just words</p>");
+        assert!(!plain.remote_images);
+
+        let logo = vec![137, 80, 78, 71];
+        let out = safe(
+            "<img src=\"cid:logo@x\" alt=\"Logo\"><img src=\"cid:page@x\">",
+            &[
+                ("logo@x".into(), "image/png".into(), logo),
+                ("page@x".into(), "text/html".into(), b"<script>".to_vec()),
+            ],
+        );
+        assert!(
+            out.html.contains("src=\"data:image/png;base64,iVBORw==\""),
+            "{}",
+            out.html
+        );
+        assert!(
+            !out.html.contains("text/html"),
+            "only pictures are inlined: {}",
+            out.html
+        );
+        assert!(!out.remote_images);
+    }
+
+    #[test]
+    fn links_keep_their_words_but_lose_their_addresses() {
+        let out = clean("<p>Please <a href=\"https://phish.example/login\" target=\"_self\">sign in</a>.</p><map><area href=\"https://x.example\"></map>").html;
+        assert!(out.contains("sign in"), "{out}");
+        assert!(
+            !out.contains("phish.example") && !out.contains("href") && !out.contains("target"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_relative_link_goes_nowhere() {
+        // Relative to the app itself, it could only ever point at the app.
+        let out = clean("<a href=\"/index.html\">x</a><img src=\"icons/mark.png\">").html;
+        assert!(
+            !out.contains("index.html") && !out.contains("icons/"),
+            "{out}"
         );
     }
 }

@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 138 tests, no network required
+cargo test          # 145 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -124,6 +124,16 @@ as a first screen with two forms on it. `tauri.conf.json` now sets
 `dangerousDisableAssetCspModification: ["style-src"]` so the declared policy is
 the one that applies; scripts keep Tauri's protection. Leave it there, and check
 interface changes in a packaged build.
+
+**HTML mail is shown behind three locks — keep all three.** It is sanitised in
+Rust (`html::safe`, ammonia: no scripts, handlers, forms, frames, `<base>`,
+`<meta>`, link addresses); shown in an iframe with an empty `sandbox`
+(no scripts, own origin, no popups); and that frame's own content security
+policy fetches nothing but, once the customer clicks Load images, `https:`
+pictures. Behind those, the app's CSP has `frame-src 'none'`, which also stops
+a frame navigating anywhere, and `img-src … https:`, which only the frame's
+policy narrows. Do not add `allow-scripts` or `allow-same-origin` to that
+sandbox, ever: together they undo it, and the page it sits in can call the app.
 
 **`bridge.js` replaces the browser's `fetch`.**
 The interface was written to call a server. Rather than rewrite it, the bridge
@@ -212,7 +222,8 @@ Be realistic about this before promising anything to a customer.
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
   RATA. Files can be attached when sending, up to 18 MB in all, and a
-  forwarded message carries its attachments. There is no HTML rendering.
+  forwarded message carries its attachments. HTML mail is shown formatted
+  in a locked-down frame (see *Traps*), with remote images off until asked.
 - No auto-update, and no code signing.
 
 ### What has never been tested
