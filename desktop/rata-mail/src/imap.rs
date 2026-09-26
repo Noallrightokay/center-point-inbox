@@ -35,6 +35,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::ServerName;
 
+use crate::body;
 use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure};
 use crate::guard::HostVerdict;
 use crate::key::{domain_of, mail_key};
@@ -46,10 +47,6 @@ use crate::words;
 const CONNECT: Duration = Duration::from_secs(10);
 const GREETING: Duration = Duration::from_secs(10);
 const COMMAND: Duration = Duration::from_secs(20);
-
-/// How much of a message body is pulled back for the preview line. Enough for a
-/// sentence or two; small enough that fifteen of them are one small response.
-const PREVIEW_BYTES: usize = 2048;
 
 /// Everything needed to open one mailbox.
 #[derive(Debug, Clone)]
@@ -93,6 +90,9 @@ pub struct Message {
     /// can name what it answers and land in the same thread. Empty when the
     /// sender gave none.
     pub message_id: String,
+    /// True when `body` is not the whole message: it ran past what is fetched
+    /// or past what RATA keeps. The rest is in the mailbox.
+    pub truncated: bool,
     /// Where the sender asked for replies to go, when that is not the From
     /// address — a mailing list, a ticket system. Empty means reply to
     /// `from_addr`.
@@ -432,10 +432,17 @@ fn refusal(cand: &Candidate) -> String {
 // --------------------------------------------------------------------- fetch
 
 /// Everything wanted about a message, in one round trip. `PEEK` matters: a
-/// plain `BODY[TEXT]` marks the message read, so merely refreshing would clear
-/// the customer's unread count.
+/// plain `BODY[]` marks the message read, so merely refreshing would clear the
+/// customer's unread count.
+///
+/// The whole message rather than `BODY[TEXT]`, because the text alone cannot
+/// be decoded: its encoding, charset and MIME structure are declared in the
+/// headers. Only the start of it, so attachments mostly stay on the server.
 fn items() -> String {
-    format!("(UID FLAGS INTERNALDATE ENVELOPE BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)")
+    format!(
+        "(UID FLAGS INTERNALDATE ENVELOPE BODY.PEEK[]<0.{}>)",
+        body::MESSAGE_BYTES
+    )
 }
 
 /// The newest `limit` messages in the inbox, newest first.
@@ -486,6 +493,74 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
     };
     let _ = timeout(COMMAND, session.logout()).await;
     Fetched::Messages(messages)
+}
+
+/// Particular messages again, by UID, newest first — for mail RATA stored before
+/// it could decode message bodies, which is otherwise never fetched again. A
+/// UID no longer in the mailbox is simply absent from the answer.
+pub async fn fetch_uids(
+    resolver: &Resolver,
+    acct: &Account,
+    uids: &[u32],
+    uidvalidity: u32,
+) -> Fetched {
+    let uids: Vec<u32> = uids.iter().copied().filter(|u| *u != 0).collect();
+    if uids.is_empty() {
+        return Fetched::Messages(vec![]);
+    }
+    if uidvalidity == 0 {
+        return Fetched::Stale("RATA has no server reference for these messages.".into());
+    }
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Fetched::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let found = uids_in(&mut session, acct, &uids, uidvalidity).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+async fn uids_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    uids: &[u32],
+    uidvalidity: u32,
+) -> Fetched
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match timeout(COMMAND, session.select("INBOX")).await {
+        Ok(Ok(m)) if m.uid_validity == Some(uidvalidity) => {}
+        // A rebuilt mailbox numbers its messages afresh: these UIDs could now
+        // name different messages, and their text must not be put under the
+        // old ones' names.
+        Ok(Ok(_)) => {
+            return Fetched::Stale(
+                "The mailbox has been reorganised since RATA last read it. Refresh to pick it up again.".into(),
+            );
+        }
+        _ => return Fetched::Net(unreachable_msg(acct, "its inbox could not be opened")),
+    }
+    let stream = match timeout(COMMAND, session.uid_fetch(join(uids), items())).await {
+        Ok(Ok(s)) => s,
+        _ => return Fetched::Net(unreachable_msg(acct, "those messages could not be read")),
+    };
+    match collect(stream, acct, uidvalidity).await {
+        // Only what was asked for: a server may volunteer others.
+        Ok(m) => Fetched::Messages(m.into_iter().filter(|m| uids.contains(&m.uid)).collect()),
+        Err(failed) => failed,
+    }
 }
 
 /// Messages older than `before_uid` — the oldest one RATA already has — newest
@@ -594,7 +669,6 @@ async fn read_range<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let mut messages: Vec<Message> = Vec::new();
     let stream = match timeout(COMMAND, session.fetch(range, items())).await {
         Ok(Ok(s)) => s,
         // The stream borrows the session for as long as it exists, so the
@@ -607,6 +681,15 @@ where
             )));
         }
     };
+    collect(stream, acct, generation).await
+}
+
+/// Messages out of a FETCH response, newest first.
+async fn collect<S>(stream: S, acct: &Account, generation: u32) -> Result<Vec<Message>, Fetched>
+where
+    S: futures::Stream<Item = Result<async_imap::types::Fetch, ImapError>>,
+{
+    let mut messages: Vec<Message> = Vec::new();
     futures::pin_mut!(stream);
     // A message that will not parse is skipped rather than failing the
     // refresh: one malformed message must not cost the customer the other
@@ -974,7 +1057,9 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "(no subject)".to_string());
 
-    let preview = f.text().map(words::plain).unwrap_or_default();
+    let raw = f.body().unwrap_or_default();
+    let text = body::read(raw, raw.len() >= body::MESSAGE_BYTES);
+    let preview = body::preview(&text.text);
 
     // INTERNALDATE — when the server received it — rather than the `Date:`
     // header inside the message. The header is written by the sender and is
@@ -1004,12 +1089,14 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
         from_name,
         from_addr,
         subject,
-        body: if preview.is_empty() {
-            format!("(preview unavailable)\n\n— Synced from {}.", acct.email)
+        body: if text.text.is_empty() {
+            "(This message has no text RATA can show. Open it in your provider's own app to see it.)"
+                .to_string()
         } else {
-            format!("{preview}\n\n— Synced from {}.", acct.email)
+            text.text
         },
-        preview: words::clip(&preview, 120),
+        truncated: text.truncated,
+        preview,
         ts,
         unread,
         starred,
@@ -1144,9 +1231,13 @@ mod tests {
             let mut lines = BufReader::new(r).lines();
             w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
             let full = |seq: usize, uid: u32| {
-                let body = format!("Body of {uid}");
+                // What a real server sends for BODY[]: headers and a MIME
+                // body, here quoted-printable UTF-8 as most mail programs write.
+                let body = format!(
+                    "From: Ann <ann@example.org>\r\nSubject: Subject {uid}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBody of {uid} =E2=80=94 caf=C3=A9\r\n"
+                );
                 format!(
-                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Subject {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\") BODY[TEXT]<0> {{{}}}\r\n{body})\r\n",
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Subject {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
                     uid / 2, // minutes that keep receive-order equal to UID order for 0..119
                     body.len()
                 )
@@ -1164,6 +1255,14 @@ mod tests {
                         "* {} EXISTS\r\n* OK [UIDVALIDITY {uidvalidity}] ok\r\n",
                         uids.len()
                     )
+                } else if up.starts_with("UID FETCH") && up.contains("BODY.PEEK") {
+                    // Particular messages by UID, in full.
+                    let want: Vec<u32> = arg.split(',').filter_map(|u| u.parse().ok()).collect();
+                    uids.iter()
+                        .enumerate()
+                        .filter(|(_, u)| want.contains(u))
+                        .map(|(i, u)| full(i + 1, *u))
+                        .collect()
                 } else if up.starts_with("UID FETCH") {
                     // "n:*" — every message with UID >= n, or, if there is
                     // none, the newest message anyway (RFC 3501's quirk).
@@ -1694,8 +1793,8 @@ mod tests {
     #[test]
     fn the_preview_fetch_peeks_so_a_refresh_cannot_mark_mail_read() {
         let q = items();
-        assert!(q.contains("BODY.PEEK[TEXT]"), "{q}");
-        assert!(!q.contains("BODY[TEXT]"), "{q}");
+        assert!(q.contains("BODY.PEEK[]<0."), "{q}");
+        assert!(!q.contains(" BODY["), "{q}");
         assert!(
             q.contains("UID") && q.contains("FLAGS") && q.contains("ENVELOPE"),
             "{q}"
@@ -1715,6 +1814,52 @@ mod tests {
         assert!(msg.contains("Google Workspace"), "{msg}");
         assert!(msg.contains("app password"), "{msg}");
         assert!(msg.contains("apppasswords"), "{msg}");
+    }
+
+    // ---------------------------------------------------------- re-reading
+
+    #[test]
+    fn stored_mail_can_be_read_again_by_uid() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
+            // 25 was never there; 20 and 30 are.
+            let got = uids_in(&mut s, &me(), &[20, 25, 30], 7).await;
+            let Fetched::Messages(m) = got else {
+                panic!("{got:?}")
+            };
+            let mut uids: Vec<u32> = m.iter().map(|m| m.uid).collect();
+            uids.sort();
+            assert_eq!(uids, vec![20, 30]);
+            assert!(
+                m.iter().all(|m| m.body.contains("café")),
+                "decoded: {:?}",
+                m[0].body
+            );
+            let log = log.lock().unwrap();
+            let fetch = log
+                .iter()
+                .find(|c| c.to_ascii_uppercase().starts_with("UID FETCH"))
+                .unwrap();
+            assert!(
+                fetch.contains("20,25,30") && fetch.contains("BODY.PEEK[]"),
+                "{fetch}"
+            );
+        });
+    }
+
+    #[test]
+    fn stored_mail_is_not_re_read_from_a_rebuilt_mailbox() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[10, 20], 8).await;
+            let got = uids_in(&mut s, &me(), &[10], 7).await;
+            assert!(matches!(got, Fetched::Stale(_)), "{got:?}");
+            assert!(
+                !log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().starts_with("UID FETCH"))
+            );
+        });
     }
 
     // -------------------------------------------------------- reply threading
@@ -1746,6 +1891,10 @@ mod tests {
             let got = read_range(&mut s, &me(), "1:2", 5).await.ok().unwrap();
             let seven = got.iter().find(|m| m.uid == 7).unwrap();
             assert_eq!(seven.message_id, "m7@example.org");
+            // Decoded, not shown as the quoted-printable it arrived in.
+            assert_eq!(seven.body, "Body of 7 — café");
+            assert_eq!(seven.preview, "Body of 7 — café");
+            assert!(!seven.truncated);
             // The fixture's Reply-To is the sender again, which is what servers
             // fill in when none was set; that is not worth keeping.
             assert_eq!(seven.reply_to, "");

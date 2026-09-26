@@ -102,3 +102,15 @@ pub async fn older_mail(
     app.older(&email, before_uid, uidvalidity, limit.unwrap_or(50))
         .await
 }
+
+/// Particular messages in one mailbox again, by UID: mail stored before RATA
+/// decoded message bodies.
+#[tauri::command]
+pub async fn reread_mail(
+    app: App<'_>,
+    email: String,
+    uids: Vec<u32>,
+    uidvalidity: u32,
+) -> Result<Vec<Message>, Problem> {
+    app.reread(&email, &uids, uidvalidity).await
+}

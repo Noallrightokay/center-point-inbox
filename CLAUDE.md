@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs. Standalone, knows nothing about the app. 98 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 39 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies. Standalone, knows nothing about the app. 123 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 40 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -77,7 +77,8 @@ the run as an artifact). v0.1.2 shipped with a broken first screen (see the
 CSP note above) and must not be given to anyone. **v0.1.3 is the beta build
 testers started on**; v0.1.4 adds server-side read/star/delete/archive;
 v0.1.5 adds Load older mail and shipped all five files; v0.1.6 adds Reply and
-removes every control that led nowhere. An upload that fails
+removes every control that led nowhere; v0.1.7 decodes message bodies. An
+upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
 
@@ -143,14 +144,22 @@ the oldest UID RATA holds, and a newly linked mailbox gets one page straight
 away. But the single `localStorage` blob has a few-MB cap, so `loadOlder`
 refuses past `STORE_SOFT_CAP` — **the largest gap**, fixed by a per-message
 store (IndexedDB), after which that cap can go.
-**Bodies are not decoded — the gap a tester will hit first.** Fetch takes
-`BODY.PEEK[TEXT]<0.2048>` and `words::plain` only strips tags and collapses
-whitespace: no MIME parsing, no quoted-printable or base64. Multipart mail
-(nearly all of it) shows boundaries and encoded text in the reading pane, cut
-at 2 KB. Fix with a real MIME parser in `rata-mail`, fetching the whole
-message (or BODYSTRUCTURE + the text part); HTML and attachments build on it.
-Also not built: INBOX only; no HTML or attachments; no auto-update; no code
-signing. Settings shows the website's plan ("No plan yet") rather than the
+**Bodies are decoded (v0.1.7).** Fetch takes `BODY.PEEK[]<0.65536>` — headers
+and the start of the message, since the text cannot be decoded without the
+headers that declare its encoding — and `body::read` parses it with
+`mail-parser` (with `full_encoding` for CJK charsets): the text/plain part if
+there is one, else `html::to_text`, our own HTML reader, which keeps block
+structure and every link's address as `text <url>` and drops styles, scripts
+and hidden preheaders. `html.rs` runs on a stranger's input, so its tag scan
+is bounded (`MAX_TAG`) and linear; keep it that way. A part cut by the 64 KiB
+limit, or text past `BODY_CHARS` (16 000), sets `truncated` and the reading
+pane says so. Links are shown, never made clickable: navigating the app's
+webview to an outside page would hand that page the IPC bridge. Mail stored
+by an older build (no `bodyV: 2`) is re-read by UID (`reread_mail` →
+`rata_mail::imap::fetch_uids`), 50 per mailbox after each sync and at once
+when opened.
+Also not built: INBOX only; no HTML rendering or attachments (next: fetch the
+whole message when one is opened); no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

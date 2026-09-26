@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use rata_mail::{
     Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, act,
-    fetch_inbox, fetch_older, send, verify,
+    fetch_inbox, fetch_older, fetch_uids, send, verify,
 };
 use serde::Serialize;
 
@@ -23,6 +23,10 @@ use crate::vault::{Unreadable, Vault};
 /// few enough that a laptop on hotel wifi is not opening ten TLS connections
 /// at once.
 const AT_ONCE: usize = 4;
+
+/// The most messages re-read in one go. Each is up to 64 KiB on the wire, so
+/// this bounds one request to a few megabytes whatever the interface asks.
+const REREAD_MAX: usize = 50;
 
 pub struct Rata {
     store: Mutex<Store>,
@@ -404,6 +408,38 @@ impl Rata {
         uidvalidity: u32,
         limit: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let acct = self.readable(email)?;
+        // Capped here as well as in the interface: a page is a page, and a
+        // runaway request must not try to pull a whole mailbox at once.
+        let found = fetch_older(
+            &self.resolver,
+            &acct,
+            before_uid,
+            uidvalidity,
+            limit.min(200),
+        )
+        .await;
+        self.answer(&acct.email, found)
+    }
+
+    /// Particular messages again, by UID — mail stored before RATA could
+    /// decode message bodies. Refused on the same terms as older mail.
+    pub async fn reread(
+        &self,
+        email: &str,
+        uids: &[u32],
+        uidvalidity: u32,
+    ) -> Result<Vec<Message>, Problem> {
+        let acct = self.readable(email)?;
+        let uids = &uids[..uids.len().min(REREAD_MAX)];
+        let found = fetch_uids(&self.resolver, &acct, uids, uidvalidity).await;
+        self.answer(&acct.email, found)
+    }
+
+    /// A linked mailbox ready to read — licensed, known, not parked for a
+    /// rejected password, and with its password readable — or why not, all
+    /// decided before anything is dialled.
+    fn readable(&self, email: &str) -> Result<Account, Problem> {
         let problem = |kind: &str, error: String| Problem {
             email: email.to_string(),
             kind: kind.into(),
@@ -431,27 +467,25 @@ impl Rata {
             Unreadable::Missing(why) => problem("missing", why),
             Unreadable::Locked(why) => problem("keychain", why),
         })?;
-        let acct = Account {
+        Ok(Account {
             email: m.email.clone(),
             pass,
             host: m.host.clone(),
             port: m.port,
             label: m.label.clone(),
+        })
+    }
+
+    fn answer(&self, email: &str, found: Fetched) -> Result<Vec<Message>, Problem> {
+        let problem = |kind: &str, error: String| Problem {
+            email: email.to_string(),
+            kind: kind.into(),
+            error,
         };
-        // Capped here as well as in the interface: a page is a page, and a
-        // runaway request must not try to pull a whole mailbox at once.
-        match fetch_older(
-            &self.resolver,
-            &acct,
-            before_uid,
-            uidvalidity,
-            limit.min(200),
-        )
-        .await
-        {
+        match found {
             Fetched::Messages(messages) => Ok(messages),
             Fetched::Auth(error) => {
-                self.note_auth_failure(&m.email);
+                self.note_auth_failure(email);
                 Err(problem("auth", error))
             }
             Fetched::Host(error) => Err(problem("host", error)),
@@ -847,6 +881,28 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
             let e = app.older("owner@example.com", 40, 7, 50).await.unwrap_err();
+            assert_eq!(e.kind, "auth");
+        });
+    }
+
+    #[test]
+    fn re_reading_mail_refuses_before_ever_dialling() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("reread-unlic"));
+            let e = app
+                .reread("owner@example.com", &[1, 2], 7)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unlicensed");
+
+            let app = rata(tmpfile("reread-unknown"));
+            let e = app.reread("nobody@example.com", &[1], 7).await.unwrap_err();
+            assert_eq!(e.kind, "unknown");
+
+            let app = rata(tmpfile("reread-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let e = app.reread("owner@example.com", &[1], 7).await.unwrap_err();
             assert_eq!(e.kind, "auth");
         });
     }

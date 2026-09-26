@@ -46,6 +46,10 @@
          answers to go when that is not the From address. */
       messageId: m.message_id || '',
       replyTo: m.reply_to || '',
+      /* Decoded from MIME since 0.1.7; anything stored without this was kept
+         as it arrived on the wire and is re-read when it can be. */
+      bodyV: 2,
+      truncated: !!m.truncated,
     };
   }
 
@@ -167,6 +171,20 @@
           beforeUid: b.beforeUid,
           uidvalidity: b.uidvalidity,
           limit: b.limit ?? null,
+        });
+        return { messages: got.map(asMessage) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/mail/read'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('reread_mail', {
+          email: b.email,
+          uids: b.uids || [],
+          uidvalidity: b.uidvalidity,
         });
         return { messages: got.map(asMessage) };
       } catch (e) {

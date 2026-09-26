@@ -23,10 +23,15 @@
 //!   guarantee above.
 //! * **Making a header readable** (`words`) — imapflow did this for free and
 //!   nothing here does.
+//! * **Making a message readable** (`body`) — MIME, transfer encodings and
+//!   charsets decoded into text, so the reading pane shows the message rather
+//!   than what it looked like on the wire.
 
+pub mod body;
 pub mod compose;
 pub mod discover;
 pub mod guard;
+pub mod html;
 pub mod imap;
 pub mod key;
 pub mod resolve;
@@ -41,7 +46,7 @@ pub use discover::{
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
     Account, Acted, Action, Fetched, Message, Verified, Verify, act, fetch_inbox, fetch_older,
-    verify,
+    fetch_uids, verify,
 };
 pub use key::{domain_of, mail_key};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
