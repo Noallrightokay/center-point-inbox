@@ -27,6 +27,51 @@ use crate::core::Rata;
 use crate::store::Store;
 use crate::vault::Keychain;
 
+/// The window opens at 1280×860, taller than a 1366×768 laptop once its
+/// taskbar is counted — the most common screen there is — and the composer's
+/// Send button sits at the bottom of it. So on a smaller screen the window is
+/// shrunk to fit before anyone sees it.
+///
+/// `planned` is the size from the config, in logical pixels: the window has
+/// not been drawn yet, so it cannot report a size of its own.
+fn fit_to_screen(window: &tauri::WebviewWindow, planned: (f64, f64)) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let size = tauri::PhysicalSize::new(
+        (planned.0 * scale).round() as u32,
+        (planned.1 * scale).round() as u32,
+    );
+    // The work area leaves out the taskbar or dock. Without a window manager
+    // to report one it can come back empty; the whole screen is the next best.
+    let work = monitor.work_area();
+    let (origin, area) = if work.size.width == 0 || work.size.height == 0 {
+        (*monitor.position(), *monitor.size())
+    } else {
+        (work.position, work.size)
+    };
+    if let Some((w, h)) = fitted((size.width, size.height), (area.width, area.height)) {
+        let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+        // Placed by hand: `center()` goes by the window's own size, which is
+        // still nothing at this point, and puts its corner mid-screen.
+        let x = origin.x + (area.width.saturating_sub(w) / 2) as i32;
+        let y = origin.y + (area.height.saturating_sub(h) / 2) as i32;
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+}
+
+/// The window size that fits `area` with a small margin, or `None` when it
+/// already fits. Both in physical pixels.
+fn fitted(window: (u32, u32), area: (u32, u32)) -> Option<(u32, u32)> {
+    if area.0 == 0 || area.1 == 0 {
+        return None;
+    }
+    let w = window.0.min(area.0 * 96 / 100);
+    let h = window.1.min(area.1 * 94 / 100);
+    if (w, h) == window { None } else { Some((w, h)) }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -47,6 +92,15 @@ fn main() {
                 resolver,
                 licence::PUBLIC_KEY,
             )));
+            let planned = app
+                .config()
+                .app
+                .windows
+                .first()
+                .map(|w| (w.width, w.height));
+            if let (Some(window), Some(planned)) = (app.get_webview_window("main"), planned) {
+                fit_to_screen(&window, planned);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,4 +120,19 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("RATA could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fitted;
+
+    #[test]
+    fn a_window_too_tall_for_a_small_laptop_is_shrunk_to_fit() {
+        // 1366×768 with a 40px taskbar.
+        assert_eq!(fitted((1280, 860), (1366, 728)), Some((1280, 684)));
+        // A screen with room leaves it alone.
+        assert_eq!(fitted((1280, 860), (1920, 1040)), None);
+        // An unknown screen is no reason to do anything.
+        assert_eq!(fitted((1280, 860), (0, 0)), None);
+    }
 }
