@@ -139,7 +139,12 @@ Don't spend time reporting these — they are known and planned:
 - Mail that arrived under an older beta is re-read and cleaned up after the
   first refresh on v0.1.7, 50 messages per mailbox at a time, and any one you
   open is fixed at once.
-- No auto-update — new betas are a new download.
+- **Updates:** from v0.1.23 RATA can update itself — a bar at the top says
+  "RATA x is ready — Restart to update" — once the update key is set up on
+  our side. The first version that has it is installed by hand, once; after
+  that RATA offers each new one. Until then, new betas are a new download.
+  If an update fails, the bar says why and offers the download; please send
+  us that exact sentence.
 
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —

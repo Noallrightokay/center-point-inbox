@@ -18,6 +18,7 @@ mod core;
 mod licence;
 mod links;
 mod store;
+mod update;
 mod vault;
 
 use std::sync::Arc;
@@ -98,7 +99,16 @@ fn from_mail(handle: &tauri::AppHandle, url: &tauri::Url) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let builder = tauri::Builder::default();
+    // Updates only where this build carries the key to check them against;
+    // see `update`.
+    let builder = if update::has_key(context.config()) {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+    builder
         .setup(|app| {
             // The app's own directory, per the platform's conventions —
             // Application Support on macOS, AppData on Windows, .local/share on
@@ -162,8 +172,10 @@ fn main() {
             commands::open_link,
             commands::save_file,
             commands::read_attachment,
+            commands::check_update,
+            commands::install_update,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("RATA could not start");
 }
 

@@ -282,3 +282,17 @@ pub fn open_link(url: String) -> Result<(), String> {
         _ => Err("RATA only opens web addresses (http and https).".into()),
     }
 }
+
+/// Is there a newer RATA? See `update`.
+#[tauri::command]
+pub async fn check_update(handle: AppHandle) -> crate::update::Offer {
+    crate::update::check(&handle).await
+}
+
+/// Download, verify and install the newer RATA, then start it. Only returns
+/// when that could not be done, with why.
+#[tauri::command]
+pub async fn install_update(handle: AppHandle) -> Result<(), String> {
+    crate::update::install(&handle).await?;
+    handle.restart()
+}

@@ -264,6 +264,26 @@
       }
     },
 
+    /* Is there a newer RATA (update.rs)? Nothing is downloaded. */
+    async '/api/update/check'() {
+      try {
+        return await invoke('check_update');
+      } catch (e) {
+        return { error: String(e) };
+      }
+    },
+
+    /* Download, verify and install it. On success the app restarts and this
+       never answers; an answer is always a failure, with why. */
+    async '/api/update/install'() {
+      try {
+        await invoke('install_update');
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e) };
+      }
+    },
+
     /* A web address the customer chose to open. Rust checks it is one. */
     async '/api/link/open'(opts) {
       const b = body(opts);

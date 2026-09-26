@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RATA",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "identifier": "org.mailrata.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -9,7 +9,7 @@
   "app": {
     "windows": [
       {
-        "title": "RATA 0.1.22 beta",
+        "title": "RATA 0.1.23 beta",
         "create": false,
         "width": 1280,
         "height": 860,
@@ -20,7 +20,9 @@
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; connect-src 'self' ipc: http://ipc.localhost https://mailrata.org; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'",
-      "dangerousDisableAssetCspModification": ["style-src"]
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     },
     "withGlobalTauri": true
   },
@@ -40,5 +42,17 @@
     "category": "Productivity",
     "shortDescription": "Your mail, on your machine",
     "longDescription": "RATA links the mailboxes you already have and keeps them on your own computer. Mail passwords never leave the device."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/Noallrightokay/center-point-inbox/releases/download/updater/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
