@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 45 tests
+cargo test          # 46 tests
 ```
 
 On Linux you need the system webview first:
@@ -211,8 +211,8 @@ Be realistic about this before promising anything to a customer.
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
-  RATA. Files can be attached when sending, up to 18 MB in all. There is no
-  HTML rendering.
+  RATA. Files can be attached when sending, up to 18 MB in all, and a
+  forwarded message carries its attachments. There is no HTML rendering.
 - No auto-update, and no code signing.
 
 ### What has never been tested

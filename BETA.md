@@ -94,6 +94,7 @@ Don't spend time reporting these — they are known and planned:
   click one to save it to your Downloads folder (RATA never opens it for you).
   From v0.1.9 you can **attach files** when writing, with 📎 Attach — up to
   18 MB in all, since most providers refuse mail over 25 MB once encoded.
+  From v0.1.11 **Forward** on a message sends its attachments along too.
   **Please report any message that still shows raw code** — lines
   like `--000abc`, `Content-Type:` or `=20` — with its sender (a newsletter
   name is fine); that is a decoding bug.
