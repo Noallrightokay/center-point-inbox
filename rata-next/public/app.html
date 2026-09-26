@@ -1437,6 +1437,13 @@ function oldestRef(email,folder='inbox'){
 }
 async function loadOlder(only,quiet){
   if(!window.__RATA_NATIVE__)return;
+  /* Mail a refresh had to leave out comes first: it is newer than anything
+     below. */
+  if(!only&&(S.gaps||[]).length){
+    const got=await fillGaps();
+    if(!quiet)toast(got.error?'Older mail did not load \u2014 '+got.error:got.added?got.added+' older message'+(got.added===1?'':'s')+' loaded':'That\u2019s everything that arrived while RATA was closed');
+    return;
+  }
   if(!MS&&JSON.stringify(S).length>STORE_SOFT_CAP){
     if(!quiet)toast('RATA\u2019s storage on this computer is nearly full, so older mail was not loaded. Deleting old messages frees space.');
     return;
@@ -1461,6 +1468,42 @@ async function loadOlder(only,quiet){
   if(notes.length){if(!quiet||added)toast((added?added+' older loaded, but ':'Older mail did not load — ')+notes[0]);return}
   if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
   if(!quiet&&finished)toast('That\u2019s everything in your inbox');
+}
+/* 0.1.28. A refresh downloads at most 200 new messages a folder; when more
+   arrived — RATA closed through a busy week — the app says which are still
+   to come (a gap: UIDs above `floor`, below `top`), and they are fetched
+   page by page from `top` down: one page a gap after each automatic
+   refresh, and with Load older mail. */
+function addGaps(list){
+  S.gaps=S.gaps||[];
+  for(const g of list||[]){
+    if(!g||!g.email||!FOLDERS.includes(g.folder)||!(g.top>g.floor+1))continue;
+    const email=String(g.email).toLowerCase();
+    if(S.gaps.some(x=>x.email===email&&x.folder===g.folder&&x.top===g.top))continue;
+    S.gaps.push({email,folder:g.folder,uidvalidity:g.uidvalidity,top:g.top,floor:g.floor});
+  }
+}
+async function fillGaps(){
+  let added=0,error='';
+  for(const g of (S.gaps||[]).slice()){
+    let r;
+    try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:g.email,folder:g.folder,beforeUid:g.top,uidvalidity:g.uidvalidity,limit:OLDER_PAGE})})}
+    catch(e){r={error:String(e&&e.message||e)}}
+    /* A mailbox rebuilt since has new numbers: there is no gap to fill in
+       them, and the next refresh reads it afresh. */
+    if(r&&r.kind==='stale'){S.gaps=S.gaps.filter(x=>x!==g);continue}
+    if(!r||r.error){error=error||g.email+': '+((r&&r.error)||'no answer');continue}
+    const got=r.messages||[];
+    for(const m of got){
+      if(m.uid<=g.floor||isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
+      S.messages.push(mailRecord(m));added++;
+    }
+    const low=got.reduce((a,m)=>Math.min(a,m.uid),g.top);
+    if(!got.length||low<=g.floor+1)S.gaps=S.gaps.filter(x=>x!==g);else g.top=low;
+  }
+  if(added)tidyAccts();
+  save();renderMailFilters();renderMail();
+  return {added,error};
 }
 /* The whole of a message, fetched when it is opened, for this session only:
    the full text of a long message and its attachments' details. Not stored —
@@ -2092,7 +2135,7 @@ function renderMail(){
     if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
-  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&olderCandidates().length;
+  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&(olderCandidates().length||(S.gaps||[]).length);
   vlist(sc,pool,more?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
   const lo=document.getElementById('load-older');
   if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await (inBox?loadBox(BOX.email,BOX.name,true):loadOlder())}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
@@ -3660,9 +3703,10 @@ function heldKnown(){
    nothing costs a sign-in and a few hundred bytes per mailbox. A mailbox
    that refused its password is not tried again until it is relinked. */
 const AUTO_EVERY=5*60e3,AUTO_BACK=60e3;let autoOn=false;
-function autoSync(){
+async function autoSync(){
   if(!window.__RATA_NATIVE__||!(LIC&&LIC.licensed)||SYNCING)return;
-  return serverSync('mail',true);
+  await serverSync('mail',true);
+  if((S.gaps||[]).length&&!SYNCING)await fillGaps();
 }
 function startAutoSync(){
   if(autoOn||!window.__RATA_NATIVE__)return;
@@ -3718,6 +3762,7 @@ async function absorbMail(res,quiet){
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   tidyAccts();
+  addGaps(res.gaps);
   /* Read and starred for mail RATA already has, from the server — another
      device may have changed them. */
   if((res.flags||[]).length){
