@@ -97,7 +97,7 @@ v0.1.15 keeps a closed draft whole; v0.1.16 draws only the rows of the
 list that are on screen; v0.1.17 adds AI summaries, translation and task
 flags through the relay (which needs the website deployed — see below);
 v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
-and makes its downloads work in the app at all. An
+and makes its downloads work in the app at all; v0.1.19 reads PDFs. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -337,6 +337,28 @@ to `save_file` (core.rs: `safe_file_name`, `write_new`, 100 MB cap). And on
 Linux Tauri's `download_dir()` exists only when the desktop has
 `user-dirs.dirs` — without it every save, attachments included, failed —
 so `commands::downloads` falls back to `~/Downloads`.
+**PDF input (v0.1.19).** PDF.js 6.3.289, legacy build (older engines than
+the modern one; the Linux webview lags), vendored as `.js` so every server
+sends a script type, loaded with `import()` (`pdfLib`) and parsing in its
+module worker. `pdfToBlocks` rebuilds structure from positions: runs on one
+baseline make a line, and a line keeps its cells (runs more than 0.3 em
+apart); two or more consecutive rows whose cell left edges line up
+(within max(4pt, 0.35 em)) make a table; the body size is the size most
+text is set in and the line step the median gap, so a gap over 1.3 steps
+starts a paragraph; larger type is a heading (levels by size); a leading
+bullet — including the Symbol/Wingdings private-use ones Word and
+LibreOffice write — or number makes a list item, whose indented next line
+continues it; a hyphen at a line's end before a lowercase letter joins the
+word; a page break continues the paragraph when the last line had no room
+for the next page's first word; lone page numbers are dropped. Scanned
+(text-less), password-locked and non-PDF files each get their own message.
+Limits, named in the note: layout and pictures; Chrome's PDFs draw bullets
+as shapes and merge a row's cells into one run, so their lists read as
+paragraphs and their tables as lines. Checked against LibreOffice and
+Chrome PDFs of known documents (structure matched exactly for
+LibreOffice), in CI with a LibreOffice-made fixture and jsPDF-made
+hyphen, scan, locked and junk cases, and in the packaged WebKit build
+(read in ~0.3 s, saved, read back by LibreOffice).
 Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 

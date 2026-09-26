@@ -13,6 +13,8 @@ const ENGINES = [
   '/vendor/mammoth-1.8.0.browser.min.js',
   '/vendor/xlsx-0.20.3.full.min.js',
   '/vendor/jspdf-2.5.1.umd.min.js',
+  '/vendor/pdf-6.3.289.legacy.min.js',
+  '/vendor/pdf.worker-6.3.289.legacy.min.js',
 ];
 
 export default async function run(state) {
@@ -586,6 +588,55 @@ export default async function run(state) {
       check(conv.latin.name === 'note.pdf' && conv.latin.pdf === '%PDF-', 'while Western European text, quotes and € make a PDF');
       check(conv.html.pwned === undefined && conv.html.name === 'page.docx', 'a web page is converted without anything in it running');
       check(/picture in it isn’t carried over/.test(conv.html.note), `and it says its picture is not carried over: "${conv.html.note}"`);
+    }
+
+    console.log('\n— Format Bridge: reading PDFs —');
+    {
+      const pdfFix = (await import('node:fs')).readFileSync(join(HERE, 'fixtures', 'sample.pdf')).toString('base64');
+      const pdf = await page.evaluate(async (pdfFix) => {
+        const got = []; const realDl = brDownload; brDownload = (blob, name) => got.push({ blob, name });
+        const toasts = []; const realToast = toast; toast = (m) => toasts.push(m);
+        const run = async (name, data, eco) => { got.length = 0; toasts.length = 0; await brIngest(new File([data], name)); BR.eco = eco; if (!toasts.length && BR.name === name) await brConvert(false); return { file: got[0], toast: toasts[0] }; };
+        const mam = await brLib('mammoth', 'mammoth');
+        const out = {};
+        /* LibreOffice's PDF of the sample report, into Word: the structure
+           comes back from where the words sit on the page. */
+        const bytes = Uint8Array.from(atob(pdfFix), (c) => c.charCodeAt(0));
+        const w = await run('report.pdf', bytes, 'office');
+        out.kind = document.querySelector('#br-kind').textContent;
+        out.note = (brNote(), document.querySelector('#br-note').textContent);
+        const html = w.file ? (await mam.convertToHtml({ arrayBuffer: await w.file.blob.arrayBuffer() })).value : '';
+        out.docx = { name: w.file && w.file.name, h1: /<h1>Quarterly report<\/h1>/.test(html), h2: /<h2>Highlights<\/h2>/.test(html),
+          para: /<p>This quarter went well, and better than planned\.<\/p>/.test(html), table: /<table>.*North.*120.*140.*<\/table>/.test(html), end: /Signed, the board &amp; staff &lt;team&gt;\./.test(html) };
+        const md = await run('report.pdf', bytes, 'plain');
+        out.md = md.file ? await md.file.blob.text() : '';
+        /* PDFs made here, to exercise what real ones do. */
+        const { jsPDF } = await brLib('jspdf', 'jspdf');
+        const d = new jsPDF();
+        d.setFontSize(11);
+        d.text('A long sentence that was set with an exam-', 20, 30); d.text('ple of a word split across two lines.', 20, 35);
+        d.text('7', 105, 290);
+        d.addPage(); d.text('Page 2 of 2', 90, 290); d.text('The second page has its own sentence.', 20, 30);
+        const h = await run('split.pdf', new Uint8Array(d.output('arraybuffer')), 'plain');
+        out.split = h.file ? await h.file.blob.text() : String(h.toast);
+        const pic = new jsPDF(); pic.setFillColor(40, 40, 40); pic.rect(20, 20, 150, 100, 'F');
+        out.scan = (await run('scan.pdf', new Uint8Array(pic.output('arraybuffer')), 'office')).toast;
+        const locked = new jsPDF({ encryption: { userPassword: 'secret', ownerPassword: 'owner', userPermissions: ['print'] } });
+        locked.text('Hidden text', 20, 20);
+        out.locked = (await run('locked.pdf', new Uint8Array(locked.output('arraybuffer')), 'office')).toast;
+        out.junk = (await run('junk.pdf', new TextEncoder().encode('this is not a pdf at all'), 'office')).toast;
+        brDownload = realDl; toast = realToast;
+        return out;
+      }, pdfFix);
+      check(/^PDF · \d+ words/.test(pdf.kind) && /headings, lists and simple tables come across/.test(pdf.note), `a PDF is read, and the note says what comes across: "${pdf.kind}"`);
+      check(pdf.docx.name === 'report.docx' && pdf.docx.h1 && pdf.docx.h2 && pdf.docx.para && pdf.docx.table && pdf.docx.end,
+        `a PDF into Word keeps its headings, paragraphs and table: ${JSON.stringify(pdf.docx)}`);
+      check(/- Revenue up 12%\n- Two new clients\n1\. Hire a designer\n2\. Open the Lisbon office/.test(pdf.md), 'and its bullet and numbered lists, bullets drawn in a symbol font included');
+      check(/an example of a word/.test(pdf.split), `a word split with a hyphen at a line's end is joined again: "${pdf.split.split('\n')[0]}"`);
+      check(!/^\s*7\s*$/m.test(pdf.split) && !/Page 2 of 2/.test(pdf.split) && /The second page has its own sentence/.test(pdf.split), 'page numbers are left out, and every page is read');
+      check(/no text in it/.test(pdf.scan || ''), `a PDF of pictures says there is no text to convert: "${pdf.scan}"`);
+      check(/locked with a password/.test(pdf.locked || ''), `a locked PDF says so: "${pdf.locked}"`);
+      check(/could not be read/.test(pdf.junk || ''), `and a file that only claims to be a PDF is refused: "${pdf.junk}"`);
     }
 
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */

@@ -27,6 +27,16 @@ const LIBS = [
     url: 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js' },
   { file: 'jspdf-2.5.1.umd.min.js',
     url: 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js' },
+  /* PDF.js, for reading PDFs in the Bridge. The legacy build, which supports
+     older engines than the modern one — the Linux app's webview is often a
+     few versions behind a browser. ES modules, saved as .js so every server
+     and the app's own asset protocol send a JavaScript type for them. Keep
+     it current: PDFs are the most hostile files the Bridge opens (a font bug
+     let a crafted PDF run code in 4.2.66 and earlier, CVE-2024-4367). */
+  { file: 'pdf-6.3.289.legacy.min.js',
+    url: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/legacy/build/pdf.min.mjs' },
+  { file: 'pdf.worker-6.3.289.legacy.min.js',
+    url: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/legacy/build/pdf.worker.min.mjs' },
 ];
 
 await mkdir(OUT, { recursive: true });
