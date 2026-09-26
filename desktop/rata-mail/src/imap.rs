@@ -2,8 +2,9 @@
 //!
 //! Two jobs, and the difference between them matters to the customer. `verify`
 //! runs once when a mailbox is linked: it finds the server, proves the password
-//! works, and says which provider it turned out to be. `fetch_inbox` runs on
-//! every refresh and brings back the newest messages.
+//! works, and says which provider it turned out to be. `fetch_newest` runs on
+//! every refresh and brings back the newest messages — from the inbox, and
+//! from the Sent folder, so a conversation shows both sides of it.
 //!
 //! Three things are worth knowing before reading the code:
 //!
@@ -61,17 +62,48 @@ pub struct Account {
     pub label: String,
 }
 
+/// Which folder of a mailbox a message lives in. A UID only means something
+/// inside its own folder, so every request about a message names this too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Folder {
+    #[default]
+    Inbox,
+    /// Mail the customer sent, from RATA or anywhere else — found by the
+    /// purpose the server declares for it (RFC 6154), or failing that by the
+    /// names providers give it.
+    Sent,
+}
+
+/// What Sent is called on servers that do not say which folder it is.
+const SENT_NAMES: &[&str] = &[
+    "Sent",
+    "Sent Items",
+    "Sent Messages",
+    "Sent Mail",
+    "INBOX.Sent",
+    "INBOX/Sent",
+    "INBOX.Sent Items",
+    "INBOX.Sent Messages",
+];
+
 /// One message, flattened to what a combined inbox actually shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Message {
     /// The account is part of the id: the same uid in two different mailboxes
-    /// must not collide once they are shown in one list.
+    /// must not collide once they are shown in one list. So is the folder,
+    /// for the same reason: `_sent_` for Sent.
     pub id: String,
+    pub folder: Folder,
     pub acct: String,
     pub acct_label: String,
     pub from_name: String,
     pub from_addr: String,
+    /// The first recipient — who a sent message went to.
+    pub to_name: String,
+    pub to_addr: String,
     pub subject: String,
     pub preview: String,
     pub body: String,
@@ -450,8 +482,13 @@ fn items() -> String {
     )
 }
 
-/// The newest `limit` messages in the inbox, newest first.
-pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fetched {
+/// The newest `limit` messages in the inbox, and the newest `limit` in Sent,
+/// newest first, on one connection.
+///
+/// Sent is a bonus rather than a condition: a mailbox without one, or whose
+/// Sent folder will not open, still brings its inbox. The inbox is what a
+/// refresh is for.
+pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fetched {
     let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
 
     let client = match open(resolver, &acct.host, port).await {
@@ -481,23 +518,95 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
         }
     };
 
+    let mut messages = match newest_in(&mut session, acct, Folder::Inbox, &mailbox, limit).await {
+        Ok(m) => m,
+        Err(failed) => return failed,
+    };
+    if let Selected::Open(sent) = select(&mut session, Folder::Sent).await
+        && let Ok(mut more) = newest_in(&mut session, acct, Folder::Sent, &sent, limit).await
+    {
+        messages.append(&mut more);
+        messages.sort_by(|a, b| b.ts.cmp(&a.ts));
+    }
+    let _ = timeout(COMMAND, session.logout()).await;
+    Fetched::Messages(messages)
+}
+
+/// The newest `limit` messages of a folder just selected.
+async fn newest_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: Folder,
+    mailbox: &async_imap::types::Mailbox,
+    limit: u32,
+) -> Result<Vec<Message>, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
     let generation = mailbox.uid_validity.unwrap_or(0);
     let total = mailbox.exists;
     if total == 0 || limit == 0 {
-        let _ = timeout(COMMAND, session.logout()).await;
-        return Fetched::Messages(vec![]);
+        return Ok(vec![]);
     }
     // `n:*` rather than `n:total`: the mailbox can grow between SELECT and
     // FETCH, and `*` means "whatever the last one is now".
     let from = total.saturating_sub(limit - 1).max(1);
     let range = format!("{from}:*");
+    read_range(session, acct, folder, &range, generation).await
+}
 
-    let messages = match read_range(&mut session, acct, &range, generation).await {
-        Ok(m) => m,
-        Err(failed) => return failed,
+/// How opening a folder went.
+enum Selected {
+    Open(async_imap::types::Mailbox),
+    /// This mailbox has no such folder.
+    Missing,
+    Failed,
+}
+
+/// Open `folder` for reading and acting on. Sent is looked for by the purpose
+/// the server declares for it, then by the names providers give it.
+async fn select<T>(session: &mut Session<T>, folder: Folder) -> Selected
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let name = match folder {
+        Folder::Inbox => "INBOX".to_string(),
+        Folder::Sent => match sent_name(session).await {
+            Some(n) => n,
+            None => return Selected::Missing,
+        },
     };
-    let _ = timeout(COMMAND, session.logout()).await;
-    Fetched::Messages(messages)
+    match timeout(COMMAND, session.select(&name)).await {
+        Ok(Ok(m)) => Selected::Open(m),
+        _ => Selected::Failed,
+    }
+}
+
+/// The name of this server's Sent folder, if it has one.
+async fn sent_name<T>(session: &mut Session<T>) -> Option<String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::types::NameAttribute as A;
+    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
+        .await
+        .ok()?
+        .ok()?;
+    let names: Vec<_> = stream.collect().await;
+    let usable: Vec<_> = names
+        .iter()
+        .flatten()
+        .filter(|n| !n.attributes().contains(&A::NoSelect))
+        .collect();
+    if let Some(n) = usable.iter().find(|n| n.attributes().contains(&A::Sent)) {
+        return Some(n.name().to_string());
+    }
+    SENT_NAMES.iter().find_map(|want| {
+        usable
+            .iter()
+            .find(|n| n.name().eq_ignore_ascii_case(want))
+            .map(|n| n.name().to_string())
+    })
 }
 
 /// The largest message RATA will download when one is opened. Mail providers
@@ -525,7 +634,13 @@ pub enum Whole {
 
 /// The whole of one message, by UID. Its size is asked first, so a message too
 /// large to be reasonable is refused before any of it is downloaded.
-pub async fn fetch_whole(resolver: &Resolver, acct: &Account, uid: u32, uidvalidity: u32) -> Whole {
+pub async fn fetch_whole(
+    resolver: &Resolver,
+    acct: &Account,
+    folder: Folder,
+    uid: u32,
+    uidvalidity: u32,
+) -> Whole {
     if uid == 0 || uidvalidity == 0 {
         return Whole::Stale("RATA has no server reference for this message.".into());
     }
@@ -544,23 +659,29 @@ pub async fn fetch_whole(resolver: &Resolver, acct: &Account, uid: u32, uidvalid
             return Whole::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = whole_in(&mut session, acct, uid, uidvalidity).await;
+    let found = whole_in(&mut session, acct, folder, uid, uidvalidity).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
 
-async fn whole_in<T>(session: &mut Session<T>, acct: &Account, uid: u32, uidvalidity: u32) -> Whole
+async fn whole_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: Folder,
+    uid: u32,
+    uidvalidity: u32,
+) -> Whole
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    match timeout(COMMAND, session.select("INBOX")).await {
-        Ok(Ok(m)) if m.uid_validity == Some(uidvalidity) => {}
-        Ok(Ok(_)) => {
+    match select(session, folder).await {
+        Selected::Open(m) if m.uid_validity == Some(uidvalidity) => {}
+        Selected::Open(_) | Selected::Missing => {
             return Whole::Stale(
                 "The mailbox has been reorganised since RATA last read it. Refresh, then open the message again.".into(),
             );
         }
-        _ => return Whole::Net(unreachable_msg(acct, "its inbox could not be opened")),
+        Selected::Failed => return Whole::Net(unreachable_msg(acct, &cannot_open(folder))),
     }
     let size = match timeout(
         COMMAND,
@@ -625,6 +746,7 @@ where
 pub async fn fetch_uids(
     resolver: &Resolver,
     acct: &Account,
+    folder: Folder,
     uids: &[u32],
     uidvalidity: u32,
 ) -> Fetched {
@@ -650,7 +772,7 @@ pub async fn fetch_uids(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = uids_in(&mut session, acct, &uids, uidvalidity).await;
+    let found = uids_in(&mut session, acct, folder, &uids, uidvalidity).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
@@ -658,29 +780,30 @@ pub async fn fetch_uids(
 async fn uids_in<T>(
     session: &mut Session<T>,
     acct: &Account,
+    folder: Folder,
     uids: &[u32],
     uidvalidity: u32,
 ) -> Fetched
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    match timeout(COMMAND, session.select("INBOX")).await {
-        Ok(Ok(m)) if m.uid_validity == Some(uidvalidity) => {}
+    match select(session, folder).await {
+        Selected::Open(m) if m.uid_validity == Some(uidvalidity) => {}
         // A rebuilt mailbox numbers its messages afresh: these UIDs could now
         // name different messages, and their text must not be put under the
         // old ones' names.
-        Ok(Ok(_)) => {
+        Selected::Open(_) | Selected::Missing => {
             return Fetched::Stale(
                 "The mailbox has been reorganised since RATA last read it. Refresh to pick it up again.".into(),
             );
         }
-        _ => return Fetched::Net(unreachable_msg(acct, "its inbox could not be opened")),
+        Selected::Failed => return Fetched::Net(unreachable_msg(acct, &cannot_open(folder))),
     }
     let stream = match timeout(COMMAND, session.uid_fetch(join(uids), items())).await {
         Ok(Ok(s)) => s,
         _ => return Fetched::Net(unreachable_msg(acct, "those messages could not be read")),
     };
-    match collect(stream, acct, uidvalidity).await {
+    match collect(stream, acct, folder, uidvalidity).await {
         // Only what was asked for: a server may volunteer others.
         Ok(m) => Fetched::Messages(m.into_iter().filter(|m| uids.contains(&m.uid)).collect()),
         Err(failed) => failed,
@@ -699,6 +822,7 @@ where
 pub async fn fetch_older(
     resolver: &Resolver,
     acct: &Account,
+    folder: Folder,
     before_uid: u32,
     uidvalidity: u32,
     limit: u32,
@@ -724,7 +848,7 @@ pub async fn fetch_older(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = older_in(&mut session, acct, before_uid, uidvalidity, limit).await;
+    let found = older_in(&mut session, acct, folder, before_uid, uidvalidity, limit).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
@@ -733,6 +857,7 @@ pub async fn fetch_older(
 async fn older_in<T>(
     session: &mut Session<T>,
     acct: &Account,
+    folder: Folder,
     before_uid: u32,
     uidvalidity: u32,
     limit: u32,
@@ -740,10 +865,12 @@ async fn older_in<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let mailbox = match timeout(COMMAND, session.select("INBOX")).await {
-        Ok(Ok(m)) => m,
-        _ => {
-            return Fetched::Net(unreachable_msg(acct, "its inbox could not be opened"));
+    let mailbox = match select(session, folder).await {
+        Selected::Open(m) => m,
+        // A Sent folder that has gone has nothing older in it.
+        Selected::Missing => return Fetched::Messages(vec![]),
+        Selected::Failed => {
+            return Fetched::Net(unreachable_msg(acct, &cannot_open(folder)));
         }
     };
     if mailbox.uid_validity != Some(uidvalidity) {
@@ -773,7 +900,7 @@ where
     }
     let from = older.saturating_sub(limit - 1).max(1);
     let range = format!("{from}:{older}");
-    match read_range(session, acct, &range, uidvalidity).await {
+    match read_range(session, acct, folder, &range, uidvalidity).await {
         // Filtered again by UID: if something was expunged between the count
         // and the fetch, positions shift, and a message RATA already has must
         // not come back as "older".
@@ -787,6 +914,7 @@ where
 async fn read_range<T>(
     session: &mut Session<T>,
     acct: &Account,
+    folder: Folder,
     range: &str,
     generation: u32,
 ) -> Result<Vec<Message>, Fetched>
@@ -805,11 +933,16 @@ where
             )));
         }
     };
-    collect(stream, acct, generation).await
+    collect(stream, acct, folder, generation).await
 }
 
 /// Messages out of a FETCH response, newest first.
-async fn collect<S>(stream: S, acct: &Account, generation: u32) -> Result<Vec<Message>, Fetched>
+async fn collect<S>(
+    stream: S,
+    acct: &Account,
+    folder: Folder,
+    generation: u32,
+) -> Result<Vec<Message>, Fetched>
 where
     S: futures::Stream<Item = Result<async_imap::types::Fetch, ImapError>>,
 {
@@ -826,7 +959,7 @@ where
             // on a server without UIDPLUS, or by another client — and showing
             // it would undo the delete on screen.
             Ok(Some(Ok(fetched))) if fetched.flags().any(|f| f == Flag::Deleted) => {}
-            Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, generation)),
+            Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, folder, generation)),
             Ok(Some(Err(ImapError::Io(e)))) => {
                 return Err(Fetched::Net(unreachable_msg(
                     acct,
@@ -907,6 +1040,7 @@ pub enum Acted {
 pub async fn act(
     resolver: &Resolver,
     acct: &Account,
+    folder: Folder,
     uids: &[u32],
     uidvalidity: u32,
     action: Action,
@@ -933,23 +1067,35 @@ pub async fn act(
             return Acted::Net(unreachable_msg(acct, &why));
         }
     };
-    let done = apply(&mut session, &uids, uidvalidity, action).await;
+    let done = apply(&mut session, folder, &uids, uidvalidity, action).await;
     let _ = timeout(COMMAND, session.logout()).await;
     done
 }
 
 /// The part of [`act`] that talks to an already-signed-in session. Generic
 /// over the stream so it can be driven by a scripted server in tests.
-async fn apply<T>(session: &mut Session<T>, uids: &[u32], uidvalidity: u32, action: Action) -> Acted
+async fn apply<T>(
+    session: &mut Session<T>,
+    folder: Folder,
+    uids: &[u32],
+    uidvalidity: u32,
+    action: Action,
+) -> Acted
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
     let failed = |what: &str, e: ImapError| Acted::Net(format!("The server would not {what}: {e}"));
 
-    let mailbox = match timeout(COMMAND, session.select("INBOX")).await {
-        Ok(Ok(m)) => m,
-        Ok(Err(e)) => return failed("open the inbox", e),
-        Err(_) => return Acted::Net("The server did not open the inbox in time.".into()),
+    let mailbox = match select(session, folder).await {
+        Selected::Open(m) => m,
+        Selected::Missing => {
+            return Acted::Stale(
+                "This mailbox no longer has that folder, so nothing was changed. Refresh and try again.".into(),
+            );
+        }
+        Selected::Failed => {
+            return Acted::Net(format!("The server would not {}.", cannot_open(folder)));
+        }
     };
     if mailbox.uid_validity != Some(uidvalidity) {
         return Acted::Stale(
@@ -1089,6 +1235,14 @@ where
     found.map(|n| n.name().to_string())
 }
 
+/// "its inbox could not be opened", for whichever folder it was.
+fn cannot_open(folder: Folder) -> String {
+    match folder {
+        Folder::Inbox => "its inbox could not be opened".into(),
+        Folder::Sent => "its Sent folder could not be opened".into(),
+    }
+}
+
 /// A refresh that failed for a reason worth keeping. The cause is carried
 /// through rather than summarised away: "could not be reached" is the same
 /// sentence for an expired certificate, a blocked port and a dead wifi
@@ -1129,9 +1283,10 @@ fn thread_id(raw: &[u8]) -> String {
 }
 
 /// One IMAP response into one message.
-fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Message {
+fn build(acct: &Account, f: &async_imap::types::Fetch, folder: Folder, generation: u32) -> Message {
     let env = f.envelope();
     let sender = env.and_then(|e| e.from.as_ref()).and_then(|a| a.first());
+    let recipient = env.and_then(|e| e.to.as_ref()).and_then(|a| a.first());
     let address = |a: &async_imap::imap_proto::types::Address| {
         let mbox = a.mailbox.as_deref().unwrap_or_default();
         let host = a.host.as_deref().unwrap_or_default();
@@ -1175,6 +1330,13 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
             }
         });
 
+    let to_addr = recipient.map(address).unwrap_or_default();
+    let to_name = recipient
+        .and_then(|a| a.name.as_deref())
+        .map(words::decode)
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| to_addr.clone());
+
     let subject = env
         .and_then(|e| e.subject.as_deref())
         .map(words::decode)
@@ -1202,8 +1364,13 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
     }
 
     let uid = f.uid.unwrap_or(f.message);
+    let place = match folder {
+        Folder::Inbox => "",
+        Folder::Sent => "sent_",
+    };
     Message {
-        id: format!("{}_{}", mail_key(&acct.email), uid),
+        id: format!("{}_{place}{uid}", mail_key(&acct.email)),
+        folder,
         acct: acct.email.clone(),
         acct_label: if acct.label.is_empty() {
             acct.email.clone()
@@ -1212,6 +1379,8 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
         },
         from_name,
         from_addr,
+        to_name,
+        to_addr,
         subject,
         body: if text.text.is_empty() {
             "(This message has no text RATA can show. Open it in your provider's own app to see it.)"
@@ -1474,7 +1643,7 @@ mod tests {
         rt_act().block_on(async {
             // RATA holds 40, 50, 60; ask for two older than 40.
             let (mut s, log) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
-            let got = older_in(&mut s, &me(), 40, 7, 2).await;
+            let got = older_in(&mut s, &me(), Folder::Inbox, 40, 7, 2).await;
             assert_eq!(uids_of(got), vec![30, 20], "newest first, nothing RATA has");
             let log = log.lock().unwrap();
             assert!(log.iter().any(|c| c.starts_with("FETCH 2:3 ")), "{log:?}");
@@ -1487,7 +1656,7 @@ mod tests {
             // RATA's oldest was 40, which has since been deleted on a phone.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), 40, 7, 2).await),
+                uids_of(older_in(&mut s, &me(), Folder::Inbox, 40, 7, 2).await),
                 vec![30, 20]
             );
         });
@@ -1500,7 +1669,7 @@ mod tests {
             // skip 60; it must come back as older.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), 70, 7, 2).await),
+                uids_of(older_in(&mut s, &me(), Folder::Inbox, 70, 7, 2).await),
                 vec![60, 50]
             );
         });
@@ -1511,7 +1680,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), 10, 7, 50).await),
+                uids_of(older_in(&mut s, &me(), Folder::Inbox, 10, 7, 50).await),
                 Vec::<u32>::new()
             );
             assert!(
@@ -1526,7 +1695,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert!(matches!(
-                older_in(&mut s, &me(), 30, 9, 50).await,
+                older_in(&mut s, &me(), Folder::Inbox, 30, 9, 50).await,
                 Fetched::Stale(_)
             ));
             assert!(
@@ -1546,7 +1715,7 @@ mod tests {
             loop {
                 let (mut s, _) = scripted_inbox(inbox, 7).await;
                 let oldest = *seen.iter().min().unwrap();
-                let page = uids_of(older_in(&mut s, &me(), oldest, 7, 3).await);
+                let page = uids_of(older_in(&mut s, &me(), Folder::Inbox, oldest, 7, 3).await);
                 if page.is_empty() {
                     break;
                 }
@@ -1580,7 +1749,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, &[42, 43, 57], 7, Action::Trash).await,
+                apply(&mut s, Folder::Inbox, &[42, 43, 57], 7, Action::Trash).await,
                 Acted::Done {
                     done: vec![42, 57],
                     gone: vec![43]
@@ -1616,7 +1785,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Read).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Read).await,
+                done(&[42])
+            );
             let log = log.lock().unwrap();
             assert!(
                 log.iter()
@@ -1639,7 +1811,7 @@ mod tests {
             })
             .await;
             assert!(matches!(
-                apply(&mut s, &[42], 9, Action::Trash).await,
+                apply(&mut s, Folder::Inbox, &[42], 9, Action::Trash).await,
                 Acted::Stale(_)
             ));
             let log = log.lock().unwrap();
@@ -1662,7 +1834,7 @@ mod tests {
             .await;
             // Not a failure: what the customer wanted is already true.
             assert_eq!(
-                apply(&mut s, &[42], 7, Action::Trash).await,
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
                 Acted::Done {
                     done: vec![],
                     gone: vec![42]
@@ -1682,7 +1854,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                done(&[42])
+            );
             let log = log.lock().unwrap();
             assert!(
                 log.iter().any(|c| c == "UID MOVE 42 \"Deleted Items\""),
@@ -1707,7 +1882,7 @@ mod tests {
             })
             .await;
             assert!(matches!(
-                apply(&mut s, &[42], 7, Action::Trash).await,
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
                 Acted::NoPlace(_)
             ));
             assert!(changed(&log.lock().unwrap()).is_empty());
@@ -1724,7 +1899,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Archive).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Archive).await,
+                done(&[42])
+            );
             assert!(
                 log.lock()
                     .unwrap()
@@ -1740,7 +1918,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                done(&[42])
+            );
             assert!(
                 log.lock()
                     .unwrap()
@@ -1760,7 +1941,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                done(&[42])
+            );
             let log = log.lock().unwrap();
             assert!(
                 log.iter().any(|c| c == "UID COPY 42 \"Deleted Items\""),
@@ -1787,7 +1971,10 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert_eq!(apply(&mut s, &[42], 7, Action::Trash).await, done(&[42]));
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                done(&[42])
+            );
             assert!(
                 !log.lock()
                     .unwrap()
@@ -1859,7 +2046,7 @@ mod tests {
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             for host in ["127.0.0.1", "192.168.1.1", "localhost", "::ffff:7f00:1"] {
-                match fetch_inbox(&r, &acct(host), 15).await {
+                match fetch_newest(&r, &acct(host), 15).await {
                     Fetched::Host(why) => assert!(
                         why.contains("private network") || why.contains("not a public"),
                         "{host}: {why}"
@@ -1875,7 +2062,7 @@ mod tests {
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             let host = format!("nx-{}.invalid", std::process::id());
-            match fetch_inbox(&r, &acct(&host), 15).await {
+            match fetch_newest(&r, &acct(&host), 15).await {
                 // Net, emphatically not Auth: the caller stops retrying a
                 // mailbox on Auth, and a DNS outage must not unlink everybody.
                 Fetched::Net(why) => assert!(why.contains("did not sync"), "{why}"),
@@ -1960,7 +2147,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             // 25 was never there; 20 and 30 are.
-            let got = uids_in(&mut s, &me(), &[20, 25, 30], 7).await;
+            let got = uids_in(&mut s, &me(), Folder::Inbox, &[20, 25, 30], 7).await;
             let Fetched::Messages(m) = got else {
                 panic!("{got:?}")
             };
@@ -1988,7 +2175,7 @@ mod tests {
     fn stored_mail_is_not_re_read_from_a_rebuilt_mailbox() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20], 8).await;
-            let got = uids_in(&mut s, &me(), &[10], 7).await;
+            let got = uids_in(&mut s, &me(), Folder::Inbox, &[10], 7).await;
             assert!(matches!(got, Fetched::Stale(_)), "{got:?}");
             assert!(
                 !log.lock()
@@ -2005,7 +2192,7 @@ mod tests {
     fn an_opened_message_arrives_whole_and_decoded() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20], 7).await;
-            let Whole::Raw(raw) = whole_in(&mut s, &me(), 20, 7).await else {
+            let Whole::Raw(raw) = whole_in(&mut s, &me(), Folder::Inbox, 20, 7).await else {
                 panic!("expected the message")
             };
             assert_eq!(body::read_whole(&raw).text, "Body of 20 — café");
@@ -2028,7 +2215,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[99], 7).await;
             assert!(matches!(
-                whole_in(&mut s, &me(), 99, 7).await,
+                whole_in(&mut s, &me(), Folder::Inbox, 99, 7).await,
                 Whole::TooLarge(_)
             ));
             assert!(!log.lock().unwrap().iter().any(|c| c.contains("BODY.PEEK")));
@@ -2039,10 +2226,13 @@ mod tests {
     fn a_message_that_has_gone_says_so() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_inbox(&[10], 7).await;
-            assert!(matches!(whole_in(&mut s, &me(), 11, 7).await, Whole::Gone));
+            assert!(matches!(
+                whole_in(&mut s, &me(), Folder::Inbox, 11, 7).await,
+                Whole::Gone
+            ));
             let (mut s, _) = scripted_inbox(&[10], 8).await;
             assert!(matches!(
-                whole_in(&mut s, &me(), 10, 7).await,
+                whole_in(&mut s, &me(), Folder::Inbox, 10, 7).await,
                 Whole::Stale(_)
             ));
         });
@@ -2074,7 +2264,10 @@ mod tests {
     fn fetched_mail_carries_what_a_reply_needs() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_inbox(&[7, 9], 5).await;
-            let got = read_range(&mut s, &me(), "1:2", 5).await.ok().unwrap();
+            let got = read_range(&mut s, &me(), Folder::Inbox, "1:2", 5)
+                .await
+                .ok()
+                .unwrap();
             let seven = got.iter().find(|m| m.uid == 7).unwrap();
             assert_eq!(seven.message_id, "m7@example.org");
             // Decoded, not shown as the quoted-printable it arrived in.
@@ -2084,6 +2277,213 @@ mod tests {
             // The fixture's Reply-To is the sender again, which is what servers
             // fill in when none was set; that is not worth keeping.
             assert_eq!(seven.reply_to, "");
+        });
+    }
+
+    // ----------------------------------------------------------- sent tests
+    //
+    // A scripted server with an inbox and a Sent folder under whatever name
+    // `list` gives it, each with its own UIDs and UIDVALIDITY. What is under
+    // test is which folder RATA opens, and what it calls what it finds there.
+
+    async fn scripted_folders(
+        list: &'static str,
+        sent: &'static str,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            // Which folder is selected: the inbox holds UIDs 1..=3 under
+            // UIDVALIDITY 7, Sent holds 11..=12 under 8.
+            let mut in_sent = false;
+            let full = |seq: usize, uid: u32| {
+                let body = format!(
+                    "From: Me <me@example.com>\r\nTo: Bo Li <bo@example.org>\r\nSubject: Sent {uid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nWhat I wrote in {uid}\r\n"
+                );
+                format!(
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Sent {uid}\" ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Bo Li\" NIL \"bo\" \"example.org\")) NIL NIL NIL \"<s{uid}@example.com>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
+                    uid,
+                    body.len()
+                )
+            };
+            while let Ok(Some(line)) = lines.next_line().await {
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                log.lock().unwrap().push(cmd.to_string());
+                let up = cmd.to_ascii_uppercase();
+                let body = if up.starts_with("LIST") {
+                    list.to_string()
+                } else if up.starts_with("SELECT") {
+                    let name = cmd[6..].trim().trim_matches('"');
+                    in_sent = name == sent;
+                    if in_sent {
+                        "* 2 EXISTS\r\n* OK [UIDVALIDITY 8] ok\r\n".to_string()
+                    } else {
+                        "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n".to_string()
+                    }
+                } else if up.starts_with("FETCH") {
+                    let uids: &[u32] = if in_sent { &[11, 12] } else { &[1, 2, 3] };
+                    uids.iter()
+                        .enumerate()
+                        .map(|(i, u)| full(i + 1, *u))
+                        .collect()
+                } else if up.starts_with("UID FETCH") {
+                    let uids: &[u32] = if in_sent { &[11, 12] } else { &[1, 2, 3] };
+                    let asked = cmd.split_whitespace().nth(2).unwrap_or("");
+                    asked
+                        .split(',')
+                        .filter_map(|u| u.parse::<u32>().ok())
+                        .filter(|u| uids.contains(u))
+                        .enumerate()
+                        .map(|(i, u)| format!("* {} FETCH (UID {u})\r\n", i + 1))
+                        .collect()
+                } else if up.starts_with("CAPABILITY") {
+                    "* CAPABILITY IMAP4rev1 MOVE\r\n".to_string()
+                } else {
+                    String::new()
+                };
+                if w.write_all(format!("{body}{tag} OK done\r\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        let session = client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap();
+        (session, seen)
+    }
+
+    const OUTLOOK: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"Sent Items\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"Deleted Items\"\r\n";
+    const GMAIL_SENT: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n";
+    /// An older server that declares nothing: Sent is known by its name.
+    const DOVECOT_OLD: &str = "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Drafts\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Sent\"\r\n";
+    /// A decoy: a folder merely containing the word is not Sent.
+    const NO_SENT: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \"/\" \"Unsent ideas\"\r\n";
+
+    fn selected(log: &[String]) -> Vec<String> {
+        log.iter()
+            .filter(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+            .map(|c| c[6..].trim().trim_matches('"').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn sent_is_found_by_what_the_server_says_it_is() {
+        rt_act().block_on(async {
+            for (list, name) in [
+                (OUTLOOK, "Sent Items"),
+                (GMAIL_SENT, "[Gmail]/Sent Mail"),
+                (DOVECOT_OLD, "INBOX.Sent"),
+            ] {
+                let (mut s, log) = scripted_folders(list, name).await;
+                assert!(matches!(select(&mut s, Folder::Sent).await, Selected::Open(m) if m.uid_validity == Some(8)), "{name}");
+                assert_eq!(selected(&log.lock().unwrap()), vec![name.to_string()]);
+            }
+        });
+    }
+
+    #[test]
+    fn a_mailbox_without_sent_opens_nothing() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(NO_SENT, "Sent").await;
+            assert!(matches!(
+                select(&mut s, Folder::Sent).await,
+                Selected::Missing
+            ));
+            assert!(
+                selected(&log.lock().unwrap()).is_empty(),
+                "nothing was opened"
+            );
+            // And the inbox is still read, with nothing from Sent.
+            let Selected::Open(inbox) = select(&mut s, Folder::Inbox).await else {
+                panic!("the inbox opens");
+            };
+            let got = newest_in(&mut s, &me(), Folder::Inbox, &inbox, 15)
+                .await
+                .unwrap();
+            assert_eq!(got.len(), 3);
+            assert!(
+                got.iter()
+                    .all(|m| m.folder == Folder::Inbox && !m.id.contains("_sent_"))
+            );
+        });
+    }
+
+    #[test]
+    fn sent_mail_has_ids_of_its_own_and_says_who_it_went_to() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_folders(OUTLOOK, "Sent Items").await;
+            let Selected::Open(sent) = select(&mut s, Folder::Sent).await else {
+                panic!("Sent opens");
+            };
+            let got = newest_in(&mut s, &me(), Folder::Sent, &sent, 15)
+                .await
+                .unwrap();
+            let ids: Vec<&str> = got.iter().map(|m| m.id.as_str()).collect();
+            let key = mail_key("me@example.com");
+            assert_eq!(
+                ids,
+                vec![format!("{key}_sent_12"), format!("{key}_sent_11")]
+            );
+            let m = &got[0];
+            assert_eq!(m.folder, Folder::Sent);
+            assert_eq!(
+                (m.to_name.as_str(), m.to_addr.as_str()),
+                ("Bo Li", "bo@example.org")
+            );
+            assert_eq!(m.uidvalidity, 8);
+            assert_eq!(m.message_id, "s12@example.com");
+            assert!(m.body.contains("What I wrote in 12"));
+        });
+    }
+
+    #[test]
+    fn acting_on_sent_mail_happens_in_sent() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(OUTLOOK, "Sent Items").await;
+            assert_eq!(
+                apply(&mut s, Folder::Sent, &[11], 8, Action::Trash).await,
+                Acted::Done {
+                    done: vec![11],
+                    gone: vec![]
+                }
+            );
+            let log = log.lock().unwrap();
+            assert_eq!(selected(&log), vec!["Sent Items".to_string()]);
+            assert!(
+                log.iter().any(|c| c
+                    .to_ascii_uppercase()
+                    .starts_with("UID MOVE 11 \"DELETED ITEMS\"")),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_sent_uid_is_never_used_in_the_inbox() {
+        rt_act().block_on(async {
+            // UID 2 exists in the inbox, under UIDVALIDITY 7. Asked about as
+            // Sent (UIDVALIDITY 8), it must not touch the inbox's message 2.
+            let (mut s, log) = scripted_folders(OUTLOOK, "Sent Items").await;
+            assert!(matches!(
+                apply(&mut s, Folder::Sent, &[2], 7, Action::Trash).await,
+                Acted::Stale(_)
+            ));
+            assert!(changed(&log.lock().unwrap()).is_empty());
         });
     }
 }

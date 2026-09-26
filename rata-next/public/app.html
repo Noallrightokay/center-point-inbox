@@ -1359,13 +1359,21 @@ const isGone=id=>!!(S.gone&&S.gone[id]);
    and says why. */
 const OLDER_PAGE=50,STORE_SOFT_CAP=3500000;
 function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).label||m.acct||'').toLowerCase()}
+/* Which folder of its mailbox a message is in (0.1.22): the inbox, or Sent.
+   A UID only means something inside its folder, so every request about a
+   message names it. Mail stored before 0.1.22 is all from the inbox. */
+const folderOf=m=>m&&m.folder==='sent'?'sent':'inbox';
+/* Each folder's history is walked on its own and ends on its own:
+   historyDone for the inbox, sentDone for Sent. */
+const FOLDER_DONE={inbox:'historyDone',sent:'sentDone'};
 function olderCandidates(only){
-  return S.linked.filter(l=>l.type==='mail'&&!l.historyDone&&(!only||l.label.toLowerCase()===String(only).toLowerCase()));
+  return S.linked.filter(l=>l.type==='mail'&&(!only||l.label.toLowerCase()===String(only).toLowerCase())
+    &&(!l.historyDone||(!l.sentDone&&oldestRef(l.label,'sent'))));
 }
-function oldestRef(email){
+function oldestRef(email,folder='inbox'){
   let best=null;const want=String(email).toLowerCase();
   for(const m of S.messages){
-    if(m.prov!=='imap'||!m.uid||!m.uidvalidity||mailEmailOf(m)!==want)continue;
+    if(m.prov!=='imap'||!m.uid||!m.uidvalidity||folderOf(m)!==folder||mailEmailOf(m)!==want)continue;
     if(!best||m.uid<best.uid)best=m;
   }
   return best;
@@ -1377,20 +1385,19 @@ async function loadOlder(only,quiet){
     return;
   }
   let added=0,finished=0;const notes=[];
-  for(const l of olderCandidates(only)){
-    const ref=oldestRef(l.label);if(!ref)continue;
+  for(const l of olderCandidates(only))for(const folder of ['inbox','sent']){
+    if(l[FOLDER_DONE[folder]])continue;
+    const ref=oldestRef(l.label,folder);if(!ref)continue;
     let r;
-    try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label,beforeUid:ref.uid,uidvalidity:ref.uidvalidity,limit:OLDER_PAGE})})}
+    try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label,folder,beforeUid:ref.uid,uidvalidity:ref.uidvalidity,limit:OLDER_PAGE})})}
     catch(e){r={error:String(e&&e.message||e)}}
     if(!r||r.error){notes.push(l.label+': '+((r&&r.error)||'no answer'));continue}
     const got=r.messages||[];
-    if(!got.length){l.historyDone=true;finished++;continue}
+    if(!got.length){l[FOLDER_DONE[folder]]=true;if(folder==='inbox')finished++;continue}
     for(const m of got){
       if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
-      const owner=linkedFind('mail',m.acct||'');
-      const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
-      S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
-      added++;
+      S.messages.push(mailRecord(m));
+      if(!m.sent)added++;
     }
   }
   save();renderSyncAll();renderMailFilters();renderMail();
@@ -1426,7 +1433,7 @@ function frameDoc(html,images){
 }
 async function openWhole(m){
   let r;
-  try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
+  try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
   catch(e){r={error:String(e&&e.message||e)}}
   if(!r||r.error){OPENED.set(m.id,{text:await bodyOf(m),truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
   OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[],html:r.html||null,remoteImages:!!r.remoteImages});
@@ -1441,7 +1448,7 @@ async function saveAttachment(m,a,btn){
   if(!a)return;
   if(btn)btn.disabled=true;
   let r;
-  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected)btn.disabled=false;
   if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path);toast('Saved to '+r.path)}
@@ -1456,7 +1463,7 @@ async function convertAttachment(m,a,btn){
   if(!a)return;
   if(btn){btn.disabled=true;btn.textContent='Opening\u2026'}
   let r;
-  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Convert'}
   if(!r||!r.ok){toast('Could not open '+a.n+' \u2014 '+((r&&r.error)||'try again'));return}
@@ -1488,16 +1495,16 @@ async function rereadBodies(msgs){
   if(!window.__RATA_NATIVE__||!msgs.length)return 0;
   const groups=new Map();
   for(const m of msgs){
-    const k=mailEmailOf(m)+'|'+m.uidvalidity;
+    const k=mailEmailOf(m)+'|'+m.uidvalidity+'|'+folderOf(m);
     if(!groups.has(k))groups.set(k,[]);
     groups.get(k).push(m);
   }
   let fixed=0;
   for(const [k,list] of groups){
-    const [email,uv]=k.split('|');
+    const [email,uv,folder]=k.split('|');
     const pick=list.sort((a,b)=>b.ts-a.ts).slice(0,REREAD_PAGE);
     let r;
-    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,uids:pick.map(m=>m.uid),uidvalidity:+uv})})}
+    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,folder,uids:pick.map(m=>m.uid),uidvalidity:+uv})})}
     catch(e){continue}
     if(!r||r.error)continue;
     for(const got of (r.messages||[])){
@@ -1527,8 +1534,8 @@ async function serverAct(msgs,action){
     if(m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
     const email=(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
     if(!email)continue;
-    const k=email+'|'+m.uidvalidity;
-    if(!groups.has(k))groups.set(k,{email,uidvalidity:m.uidvalidity,uids:[]});
+    const k=email+'|'+m.uidvalidity+'|'+folderOf(m);
+    if(!groups.has(k))groups.set(k,{email,folder:folderOf(m),uidvalidity:m.uidvalidity,uids:[]});
     groups.get(k).uids.push(m.uid);
   }
   const problems=[];
@@ -1886,12 +1893,14 @@ function setSplit(on){
 
 function mailRowHTML(m){
   const nm=msgFrom(m);
+  /* Sent mail is listed by who it went to, not by "you". */
+  const shown=m.sent?'To: '+(contact(m.toId)?.name||m.toName||'(no recipient)'):nm;
   return `
     <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
       <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
       <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
       <div class="m-body">
-        <div class="m-line1"><span class="m-from">${esc(nm)}</span><span class="m-time">${rel(m.ts)}</span></div>
+        <div class="m-line1"><span class="m-from">${esc(shown)}</span><span class="m-time">${rel(m.ts)}</span></div>
         ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:'<div class="m-subj none">(no subject)</div>'}
         <div class="m-prev">${esc(m.prev)}</div>
         <div class="m-meta">
@@ -2193,7 +2202,9 @@ function openMail(id){
   const d=$('#mail-detail');
   d.classList.add('open');
   const nm=msgFrom(m);
-  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity;
+  /* Mail from Sent is on the server like the inbox's; RATA's own record of
+     something it sent is not. */
+  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&(!m.sent||folderOf(m)==='sent')&&m.uid&&m.uidvalidity;
   const whole=OPENED.get(id);
   /* The text is read from disk when it is not to hand, and the message
      drawn again once it is — a few milliseconds. */
@@ -2219,11 +2230,11 @@ function openMail(id){
       <h2>${esc(m.subj||chan(m.ch).label+' message')}</h2>
       <div class="md-fromline">
         <div class="avatar" style="background:${avColor(nm)}">${initials(nm)}</div>
-        <div class="md-fromtext"><b>${esc(nm)}</b><span>${esc((m.fromAddr||(c&&c.addr)||''))} · <span class="badge ${m.prov||'email'}">${esc(m.prov||'email')}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
+        <div class="md-fromtext"><b>${esc(nm)}</b><span>${m.sent?'To '+esc(m.toAddr||m.toName||''):esc((m.fromAddr||(c&&c.addr)||''))} · <span class="badge ${m.prov||'email'}">${esc(m.prov||'email')}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
       </div>
       <div class="md-actions">
         ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
-        ${!m.sent?'<button class="btn" id="md-forward">Forward</button>':''}
+        ${!m.sent||folderOf(m)==='sent'?'<button class="btn" id="md-forward">Forward</button>':''}
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
         <div class="md-sortwrap"><button class="btn" id="md-move">Sort ▾</button><div class="md-sortmenu" id="md-sortmenu">${Object.entries(CATS).map(([c,l])=>`<button data-mv="${c}">${l}</button>`).join('')}<label><input type="checkbox" id="mv-always"> Always from this sender</label></div></div>
@@ -2231,7 +2242,7 @@ function openMail(id){
         ${window.__RATA_NATIVE__&&!m.sent?'<button class="btn" id="md-translate">\u21c4 Translate</button>':''}
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
-        ${m.prov==='imap'&&m.uid?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${m.prov==='imap'&&m.uid&&!m.sent?'<button class="btn" id="md-archive">Archive</button>':''}
         <button class="btn danger" id="md-del">Delete</button>
       </div>
     </div>
@@ -3001,7 +3012,7 @@ async function forwardMessage(m,targetAcctId){
   const text=whole&&!whole.error?whole.text:String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
-  if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
+  if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
   DRAFT={kind:'forward'};renderDraftHead();
   renderCmpFiles();liveScan();
   const b=$('#cmp-body');b.setSelectionRange(0,0);b.scrollTop=0;
@@ -3135,7 +3146,7 @@ $('#cmp-send').onclick=async()=>{
   const acctSel=prov;
   const acct=S.linked.find(l=>l.id===acctSel);
   const mAcct=acct&&acct.type==='mail'?acct:null;
-  let realSent=false;
+  let realSent=false,sentId='';
   const files=CMP_FILES.slice();
   const fwd=CMP_FWD&&CMP_FWD.atts.length?CMP_FWD:null;
   if((files.length||fwd)&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
@@ -3149,9 +3160,9 @@ $('#cmp-send').onclick=async()=>{
       sb.textContent='Sending…';
       const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
-          forward:fwd?{email:fwd.email,uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
+          forward:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
       if(!r.ok)throw new Error(r.error||'send failed');
-      realSent=true;
+      realSent=true;sentId=r.messageId||'';
     }catch(e){
       sb.disabled=false;sb.textContent='Send';
       toast(e.message==='needs-the-app'
@@ -3161,7 +3172,7 @@ $('#cmp-send').onclick=async()=>{
     }
     sb.disabled=false;sb.textContent='Send';
   }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
     atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
@@ -3364,6 +3375,25 @@ async function serverSync(p){
   }
 }
 
+/* A message from the app as RATA keeps it: whose mailbox, and who it is
+   with — the sender for mail received, the recipient for mail sent, so both
+   sides of a conversation land in that person's thread in People. */
+function mailRecord(m){
+  const owner=linkedFind('mail',m.acct||'');
+  const addr=String((m.sent?m.toAddr:m.fromAddr)||'').toLowerCase();
+  const match=addr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===addr):null;
+  return Object.assign({cid:m.sent?null:(match?match.id:null),...(m.sent?{toId:match?match.id:null}:{}),acct:owner?owner.id:undefined,real:true,atts:[]},m);
+}
+/* RATA's own record of a message it sent that this copy from Sent is: the
+   same Message-ID — or, for mail sent before RATA kept that (0.1.22), the
+   same subject to the same address within a quarter of an hour. */
+function localTwin(m){
+  const to=String(m.toAddr||'').toLowerCase();
+  return S.messages.find(x=>x.sent&&!x.uid&&String(x.id).startsWith('x')&&(x.acct===(linkedFind('mail',m.acct||'')||{}).id)&&(
+    (m.messageId&&x.messageId)?x.messageId===m.messageId
+      :(!x.messageId&&(x.subj||'')===(m.subj||'')&&Math.abs((x.ts||0)-(m.ts||0))<15*60e3&&!!to&&String(x.toName||'').toLowerCase().includes(to))
+  ))||null;
+}
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
    says so by name rather than sinking the whole refresh. */
@@ -3388,15 +3418,18 @@ async function absorbMail(res){
   }
   for(const m of (res.messages||[])){
     if(isGone(m.id))continue;
+    /* A message sent from RATA, now back from the Sent folder the provider
+       filed it in: the server's copy takes the place of RATA's own record,
+       rather than the list showing it twice. */
+    if(m.sent){const twin=localTwin(m);if(twin)S.messages=S.messages.filter(x=>x!==twin)}
     /* Already here: take the server's word on read and starred — it is the
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
     if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;continue}
-    const owner=linkedFind('mail',m.acct||'');
-    const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
-    S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
-    added++;newIds.push(m.id);
+    S.messages.push(mailRecord(m));
+    if(!m.sent)added++;
+    newIds.push(m.id);
   }
   save();
   setTimeout(upgradeBodies,0);

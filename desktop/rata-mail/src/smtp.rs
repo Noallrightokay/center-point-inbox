@@ -55,7 +55,15 @@ fn data_timeout(len: usize) -> Duration {
 pub enum Sent {
     /// Accepted, and by whom — worth showing, because "sent via
     /// smtp-mail.outlook.com" is the answer to "did it actually go?".
-    Ok { via: String, id: String },
+    ///
+    /// `message_id` is the Message-ID RATA wrote into it, without the angle
+    /// brackets — how the copy the provider files in Sent is recognised as
+    /// this same message.
+    Ok {
+        via: String,
+        id: String,
+        message_id: String,
+    },
     /// Refused before a socket was opened.
     Host(String),
     /// The server rejected the password. Every remaining candidate is the same
@@ -187,7 +195,9 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let body = render(msg, &now_rfc2822(), &message_id(msg, nanos));
+    let unique = message_id(msg, nanos);
+    let written = format!("{unique}@{}", msg.from.domain());
+    let body = render(msg, &now_rfc2822(), &unique);
 
     let hosts = smtp_candidates(&acct.host, &acct.email);
     let mut blocked: Option<String> = None;
@@ -196,7 +206,13 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
     for host in &hosts {
         for (port, implicit) in SMTP_PORTS {
             match attempt(resolver, acct, host, port, implicit, &body).await {
-                Sent::Ok { via, id } => return Sent::Ok { via, id },
+                Sent::Ok { via, id, .. } => {
+                    return Sent::Ok {
+                        via,
+                        id,
+                        message_id: written,
+                    };
+                }
                 // The password is wrong, or the message itself was refused.
                 // Another port would produce the same answer, and repeating a
                 // rejected password is how accounts get locked.
@@ -330,6 +346,7 @@ async fn attempt(
     Sent::Ok {
         via: format!("{host}:{port}"),
         id: accepted.text.clone(),
+        message_id: String::new(),
     }
 }
 

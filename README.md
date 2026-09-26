@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 145 tests, no network required
+cargo test          # 150 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 46 tests
+cargo test          # 55 tests
 ```
 
 On Linux you need the system webview first:
@@ -202,7 +202,8 @@ Be realistic about this before promising anything to a customer.
 - Adding a mailbox by address and app password
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
-- Fetching the newest messages from INBOX, several mailboxes at once
+- Fetching the newest messages from the inbox and the Sent folder, several
+  mailboxes at once, so a conversation shows both sides
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
 - A guard that stops a hostile mail server redirecting the app at your own LAN
@@ -217,7 +218,9 @@ Be realistic about this before promising anything to a customer.
   the mailbox: start-up reads every message's details (about 0.75 s at
   10,000), and a search reads through all the text on disk (about half a
   second at 10,000).
-- **INBOX only.** No other folders are shown.
+- **The inbox and Sent only.** Drafts, archive, spam and your own folders are
+  not shown. Mail sent from RATA appears in Sent only if the provider files
+  it there (Gmail and Outlook do); RATA does not add it itself.
 - **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
   — MIME, quoted-printable, base64, any charset — and an HTML-only message is
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).
