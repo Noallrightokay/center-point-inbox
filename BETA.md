@@ -94,7 +94,9 @@ Don't spend time reporting these — they are known and planned:
   link can say anything, so check it is the site you expected. In the
   **Text** view each address is shown in full and opens straight away. A
   link to an email address opens RATA's own composer. Report any link that
-  does nothing, or opens the wrong thing. Report any message that looks broken
+  does nothing, or opens the wrong thing. From v0.1.15, closing the composer
+  keeps the whole draft — a forward keeps its files, a reply its thread — and
+  **Discard** at the top starts a blank message. Report any message that looks broken
   formatted — with its sender — as well as any that shows raw code. From v0.1.8, opening a long
   message loads all of it, and **attachments** are listed on the message —
   click one to save it to your Downloads folder (RATA never opens it for you).

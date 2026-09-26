@@ -419,6 +419,8 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .cmp-head{display:flex;align-items:center;padding:10px 20px 13px;border-bottom:1px solid var(--hair-2)}
 .cmp-head b{font-size:16px}
 .cmp-head .badge{margin-left:10px}
+.cmp-discard{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--slate);padding:5px 11px;border-radius:999px;background:var(--fill)}
+.cmp-discard:not([hidden])+.cmp-close{margin-left:8px}
 .cmp-close{margin-left:auto;color:var(--slate);width:28px;height:28px;display:grid;place-items:center;background:var(--fill);border-radius:50%;font-size:13px}
 #compose input,#compose textarea{border:none;outline:none;padding:13px 20px;border-bottom:1px solid var(--hair-2);background:transparent;width:100%;font-size:15px}
 #compose textarea{flex:1;min-height:170px;resize:none;line-height:1.6}
@@ -939,7 +941,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 <div id="compose-ov">
   <div id="compose">
     <div class="grabber"></div>
-    <div class="cmp-head"><b>New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-close" id="cmp-close">✕</button></div>
+    <div class="cmp-head"><b id="cmp-title">New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-discard" id="cmp-discard" hidden>Discard</button><button class="cmp-close" id="cmp-close" aria-label="Close, keeping the draft">✕</button></div>
     <div class="dlp-bar" id="dlp-bar"></div>
     <input type="text" id="cmp-to" placeholder="To">
     <input type="text" id="cmp-subj" placeholder="Subject">
@@ -1889,10 +1891,10 @@ function mailtoOf(h){
   }catch(e){return null}
 }
 /* A new message to someone a link named: nothing left over from an earlier
-   draft, which could otherwise go to this stranger. */
+   draft, which could otherwise go to this stranger (newDraft). */
 function writeTo(to,subject){
-  openCompose();
-  $('#cmp-to').value=to;$('#cmp-subj').value=subject||'';$('#cmp-body').value='';
+  newDraft();openCompose();
+  $('#cmp-to').value=to;$('#cmp-subj').value=subject||'';
   liveScan();$('#cmp-body').focus();
 }
 let LINK_PENDING=null;
@@ -2102,7 +2104,7 @@ function openPerson(cid){
   $('#pd-write').onclick=()=>{
     if(lastIn){replyTo(lastIn);return}
     if(!c.addr){toast('Add an email address for '+(c.nick||c.name)+' first');return}
-    openCompose();$('#cmp-to').value=c.addr;liveScan();$('#cmp-subj').focus();
+    newDraft();openCompose();$('#cmp-to').value=c.addr;liveScan();$('#cmp-subj').focus();
   };
   renderPeople();
 }
@@ -2677,13 +2679,15 @@ $('#btn-reset').onclick=()=>{
 const ov=$('#compose-ov');
 let dlpTimer=null,lastFindings=[];
 function fillComposeFrom(){
-  const sel=$('#cmp-from');
+  const sel=$('#cmp-from'),was=sel.value;
   /* Anything that can really send goes first, so the default is a real send
      rather than a note to self. */
   const sendable=S.linked.filter(l=>l.type==='mail');
   sel.innerHTML=sendable.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')
     +'<option value="local">Record only (no linked email)</option>';
-  if(sendable.length)sel.value=sendable[0].id;
+  /* A draft reopened keeps the mailbox it was being sent from. */
+  if(was&&[...sel.options].some(o=>o.value===was))sel.value=was;
+  else if(sendable.length)sel.value=sendable[0].id;
 }
 /* The message being answered, while the composer holds a reply. Its id goes
    out as In-Reply-To so the answer lands in the same thread at the other end. */
@@ -2695,13 +2699,17 @@ let CMP_FILES=[];
    on the server and which of its attachments. The app fetches them from the
    mailbox at send time, so a forward never routes files through this page. */
 let CMP_FWD=null;
+/* What the draft is, for the composer's title: 'reply' (with the name of
+   whoever it answers), 'forward' or 'new'. A reopened draft says so, since
+   what it carries — a thread, a forward's files — is otherwise unseen. */
+let DRAFT={kind:'new'};
 async function forwardMessage(m,targetAcctId){
   const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&m.uid&&m.uidvalidity;
   /* A forward should carry the whole message. If what is stored may be only
      the start of it, or its attachment list may be partial, fetch it first. */
   if(native&&m.bodyV===2&&!OPENED.get(m.id)&&(m.truncated||(m.atts||[]).length)){toast('Fetching the whole message to forward\u2026');await openWhole(m)}
   const whole=OPENED.get(m.id);
-  openCompose();
+  newDraft();openCompose();
   const from=$('#cmp-from'),want=targetAcctId||m.acct;
   if(want&&[...from.options].some(o=>o.value===want))from.value=want;
   $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
@@ -2709,6 +2717,7 @@ async function forwardMessage(m,targetAcctId){
   $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
   if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
+  DRAFT={kind:'forward'};renderDraftHead();
   renderCmpFiles();liveScan();
   const b=$('#cmp-body');b.setSelectionRange(0,0);b.scrollTop=0;
   $('#cmp-to').focus();
@@ -2723,6 +2732,7 @@ function renderCmpFiles(){
     +(total>ATTACH_MAX?`<span class="cmp-file" style="color:var(--red,#c33)">${kb(total)} in all — over the ${kb(ATTACH_MAX)} most providers accept</span>`:'');
   el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);renderCmpFiles()});
   el.querySelectorAll('[data-rmfwd]').forEach(b=>b.onclick=()=>{CMP_FWD.atts.splice(+b.dataset.rmfwd,1);renderCmpFiles()});
+  renderDraftHead();
 }
 async function fileBase64(f){
   const u8=new Uint8Array(await f.arrayBuffer());
@@ -2731,21 +2741,46 @@ async function fileBase64(f){
   return btoa(bin);
 }
 $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.target.files]);e.target.value='';renderCmpFiles()});
+/* The composer holds one draft: who it is from and to, its words, the files
+   picked for it, the message it answers and the one it forwards. They belong
+   together, so they are kept and dropped together. Closing the composer keeps
+   all of it for the next Compose; starting something new — a reply, a
+   forward, a message to someone — starts from nothing (newDraft). It used to
+   keep the words and drop the rest, so a closed forward came back saying
+   "Forwarded message" without the files, a reply without its thread, and a
+   message to someone new with the last draft's subject and text. */
+function newDraft(){
+  REPLYING=null;CMP_FILES=[];CMP_FWD=null;DRAFT={kind:'new'};
+  ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
+  $('#cmp-from').value='';
+  renderCmpFiles();
+}
 function openCompose(){
-  REPLYING=null;
-  CMP_FILES=[];CMP_FWD=null;renderCmpFiles();
   /* Only the app can send, so only the app offers to attach. */
   const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
-  fillComposeFrom();
+  fillComposeFrom();renderCmpFiles();liveScan();renderDraftHead();
   ov.classList.add('open');
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
-  $('#cmp-to').focus();
+  $($('#cmp-to').value?'#cmp-body':'#cmp-to').focus();
 }
-function closeCompose(){ov.classList.remove('open');REPLYING=null}
+function closeCompose(){ov.classList.remove('open')}
+function draftHasAnything(){
+  return !!(REPLYING||CMP_FWD||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
+}
+function renderDraftHead(){
+  $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':'New message';
+  $('#cmp-discard').hidden=!draftHasAnything();
+}
+/* Throws the draft away — its words, files and what it answers or forwards —
+   and leaves a blank message. */
+$('#cmp-discard').onclick=()=>{
+  if(!confirm('Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
+  newDraft();openCompose();
+};
 /* Reply from the mailbox the message arrived in, to whoever the sender asked
    replies to go to, quoting what RATA has of the original. */
 function replyTo(m){
-  openCompose();
+  newDraft();openCompose();
   const from=$('#cmp-from');
   if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
   $('#cmp-to').value=m.replyTo||m.fromAddr||'';
@@ -2754,6 +2789,7 @@ function replyTo(m){
   const orig=String(m.body||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\nOn ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
   REPLYING={id:m.id,messageId:m.messageId||''};
+  DRAFT={kind:'reply',to:msgFrom(m)};renderDraftHead();
   liveScan();
   const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
 }
@@ -2795,6 +2831,7 @@ function liveScan(){
   }
 }
 ['cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{clearTimeout(dlpTimer);dlpTimer=setTimeout(liveScan,220)}));
+['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
 $('#cmp-send').onclick=async()=>{
   const to=$('#cmp-to').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
   if(!to||!subj){toast('Recipient and subject required');return}
@@ -2842,7 +2879,7 @@ $('#cmp-send').onclick=async()=>{
     atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
-  ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
+  newDraft();
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
 };

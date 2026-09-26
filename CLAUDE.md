@@ -85,7 +85,8 @@ attachments; v0.1.10 shrinks the window to fit small screens (it opened
 the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
 the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
 keeps mail in IndexedDB, one record per message, with no storage cap;
-v0.1.14 opens links in the browser, asking first for links in formatted mail. An
+v0.1.14 opens links in the browser, asking first for links in formatted mail;
+v0.1.15 keeps a closed draft whole. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -209,6 +210,15 @@ original's mailbox, UID, UIDVALIDITY and attachment indexes — never bytes.
 `core::send` fetches those attachments from the mailbox (`forwarded_files`)
 before the size check. The drag-between-panes forward uses the same path; it
 used to announce files it never sent.
+**One draft, kept whole (v0.1.15).** The composer's draft is To, Subject,
+body, From, `CMP_FILES`, `CMP_FWD`, `REPLYING` and `DRAFT` (what it is, for
+the title). Closing keeps all of it; Compose reopens it; Reply, Forward, a
+person's Write and a `mailto:` link call `newDraft()` first; a send clears
+it. Until 0.1.15 closing kept the words and dropped the rest, so a closed
+forward came back saying "Forwarded message" with no files, and a reply lost
+its thread. Because a reopened draft can carry a thread nobody sees, its
+title says what it is ("Reply to Ann", "Forward") and **Discard** starts a
+blank message.
 **HTML mail (v0.1.12) — three locks, keep all three.** (1) `html::safe`
 sanitises with ammonia: scripts, handlers, forms, frames, `<meta>`, `<base>`,
 relative URLs and any `href` that is not http, https or mailto go; layout, `<style>`, an allowlist of
