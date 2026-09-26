@@ -95,7 +95,10 @@ Don't spend time reporting these — they are known and planned:
   v0.1.19 it reads **PDFs** too — the text, headings, lists and simple
   tables come across, rebuilt from the page; the layout and pictures don't,
   and scanned PDFs (pictures of pages) can't be read yet. It can't read
-  old .doc files. Send us the files that come out wrong.
+  old .doc files. From v0.1.20 an attachment RATA can read has a
+  **⇄ Convert** button beside it: one click puts it in the Format Bridge,
+  ready to turn into another format, without saving it first. Send us the
+  files that come out wrong.
 - **AI, from v0.1.17:** **✦ Summarize** and **⇄ Translate** on a message, and
   **Run briefing** in Assist, which flags the mail that needs you to do
   something (⚑ in the list). The first time, RATA tells you what it sends:

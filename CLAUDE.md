@@ -97,7 +97,8 @@ v0.1.15 keeps a closed draft whole; v0.1.16 draws only the rows of the
 list that are on screen; v0.1.17 adds AI summaries, translation and task
 flags through the relay (which needs the website deployed — see below);
 v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
-and makes its downloads work in the app at all; v0.1.19 reads PDFs. An
+and makes its downloads work in the app at all; v0.1.19 reads PDFs; v0.1.20
+converts an attachment straight from the message. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -359,6 +360,15 @@ Chrome PDFs of known documents (structure matched exactly for
 LibreOffice), in CI with a LibreOffice-made fixture and jsPDF-made
 hyphen, scan, locked and junk cases, and in the packaged WebKit build
 (read in ~0.3 s, saved, read back by LibreOffice).
+**Attachments into the Bridge (v0.1.20).** An attachment whose extension the
+Bridge reads (`bridgeable`, from `BR_KINDS`) gets **⇄ Convert** beside it;
+`convertAttachment` → bridge `/api/mail/attachment/read` →
+`read_attachment` → `core::read_attachment`, which fetches it like a save
+(`attachment_of`, shared with `save_attachment`) but hands the bytes back as
+base64 instead of writing them, capped at `READ_MAX` (25 MB, kind
+`too-large`). The page asks by message and index only; the bytes go to
+`brIngest` as a `File`, through the same readers as a dropped file, and
+nothing is saved until the customer converts.
 Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 

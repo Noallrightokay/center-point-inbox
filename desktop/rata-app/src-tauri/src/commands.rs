@@ -200,6 +200,32 @@ fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
         .or_else(|| paths.home_dir().ok().map(|h| h.join("Downloads")))
 }
 
+/// An attachment's bytes, for the Format Bridge to convert: as base64, since
+/// the bridge carries text. The interface asks by message and index only.
+#[tauri::command]
+pub async fn read_attachment(
+    app: App<'_>,
+    email: String,
+    uid: u32,
+    uidvalidity: u32,
+    index: u32,
+) -> Result<Handed, Problem> {
+    let got = app.read_attachment(&email, uid, uidvalidity, index).await?;
+    Ok(Handed {
+        name: got.name,
+        mime: got.mime,
+        data: rata_mail::words::base64_encode(&got.data),
+    })
+}
+
+/// An attachment on its way to the page.
+#[derive(serde::Serialize)]
+pub struct Handed {
+    name: String,
+    mime: String,
+    data: String,
+}
+
 /// A file the interface made (a conversion, an export), into Downloads. The
 /// bytes come as base64, since the bridge carries text.
 #[tauri::command]
