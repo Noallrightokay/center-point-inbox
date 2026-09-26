@@ -1,5 +1,5 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v20';
+const V = 'rata-shell-v21';
 const SHELL = [
   './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
   './fonts/fonts.css',

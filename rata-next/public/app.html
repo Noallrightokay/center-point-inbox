@@ -2399,9 +2399,13 @@ function renderDocs(){
       c.ondragstart=e=>{e.dataTransfer.setData('text/rata-doc',c.dataset.doc);e.dataTransfer.effectAllowed='move'};
     });
   }
-  g.querySelectorAll('.cv[data-bridge]').forEach(b=>b.onclick=()=>{
+  g.querySelectorAll('.cv[data-bridge]').forEach(b=>b.onclick=async()=>{
     const d=S.documents.find(x=>x.id===b.dataset.bridge);if(!d)return;
     bridgeInit();
+    /* The original file, where it was kept, is read again so its headings,
+       lists, tables and sheets come too; otherwise only its text. */
+    const kept=d.hasFile?await fvGet(d.id).catch(()=>null):null;
+    if(kept){await brIngest(new File([kept],d.name));if(BR.name===d.name){BR.file=null;BR.srcId=d.id;document.querySelector('.bridge-card').scrollIntoView({behavior:'smooth',block:'start'});return}}
     BR={name:d.name,kind:'Workspace document',text:String(d.content||''),rows:null,eco:BR.eco,file:null,srcId:d.id};
     $('#br-name').textContent=BR.name;
     $('#br-kind').textContent=BR.kind+' · '+BR.text.split(/\s+/).length+' words';
@@ -2651,14 +2655,11 @@ function renderPlan(){
   $('#bill-nolinks').style.display=SELLABLE.some(k=>links[k])?'none':'';
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
-$('#btn-export').onclick=()=>{
+$('#btn-export').onclick=async()=>{
   const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=`rata-workspace-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();URL.revokeObjectURL(a.href);
+  if(!await brDownload(blob,`rata-workspace-${new Date().toISOString().slice(0,10)}.json`))return;
   audit('workspace.export','Full JSON export');
-  toast('Workspace exported');
+  if(!window.__RATA_NATIVE__)toast('Workspace exported');
 };
 $('#btn-import').onclick=()=>$('#import-file').click();
 $('#import-file').addEventListener('change',e=>{
@@ -3283,99 +3284,305 @@ async function brLib(k,globalName){
   await loadScript(BR_LIBS[k]);
   return window[globalName];
 }
-function brDownload(blob,fname){
+/* A file RATA made — a conversion, an export — handed to the customer. In a
+   browser that is a download. In the app the webview drops a page's
+   downloads without a word, so the app writes the file into Downloads itself
+   (save_file) and says where; it cleans the name and never overwrites. */
+async function brDownload(blob,fname){
+  if(window.__RATA_NATIVE__){
+    let r;
+    try{r=await apiFetch('/api/file/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fname,data:await fileBase64(blob)})})}
+    catch(e){r={error:String(e&&e.message||e)}}
+    if(!r||!r.ok){toast('Could not save '+fname+' \u2014 '+((r&&r.error)||'no answer'));return false}
+    toast('Saved to your Downloads folder as '+r.name);
+    return true;
+  }
   const u=URL.createObjectURL(blob);
   const l=document.createElement('a');l.href=u;l.download=fname;document.body.appendChild(l);l.click();l.remove();
   setTimeout(()=>URL.revokeObjectURL(u),4000);
+  return true;
+}
+/* ---- The document in the middle ----
+   Every file is read into one shape and every format is written from it, so
+   each reader works with each writer: a list of blocks — headings (1–3),
+   paragraphs, list items and tables — whose text is runs marked bold or
+   italic. Spreadsheets stay rows and columns, every sheet of them. */
+const BR_KINDS={docx:'Word document',html:'Web page',htm:'Web page',md:'Markdown',txt:'Text document',csv:'CSV spreadsheet',xlsx:'Excel spreadsheet'};
+const plainRuns=t=>[{text:String(t)}];
+const runsText=rs=>rs.map(r=>r.text).join('');
+function blocksText(blocks){
+  return blocks.map(b=>b.t==='table'?b.rows.map(r=>r.join('\t')).join('\n'):(b.t==='li'?(b.ordered?'1. ':'• '):'')+runsText(b.runs)).join('\n\n');
+}
+/* HTML — from a web page, or from mammoth's reading of a .docx — into blocks.
+   Parsed with DOMParser, into a document that is never shown: nothing in it
+   loads or runs. Putting a stranger's HTML into this page's DOM instead, even
+   a detached element, lets an <img onerror> run with the app's powers. */
+function htmlToBlocks(html){
+  const doc=new DOMParser().parseFromString(String(html),'text/html');
+  const out=[];
+  const runsOf=(el,b,i,acc)=>{
+    for(const n of el.childNodes){
+      if(n.nodeType===3){const t=n.nodeValue.replace(/\s+/g,' ');if(t)acc.push({text:t,b,i})}
+      else if(n.nodeType===1){
+        const tag=n.tagName;
+        if(tag==='BR'){acc.push({text:'\n',b,i});continue}
+        if(/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|HEAD|TITLE)$/.test(tag))continue;
+        runsOf(n,b||/^(B|STRONG)$/.test(tag)||/bold|[6-9]00/.test(n.getAttribute('style')||''),i||/^(I|EM)$/.test(tag),acc);
+      }
+    }
+    return acc;
+  };
+  const tidy=rs=>{
+    const m=[];for(const r of rs){const last=m[m.length-1];if(last&&!!last.b===!!r.b&&!!last.i===!!r.i)last.text+=r.text;else m.push({text:r.text,b:!!r.b,i:!!r.i})}
+    if(m.length){m[0].text=m[0].text.replace(/^\s+/,'');m[m.length-1].text=m[m.length-1].text.replace(/\s+$/,'')}
+    return m.filter(r=>r.text);
+  };
+  const walk=el=>{
+    for(const n of el.children){
+      const tag=n.tagName;
+      if(/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|HEAD)$/.test(tag))continue;
+      if(/^H[1-6]$/.test(tag)){const r=tidy(runsOf(n,false,false,[]));if(r.length)out.push({t:'h',level:Math.min(3,+tag[1]),runs:r});continue}
+      if(tag==='UL'||tag==='OL'){
+        for(const li of n.children)if(li.tagName==='LI'){
+          const nested=[...li.children].filter(c=>c.tagName==='UL'||c.tagName==='OL');
+          nested.forEach(c=>c.remove());
+          const r=tidy(runsOf(li,false,false,[]));if(r.length)out.push({t:'li',ordered:tag==='OL',runs:r});
+          nested.forEach(c=>walk({children:[c]}));
+        }
+        continue;
+      }
+      if(tag==='TABLE'){
+        const rows=[...n.querySelectorAll('tr')].map(tr=>[...tr.children].filter(c=>/^T[DH]$/.test(c.tagName)).map(c=>c.textContent.replace(/\s+/g,' ').trim()));
+        if(rows.length)out.push({t:'table',rows});
+        continue;
+      }
+      if(/^(P|PRE|BLOCKQUOTE|ADDRESS)$/.test(tag)||(!n.querySelector('p,h1,h2,h3,h4,h5,h6,ul,ol,table,div,section,article')&&n.textContent.trim())){
+        const r=tidy(runsOf(n,false,false,[]));if(r.length)out.push({t:'p',runs:r});continue;
+      }
+      walk(n);
+    }
+  };
+  walk(doc.body||doc.documentElement);
+  out.pictures=doc.images.length;
+  return out;
+}
+/* Markdown, and plain text as a simple case of it: # headings, - and 1.
+   lists, **bold** and *italic*, paragraphs split by blank lines. */
+function mdRuns(t){
+  const out=[];const re=/(\*\*|__)(.+?)\1|(\*|_)(?!\s)(.+?)\3/g;let last=0,m;
+  while((m=re.exec(t))){if(m.index>last)out.push({text:t.slice(last,m.index)});out.push(m[2]!==undefined?{text:m[2],b:true}:{text:m[4],i:true});last=re.lastIndex}
+  if(last<t.length)out.push({text:t.slice(last)});
+  return out.filter(r=>r.text);
+}
+function mdToBlocks(text,plain){
+  const out=[];let para=[];
+  const flush=()=>{if(para.length){out.push({t:'p',runs:plain?plainRuns(para.join('\n')):mdRuns(para.join(' '))});para=[]}};
+  for(const raw of String(text).replace(/\r\n?/g,'\n').split('\n')){
+    const line=raw.replace(/\s+$/,'');
+    let m;
+    if(!line.trim()){flush();continue}
+    if(!plain&&(m=line.match(/^(#{1,6})\s+(.*)$/))){flush();out.push({t:'h',level:Math.min(3,m[1].length),runs:mdRuns(m[2])});continue}
+    if(!plain&&(m=line.match(/^\s*[-*+]\s+(.*)$/))){flush();out.push({t:'li',ordered:false,runs:mdRuns(m[1])});continue}
+    if(!plain&&(m=line.match(/^\s*\d+[.)]\s+(.*)$/))){flush();out.push({t:'li',ordered:true,runs:mdRuns(m[1])});continue}
+    para.push(plain?raw:line.trim());
+  }
+  flush();
+  return out;
 }
 async function brIngest(file){
   const name=file.name,ext=name.split('.').pop().toLowerCase();
+  if(!BR_KINDS[ext]){toast('That format can’t be converted yet — use .docx, .xlsx, .csv, .txt, .md or .html');return}
   try{
+    const buf=await file.arrayBuffer();
+    let blocks=null,sheets=null;
     if(ext==='docx'){
       const mam=await brLib('mammoth','mammoth');
-      const buf=await file.arrayBuffer();
-      const res=await mam.extractRawText({arrayBuffer:buf});
-      BR={name,kind:'Word document',text:res.value||'',rows:null,eco:BR.eco};
+      blocks=htmlToBlocks((await mam.convertToHtml({arrayBuffer:buf})).value||'');
     }else if(ext==='xlsx'||ext==='csv'){
       const X=await brLib('xlsx','XLSX');
-      const buf=await file.arrayBuffer();
       const wb=X.read(buf,{type:'array'});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      BR={name,kind:ext==='csv'?'CSV spreadsheet':'Excel spreadsheet',text:X.utils.sheet_to_csv(ws),rows:X.utils.sheet_to_json(ws,{header:1}),eco:BR.eco};
-    }else if(['txt','md','html','htm'].includes(ext)){
-      let t=await file.text();
-      if(ext==='html'||ext==='htm'){const dv=document.createElement('div');dv.innerHTML=t;t=dv.textContent||''}
-      BR={name,kind:ext==='md'?'Markdown':'Text document',text:t,rows:null,eco:BR.eco};
-    }else{toast('That format isn\u2019t bridgeable yet — use docx, xlsx, csv, txt, md, or html');return}
-    /* Hold on to the original file object — conversion produces a second file,
-       it does not consume this one. */
-    BR.file=file;BR.srcId=null;
+      sheets=wb.SheetNames.map(n=>({name:n,rows:X.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:''})})).filter(sh=>sh.rows.length);
+      if(!sheets.length)sheets=[{name:wb.SheetNames[0]||'Sheet1',rows:[]}];
+    }else{
+      const t=new TextDecoder().decode(buf);
+      blocks=ext==='html'||ext==='htm'?htmlToBlocks(t):mdToBlocks(t,ext==='txt');
+    }
+    const rows=sheets?sheets[0].rows:null;
+    BR={name,kind:BR_KINDS[ext],blocks,sheets,rows,text:sheets?sheets.map(sh=>sh.rows.map(r=>r.join(',')).join('\n')).join('\n\n'):blocksText(blocks),eco:BR.eco,file,srcId:null};
     $('#br-name').textContent=BR.name;
-    $('#br-kind').textContent=BR.kind+' · '+(BR.rows?BR.rows.length+' rows':BR.text.split(/\s+/).length+' words');
+    $('#br-kind').textContent=BR.kind+' · '+(sheets?sheets.reduce((n,sh)=>n+sh.rows.length,0)+' rows'+(sheets.length>1?' in '+sheets.length+' sheets':''):BR.text.split(/\s+/).filter(Boolean).length+' words');
     $('#br-loaded').style.display='block';
     brNote();
   }catch(e){toast('Could not read that file — '+(e.message||'try another'));console.error(e)}
 }
 function brNote(){
-  const eco=BR.eco,sheet=!!BR.rows;
+  const eco=BR.eco,sheet=!!BR.sheets||!!BR.rows,many=BR.sheets&&BR.sheets.length>1;
   const notes={
-    office:sheet?'Delivers a real .xlsx — opens directly in Excel.':'Delivers a Word-format file — opens directly in Word.',
-    google:sheet?'Delivers .xlsx — drag into Google Drive and it opens as a Google Sheet automatically.':'Delivers a Word-format file — drag into Google Drive and it opens as a Google Doc automatically.',
-    apple:sheet?'Delivers .xlsx — Numbers opens it natively (Apple\u2019s own formats are sealed; this is how Apple itself interops).':'Delivers a Word-format file — Pages opens it natively (Apple\u2019s own formats are sealed; this is how Apple itself interops).',
-    pdf:'Delivers a print-ready PDF — universal, uneditable.',
-    plain:sheet?'Delivers .csv — the universal spreadsheet interchange.':'Delivers Markdown — clean text that pastes anywhere.'
+    office:sheet?'Delivers a real .xlsx — opens directly in Excel.':'Delivers a real .docx — opens directly in Word, with headings, lists and tables kept.',
+    google:sheet?'Delivers .xlsx — drag it into Google Drive and it opens as a Google Sheet.':'Delivers .docx — drag it into Google Drive and it opens as a Google Doc.',
+    apple:sheet?'Delivers .xlsx — Numbers opens it as it is (Apple’s own formats are closed; this is how Apple itself exchanges files).':'Delivers .docx — Pages opens it as it is (Apple’s own formats are closed; this is how Apple itself exchanges files).',
+    pdf:'Delivers a print-ready PDF — opens anywhere, can’t be edited.'+(sheet?' Very wide tables are cut at the page edge.':''),
+    plain:sheet?(many?'Delivers one .csv per sheet, together in a .zip.':'Delivers .csv — the spreadsheet format everything reads.'):'Delivers Markdown — plain text that keeps headings and lists.'
   };
-  $('#br-note').textContent=notes[eco];
+  const pics=BR.blocks&&BR.blocks.pictures;
+  $('#br-note').textContent=notes[eco]+(pics?` The ${pics===1?'picture':pics+' pictures'} in it ${pics===1?'isn\u2019t':'aren\u2019t'} carried over yet.`:'');
 }
+/* ---- Writing ---- */
+/* A .zip, stored rather than compressed: what .docx is, and what several
+   CSVs are sent as. Small and dependency-free; every office suite reads it. */
+const CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+function crc32(u8){let c=0xFFFFFFFF;for(let i=0;i<u8.length;i++)c=CRC_TABLE[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0}
+function zipStore(files){
+  const enc=new TextEncoder(),parts=[],central=[];let off=0;
+  const d=new Date(),time=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1),date=((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate();
+  for(const f of files){
+    const name=enc.encode(f.name),data=typeof f.data==='string'?enc.encode(f.data):f.data,crc=crc32(data);
+    const h=new DataView(new ArrayBuffer(30));
+    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true);h.setUint16(8,0,true);h.setUint16(10,time,true);h.setUint16(12,date,true);
+    h.setUint32(14,crc,true);h.setUint32(18,data.length,true);h.setUint32(22,data.length,true);h.setUint16(26,name.length,true);h.setUint16(28,0,true);
+    parts.push(new Uint8Array(h.buffer),name,data);
+    const c=new DataView(new ArrayBuffer(46));
+    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint16(10,0,true);c.setUint16(12,time,true);c.setUint16(14,date,true);
+    c.setUint32(16,crc,true);c.setUint32(20,data.length,true);c.setUint32(24,data.length,true);c.setUint16(28,name.length,true);c.setUint32(42,off,true);
+    central.push(new Uint8Array(c.buffer),name);
+    off+=30+name.length+data.length;
+  }
+  const size=central.reduce((n,p)=>n+p.length,0),e=new DataView(new ArrayBuffer(22));
+  e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,size,true);e.setUint32(16,off,true);
+  return new Blob([...parts,...central,new Uint8Array(e.buffer)]);
+}
+/* XML text: escaped, and without the control characters XML 1.0 forbids —
+   one of those left in makes Word refuse the whole file. */
+const xmlText=s=>String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function blocksToDocx(blocks,title){
+  const run=r=>{
+    const props=(r.b?'<w:b/>':'')+(r.i?'<w:i/>':'');
+    return String(r.text).split('\n').map((line,k)=>(k?'<w:r><w:br/></w:r>':'')+`<w:r>${props?`<w:rPr>${props}</w:rPr>`:''}<w:t xml:space="preserve">${xmlText(line)}</w:t></w:r>`).join('');
+  };
+  const para=(runs,style,prefix)=>`<w:p>${style?`<w:pPr><w:pStyle w:val="${style}"/></w:pPr>`:''}${prefix?run({text:prefix}):''}${runs.map(run).join('')}</w:p>`;
+  let n=0;
+  const body=blocks.map(b=>{
+    if(b.t!=='li'||!b.ordered)n=b.t==='li'?n:0;
+    if(b.t==='h')return para(b.runs,'Heading'+b.level);
+    if(b.t==='li')return para(b.runs,'ListParagraph',b.ordered?(++n)+'.\t':'•\t');
+    if(b.t==='table'){
+      const cols=Math.max(1,...b.rows.map(r=>r.length));
+      return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>${'<w:gridCol/>'.repeat(cols)}</w:tblGrid>`
+        +b.rows.map(r=>`<w:tr>${Array.from({length:cols},(_,k)=>`<w:tc><w:p>${run({text:r[k]??''})}</w:p></w:tc>`).join('')}</w:tr>`).join('')+'</w:tbl><w:p/>';
+    }
+    return para(b.runs);
+  }).join('');
+  const W='xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const heading=(k,size)=>`<w:style w:type="paragraph" w:styleId="Heading${k}"><w:name w:val="heading ${k}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="${k-1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${size}"/></w:rPr></w:style>`;
+  return zipStore([
+    {name:'[Content_Types].xml',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>'},
+    {name:'_rels/.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>'},
+    {name:'docProps/core.xml',data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xmlText(title)}</dc:title><dc:creator>RATA</dc:creator></cp:coreProperties>`},
+    {name:'word/_rels/document.xml.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
+    {name:'word/styles.xml',data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>${heading(1,32)}${heading(2,28)}${heading(3,24)}<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="40"/><w:ind w:left="720" w:hanging="360"/></w:pPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tblBorders><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`},
+    {name:'word/document.xml',data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${body||'<w:p/>'}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`}
+  ]);
+}
+function blocksToMd(blocks){
+  const md=rs=>rs.map(r=>{const t=r.text.replace(/([*_\\#`])/g,'\\$1');return r.b&&r.i?`***${t}***`:r.b?`**${t}**`:r.i?`*${t}*`:t}).join('');
+  let n=0;
+  return blocks.map(b=>{
+    if(b.t!=='li'||!b.ordered)n=b.t==='li'?n:0;
+    if(b.t==='h')return '#'.repeat(b.level)+' '+md(b.runs);
+    if(b.t==='li')return (b.ordered?(++n)+'. ':'- ')+md(b.runs);
+    if(b.t==='table'){const cols=Math.max(1,...b.rows.map(r=>r.length));const cell=c=>String(c??'').replace(/\|/g,'\\|');return b.rows.map((r,k)=>'| '+Array.from({length:cols},(_,j)=>cell(r[j])).join(' | ')+' |'+(k===0?'\n|'+' --- |'.repeat(cols):'')).join('\n')}
+    return md(b.runs);
+  }).reduce((acc,t,k)=>acc+(k?(blocks[k].t==='li'&&blocks[k-1].t==='li'?'\n':'\n\n'):'')+t,'')+'\n';
+}
+/* PDF's built-in fonts carry Western European letters only (Windows-1252).
+   Anything else would come out as gibberish, so it is refused and named. */
+const PDF_CHARS=/^[\u0009\u000a\u000d -~ -ÿŒœŠšŸŽžƒˆ˜–—‘-‚“-„†-•…‰‹›€™]*$/;
+function pdfBlocker(text){
+  if(PDF_CHARS.test(text))return null;
+  const bad=[...String(text)].find(c=>!PDF_CHARS.test(c))||'';
+  const script=/[Ѐ-ӿ]/.test(bad)?'Cyrillic':/[Ͱ-Ͽ]/.test(bad)?'Greek':/[֐-׿]/.test(bad)?'Hebrew':/[؀-ۿ]/.test(bad)?'Arabic':/[぀-ヿ一-鿿가-힯]/.test(bad)?'Chinese, Japanese or Korean':/[\u{1f000}-\u{1faff}☀-➿]/u.test(bad)?'emoji':'some';
+  return `This file has ${script} characters, which RATA’s PDFs can’t show yet. Choose Microsoft Office or Google instead — those keep every character.`;
+}
+async function blocksToPdf(blocks){
+  const {jsPDF}=await brLib('jspdf','jspdf');
+  const doc=new jsPDF();let y=18;const X0=16,W=178;
+  const need=h=>{if(y+h>282){doc.addPage();y=18}};
+  let n=0;
+  for(const b of blocks){
+    if(b.t!=='li'||!b.ordered)n=b.t==='li'?n:0;
+    if(b.t==='table'){
+      const cols=Math.max(1,...b.rows.map(r=>r.length)),cw=W/cols;
+      doc.setFont('helvetica','normal');doc.setFontSize(9);
+      b.rows.forEach((r,k)=>{need(6);doc.setFont('helvetica',k===0?'bold':'normal');for(let j=0;j<cols;j++){doc.text(doc.splitTextToSize(String(r[j]??''),cw-2)[0]||'',X0+j*cw,y)}y+=5.5});
+      y+=4;continue;
+    }
+    const size=b.t==='h'?[0,17,14,12][b.level]:11,bold=b.t==='h'||b.runs.every(r=>r.b);
+    doc.setFont('helvetica',bold?'bold':(b.runs.every(r=>r.i)?'italic':'normal'));doc.setFontSize(size);
+    const prefix=b.t==='li'?(b.ordered?(++n)+'. ':'• '):'';
+    const lines=doc.splitTextToSize(prefix+runsText(b.runs),b.t==='li'?W-6:W);
+    const lh=size*0.45;
+    if(b.t==='h')need(lh*2+4),y+=3;
+    for(const ln of lines){need(lh);doc.text(ln,X0+(b.t==='li'?4:0),y);y+=lh}
+    y+=b.t==='h'?1.5:2.5;
+  }
+  return doc.output('blob');
+}
+async function sheetsToPdf(sheets){
+  const {jsPDF}=await brLib('jspdf','jspdf');
+  const doc=new jsPDF({orientation:'landscape'});let y=16;
+  sheets.forEach((sh,s)=>{
+    if(s){doc.addPage();y=16}
+    doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text(sh.name||'Sheet '+(s+1),14,y);y+=8;
+    const cols=Math.max(1,...sh.rows.map(r=>r.length)),cw=Math.max(18,269/cols);
+    doc.setFontSize(8.5);
+    sh.rows.forEach((r,k)=>{
+      if(y>198){doc.addPage();y=16}
+      doc.setFont('helvetica',k===0?'bold':'normal');
+      for(let j=0;j<cols&&14+j*cw<283;j++)doc.text(doc.splitTextToSize(String(r[j]??''),cw-2)[0]||'',14+j*cw,y);
+      y+=5;
+    });
+  });
+  return doc.output('blob');
+}
+const csvOf=rows=>rows.map(r=>r.map(c=>/[",\n\r]/.test(String(c))?'"'+String(c).replace(/"/g,'""')+'"':c).join(',')).join('\r\n')+'\r\n';
 async function brConvert(saveToDocs){
   if(!BR.name){toast('Load a file first');return}
   const go=$('#br-go');go.disabled=true;go.textContent='Converting…';
   try{
-    let text=BR.text,rows=BR.rows;
-    const base=BR.name.replace(/\.[^.]+$/,'');
-    const eco=BR.eco;
-    BR.outText=text;BR.outLang='';
-    if(rows){
-      const X=await brLib('xlsx','XLSX');
+    const base=BR.name.replace(/\.[^.]+$/,'')||'document',eco=BR.eco;
+    /* A document kept in the workspace carries its text, not its structure. */
+    const sheets=BR.sheets||(BR.rows?[{name:'Sheet1',rows:BR.rows}]:null);
+    const blocks=sheets?null:(BR.blocks||mdToBlocks(BR.text,true));
+    BR.outText=BR.text;BR.outLang='';
+    if(sheets){
       if(eco==='plain'){
-        await brFinish(new Blob([rows.map(r=>r.map(c=>/[",\n]/.test(String(c))?'"'+String(c).replace(/"/g,'""')+'"':c).join(',')).join('\n')],{type:'text/csv'}),base+'.csv',saveToDocs,'csv');
+        if(sheets.length===1)await brFinish(new Blob([csvOf(sheets[0].rows)],{type:'text/csv'}),base+'.csv',saveToDocs,'csv');
+        else await brFinish(zipStore(sheets.map((sh,k)=>({name:(sh.name||'Sheet'+(k+1)).replace(/[\\/:*?"<>|]/g,'_')+'.csv',data:csvOf(sh.rows)}))),base+'.csv.zip',saveToDocs,'zip');
       }else if(eco==='pdf'){
-        const {jsPDF}=await brLib('jspdf','jspdf');
-        const doc=new jsPDF();let y=14;
-        doc.setFontSize(9);
-        rows.slice(0,120).forEach(r=>{doc.text(String(r.join('   ')).slice(0,110),12,y);y+=6;if(y>282){doc.addPage();y=14}});
-        await brFinish(doc.output('blob'),base+'.pdf',saveToDocs,'pdf');
+        const why=pdfBlocker(sheets.map(sh=>sh.name+'\n'+csvOf(sh.rows)).join('\n'));if(why){toast(why);return}
+        await brFinish(await sheetsToPdf(sheets),base+'.pdf',saveToDocs,'pdf');
       }else{
-        const wb=X.utils.book_new();
-        X.utils.book_append_sheet(wb,X.utils.aoa_to_sheet(rows),'Sheet1');
+        const X=await brLib('xlsx','XLSX');const wb=X.utils.book_new();
+        sheets.forEach((sh,k)=>X.utils.book_append_sheet(wb,X.utils.aoa_to_sheet(sh.rows),String(sh.name||'Sheet'+(k+1)).slice(0,31)));
         const out=X.write(wb,{type:'array',bookType:'xlsx'});
         await brFinish(new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),base+'.xlsx',saveToDocs,'xlsx');
       }
+    }else if(eco==='pdf'){
+      const why=pdfBlocker(blocksText(blocks));if(why){toast(why);return}
+      await brFinish(await blocksToPdf(blocks),base+'.pdf',saveToDocs,'pdf');
+    }else if(eco==='plain'){
+      await brFinish(new Blob([blocksToMd(blocks)],{type:'text/markdown'}),base+'.md',saveToDocs,'md');
     }else{
-      if(eco==='pdf'){
-        const {jsPDF}=await brLib('jspdf','jspdf');
-        const doc=new jsPDF();
-        doc.setFontSize(11);
-        const lines=doc.splitTextToSize(text,182);
-        let y=16;
-        for(const ln of lines){doc.text(ln,14,y);y+=6.4;if(y>282){doc.addPage();y=16}}
-        await brFinish(doc.output('blob'),base+'.pdf',saveToDocs,'pdf');
-      }else if(eco==='plain'){
-        await brFinish(new Blob([text],{type:'text/markdown'}),base+'.md',saveToDocs,'md');
-      }else{
-        const paras=text.split(/\n{2,}|\n/).map(p=>'<p>'+p.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</p>').join('');
-        const html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>'+base+'</title></head><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5">'+paras+'</body></html>';
-        await brFinish(new Blob([html],{type:'application/msword'}),base+'.doc',saveToDocs,'doc');
-      }
+      await brFinish(new Blob([blocksToDocx(blocks,base)],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}),base+'.docx',saveToDocs,'docx');
     }
     const tgt={office:'Microsoft Office',google:'Google Workspace',apple:'Apple iWork',pdf:'PDF',plain:'plain formats'}[eco];
-    await audit('bridge.convert',`${BR.name} \u2192 ${tgt}`);
+    await audit('bridge.convert',`${BR.name} → ${tgt}`);
     S.counters.conv=(S.counters.conv||0)+1;save();
   }catch(e){toast('Conversion failed — '+(e.message||'try again'));console.error(e)}
   finally{go.disabled=false;go.textContent='Convert & download'}
 }
 async function brFinish(blob,fname,saveToDocs,fmt){
-  if(!saveToDocs){brDownload(blob,fname);return}
+  if(!saveToDocs){await brDownload(blob,fname);return}
   const pair='p'+Date.now();
   const stamp=Date.now();
   let srcId=BR.srcId||null;

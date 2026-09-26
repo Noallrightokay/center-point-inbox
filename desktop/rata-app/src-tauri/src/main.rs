@@ -160,6 +160,7 @@ fn main() {
             commands::open_message,
             commands::save_attachment,
             commands::open_link,
+            commands::save_file,
         ])
         .run(tauri::generate_context!())
         .expect("RATA could not start");

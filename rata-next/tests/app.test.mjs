@@ -528,6 +528,66 @@ export default async function run(state) {
     check(pair.srcHasText, 'original carries its extracted text into the workspace');
     check(!!(await dl), 'converted file downloaded');
 
+    /* ---- every reader into every writer ---- */
+    console.log('\n— Format Bridge: what goes in comes out, in a real format —');
+    {
+      const docx = (await import('node:fs')).readFileSync(join(HERE, 'fixtures', 'sample.docx')).toString('base64');
+      const conv = await page.evaluate(async (docx) => {
+        const got = []; const realDl = brDownload; brDownload = (blob, name) => got.push({ blob, name });
+        const toasts = []; const realToast = toast; toast = (m) => toasts.push(m);
+        const run = async (name, data, eco) => { await brIngest(new File([data], name)); BR.eco = eco; got.length = 0; toasts.length = 0; await brConvert(false); return { file: got[0], toast: toasts[0], kind: document.querySelector('#br-kind').textContent }; };
+        const mam = await brLib('mammoth', 'mammoth'), X = await brLib('xlsx', 'XLSX');
+        const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const out = {};
+        /* A .docx written by LibreOffice, back out as a .docx: read with an
+           independent reader (mammoth), its structure is still there. */
+        const w = await run('report.docx', bytes(docx), 'office');
+        const html = (await mam.convertToHtml({ arrayBuffer: await w.file.blob.arrayBuffer() })).value;
+        out.docx = { name: w.file.name, type: w.file.blob.type, kind: w.kind, h1: /<h1>Quarterly report<\/h1>/.test(html), h2: /<h2>Highlights<\/h2>/.test(html),
+          bold: /<strong>well<\/strong>/.test(html), italic: /<em>better than planned<\/em>/.test(html), table: /<table>.*North.*140/.test(html), amp: /the board &amp; staff &lt;team&gt;/.test(html) };
+        const md = await run('report.docx', bytes(docx), 'plain');
+        out.md = await md.file.blob.text();
+        /* A spreadsheet keeps every sheet. */
+        const wb = X.utils.book_new();
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Region', 'Q1'], ['South', 'a,"quoted" cell']]), 'Sales');
+        X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Name'], ['Ann']]), 'Team');
+        const two = new Uint8Array(X.write(wb, { type: 'array', bookType: 'xlsx' }));
+        const xl = await run('book.xlsx', two, 'office');
+        const back = X.read(await xl.file.blob.arrayBuffer(), { type: 'array' });
+        out.sheets = { kind: xl.kind, names: back.SheetNames, team: X.utils.sheet_to_json(back.Sheets.Team, { header: 1 }) };
+        const zip = await run('book.xlsx', two, 'plain');
+        const zipped = X.CFB.read(new Uint8Array(await zip.file.blob.arrayBuffer()), { type: 'array' });
+        /* SheetJS's reader lists a placeholder of its own (Sh33tJ5) in any zip. */
+        out.zip = { name: zip.file.name, files: zipped.FileIndex.filter((f) => f.type === 2 && !f.name.includes('Sh33tJ5')).map((f) => [f.name, new TextDecoder().decode(f.content)]) };
+        /* Characters PDF cannot carry are refused by name, not garbled. */
+        const cyr = await run('note.txt', 'Привет, мир', 'pdf');
+        out.cyr = { file: !!cyr.file, toast: cyr.toast };
+        const latin = await run('note.txt', 'Café — naïve “quotes” €5', 'pdf');
+        out.latin = { name: latin.file && latin.file.name, pdf: latin.file ? (await latin.file.blob.text()).slice(0, 5) : null };
+        /* A web page is read without being run. */
+        window.__bridgePwned = undefined;
+        const page = await run('page.html', '<h1>Hi</h1><img src="x" onerror="window.__bridgePwned=1"><script>window.__bridgePwned=2</script><p>Body</p>', 'office');
+        await new Promise((r) => setTimeout(r, 300));
+        out.html = { pwned: window.__bridgePwned, name: page.file && page.file.name, note: document.querySelector('#br-note').textContent };
+        brDownload = realDl; toast = realToast;
+        return out;
+      }, docx);
+      check(conv.docx.name === 'report.docx' && /wordprocessingml/.test(conv.docx.type), `Word out is a real .docx, not HTML named .doc: ${conv.docx.name}`);
+      check(conv.docx.h1 && conv.docx.h2 && conv.docx.bold && conv.docx.italic && conv.docx.table,
+        `and keeps headings, bold, italic and tables: ${JSON.stringify(conv.docx)}`);
+      check(conv.docx.amp, 'with & and < written safely');
+      check(/^# Quarterly report\n/.test(conv.md) && /\*\*well\*\*/.test(conv.md) && /- Revenue up 12%\n- Two new clients/.test(conv.md) && /\| North \| 120 \| 140 \|/.test(conv.md),
+        'Markdown out keeps headings, bold, lists and tables');
+      check(/2 sheets/.test(conv.sheets.kind) && JSON.stringify(conv.sheets.names) === '["Sales","Team"]' && JSON.stringify(conv.sheets.team) === '[["Name"],["Ann"]]',
+        `a workbook keeps every sheet, not just the first: ${JSON.stringify(conv.sheets.names)}`);
+      check(conv.zip.name === 'book.csv.zip' && conv.zip.files.length === 2 && conv.zip.files.some(([n, t]) => n === 'Sales.csv' && t.includes('"a,""quoted"" cell"')),
+        `as CSV, one file per sheet in a .zip, quoted properly: ${conv.zip.files.map(([n]) => n).join(', ')}`);
+      check(!conv.cyr.file && /Cyrillic/.test(conv.cyr.toast || ''), `a PDF that would garble the text is refused, saying why: "${conv.cyr.toast}"`);
+      check(conv.latin.name === 'note.pdf' && conv.latin.pdf === '%PDF-', 'while Western European text, quotes and € make a PDF');
+      check(conv.html.pwned === undefined && conv.html.name === 'page.docx', 'a web page is converted without anything in it running');
+      check(/picture in it isn’t carried over/.test(conv.html.note), `and it says its picture is not carried over: "${conv.html.note}"`);
+    }
+
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
     /* ---- depth is part of the design, not decoration to be lost ---- */
     console.log('\n— the interface has weight —');

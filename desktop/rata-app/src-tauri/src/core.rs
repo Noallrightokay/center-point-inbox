@@ -865,6 +865,32 @@ pub fn safe_file_name(name: &str) -> String {
     clean
 }
 
+/// The most the interface may hand over to be saved: a converted document or
+/// a workspace export, never anything near this.
+pub const SAVE_MAX: usize = 100 * 1024 * 1024;
+
+/// A file the interface made — a converted document, a workspace export —
+/// saved into `dir` (the Downloads folder). The webview does not save a
+/// page's downloads on its own, so without this "Convert & download" did
+/// nothing at all in the app. The name is cleaned as an attachment's is and
+/// an existing file is never overwritten; RATA does not open what it saved.
+pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> {
+    if bytes.len() > SAVE_MAX {
+        return Err("That file is too large to save from RATA.".into());
+    }
+    let name = safe_file_name(name);
+    let path = write_new(dir, &name, bytes)
+        .map_err(|e| format!("It could not be saved in {} ({e}).", dir.display()))?;
+    Ok(Saved {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(name),
+        path: path.display().to_string(),
+        size: bytes.len() as u64,
+    })
+}
+
 /// Write `bytes` to a new file in `dir` named `name`, or `name (2)` and so on
 /// if that is taken. Created exclusively, so an existing file is never
 /// overwritten, even one that appears between the check and the write.
@@ -1258,6 +1284,26 @@ mod tests {
         assert_eq!(std::fs::read(&a).unwrap(), b"one");
         assert_eq!(std::fs::read(&b).unwrap(), b"two");
         assert_eq!(std::fs::read(&c).unwrap(), b"three");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_made_file_is_saved_clean_and_never_over_another() {
+        let dir = std::env::temp_dir().join(format!("rata-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = save_file(&dir, "report.docx", b"one").unwrap();
+        let b = save_file(&dir, "report.docx", b"two").unwrap();
+        assert_eq!(a.name, "report.docx");
+        assert_eq!(b.name, "report (2).docx");
+        assert_eq!(std::fs::read(&a.path).unwrap(), b"one");
+        let sly = save_file(&dir, "../../.bashrc", b"x").unwrap();
+        assert!(
+            std::path::Path::new(&sly.path).starts_with(&dir),
+            "{}",
+            sly.path
+        );
+        let big = vec![0u8; SAVE_MAX + 1];
+        assert!(save_file(&dir, "big.bin", &big).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
