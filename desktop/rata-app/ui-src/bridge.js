@@ -221,6 +221,17 @@
       }
     },
 
+    /* A web address the customer chose to open. Rust checks it is one. */
+    async '/api/link/open'(opts) {
+      const b = body(opts);
+      try {
+        await invoke('open_link', { url: String(b.url || '') });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e) };
+      }
+    },
+
     async '/api/mail/read'(opts) {
       const b = body(opts);
       try {
@@ -391,6 +402,25 @@
   } else {
     settleLicence();
   }
+
+  /* Every web link on the app's own page — the licence page, checkout, a
+     link in the text of a message — opens in the browser. Followed in place,
+     it would replace the app with a web page and no way back; links.rs
+     refuses that navigation too, and this is the half that still opens the
+     page. A handler on the page that claims the click first (preventDefault)
+     keeps it. Links inside an HTML message never reach here: that frame is
+     another document, and its clicks arrive through Rust. */
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return;
+    e.preventDefault();
+    invoke('open_link', { url: href }).catch((err) => {
+      if (typeof window.toast === 'function') window.toast(err && err.error ? err.error : String(err));
+    });
+  });
 
   window.__RATA_NATIVE__ = async function (path, opts) {
     const route = ROUTES[path];

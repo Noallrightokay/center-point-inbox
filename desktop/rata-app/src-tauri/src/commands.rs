@@ -188,3 +188,14 @@ pub async fn save_attachment(
     app.save_attachment(&email, uid, uidvalidity, index, &dir)
         .await
 }
+
+/// A web address from the interface — a link in the text of a message, or
+/// one the customer confirmed — for the browser. Anything that is not http
+/// or https is refused here, whatever the page asked.
+#[tauri::command]
+pub fn open_link(url: String) -> Result<(), String> {
+    match crate::links::classify(&url) {
+        Some(crate::links::Link::Web(u)) => crate::links::open_in_browser(&u),
+        _ => Err("RATA only opens web addresses (http and https).".into()),
+    }
+}

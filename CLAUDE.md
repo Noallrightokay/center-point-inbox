@@ -84,7 +84,8 @@ attachments; v0.1.10 shrinks the window to fit small screens (it opened
 `fit_to_screen` in `main.rs`, which has to use the configured size because
 the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
 the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
-keeps mail in IndexedDB, one record per message, with no storage cap. An
+keeps mail in IndexedDB, one record per message, with no storage cap;
+v0.1.14 opens links in the browser, asking first for links in formatted mail. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -177,8 +178,7 @@ structure and every link's address as `text <url>` and drops styles, scripts
 and hidden preheaders. `html.rs` runs on a stranger's input, so its tag scan
 is bounded (`MAX_TAG`) and linear; keep it that way. A part cut by the 64 KiB
 limit, or text past `BODY_CHARS` (16 000), sets `truncated` and the reading
-pane says so. Links are shown, never made clickable: navigating the app's
-webview to an outside page would hand that page the IPC bridge. Mail stored
+pane says so. Mail stored
 by an older build (no `bodyV: 2`) is re-read by UID (`reread_mail` →
 `rata_mail::imap::fetch_uids`), 50 per mailbox after each sync and at once
 when opened.
@@ -211,12 +211,15 @@ before the size check. The drag-between-panes forward uses the same path; it
 used to announce files it never sent.
 **HTML mail (v0.1.12) — three locks, keep all three.** (1) `html::safe`
 sanitises with ammonia: scripts, handlers, forms, frames, `<meta>`, `<base>`,
-relative URLs and every link's `href` go; layout, `<style>`, an allowlist of
+relative URLs and any `href` that is not http, https or mailto go; layout, `<style>`, an allowlist of
 CSS properties and `cid:` pictures (inlined as `data:`, images only, capped)
-stay. (2) The interface shows it in `<iframe sandbox="">` — never add
-`allow-scripts` or `allow-same-origin`; together they undo the sandbox, and
-this page can call the app — with `<base target="_blank">` so any link that
-slipped through tries a popup the sandbox refuses. (3) The frame's own CSP
+stay. (2) The interface shows it in `<iframe sandbox="allow-popups">` —
+never add `allow-scripts` or `allow-same-origin` (together they undo the
+sandbox, and this page can call the app), nor `allow-top-navigation`,
+`allow-forms` or `allow-popups-to-escape-sandbox`. `allow-popups` is there
+only because a click on a link is a request for a new window (`<base
+target="_blank">`), which is how Rust hears of it; no window ever opens (see
+*Links* below). (3) The frame's own CSP
 (`frameDoc`) fetches nothing but `https:` pictures after **Load images**; the
 app CSP's `img-src … https:` exists only so that can work, and its
 `frame-src 'none'` also blocks a frame navigating itself. Verified in the
@@ -228,8 +231,31 @@ not request events; and the desktop harness (`beta-fixes.mjs` in the session
 scratchpad) now serves the page under the app's real CSP from
 `tauri.conf.json`. Opening a message fetches it whole when it may have HTML
 (`m.html`, or unknown for mail stored before 0.1.12).
-Also not built: INBOX only; clickable links (needs the system browser — an
-opener with an allowlist of schemes); no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**Links (v0.1.14).** The app's webview holds the bridge to everything, so no
+outside page may ever load in it; links go to the customer's browser, and
+only http and https do (`links.rs`: `classify` refuses `file:`,
+`javascript:`, `data:`, custom schemes, and `user@host` addresses that
+disguise the real host). The main window is built in `main.rs` rather than
+from the config (`"create": false`) so it can carry two handlers.
+`on_new_window` receives every click on a link in a formatted message (the
+frame's only permission), always answers `Deny`, and tells the page via
+`eval` of a JSON literal: `window.__rataLink({kind:'web',url,host})` shows
+"Open this link in your browser?" naming the host — the words of a link can
+say anything — and only **Open** calls `open_link`; `kind:'mail'` opens
+RATA's composer (`writeTo`, with an empty body). `on_navigation` keeps the
+window on `tauri://localhost` / `http(s)://tauri.localhost` / `about:`,
+sends mailrata.org links to the browser and refuses the rest — the licence
+box's "Sign in at mailrata.org" used to replace the app with the website,
+with no way back. In the Text view, addresses are linked (`linkify`) and
+open straight away, since the text *is* the address; bridge.js hands every
+http(s) link on the app's own page to `open_link`, and `open_link` checks
+again in Rust whatever the page asked. Verified in the packaged WebKit build
+(a click in the frame reached `on_new_window`, the dialog named the host,
+Open passed exactly that URL to `xdg-open`, `javascript:` did nothing,
+`location.href` to example.com was refused). Testing trap: under Xvfb here
+the webview draws at 3/4 width but takes clicks at full width — multiply a
+screenshot's x by 4/3 before clicking with xdotool; y is unchanged.
+Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

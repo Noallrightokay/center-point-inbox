@@ -637,17 +637,32 @@ fn cleaner() -> ammonia::Builder<'static> {
     )
     .add_tag_attributes("img", ["src", "alt", "width", "height", "border"])
     .add_tag_attributes("font", ["color", "face", "size"])
-    // Links are shown but go nowhere: followed inside the frame, a link
-    // would put the sender's page — a login form, say — in the reading
-    // pane. The addresses are in the text version, to read and copy.
-    .rm_tag_attributes("a", ["href"])
+    // A link keeps its address only if it is a web page or someone to write
+    // to. Followed inside the frame it would go nowhere (the frame may not
+    // navigate); clicked, it asks for a new window, which the app refuses and
+    // turns into "open this in your browser?", naming where it really goes.
+    .attribute_filter(|element, attribute, value| {
+        if element == "a" && attribute == "href" {
+            return link_target(value).then_some(value.into());
+        }
+        Some(value.into())
+    })
     .rm_tags(["area", "map"])
-    .link_rel(None)
+    .link_rel(Some("noopener noreferrer"))
     .add_url_schemes(["data"])
     .url_relative(ammonia::UrlRelative::Deny)
     .filter_style_properties(STYLE_PROPERTIES.iter().copied().collect())
     .strip_comments(true);
     b
+}
+
+/// Whether a link's address may stay in the message: http, https and
+/// mailto, nothing else. The app checks again before acting on a click.
+fn link_target(href: &str) -> bool {
+    let lower = href.trim_start().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|p| lower.starts_with(p))
 }
 
 /// The CSS allowed in a `style` attribute: what lays out and colours a
@@ -1019,13 +1034,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn links_keep_their_words_but_lose_their_addresses() {
-        let out = clean("<p>Please <a href=\"https://phish.example/login\" target=\"_self\">sign in</a>.</p><map><area href=\"https://x.example\"></map>").html;
-        assert!(out.contains("sign in"), "{out}");
+    fn web_and_mail_links_keep_their_addresses_and_nothing_else_does() {
+        let out = clean("<p>Please <a href=\"https://shop.example/order?id=1&amp;t=2\" target=\"_self\">see your order</a> or <a href=\"mailto:help@shop.example\">write</a>.</p>").html;
         assert!(
-            !out.contains("phish.example") && !out.contains("href") && !out.contains("target"),
+            out.contains("href=\"https://shop.example/order?id=1&amp;t=2\""),
             "{out}"
         );
+        assert!(out.contains("href=\"mailto:help@shop.example\""), "{out}");
+        // Its own target would make it try to replace the frame; it takes the
+        // frame's instead, which asks for a new window.
+        assert!(!out.contains("target"), "{out}");
+        assert!(out.contains("rel=\"noopener noreferrer\""), "{out}");
+        for other in [
+            "<a href=\"file:///etc/passwd\">x</a>",
+            "<a href=\"data:text/html,x\">x</a>",
+            "<a href=\"tel:+15550100\">x</a>",
+            "<a href=\"ftp://example.com/x\">x</a>",
+            "<a href=\"ms-msdt:/id x\">x</a>",
+            "<a href=\"  javascript:alert(1)\">x</a>",
+            "<map><area href=\"https://x.example\"></map>",
+        ] {
+            let out = clean(other).html;
+            assert!(!out.contains("href"), "{other} -> {out}");
+        }
     }
 
     #[test]

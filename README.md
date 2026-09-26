@@ -225,6 +225,8 @@ Be realistic about this before promising anything to a customer.
   RATA. Files can be attached when sending, up to 18 MB in all, and a
   forwarded message carries its attachments. HTML mail is shown formatted
   in a locked-down frame (see *Traps*), with remote images off until asked.
+  Links open in the browser — web addresses only, and from formatted mail
+  only after a prompt naming where the link really goes (`links.rs`).
 - No auto-update, and no code signing.
 
 ### What has never been tested

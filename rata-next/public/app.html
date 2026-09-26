@@ -502,6 +502,15 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 /* ---------- welcome ---------- */
 #welcome-ov{position:fixed;inset:0;background:rgba(10,14,26,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;z-index:48;align-items:center;justify-content:center;padding:20px}
 #welcome-ov.open{display:flex}
+#link-ov{position:fixed;inset:0;background:rgba(10,14,26,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
+#link-ov.open{display:flex}
+#link-card{width:min(480px,100%);background:var(--glass-strong);backdrop-filter:saturate(180%) blur(28px);-webkit-backdrop-filter:saturate(180%) blur(28px);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .2s cubic-bezier(.32,.72,.35,1)}
+#link-card h2{font-size:18px;font-weight:650;margin-bottom:10px}
+.link-lead{font-size:12.5px;color:var(--slate);margin:6px 0}
+.link-host{font-size:20px;font-weight:700;overflow-wrap:anywhere;margin:2px 0 6px}
+.link-url{font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;color:var(--faint);background:var(--card);border-radius:var(--r-sm);padding:8px 10px;overflow-wrap:anywhere;max-height:88px;overflow:auto}
+.link-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.md-content a.md-link{color:var(--tint-deep);text-decoration:underline;overflow-wrap:anywhere}
 #welcome-card{width:min(440px,100%);background:var(--glass-strong);backdrop-filter:saturate(180%) blur(28px);-webkit-backdrop-filter:saturate(180%) blur(28px);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .3s cubic-bezier(.32,.72,.35,1)}
 #welcome-card h2{font-family:'Fredoka',var(--sans);font-weight:600;font-size:22px;letter-spacing:.03em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
@@ -898,6 +907,18 @@ button.att-card:disabled{opacity:.6;cursor:progress}
   </div>
 </div>
 
+<!-- Opening a link from a formatted message -->
+<div id="link-ov" role="dialog" aria-modal="true" aria-labelledby="link-title">
+  <div id="link-card">
+    <h2 id="link-title">Open this link in your browser?</h2>
+    <p class="link-lead">It goes to</p>
+    <div class="link-host" id="link-host"></div>
+    <div class="link-url" id="link-url"></div>
+    <p class="link-lead">The words of a link in an email can say anything. If this is not the site you expected, do not open it.</p>
+    <div class="link-btns"><button class="btn" id="link-cancel">Cancel</button><button class="btn primary" id="link-open">Open in browser</button></div>
+  </div>
+</div>
+
 <!-- Rata Assist -->
 <button id="assist-fab" aria-label="Rata Assist"><img src="icons/mark-256.png" alt="" width="40" height="40" style="display:block"></button>
 <div id="assist-ov">
@@ -1237,13 +1258,15 @@ const VIEWMODE=new Map(),SHOWIMG=new Set();
    sandbox — no scripts, no forms, no popups, no navigating the app, and an
    origin of its own, so nothing in it can reach this page or the app behind
    it — and its own content security policy allows nothing to be fetched
-   except, once asked for, pictures over https. Links inside it are inert;
-   their addresses are in the Text view. */
+   except, once asked for, pictures over https. The one thing the sandbox
+   allows is asking for a new window, which is all a click on a link does
+   (every link targets _blank, below): the app never opens one — Rust turns
+   the request into "open this in your browser?" (links.rs, __rataLink). */
 function frameDoc(html,images){
   const csp="default-src 'none'; script-src 'none'; object-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:"+(images?' https:':'');
   return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
-    /* Second lock on links: every one tries to open a new window, which the
-       sandbox refuses, so even a link that reached this far does nothing. */
+    /* Every link asks for a new window rather than trying to replace the
+       frame, which the app's CSP would refuse (frame-src 'none'). */
     +'<base target="_blank">'
     +'<style>html,body{margin:0;background:#fff;color:#1b1b1b}body{padding:18px;font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}</style>'
     +'</head><body>'+html+'</body></html>';
@@ -1835,6 +1858,71 @@ function renderResting(){
   });
 }
 
+/* ---------------- LINKS ----------------
+   In the text of a message a link shows exactly where it goes, so clicking
+   it opens it: in the browser (bridge.js hands every web link on this page
+   to Rust, which opens http and https and nothing else), or, for an email
+   address, in the composer here. In a formatted message the words can say
+   anything, so a click asks first and names the real destination. */
+const LINK_RX=/\b(?:https?:\/\/|mailto:)[^\s<>"'`]+/gi;
+function linkify(text){
+  text=String(text||'');
+  let out='',last=0;
+  for(const mm of text.matchAll(LINK_RX)){
+    if(mm.index<last)continue;
+    let u=mm[0];
+    /* A full stop or bracket after a link belongs to the sentence — unless
+       the link opened the bracket itself. */
+    while(u.length&&(/[.,;:!?'"\]}]$/.test(u)||(u.endsWith(')')&&u.split('(').length<u.split(')').length)))u=u.slice(0,-1);
+    if(!/^(https?:\/\/[^/?#]|mailto:.+@)/i.test(u))continue;
+    out+=esc(text.slice(last,mm.index))+`<a class="md-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`;
+    last=mm.index+u.length;
+  }
+  return out+esc(text.slice(last));
+}
+function mailtoOf(h){
+  try{
+    const u=new URL(h);
+    const to=decodeURIComponent(u.pathname).split(',')[0].trim();
+    if(!/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(to)||to.length>254)return null;
+    return {to,subject:(u.searchParams.get('subject')||'').replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200)};
+  }catch(e){return null}
+}
+/* A new message to someone a link named: nothing left over from an earlier
+   draft, which could otherwise go to this stranger. */
+function writeTo(to,subject){
+  openCompose();
+  $('#cmp-to').value=to;$('#cmp-subj').value=subject||'';$('#cmp-body').value='';
+  liveScan();$('#cmp-body').focus();
+}
+let LINK_PENDING=null;
+function askToOpen(url,host){
+  LINK_PENDING=url;
+  $('#link-host').textContent=host;
+  $('#link-url').textContent=url.length>400?url.slice(0,400)+'\u2026':url;
+  $('#link-ov').classList.add('open');
+  $('#link-open').focus();
+}
+function closeLink(){LINK_PENDING=null;$('#link-ov').classList.remove('open')}
+async function openLink(url){
+  let r;
+  try{r=await apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})})}
+  catch(e){r={error:String(e&&e.message||e)}}
+  if(!r||r.error){toast((r&&r.error)||'The link could not be opened');return false}
+  return true;
+}
+/* Rust calls this when a link in a formatted message is clicked, with what
+   it made of it (links.rs). The frame itself can call nothing here. */
+window.__rataLink=said=>{
+  if(!said||typeof said!=='object')return;
+  if(said.kind==='web'&&typeof said.url==='string')askToOpen(said.url,String(said.host||''));
+  else if(said.kind==='mail'&&typeof said.to==='string')writeTo(said.to,String(said.subject||''));
+  else toast('RATA opens links to web pages and email addresses only, and this was neither.');
+};
+$('#link-cancel').onclick=closeLink;
+$('#link-ov').addEventListener('click',e=>{if(e.target.id==='link-ov')closeLink()});
+$('#link-open').onclick=()=>{const u=LINK_PENDING;closeLink();if(u)openLink(u)};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&LINK_PENDING)closeLink()});
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
   selMail=id;
@@ -1881,8 +1969,8 @@ function openMail(id){
       </div>
     </div>
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
-    ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
-      :`<div class="md-content" id="md-body">${esc(whole?whole.text:m.body)}</div>
+    ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
+      :`<div class="md-content" id="md-body">${linkify(whole?whole.text:m.body)}</div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
@@ -1921,6 +2009,10 @@ function openMail(id){
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
+  $$('#md-body a.md-link').forEach(a=>a.onclick=e=>{
+    const h=a.getAttribute('href')||'';
+    if(/^mailto:/i.test(h)){e.preventDefault();const w=mailtoOf(h);if(w)writeTo(w.to,w.subject)}
+  });
   $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
   if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
   if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
