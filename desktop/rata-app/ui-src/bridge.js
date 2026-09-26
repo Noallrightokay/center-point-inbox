@@ -130,8 +130,11 @@
       };
     },
 
-    async '/api/sync/mail'() {
-      const res = await invoke('refresh_mail', { limit: 15 });
+    /* `known`: what the interface already holds of each folder, so only
+       what is new is downloaded; `flags` comes back for the rest. */
+    async '/api/sync/mail'(opts) {
+      const b = body(opts);
+      const res = await invoke('refresh_mail', { limit: 15, known: Array.isArray(b.known) ? b.known : null });
       /* Nothing was read, because this copy is not licensed. Said as an error
          so the interface leaves what it has alone — building an answer from
          the empty lists below would report every mailbox as live and freshly
@@ -163,6 +166,7 @@
          where the interface already words each one correctly. */
       return {
         messages: res.messages.map(asMessage),
+        flags: res.flags || [],
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };

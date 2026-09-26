@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders and the customer's own. Standalone, knows nothing about the app. 158 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders and the customer's own, refreshing only what is new. Standalone, knows nothing about the app. 162 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 58 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -104,7 +104,8 @@ Sent folder too; v0.1.23 can update itself (once the owner has added the
 update key — `rata-next/LAUNCH.md` §9); v0.1.24 takes the plan from the
 licence, so Pro opens Side by side in the app; v0.1.25 adds Archive and
 Spam; v0.1.26 adds the customer's own folders and Move to, and files
-synced mail under its mailbox (replies had gone from the first one). An
+synced mail under its mailbox (replies had gone from the first one);
+v0.1.27 fetches new mail by itself and downloads only what is new. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -163,7 +164,26 @@ server's declared `\Trash`; none means refused) and never acts on a UID it
 cannot vouch for (UIDVALIDITY must match; only UIDs still present are touched).
 Deletions are also remembered in `S.gone` so sync does not restore them, and a
 sync takes the server's read/starred for messages it already holds. What is
-missing is scale. A refresh fetches the newest ~15; older mail comes 50 at a
+missing is scale. **New mail by itself, and only what is new (v0.1.27).**
+Until 0.1.27 the desktop app never refreshed on its own — boot only synced
+website accounts — so mail arrived only when someone pressed Sync. Now
+`startAutoSync` (started by `takeStanding` once the licence is good) refreshes
+0.8 s after start, every five minutes, and on `focus`/`visibilitychange`
+after a minute away; `serverSync(p, quiet)` runs one refresh at a time
+(`SYNCING`), and a quiet one only speaks, or writes to the audit log, when
+there is new mail. Each refresh sends `known` (`heldKnown`: per mailbox and
+fixed folder, the newest UID held and its UIDVALIDITY) → `refresh_mail` →
+`fetch_newest(…, known)`: for a known folder the engine asks `UID FETCH
+since+1:* (UID)` and downloads only those (at most `NEW_MAX`, 200), and sends
+read/starred for the newest `limit` as `flags` (`FETCH n:* (UID FLAGS)`, no
+text), which `absorbMail` applies; an unknown folder or a changed
+UIDVALIDITY gets the newest `limit` whole, as before. So a refresh with
+nothing new is a sign-in and a few hundred bytes a folder. Not handled: more
+than 200 new in one folder between refreshes leaves the ones in between
+unfetched, since Load older mail pages below the *oldest* message held (the
+same gap began at 15 before 0.1.27).
+Before 0.1.27 every refresh re-downloaded up to 64 KB of each of the newest
+15 in four folders. Older mail comes 50 at a
 time through **Load older mail** (`loadOlder` → `/api/mail/older` →
 `older_mail` → `rata_mail::imap::fetch_older`), which pages by position below
 the oldest UID RATA holds, and a newly linked mailbox gets one page straight
