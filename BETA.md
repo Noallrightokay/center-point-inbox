@@ -81,10 +81,10 @@ Don't spend time reporting these — they are known and planned:
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
-  RATA stops loading older mail once its storage on your computer is nearly
-  full (a few MB — somewhere between one and three thousand messages,
-  depending on how long they are) and says so; a
-  larger store is coming.
+  From v0.1.13 there is no storage limit to run into: mail is kept one
+  message at a time, with room for as much as your disk holds. With many
+  thousands of messages, starting RATA and redrawing the list get slower —
+  tell us when it starts to feel slow, and at roughly how many messages.
 - No other folders yet — only the inbox is shown.
 - **HTML mail is shown formatted from v0.1.12** — layout, colours, tables and
   the pictures carried inside the message. Pictures from the internet stay off
