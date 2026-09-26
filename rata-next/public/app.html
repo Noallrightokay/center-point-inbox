@@ -1098,42 +1098,152 @@ function migrate(old){
    and localStorage holds a few megabytes per site: a few thousand messages
    and "Storage full". IndexedDB holds as much as the disk allows.
 
-   The interface still works on S.messages in memory, all of it, as before.
+   A message's text is kept apart from the rest of it (0.1.21): the list,
+   the filters and everything else work on S.messages in memory — who, when,
+   subject, the preview line, flags — and the text, nearly all of a
+   message's size, stays on disk in its own store until something needs it:
+   opening the message, replying, a search. Memory is what the list needs,
+   not what the mailbox weighs. bodyNow(m) is the text if it is to hand;
+   bodyOf(m) / bodiesOf(list) fetch it. A message that arrives with its text
+   (a sync, older mail, a sent one, an import) keeps it until the next save,
+   which moves it to disk.
+
    save() writes what changed, and finding that out has to be cheap: it runs
-   on every click, over every message. So each message is remembered as it
-   was last stored in two halves — its body, which is nearly all of its size
-   and almost never changes, compared by identity; and everything else, a few
-   hundred bytes, compared as JSON. Only messages that differ, and those no
-   longer in S.messages, touch the disk — in one transaction, started in the
-   same turn as the change, so a window closed straight after a delete still
-   takes the delete with it.
+   on every click, over every message. Each message is remembered as it was
+   last stored, as JSON — a few hundred bytes now the text is elsewhere. Only
+   messages that differ, text that is new, and messages no longer in
+   S.messages touch the disk — in one transaction, started in the same turn
+   as the change, so a window closed straight after a delete still takes the
+   delete with it.
 
    If IndexedDB cannot be opened, messages stay in the localStorage entry the
-   old way, with its cap (STORE_SOFT_CAP); nothing is lost either way. */
-const MS_DB='rata-mail-'+(SESSION?SESSION.uid:'anon'),MS_STORE='messages';
+   old way, text and all, with its cap (STORE_SOFT_CAP); nothing is lost
+   either way. */
+const MS_DB='rata-mail-'+(SESSION?SESSION.uid:'anon');
+/* Two stores. "messages" holds each message's text, as JSON with a body
+   field — the store every build since 0.1.13 has written, so a mailbox kept
+   by one of those keeps its text where it is (a record there is the whole
+   message, and only its body is read). "meta" holds the rest of each
+   message, which is what start-up reads. */
+const MS_TEXT='messages',MS_META='meta';
 let MS=null;              /* the open database, or null: the old way */
-const MS_HELD=new Map();  /* id → [the rest as JSON, the body] as stored */
+const MS_HELD=new Map();  /* id → the message without its text, as JSON, as stored */
+const BODY_PUT=new Map(); /* id → text taken off a message, not yet on disk */
+const BODY_FLY=new Map(); /* id → text being written now */
+const BODY_CACHE=new Map(),BODY_CACHE_MAX=200; /* id → text read lately */
 let msQueued=false,msWarned=false,msLast=Promise.resolve();
-const msRest=m=>{const {body,...rest}=m;return JSON.stringify(rest)};
-function msOpen(){
+function msOpen(name=MS_DB){
   return new Promise((res,rej)=>{
     /* Some webviews have been known to leave open() pending forever; the
-       app must still start. */
+       app must still start. An upgrade under way is IndexedDB working, and
+       a large mailbox takes a while to go through. */
     const t=setTimeout(()=>rej(new Error('IndexedDB did not open')),5000);
-    let rq;try{rq=indexedDB.open(MS_DB,1)}catch(e){clearTimeout(t);rej(e);return}
-    rq.onupgradeneeded=()=>{const db=rq.result;if(!db.objectStoreNames.contains(MS_STORE))db.createObjectStore(MS_STORE)};
+    let rq;try{rq=indexedDB.open(name,2)}catch(e){clearTimeout(t);rej(e);return}
+    rq.onupgradeneeded=e=>{
+      clearTimeout(t);
+      const db=rq.result;
+      if(!db.objectStoreNames.contains(MS_TEXT))db.createObjectStore(MS_TEXT);
+      if(!db.objectStoreNames.contains(MS_META))db.createObjectStore(MS_META);
+      /* Version 1 kept each message whole in "messages". The text stays
+         there — rewriting it was 30 s for 10 000 messages, since writing is
+         what is slow — and the rest of each is copied into "meta", in the
+         same transaction. A record that cannot be read is copied as it is,
+         so start-up finds it and the next save removes it. */
+      if(e.oldVersion>=1&&e.oldVersion<2){
+        const tx=rq.transaction,ts=tx.objectStore(MS_TEXT),ms=tx.objectStore(MS_META);
+        const ks=ts.getAllKeys(),vs=ts.getAll();
+        vs.onsuccess=()=>{
+          const keys=ks.result,vals=vs.result;
+          for(let i=0;i<keys.length;i++){
+            let m=null;try{m=JSON.parse(vals[i])}catch(err){}
+            if(m&&typeof m==='object'){delete m.body;ms.put(JSON.stringify(m),keys[i])}
+            else ms.put(vals[i],keys[i]);
+          }
+        };
+      }
+    };
     rq.onsuccess=()=>{clearTimeout(t);const db=rq.result;db.onversionchange=()=>db.close();res(db)};
     rq.onerror=()=>{clearTimeout(t);rej(rq.error)};
   });
 }
-/* Every record as [key, JSON], in key order. */
+/* Every message — without its text — as [key, JSON], in key order. */
 function msAll(db){
   return new Promise((res,rej)=>{
-    const tx=db.transaction(MS_STORE,'readonly'),st=tx.objectStore(MS_STORE);
+    const tx=db.transaction(MS_META,'readonly'),st=tx.objectStore(MS_META);
     const ks=st.getAllKeys(),vs=st.getAll();
     tx.oncomplete=()=>res(ks.result.map((k,i)=>[String(k),vs.result[i]]));
     tx.onerror=tx.onabort=()=>rej(tx.error);
   });
+}
+/* The text in a record of the text store: {body} as this build writes it,
+   or a whole message as 0.1.13–0.1.20 did. */
+function textOf(v){
+  if(typeof v!=='string')return '';
+  try{const o=JSON.parse(v);return o&&typeof o==='object'&&o.body!=null?String(o.body):''}catch(e){return ''}
+}
+function bodyRemember(id,b){
+  BODY_CACHE.delete(id);BODY_CACHE.set(id,b);
+  if(BODY_CACHE.size>BODY_CACHE_MAX)BODY_CACHE.delete(BODY_CACHE.keys().next().value);
+}
+/* A message's text if it is to hand — on the message (not saved yet, or
+   kept the old way), waiting to be written, being written, or read lately
+   — else undefined. */
+function bodyNow(m){
+  if(!m)return '';
+  if('body' in m)return m.body==null?'':String(m.body);
+  const id=String(m.id);
+  if(BODY_PUT.has(id))return BODY_PUT.get(id);
+  if(BODY_FLY.has(id))return BODY_FLY.get(id);
+  if(BODY_CACHE.has(id)){const b=BODY_CACHE.get(id);bodyRemember(id,b);return b}
+  return undefined;
+}
+/* The text of each message in list, as a Map by id, read from disk in one
+   transaction where it is not to hand. A message with none gives ''. */
+function bodiesOf(list){
+  const out=new Map(),need=[];
+  for(const m of list){if(!m)continue;const b=bodyNow(m);if(b!==undefined)out.set(m.id,b);else need.push(m)}
+  if(!need.length)return Promise.resolve(out);
+  const blank=()=>{for(const m of need)if(!out.has(m.id))out.set(m.id,'');return out};
+  if(!MS)return Promise.resolve(blank());
+  return new Promise(res=>{
+    let tx;try{tx=MS.transaction(MS_TEXT,'readonly')}catch(e){res(blank());return}
+    const st=tx.objectStore(MS_TEXT);
+    for(const m of need){const rq=st.get(String(m.id));rq.onsuccess=()=>out.set(m.id,textOf(rq.result))}
+    tx.oncomplete=()=>{
+      /* Fills the cache, never overwrites it: whatever changed a text since
+         this read began put the new one there. */
+      for(const m of need){const id=String(m.id);if(!BODY_PUT.has(id)&&!BODY_FLY.has(id)&&!BODY_CACHE.has(id)&&!('body' in m))bodyRemember(id,out.get(m.id))}
+      res(blank());
+    };
+    tx.onerror=tx.onabort=()=>res(blank());
+  });
+}
+const bodyOf=m=>bodiesOf([m]).then(r=>r.get(m.id)??'');
+/* The ids of every message whose text contains q, ignoring case: a pass
+   over the text store on disk plus what is still in memory. A record is
+   only parsed when its raw JSON matches, which most do not. */
+async function bodiesMatching(q){
+  const re=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'),hits=new Set(),seen=new Set();
+  for(const m of S.messages){
+    if(!m||!('body' in m))continue;
+    seen.add(String(m.id));if(re.test(String(m.body||'')))hits.add(String(m.id));
+  }
+  for(const [id,b] of [...BODY_PUT,...BODY_FLY]){if(seen.has(id))continue;seen.add(id);if(re.test(b))hits.add(id)}
+  if(!MS)return hits;
+  /* JSON writes a line break as \n and a quote as \", so a query with
+     either could miss the raw test; those are checked in the text itself. */
+  const raw=!/["\\\n\r\t]/.test(q);
+  await new Promise(res=>{
+    let tx;try{tx=MS.transaction(MS_TEXT,'readonly')}catch(e){res();return}
+    tx.objectStore(MS_TEXT).openCursor().onsuccess=ev=>{
+      const c=ev.target.result;if(!c)return;
+      const id=String(c.key),v=c.value;
+      if(!seen.has(id)&&typeof v==='string'&&(!raw||re.test(v))&&re.test(textOf(v)))hits.add(id);
+      c.continue();
+    };
+    tx.oncomplete=tx.onerror=tx.onabort=()=>res();
+  });
+  return hits;
 }
 /* Writes what changed since the store was last written, and returns when
    that and every earlier write is on disk. A failed write forgets what it
@@ -1144,32 +1254,52 @@ function msFlush(){
   const now=new Set(),put=[],del=[];
   for(const m of S.messages){
     if(!m||m.id==null)continue;
-    const id=String(m.id),rest=msRest(m),was=MS_HELD.get(id);
+    const id=String(m.id);
     now.add(id);
-    if(!was||was[1]!==m.body||was[0]!==rest)put.push([id,m,rest]);
+    /* Text that came with the message goes to disk and leaves memory. */
+    if('body' in m){const b=m.body==null?'':String(m.body);delete m.body;BODY_PUT.set(id,b);bodyRemember(id,b)}
+    const rest=JSON.stringify(m);
+    if(MS_HELD.get(id)!==rest)put.push([id,rest]);
   }
   for(const id of MS_HELD.keys())if(!now.has(id))del.push(id);
-  if(!put.length&&!del.length)return msLast;
-  for(const [id,m,rest] of put)MS_HELD.set(id,[rest,m.body]);
-  for(const id of del)MS_HELD.delete(id);
+  for(const id of BODY_PUT.keys())if(!now.has(id)){BODY_PUT.delete(id);BODY_CACHE.delete(id)}
+  const texts=[...BODY_PUT];
+  if(!put.length&&!del.length&&!texts.length)return msLast;
+  /* Text being written is not written again by the next save. */
+  for(const [id,b] of texts)BODY_FLY.set(id,b);
+  BODY_PUT.clear();
+  for(const [id,rest] of put)MS_HELD.set(id,rest);
+  for(const id of del){MS_HELD.delete(id);BODY_CACHE.delete(id)}
   const undo=e=>{
     for(const [id] of put)MS_HELD.delete(id);
-    for(const id of del)MS_HELD.set(id,['',undefined]);
+    for(const id of del)MS_HELD.set(id,'');
+    /* Text that did not reach the disk waits for the next save, unless it
+       has changed since. */
+    for(const [id,b] of texts){if(BODY_FLY.get(id)===b)BODY_FLY.delete(id);if(!BODY_PUT.has(id)&&now.has(id))BODY_PUT.set(id,b)}
     if(!msWarned){msWarned=true;toast('RATA could not save mail on this computer'+(e&&e.name==='QuotaExceededError'?': the disk is full.':'.')+' It is still on the server.')}
     throw e;
   };
   try{
-    const tx=MS.transaction(MS_STORE,'readwrite'),st=tx.objectStore(MS_STORE);
-    for(const [id,m] of put)st.put(JSON.stringify(m),id);
-    for(const id of del)st.delete(id);
-    return msLast=new Promise((res,rej)=>{tx.oncomplete=()=>{msWarned=false;res()};tx.onerror=tx.onabort=()=>rej(tx.error||new Error('aborted'))}).catch(undo);
+    const tx=MS.transaction([MS_META,MS_TEXT],'readwrite'),ms=tx.objectStore(MS_META),ts=tx.objectStore(MS_TEXT);
+    for(const [id,rest] of put)ms.put(rest,id);
+    for(const [id,b] of texts)ts.put(JSON.stringify({body:b}),id);
+    for(const id of del){ms.delete(id);ts.delete(id)}
+    return msLast=new Promise((res,rej)=>{
+      tx.oncomplete=()=>{
+        msWarned=false;
+        /* On disk now, and read from there from now on (or the cache). */
+        for(const [id,b] of texts)if(BODY_FLY.get(id)===b)BODY_FLY.delete(id);
+        res();
+      };
+      tx.onerror=tx.onabort=()=>rej(tx.error||new Error('aborted'));
+    }).catch(undo);
   }catch(e){return msLast=Promise.reject(e).catch(undo)}
 }
 function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb';return o}
 /* Before anything is shown: the small entry from localStorage, the messages
-   from IndexedDB. Mail an older build kept in the localStorage entry moves
-   into IndexedDB here, and the entry is only rewritten without it once
-   IndexedDB has confirmed the write. */
+   (without their text) from IndexedDB. Mail an older build kept in the
+   localStorage entry moves into IndexedDB here, and the entry is only
+   rewritten without it once IndexedDB has confirmed the write. */
 async function load(){
   let st=null;
   try{const raw=localStorage.getItem(LS_KEY);st=raw?JSON.parse(raw):null}catch(e){st=null}
@@ -1180,10 +1310,12 @@ async function load(){
   const byId=new Map();
   for(const [id,j] of held){
     /* Unreadable, or filed under a key that is not its id: remembered as
-       something no message matches, so the next write replaces or removes it. */
+       something no message matches, so the next write replaces or removes
+       it. So is a record still carrying its text, which the next write
+       moves to where text is kept. */
     let m=null;try{m=JSON.parse(j)}catch(e){}
-    if(m&&m.id!=null&&String(m.id)===id){MS_HELD.set(id,[msRest(m),m.body]);byId.set(id,m)}
-    else MS_HELD.set(id,['',undefined]);
+    if(m&&m.id!=null&&String(m.id)===id){MS_HELD.set(id,'body' in m?'':j);byId.set(id,m)}
+    else MS_HELD.set(id,'');
   }
   /* The localStorage copy wins: it is the newer one whenever both exist. */
   for(const m of S.messages)if(m&&m.id!=null)byId.set(String(m.id),m);
@@ -1191,7 +1323,9 @@ async function load(){
      recorded in S.gone, which is written at once. */
   S.messages=[...byId.values()].filter(m=>(m.ch||'email')==='email'&&!isGone(m.id));
   if(!MS)return;
-  try{await msFlush()}catch(e){MS=null;return}
+  /* If that first write fails, mail goes back to the old way for this
+     session, and takes back the text the write had taken off it. */
+  try{await msFlush()}catch(e){MS=null;for(const m of S.messages){const id=String(m.id);const b=BODY_PUT.get(id)??BODY_FLY.get(id);if(b!==undefined)m.body=b}BODY_PUT.clear();BODY_FLY.clear();return}
   if(inBlob)saveLocal();
 }
 function saveLocal(){
@@ -1294,7 +1428,7 @@ async function openWhole(m){
   let r;
   try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
   catch(e){r={error:String(e&&e.message||e)}}
-  if(!r||r.error){OPENED.set(m.id,{text:m.body,truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
+  if(!r||r.error){OPENED.set(m.id,{text:await bodyOf(m),truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
   OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[],html:r.html||null,remoteImages:!!r.remoteImages});
   /* The list of attachments is small and worth keeping: it is what puts the
      paperclip on the message in the list. */
@@ -1340,7 +1474,7 @@ async function convertAttachment(m,a,btn){
    refresh only re-fetches the newest few, so it would stay unreadable. It is
    re-read from the server instead: a batch per mailbox after each sync, and at
    once when such a message is opened. */
-const REREAD_PAGE=50;
+const REREAD_PAGE=50,REREADING=new Set();
 function takeBody(have,m){
   if(m.bodyV!==2||have.bodyV===2)return false;
   have.body=m.body;have.prev=m.prev;have.truncated=!!m.truncated;have.bodyV=2;
@@ -2050,14 +2184,21 @@ function openMail(id){
   selMail=id;
   const c=contact(m.cid);
   if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`);serverAct([m],'read')}
-  if(m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2){
-    rereadBodies([m]).then(n=>{if(n&&selMail===id)openMail(id)});
+  /* Once per message at a time: drawing it again (its text arriving from
+     disk, say) does not ask the server twice. */
+  if(m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2&&!REREADING.has(id)){
+    REREADING.add(id);
+    rereadBodies([m]).then(n=>{if(n&&selMail===id)openMail(id)}).finally(()=>REREADING.delete(id));
   }
   const d=$('#mail-detail');
   d.classList.add('open');
   const nm=msgFrom(m);
   const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity;
   const whole=OPENED.get(id);
+  /* The text is read from disk when it is not to hand, and the message
+     drawn again once it is — a few milliseconds. */
+  const body=bodyNow(m);
+  if(body===undefined&&!whole)bodyOf(m).then(b=>{if(b&&selMail===id)openMail(id)});
   const atts=(whole&&whole.atts)||m.atts||[];
   const savable=native;
   /* A long message, or one with attachments, is fetched in full when opened:
@@ -2096,7 +2237,7 @@ function openMail(id){
     </div>
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
     ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
-      :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body">${linkify(showTr?tr.text:whole?whole.text:m.body)}</div>
+      :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body">${linkify(showTr?tr.text:whole?whole.text:(body??''))}</div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
@@ -2145,7 +2286,7 @@ function openMail(id){
   $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
   if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
   if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
-  if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
+  if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:(body??'');$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
 
@@ -2195,9 +2336,10 @@ function toggleAddPerson(){
     h.innerHTML='';renderPeople();toast(name+' added');
   };
 }
-function bubbleHTML(m){
+function bubbleHTML(m,body){
+  if(body===undefined)body=bodyNow(m)??m.prev??'';
   return `<div class="bubble-wrap ${m.sent?'you':'them'}">
-      <div class="bubble">${m.subj?`<span class="subj">${esc(m.subj)}</span>`:''}${esc(m.body)}${m.atts.map(a=>`<span class="b-att">${a.f} · ${esc(a.n)}</span>`).join('')}</div>
+      <div class="bubble">${m.subj?`<span class="subj">${esc(m.subj)}</span>`:''}${esc(body)}${m.atts.map(a=>`<span class="b-att">${a.f} · ${esc(a.n)}</span>`).join('')}</div>
       <div class="bubble-meta"><span class="badge ${m.ch==='email'?(m.prov||'email'):m.ch}">${m.ch==='email'?'Email':chan(m.ch).label}</span>${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}${rel(m.ts)}</div>
     </div>`;
 }
@@ -2219,11 +2361,17 @@ function openPerson(cid){
       <div class="avatar" style="background:${avColor(c.name)}">${initials(c.nick||c.name)}</div>
       <div class="who"><b>${esc(c.nick||c.name)}${c.nick?` <span style="color:var(--faint);font-weight:400;font-size:12px">(${esc(c.name)})</span>`:''}</b><span>${esc(c.addr||'No email address yet')}</span></div>
     </div>
-    <div class="thread-scroll" id="thread-scroll">${all.length?all.map(bubbleHTML).join(''):'<div class="empty"><b>No messages yet</b>Mail with them appears here as it arrives.</div>'}</div>
+    <div class="thread-scroll" id="thread-scroll">${all.length?all.map(m=>bubbleHTML(m)).join(''):'<div class="empty"><b>No messages yet</b>Mail with them appears here as it arrives.</div>'}</div>
     <div class="reply-bar" style="justify-content:flex-end">
       <button class="btn primary" id="pd-write">${lastIn?'Reply to '+first:'Write to '+first}</button>
     </div>`;
   const ts=$('#thread-scroll');if(ts)ts.scrollTop=ts.scrollHeight;
+  /* Text not to hand is read from disk and the thread redrawn with it; until
+     then each message shows its preview line. */
+  if(all.some(m=>bodyNow(m)===undefined))bodiesOf(all).then(b=>{
+    const t=$('#thread-scroll');if(selPerson!==cid||!t)return;
+    t.innerHTML=all.map(m=>bubbleHTML(m,b.get(m.id))).join('');t.scrollTop=t.scrollHeight;
+  });
   $('#pd-back')&&($('#pd-back').onclick=()=>d.classList.remove('open'));
   /* This used to be a message box that "sent" by adding a bubble to the
      thread and nothing else — no mail ever left. Writing now goes through the
@@ -2245,16 +2393,22 @@ function searchAcctName(m){
   const label=l?l.label:(m.acctLabel||m.acct||'');
   return label?' · <span class="badge">'+esc(label)+'</span>':'';
 }
-function doSearch(){
+/* Message text is on disk, not in memory, so a search reads through it
+   there; a newer search makes an older one's answer moot. */
+let SEARCH_RUN=0;
+async function doSearch(){
   const q=$('#search-input').value.trim();
   if(!q)return;
-  const ql=q.toLowerCase();
+  const ql=q.toLowerCase(),run=++SEARCH_RUN;
+  $('#res-pane').innerHTML='<div class="empty"><b>Searching\u2026</b>Reading through your mail on this computer.</div>';
+  const inText=await bodiesMatching(q);
+  if(run!==SEARCH_RUN)return;
   const hits=[];
   for(const m of S.messages){
     if(!channelEnabled(m.ch))continue;
     const nm=msgFrom(m);
-    const hay=(nm+' '+(m.subj||'')+' '+m.body+' '+(m.orig||'')+' '+m.atts.map(a=>a.n).join(' ')).toLowerCase();
-    if(hay.includes(ql))hits.push({type:'msg',ref:m});
+    const hay=(nm+' '+(m.subj||'')+' '+(m.orig||'')+' '+m.atts.map(a=>a.n).join(' ')).toLowerCase();
+    if(hay.includes(ql)||inText.has(String(m.id)))hits.push({type:'msg',ref:m});
   }
   for(const d of S.documents){
     if((d.name+' '+d.prov+' '+(d.content||'')).toLowerCase().includes(ql))hits.push({type:'doc',ref:d});
@@ -2682,7 +2836,10 @@ function renderPlan(){
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
 $('#btn-export').onclick=async()=>{
-  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
+  /* The export is the whole workspace, so the text of every message comes
+     back from disk into it. */
+  const texts=await bodiesOf(S.messages);
+  const blob=new Blob([JSON.stringify(Object.assign({},S,{messages:S.messages.map(m=>Object.assign({},m,{body:texts.get(m.id)??''}))}),null,2)],{type:'application/json'});
   if(!await brDownload(blob,`rata-workspace-${new Date().toISOString().slice(0,10)}.json`))return;
   audit('workspace.export','Full JSON export');
   if(!window.__RATA_NATIVE__)toast('Workspace exported');
@@ -2836,12 +2993,12 @@ async function forwardMessage(m,targetAcctId){
   /* A forward should carry the whole message. If what is stored may be only
      the start of it, or its attachment list may be partial, fetch it first. */
   if(native&&m.bodyV===2&&!OPENED.get(m.id)&&(m.truncated||(m.atts||[]).length)){toast('Fetching the whole message to forward\u2026');await openWhole(m)}
-  const whole=OPENED.get(m.id);
+  const whole=OPENED.get(m.id),stored=whole&&!whole.error?'':bodyNow(m)??await bodyOf(m);
   newDraft();openCompose();
   const from=$('#cmp-from'),want=targetAcctId||m.acct;
   if(want&&[...from.options].some(o=>o.value===want))from.value=want;
   $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
-  const text=whole&&!whole.error?whole.text:String(m.body||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
+  const text=whole&&!whole.error?whole.text:String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
   if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
@@ -2907,14 +3064,15 @@ $('#cmp-discard').onclick=()=>{
 };
 /* Reply from the mailbox the message arrived in, to whoever the sender asked
    replies to go to, quoting what RATA has of the original. */
-function replyTo(m){
+async function replyTo(m){
+  const stored=bodyNow(m)??await bodyOf(m);
   newDraft();openCompose();
   const from=$('#cmp-from');
   if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
   $('#cmp-to').value=m.replyTo||m.fromAddr||'';
   const subj=m.subj&&m.subj!=='(no subject)'?m.subj:'';
   $('#cmp-subj').value=(/^re:/i.test(subj)?'':'Re: ')+subj;
-  const orig=String(m.body||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
+  const orig=String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\nOn ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
   REPLYING={id:m.id,messageId:m.messageId||''};
   DRAFT={kind:'reply',to:msgFrom(m)};renderDraftHead();
@@ -3788,8 +3946,8 @@ function bridgeInit(){
 }
 
 /* ---------------- SUMMARY (per message) ---------------- */
-function localSummary(m){
-  const text=(m.subj?m.subj+'. ':'')+(m.orig||m.body);
+function localSummary(m,body){
+  const text=(m.subj?m.subj+'. ':'')+(m.orig||body||'');
   const sents=text.split(/(?<=[.!?])\s+/).filter(s=>s.trim().length>10);
   const actions=sents.filter(s=>ASSIST_ACTIONS.test(s)||/\?\s*$/.test(s.trim())||ASSIST_DEADLINE.test(s));
   const lead=sents.slice(0,2).join(' ');
@@ -3803,11 +3961,13 @@ async function summarizeMessage(id){
   const d=$('#mail-detail .md-inner');if(!d)return;
   d.insertAdjacentHTML('beforeend','<div id="md-summary" class="as-ai md-ai"><b class="md-ai-title"></b><div class="md-ai-text"></div><div class="md-ai-note"></div></div>');
   const box=$('#md-summary'),title=box.querySelector('.md-ai-title'),text=box.querySelector('.md-ai-text'),note=box.querySelector('.md-ai-note');
-  const quick=why=>{title.textContent='Quick summary';text.textContent=localSummary(m);note.textContent=why||''};
+  const stored=await bodyOf(m);
+  if(!box.isConnected)return;
+  const quick=why=>{title.textContent='Quick summary';text.textContent=localSummary(m,stored);note.textContent=why||''};
   if(!window.__RATA_NATIVE__||!aiOk()){quick(window.__RATA_NATIVE__?'Made on this computer, without AI.':'');await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
   title.textContent='Summary';text.textContent='Summarizing\u2026';
   const whole=OPENED.get(id);
-  const r=await askAI({task:'summarize',subject:m.subj||'',from:msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),text:(whole&&!whole.error&&whole.text)||m.body||m.prev||'',lang:userLang()});
+  const r=await askAI({task:'summarize',subject:m.subj||'',from:msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),text:(whole&&!whole.error&&whole.text)||stored||m.prev||'',lang:userLang()});
   if(!box.isConnected)return;
   if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
   title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
@@ -3852,7 +4012,7 @@ async function translateMessage(id){
   const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
   const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
   const whole=OPENED.get(id),to=userLang();
-  const r=await askAI({task:'translate',subject:m.subj||'',text:(whole&&!whole.error&&whole.text)||m.body||m.prev||'',to});
+  const r=await askAI({task:'translate',subject:m.subj||'',text:(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev||'',to});
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
   TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut,to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
@@ -3863,12 +4023,13 @@ async function translateMessage(id){
 /* ---------------- RATA ASSIST (to-do & request bot) ---------------- */
 const ASSIST_ACTIONS=/\b(can you|could you|would you|please|need(s)? (you|to)|let me know|confirm|review|sign|send (me|over|the)|call me|schedule|approve|due|deadline|asap|invoice|wire|w-?9|remind|clarification|questions?)\b/i;
 const ASSIST_DEADLINE=/\b(by |before |due )(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|eod|end of (day|week)|the \d{1,2}(st|nd|rd|th)?|\d{1,2}\/\d{1,2})\b|\bthis (week|afternoon|morning)\b|\btonight\b|\btomorrow\b/i;
-function extractTodos(){
+async function extractTodos(){
   const cutoff=Date.now()-14*864e5;
   const items=[];
-  for(const m of S.messages){
-    if(m.sent||!channelEnabled(m.ch)||m.ts<cutoff)continue;
-    const text=(m.subj?m.subj+'. ':'')+m.body;
+  const pool=S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)&&m.ts>=cutoff);
+  const texts=await bodiesOf(pool);
+  for(const m of pool){
+    const text=(m.subj?m.subj+'. ':'')+(texts.get(m.id)||'');
     const sentences=text.split(/(?<=[.?!])\s+|\n+/).filter(s=>s.trim().length>8);
     for(const s of sentences){
       const why=[];
@@ -3891,8 +4052,8 @@ function assistItemHTML(i){
     <div class="as-why">${i.why.map(w=>`<span class="as-chip ${w}">${w}</span>`).join('')}</div>
   </div>`;
 }
-function runLocalBrief(){
-  const items=extractTodos();
+async function runLocalBrief(){
+  const items=await extractTodos();
   const out=$('#as-out');
   if(!items.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No open requests or to-dos detected in the last 14 days.</div>';return}
   const dl=items.filter(i=>i.why.includes('deadline'));
@@ -3915,15 +4076,16 @@ function runLocalBrief(){
    computer; only pressing Run briefing sends anything. */
 const BRIEF_MAX=25,BRIEF_DAYS=14;
 async function runAIBrief(){
-  if(!window.__RATA_NATIVE__||!aiOk()){runLocalBrief();return}
+  if(!window.__RATA_NATIVE__||!aiOk()){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
   const pool=S.messages.filter(m=>!m.sent&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
   if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
   btn.disabled=true;btn.textContent='Reading\u2026';
-  const r=await askAI({task:'tasks',messages:pool.map(m=>({id:m.id,from:msgFrom(m),subject:m.subj||'',text:String(m.body||m.prev||'').slice(0,1500)}))});
+  const texts=await bodiesOf(pool);
+  const r=await askAI({task:'tasks',messages:pool.map(m=>({id:m.id,from:msgFrom(m),subject:m.subj||'',text:String(texts.get(m.id)||m.prev||'').slice(0,1500)}))});
   btn.disabled=false;btn.textContent='Run briefing';
-  if(r.error){runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.</p>`);return}
+  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.</p>`);return}
   const found=new Map((r.tasks||[]).map(t=>[t.id,t]));
   /* What the briefing looked at is re-flagged from its answer, so a message
      that no longer needs anything loses its flag. */

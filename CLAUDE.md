@@ -98,7 +98,8 @@ list that are on screen; v0.1.17 adds AI summaries, translation and task
 flags through the relay (which needs the website deployed — see below);
 v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
 and makes its downloads work in the app at all; v0.1.19 reads PDFs; v0.1.20
-converts an attachment straight from the message. An
+converts an attachment straight from the message; v0.1.21 keeps message
+text on disk until it is needed instead of in memory. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -165,8 +166,8 @@ away.
 **Where mail is kept (v0.1.13).** Each message is its own record in
 IndexedDB (`rata-mail-<uid>`, store `messages`, key = id, value = the
 message as JSON); everything else in `S` stays one small `localStorage`
-entry, marked `store:'idb'` and written without `messages`. `S.messages` is
-still all in memory, so nothing else in the page changed. `save()` finds
+entry, marked `store:'idb'` and written without `messages`. `S.messages`
+was still all in memory then (0.1.21 moved the text out — below). `save()` finds
 what changed by comparing each message with how it was last stored
 (`MS_HELD`: the body by identity — nearly all the bytes, almost never
 changed — and the rest as JSON), and writes only that, plus deletions, in
@@ -180,8 +181,31 @@ way and `loadOlder` keeps its `STORE_SOFT_CAP`; the two halves merge the
 next time it opens. Deleting the account deletes this database too.
 Verified in the packaged WebKit build: 1 500 messages (12 MB) written,
 the app killed and restarted, all back with bodies and a star intact.
-What does not scale yet is memory: start-up parses every message (~0.7 s
-at 10 000 / 45 MB) and all of it stays in `S.messages`.
+**Text on disk, not in memory (v0.1.21).** The database is version 2 with
+two stores: `meta` (each message without its text — what start-up reads
+and `S.messages` holds) and `messages` (the text, as JSON with a `body`
+field). The text store keeps the old store's name on purpose: the upgrade
+from version 1 leaves every whole-message record where it is and only
+copies the rest of each into `meta` (`textOf` reads `body` from either
+shape). Rewriting the text instead took 30 s at 10 000 messages in
+Chromium here, because writes are what is slow; this way it is ~2 s once.
+A message that arrives with `m.body` (sync, older mail, re-read, sent,
+import) keeps it until the next `msFlush`, which moves it to `BODY_PUT`
+(waiting), then `BODY_FLY` (being written — so the next save does not
+write it again, which once made a relaunch wait out a 48 MB write), then
+disk. **Never read `m.body`**: use `bodyNow(m)` (text if to hand, else
+undefined) or `bodyOf(m)` / `bodiesOf(list)` (read from disk in one
+transaction; a small LRU `BODY_CACHE` keeps what was read lately and is
+only filled, never overwritten, by a read). Search (`bodiesMatching`)
+walks the text store with a cursor and parses a record only when its raw
+JSON matches; batching with `getAll` was slower. Export reads every text
+back into the file. Without IndexedDB the old way stands: text stays on
+each message in the `localStorage` entry. At 10 000 messages (48 MB of
+text) in Chromium: messages held 48 MB → 2.9 MB, JS heap 103 → 13 MB,
+start-up ~0.9 → ~0.75 s, search 65 → ~480 ms (it says "Searching…").
+Verified in the packaged WebKit build: a 0.1.20-format mailbox of 3 000
+messages upgraded in place, star kept, no text in memory, opening, search
+(~250 ms), reply quoting from disk, and the same after a restart.
 **The list draws a screenful (v0.1.16).** `vlist(sc,pool,tail)` puts a
 spacer as tall as every row in a list and draws only the rows in view plus
 `VL_MARGIN` either side, moved with `translateY`; `vlDraw` redraws on

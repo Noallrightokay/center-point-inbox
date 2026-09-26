@@ -83,9 +83,13 @@ Don't spend time reporting these — they are known and planned:
   ~65, and **Load older mail** at the bottom of the list walks further back.
   From v0.1.13 there is no storage limit to run into: mail is kept one
   message at a time, with room for as much as your disk holds, and from
-  v0.1.16 the list stays quick however long it is. Starting RATA still takes
-  longer with a very big mailbox (about a second at ten thousand messages)
-  — tell us when it starts to feel slow, and at roughly how many messages.
+  v0.1.16 the list stays quick however long it is. From v0.1.21 the text of
+  your messages stays on disk until you open one, so RATA uses far less
+  memory with a big mailbox; the first start after updating to v0.1.21
+  takes a few seconds longer while it reorganises what it has kept, once.
+  Searching a very big mailbox takes a moment (about half a second at ten
+  thousand messages) — tell us when anything starts to feel slow, and at
+  roughly how many messages.
 - No other folders yet — only the inbox is shown.
 - **Converting files (Files → Format Bridge), rebuilt in v0.1.18:** Word
   output is now a real .docx that Word, Google Docs and Pages open without

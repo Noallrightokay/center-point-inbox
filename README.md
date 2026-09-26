@@ -209,13 +209,14 @@ Be realistic about this before promising anything to a customer.
 
 **Not built yet:**
 
-- **The whole mailbox is held in memory.** Since v0.1.13 each message is its
-  own record in IndexedDB, which has room for as much mail as the disk does
-  (it used to share one `localStorage` blob of a few MB with everything
-  else), and only what changed is written; since v0.1.16 the list draws
-  only the rows on screen. But every message is still read into memory at
-  start: at 10,000 messages (45 MB) that is about 0.7 s, and memory grows
-  with the mailbox. Past that needs bodies read from disk when opened.
+- **Very large mailboxes.** Each message is its own record in IndexedDB
+  (v0.1.13), the list draws only the rows on screen (v0.1.16), and since
+  v0.1.21 a message's text stays on disk until it is opened, replied to,
+  searched or summarised — memory holds only what the list shows (about
+  3 MB for 10,000 messages, against 48 MB of text). What still grows with
+  the mailbox: start-up reads every message's details (about 0.75 s at
+  10,000), and a search reads through all the text on disk (about half a
+  second at 10,000).
 - **INBOX only.** No other folders are shown.
 - **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
   — MIME, quoted-printable, base64, any charset — and an HTML-only message is
