@@ -157,6 +157,12 @@ Don't spend time reporting these — they are known and planned:
   If an update fails, the bar says why and offers the download; please send
   us that exact sentence.
 
+- **New mail comes in by itself from v0.1.27** — a moment after RATA starts,
+  every five minutes while it is open, and when you come back to it. Before
+  that, mail only arrived when you pressed Sync. If your provider starts
+  refusing RATA with messages about too many sign-ins, tell us which
+  provider — every five minutes is a sign-in every five minutes.
+
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —
 check that it lands in the same thread at the other end), removing a mailbox,

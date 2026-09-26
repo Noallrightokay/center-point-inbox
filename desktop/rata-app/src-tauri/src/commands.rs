@@ -19,7 +19,8 @@ use tauri::{AppHandle, Manager, State};
 use rata_mail::{Action, File, Folder, Message, OwnFolder};
 
 use crate::core::{
-    Changed, Delivered, Draft, Forwarded, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing,
+    Changed, Delivered, Draft, Forwarded, Held, Linked, Opened, Problem, Rata, Refreshed, Saved,
+    Standing,
 };
 use crate::store::Mailbox;
 
@@ -66,8 +67,14 @@ pub fn retry_mailbox(app: App<'_>, email: String) {
 }
 
 #[tauri::command]
-pub async fn refresh_mail(app: App<'_>, limit: Option<u32>) -> Result<Refreshed, String> {
-    Ok(app.refresh(limit.unwrap_or(15)).await)
+pub async fn refresh_mail(
+    app: App<'_>,
+    limit: Option<u32>,
+    known: Option<Vec<Held>>,
+) -> Result<Refreshed, String> {
+    Ok(app
+        .refresh(limit.unwrap_or(15), &known.unwrap_or_default())
+        .await)
 }
 
 /// Send one message. Everything the composer has comes as one draft.

@@ -532,62 +532,207 @@ fn items() -> String {
     )
 }
 
-/// The newest `limit` messages in the inbox, and the newest `limit` in Sent,
-/// newest first, on one connection.
+/// What RATA already holds from one folder: the newest UID it has, under
+/// which UIDVALIDITY. Given this, a refresh downloads only what came after.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct Known {
+    pub folder: Folder,
+    pub uidvalidity: u32,
+    pub since: u32,
+}
+
+/// A message RATA already has, as the server has it now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Flags {
+    pub id: String,
+    pub unread: bool,
+    pub starred: bool,
+}
+
+/// What a refresh found: messages new to RATA, whole, and read/starred for
+/// recent ones it already has.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Newest {
+    pub messages: Vec<Message>,
+    pub flags: Vec<Flags>,
+}
+
+/// The most new messages one refresh downloads from one folder. A laptop
+/// closed for a week comes back to hundreds; what is past this arrives with
+/// Load older mail instead of in one enormous refresh.
+pub const NEW_MAX: u32 = 200;
+
+/// The newest mail of the inbox, Sent, Archive and Spam, newest first, on one
+/// connection.
 ///
-/// Sent is a bonus rather than a condition: a mailbox without one, or whose
-/// Sent folder will not open, still brings its inbox. The inbox is what a
-/// refresh is for.
-pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fetched {
+/// For a folder RATA has read before (`known`), only messages newer than the
+/// newest one it holds are downloaded, and the read and starred state of the
+/// newest `limit` comes back without their text — so a refresh with nothing
+/// new moves a few hundred bytes, and checking every few minutes costs
+/// nothing. A folder RATA has not read, or whose UIDVALIDITY changed, gets its
+/// newest `limit` messages whole.
+///
+/// The other folders are a bonus rather than a condition: a mailbox without
+/// one, or where one will not open, still brings its inbox. The inbox is what
+/// a refresh is for.
+pub async fn fetch_newest(
+    resolver: &Resolver,
+    acct: &Account,
+    limit: u32,
+    known: &[Known],
+) -> Result<Newest, Fetched> {
     let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
 
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
-        Err(Trouble::Host(why)) => return Fetched::Host(why),
+        Err(Trouble::Host(why)) => return Err(Fetched::Host(why)),
         Err(Trouble::Net(why) | Trouble::Auth(why)) => {
-            return Fetched::Net(unreachable_msg(acct, &why));
+            return Err(Fetched::Net(unreachable_msg(acct, &why)));
         }
     };
 
     let mut session = match sign_in(client, &acct.email, &acct.pass).await {
         Ok(s) => s,
-        Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Auth(why)) => return Err(Fetched::Auth(revoked_msg(acct, &why))),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
-            return Fetched::Net(unreachable_msg(acct, &why));
+            return Err(Fetched::Net(unreachable_msg(acct, &why)));
         }
     };
 
-    let mailbox = match timeout(COMMAND, session.select("INBOX")).await {
-        Ok(Ok(m)) => m,
-        _ => {
-            let _ = timeout(COMMAND, session.logout()).await;
-            return Fetched::Net(format!(
-                "{} did not sync — its inbox could not be opened. It will be tried again on the next refresh.",
-                acct.email
-            ));
-        }
-    };
+    let found = newest_everywhere(&mut session, acct, limit, known).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
 
-    let mut messages = match newest_in(&mut session, acct, &Folder::Inbox, &mailbox, limit).await {
-        Ok(m) => m,
-        Err(failed) => return failed,
+/// The part of [`fetch_newest`] that talks to a signed-in session.
+async fn newest_everywhere<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    limit: u32,
+    known: &[Known],
+) -> Result<Newest, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let held = |folder: &Folder| known.iter().find(|k| k.folder == *folder);
+    let Ok(Ok(mailbox)) = timeout(COMMAND, session.select("INBOX")).await else {
+        return Err(Fetched::Net(format!(
+            "{} did not sync — its inbox could not be opened. It will be tried again on the next refresh.",
+            acct.email
+        )));
     };
+    let mut found = refresh_in(
+        session,
+        acct,
+        &Folder::Inbox,
+        &mailbox,
+        limit,
+        held(&Folder::Inbox),
+    )
+    .await?;
     // The other folders are a bonus: any that is missing, will not open or
     // fails partway is left out, and the inbox still arrives.
-    let found = places(&mut session).await;
+    let places = places(session).await;
     for folder in [Folder::Sent, Folder::Archive, Folder::Junk] {
-        let Some(name) = found.name(&folder) else {
+        let Some(name) = places.name(&folder) else {
             continue;
         };
-        if let Selected::Open(mailbox) = select_name(&mut session, name).await
-            && let Ok(mut more) = newest_in(&mut session, acct, &folder, &mailbox, limit).await
+        if let Selected::Open(mailbox) = select_name(session, name).await
+            && let Ok(mut more) =
+                refresh_in(session, acct, &folder, &mailbox, limit, held(&folder)).await
         {
-            messages.append(&mut more);
+            found.messages.append(&mut more.messages);
+            found.flags.append(&mut more.flags);
         }
     }
-    messages.sort_by(|a, b| b.ts.cmp(&a.ts));
-    let _ = timeout(COMMAND, session.logout()).await;
-    Fetched::Messages(messages)
+    found.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
+    Ok(found)
+}
+
+/// One folder of a refresh, just selected: see [`fetch_newest`].
+async fn refresh_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: &Folder,
+    mailbox: &async_imap::types::Mailbox,
+    limit: u32,
+    known: Option<&Known>,
+) -> Result<Newest, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let generation = mailbox.uid_validity.unwrap_or(0);
+    let Some(since) = known
+        .filter(|k| k.since > 0 && generation != 0 && k.uidvalidity == generation)
+        .map(|k| k.since)
+    else {
+        let messages = newest_in(session, acct, folder, mailbox, limit).await?;
+        return Ok(Newest {
+            messages,
+            flags: vec![],
+        });
+    };
+    if mailbox.exists == 0 || limit == 0 {
+        return Ok(Newest::default());
+    }
+    let listing_failed = || Fetched::Net(unreachable_msg(acct, "the inbox could not be listed"));
+
+    // Read and starred for the newest `limit`, as the server has them now.
+    // No text: RATA has these already.
+    let from = mailbox.exists.saturating_sub(limit - 1).max(1);
+    let recent = match timeout(COMMAND, session.fetch(format!("{from}:*"), "(UID FLAGS)")).await {
+        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
+        _ => return Err(listing_failed()),
+    };
+    let flags: Vec<Flags> = recent
+        .iter()
+        .filter_map(|f| f.as_ref().ok())
+        .filter_map(|f| Some((f.uid?, f)))
+        .filter(|(uid, f)| *uid <= since && !f.flags().any(|x| x == Flag::Deleted))
+        .map(|(uid, f)| Flags {
+            id: message_key(acct, folder, uid),
+            unread: !f.flags().any(|x| x == Flag::Seen),
+            starred: f.flags().any(|x| x == Flag::Flagged),
+        })
+        .collect();
+
+    // Everything after the newest message RATA holds. `n:*` returns the
+    // newest message even when its UID is below n, so the answer is filtered.
+    let after = match timeout(
+        COMMAND,
+        session.uid_fetch(format!("{}:*", since.saturating_add(1)), "UID"),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
+        _ => return Err(listing_failed()),
+    };
+    let mut fresh: Vec<u32> = after
+        .iter()
+        .filter_map(|f| f.as_ref().ok()?.uid)
+        .filter(|u| *u > since)
+        .collect();
+    fresh.sort_unstable();
+    fresh.dedup();
+    let fresh = &fresh[fresh.len().saturating_sub(NEW_MAX as usize)..];
+    if fresh.is_empty() {
+        return Ok(Newest {
+            messages: vec![],
+            flags,
+        });
+    }
+    let stream = match timeout(COMMAND, session.uid_fetch(join(fresh), items())).await {
+        Ok(Ok(s)) => s,
+        _ => return Err(listing_failed()),
+    };
+    let messages = collect(stream, acct, folder, generation)
+        .await?
+        .into_iter()
+        .filter(|m| fresh.contains(&m.uid))
+        .collect();
+    Ok(Newest { messages, flags })
 }
 
 /// The newest `limit` messages of a folder just selected.
@@ -1721,6 +1866,20 @@ fn named_tag(name: &str) -> String {
         .collect()
 }
 
+/// The id RATA gives the message `uid` of `folder`. The mailbox and the
+/// folder are part of it: the same UID in two mailboxes, or two folders of
+/// one, must not collide once they are shown in one list.
+fn message_key(acct: &Account, folder: &Folder, uid: u32) -> String {
+    let place = match folder {
+        Folder::Inbox => String::new(),
+        Folder::Sent => "sent_".into(),
+        Folder::Archive => "archive_".into(),
+        Folder::Junk => "junk_".into(),
+        Folder::Named(name) => format!("f{}_", named_tag(name)),
+    };
+    format!("{}_{place}{uid}", mail_key(&acct.email))
+}
+
 /// One IMAP response into one message.
 fn build(
     acct: &Account,
@@ -1808,15 +1967,8 @@ fn build(
     }
 
     let uid = f.uid.unwrap_or(f.message);
-    let place = match folder {
-        Folder::Inbox => String::new(),
-        Folder::Sent => "sent_".into(),
-        Folder::Archive => "archive_".into(),
-        Folder::Junk => "junk_".into(),
-        Folder::Named(name) => format!("f{}_", named_tag(name)),
-    };
     Message {
-        id: format!("{}_{place}{uid}", mail_key(&acct.email)),
+        id: message_key(acct, folder, uid),
         folder: folder.clone(),
         acct: acct.email.clone(),
         acct_label: if acct.label.is_empty() {
@@ -2031,6 +2183,24 @@ mod tests {
                     }
                     hits.iter()
                         .map(|(seq, u)| format!("* {seq} FETCH (UID {u})\r\n"))
+                        .collect()
+                } else if up.starts_with("FETCH") && !up.contains("BODY") {
+                    // Read and starred only: even UIDs are read, every fifth
+                    // is starred.
+                    let (a, _) = arg.split_once(':').unwrap();
+                    let a: usize = a.parse().unwrap();
+                    (a.max(1)..=uids.len())
+                        .map(|s| {
+                            let u = uids[s - 1];
+                            let mut f = Vec::new();
+                            if u.is_multiple_of(2) {
+                                f.push("\\Seen");
+                            }
+                            if u.is_multiple_of(5) {
+                                f.push("\\Flagged");
+                            }
+                            format!("* {s} FETCH (UID {u} FLAGS ({}))\r\n", f.join(" "))
+                        })
                         .collect()
                 } else if up.starts_with("FETCH") {
                     let (a, b) = arg.split_once(':').unwrap();
@@ -2493,8 +2663,8 @@ mod tests {
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             for host in ["127.0.0.1", "192.168.1.1", "localhost", "::ffff:7f00:1"] {
-                match fetch_newest(&r, &acct(host), 15).await {
-                    Fetched::Host(why) => assert!(
+                match fetch_newest(&r, &acct(host), 15, &[]).await {
+                    Err(Fetched::Host(why)) => assert!(
                         why.contains("private network") || why.contains("not a public"),
                         "{host}: {why}"
                     ),
@@ -2509,10 +2679,10 @@ mod tests {
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             let host = format!("nx-{}.invalid", std::process::id());
-            match fetch_newest(&r, &acct(&host), 15).await {
+            match fetch_newest(&r, &acct(&host), 15, &[]).await {
                 // Net, emphatically not Auth: the caller stops retrying a
                 // mailbox on Auth, and a DNS outage must not unlink everybody.
-                Fetched::Net(why) => assert!(why.contains("did not sync"), "{why}"),
+                Err(Fetched::Net(why)) => assert!(why.contains("did not sync"), "{why}"),
                 other => panic!("{other:?}"),
             }
         });
@@ -3206,5 +3376,115 @@ mod tests {
         // A server sending raw UTF-8 names must not bring RATA down.
         assert_eq!(folder_label("Entwürfe", Some("/")), "Entwürfe");
         assert_eq!(folder_label("Añoß.2026", Some(".")), "Añoß / 2026");
+    }
+
+    // ------------------------------------------------------- refreshing
+    fn bodies_fetched(log: &[String]) -> Vec<String> {
+        log.iter()
+            .filter(|c| c.to_ascii_uppercase().contains("BODY.PEEK"))
+            .cloned()
+            .collect()
+    }
+
+    fn sorted_uids(m: &[Message]) -> Vec<u32> {
+        let mut u: Vec<u32> = m.iter().map(|m| m.uid).collect();
+        u.sort_unstable();
+        u
+    }
+
+    fn inbox_known(uidvalidity: u32, since: u32) -> Vec<Known> {
+        vec![Known {
+            folder: Folder::Inbox,
+            uidvalidity,
+            since,
+        }]
+    }
+
+    static TWENTY: [u32; 20] = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ];
+
+    #[test]
+    fn a_refresh_with_nothing_new_downloads_no_text() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&TWENTY, 7).await;
+            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 20))
+                .await
+                .unwrap();
+            assert!(got.messages.is_empty());
+            let key = mail_key("me@example.com");
+            let flags: Vec<(String, bool, bool)> = got
+                .flags
+                .iter()
+                .map(|f| (f.id.clone(), f.unread, f.starred))
+                .collect();
+            assert_eq!(
+                flags,
+                (16..=20)
+                    .map(|u: u32| (
+                        format!("{key}_{u}"),
+                        !u.is_multiple_of(2),
+                        u.is_multiple_of(5)
+                    ))
+                    .collect::<Vec<_>>(),
+                "read and starred for the newest five, as the server has them"
+            );
+            assert!(bodies_fetched(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    #[test]
+    fn a_refresh_downloads_only_what_came_after() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&TWENTY, 7).await;
+            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 17))
+                .await
+                .unwrap();
+            assert_eq!(sorted_uids(&got.messages), vec![18, 19, 20]);
+            assert!(got.messages.iter().all(|m| m.body.contains("Body of")));
+            // Flags only for what RATA already had.
+            assert_eq!(got.flags.len(), 2);
+            let log = log.lock().unwrap();
+            let bodies = bodies_fetched(&log);
+            assert_eq!(bodies.len(), 1, "{log:?}");
+            assert!(
+                bodies[0]
+                    .to_ascii_uppercase()
+                    .starts_with("UID FETCH 18,19,20 ")
+            );
+        });
+    }
+
+    #[test]
+    fn an_unknown_or_rebuilt_folder_is_read_whole() {
+        rt_act().block_on(async {
+            for known in [vec![], inbox_known(9, 20), inbox_known(7, 0)] {
+                let (mut s, _) = scripted_inbox(&TWENTY, 7).await;
+                let got = newest_everywhere(&mut s, &me(), 5, &known).await.unwrap();
+                assert_eq!(
+                    sorted_uids(&got.messages),
+                    vec![16, 17, 18, 19, 20],
+                    "{known:?}"
+                );
+                assert!(got.flags.is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn after_a_long_absence_a_refresh_is_still_bounded() {
+        rt_act().block_on(async {
+            let many: &'static [u32] =
+                Box::leak((1..=300).collect::<Vec<u32>>().into_boxed_slice());
+            let (mut s, _) = scripted_inbox(many, 7).await;
+            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 50))
+                .await
+                .unwrap();
+            // The newest of them; the rest are older mail.
+            assert_eq!(
+                sorted_uids(&got.messages),
+                (300 - NEW_MAX + 1..=300).collect::<Vec<_>>()
+            );
+        });
     }
 }

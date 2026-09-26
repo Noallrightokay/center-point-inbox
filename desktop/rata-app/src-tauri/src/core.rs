@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Folder, Listed, Message, Outgoing,
-    OwnFolder, Resolver, Sent, Verify, Whole, act, body, fetch_folder, fetch_newest, fetch_older,
-    fetch_uids, fetch_whole, list_folders, send, verify,
+    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Flags, Folder, Known, Listed,
+    Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Whole, act, body, fetch_folder,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, send, verify,
 };
 use serde::Serialize;
 
@@ -70,6 +70,9 @@ pub struct Refreshed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unlicensed: Option<String>,
     pub messages: Vec<Message>,
+    /// Read and starred, as the server has them now, for recent messages the
+    /// interface already holds — which a refresh no longer downloads again.
+    pub flags: Vec<Flags>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
     pub problems: Vec<Problem>,
@@ -96,6 +99,16 @@ pub struct Opened {
     /// Whether that HTML asks for pictures from the internet, which are not
     /// loaded unless the customer says so.
     pub remote_images: bool,
+}
+
+/// What the interface already holds of one folder of one mailbox: the newest
+/// UID it has there, under which UIDVALIDITY.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Held {
+    pub email: String,
+    pub folder: Folder,
+    pub uidvalidity: u32,
+    pub since: u32,
 }
 
 /// A message ready to go, as the composer hands it over.
@@ -398,8 +411,9 @@ impl Rata {
         self.vault.forget(email)
     }
 
-    /// Read every linked mailbox.
-    pub async fn refresh(&self, limit: u32) -> Refreshed {
+    /// Read every linked mailbox. `known` is what the interface already holds
+    /// of each folder, so only what is new is downloaded.
+    pub async fn refresh(&self, limit: u32, known: &[Held]) -> Refreshed {
         let mut out = Refreshed::default();
         if let Err(error) = self.licensed() {
             out.unlicensed = Some(error);
@@ -427,11 +441,23 @@ impl Rata {
         for batch in work.chunks(AT_ONCE) {
             let mut running = Vec::new();
             for m in batch {
-                running.push(self.read_one(m, limit));
+                let mine: Vec<Known> = known
+                    .iter()
+                    .filter(|k| k.email.eq_ignore_ascii_case(&m.email))
+                    .map(|k| Known {
+                        folder: k.folder.clone(),
+                        uidvalidity: k.uidvalidity,
+                        since: k.since,
+                    })
+                    .collect();
+                running.push(async move { self.read_one(m, limit, &mine).await });
             }
             for done in futures::future::join_all(running).await {
                 match done {
-                    Ok(mut msgs) => out.messages.append(&mut msgs),
+                    Ok(mut found) => {
+                        out.messages.append(&mut found.messages);
+                        out.flags.append(&mut found.flags);
+                    }
                     Err(p) => {
                         if p.kind == "auth" {
                             self.note_auth_failure(&p.email);
@@ -446,7 +472,7 @@ impl Rata {
         out
     }
 
-    async fn read_one(&self, m: &Mailbox, limit: u32) -> Result<Vec<Message>, Problem> {
+    async fn read_one(&self, m: &Mailbox, limit: u32, known: &[Known]) -> Result<Newest, Problem> {
         let problem = |kind: &str, error: String| Problem {
             email: m.email.clone(),
             kind: kind.into(),
@@ -467,11 +493,12 @@ impl Rata {
             port: m.port,
             label: m.label.clone(),
         };
-        match fetch_newest(&self.resolver, &acct, limit).await {
-            Fetched::Messages(messages) => Ok(messages),
-            Fetched::Auth(error) => Err(problem("auth", error)),
-            Fetched::Host(error) => Err(problem("host", error)),
-            Fetched::Net(error) | Fetched::Stale(error) => Err(problem("net", error)),
+        match fetch_newest(&self.resolver, &acct, limit, known).await {
+            Ok(found) => Ok(found),
+            Err(Fetched::Messages(_)) => Ok(Newest::default()),
+            Err(Fetched::Auth(error)) => Err(problem("auth", error)),
+            Err(Fetched::Host(error)) => Err(problem("host", error)),
+            Err(Fetched::Net(error) | Fetched::Stale(error)) => Err(problem("net", error)),
         }
     }
 
@@ -1167,7 +1194,7 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
 
-            let out = app.refresh(15).await;
+            let out = app.refresh(15, &[]).await;
             assert!(
                 out.problems.is_empty(),
                 "it should not have been tried at all"
@@ -1181,7 +1208,7 @@ mod tests {
 
             // And it comes back once the password is replaced.
             app.clear_auth_failure("owner@example.com");
-            assert!(app.refresh(15).await.skipped.is_empty());
+            assert!(app.refresh(15, &[]).await.skipped.is_empty());
         });
     }
 
@@ -1194,7 +1221,7 @@ mod tests {
             // A private host: refused by the guard rather than by the network.
             linked(&app, "b@example.com", "127.0.0.1");
 
-            let out = app.refresh(15).await;
+            let out = app.refresh(15, &[]).await;
             assert_eq!(out.problems.len(), 2, "{:?}", out.problems);
             let kinds: Vec<&str> = out.problems.iter().map(|p| p.kind.as_str()).collect();
             assert!(kinds.contains(&"net"), "{kinds:?}");
@@ -1226,7 +1253,7 @@ mod tests {
             })
             .unwrap();
 
-            let out = app.refresh(15).await;
+            let out = app.refresh(15, &[]).await;
             assert_eq!(out.problems.len(), 1);
             assert_eq!(out.problems[0].kind, "missing");
             assert!(
@@ -1560,13 +1587,13 @@ mod tests {
             })
             .unwrap();
 
-            let out = app.refresh(15).await;
+            let out = app.refresh(15, &[]).await;
             assert_eq!(out.problems.len(), 1);
             assert_eq!(out.problems[0].kind, "keychain", "{:?}", out.problems[0]);
             // The whole point: a keychain that was not ready at login must not
             // leave the mailbox demanding a relink once it is.
             assert!(app.mailboxes().iter().all(|m| m.auth_failed_at.is_none()));
-            assert!(app.refresh(15).await.skipped.is_empty());
+            assert!(app.refresh(15, &[]).await.skipped.is_empty());
         });
     }
 
@@ -1619,7 +1646,7 @@ mod tests {
                 Linked::Failed { error } => assert!(error.contains("licence key"), "{error}"),
                 other => panic!("linking without a licence: {other:?}"),
             }
-            let out = app.refresh(15).await;
+            let out = app.refresh(15, &[]).await;
             assert!(out.unlicensed.is_some(), "refreshing without a licence");
             assert!(out.messages.is_empty());
             // Not recorded as a mailbox problem: no mailbox is broken, and
@@ -1831,6 +1858,28 @@ mod tests {
         assert!(serde_json::from_str::<Action>(r#"{"move":"Trash"}"#).is_err());
         let m = serde_json::to_value(Folder::Named("Entw&APw-rfe".into())).unwrap();
         assert_eq!(m, serde_json::json!({"named": "Entw&APw-rfe"}));
+        // What the page already holds, per folder, so a refresh brings only
+        // what is new; and what comes back for messages it has.
+        let held: Vec<Held> = serde_json::from_str(
+            r#"[{"email":"a@b.example","folder":"sent","uidvalidity":8,"since":12},
+                {"email":"a@b.example","folder":{"named":"Work"},"uidvalidity":3,"since":40}]"#,
+        )
+        .unwrap();
+        assert_eq!(held[0].folder, Folder::Sent);
+        assert_eq!(held[1].folder, Folder::Named("Work".into()));
+        let r = serde_json::to_value(Refreshed {
+            flags: vec![Flags {
+                id: "k_7".into(),
+                unread: false,
+                starred: true,
+            }],
+            ..Refreshed::default()
+        })
+        .unwrap();
+        assert_eq!(
+            r["flags"],
+            serde_json::json!([{"id": "k_7", "unread": false, "starred": true}])
+        );
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),
             message_id: "abc@b.example".into(),

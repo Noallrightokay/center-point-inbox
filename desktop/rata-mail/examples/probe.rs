@@ -4,9 +4,7 @@
 //!   cargo run --example probe -- link  you@example.com 'app password' [server]
 //!   cargo run --example probe -- fetch you@example.com 'app password' imap.example.com
 //!   cargo run --example probe -- send  you@example.com 'app password' imap.example.com them@elsewhere.org
-use rata_mail::{
-    Account, Address, Fetched, Outgoing, Resolver, Sent, Verify, fetch_newest, send, verify,
-};
+use rata_mail::{Account, Address, Outgoing, Resolver, Sent, Verify, fetch_newest, send, verify};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -35,10 +33,10 @@ async fn main() {
             Verify::NeedsHost(w) => println!("NEEDS   {w}"),
             Verify::Failed(w) => println!("FAILED  {w}"),
         },
-        "fetch" => match fetch_newest(&r, &acct, 15).await {
-            Fetched::Messages(m) => {
-                println!("{} message(s)", m.len());
-                for x in m {
+        "fetch" => match fetch_newest(&r, &acct, 15, &[]).await {
+            Ok(found) => {
+                println!("{} message(s)", found.messages.len());
+                for x in found.messages {
                     println!(
                         "  [{}{}] {:<28} {}",
                         if x.unread { "•" } else { " " },
@@ -48,7 +46,7 @@ async fn main() {
                     );
                 }
             }
-            other => println!("{other:?}"),
+            Err(other) => println!("{other:?}"),
         },
         "send" => {
             let to = a.get(4).cloned().unwrap_or_default();

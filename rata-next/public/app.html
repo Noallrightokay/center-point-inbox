@@ -2690,6 +2690,7 @@ function takeStanding(st){
   LIC=st&&typeof st==='object'&&!st.error?st:null;
   /* The bridge can answer before the workspace has loaded; boot asks again. */
   if(!S)return;
+  if(LIC&&LIC.licensed)startAutoSync();
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
 }
@@ -3619,15 +3620,58 @@ async function apiFetch(path,opts){
 }
 /* Every mailbox syncs together: /api/sync/mail answers for all of them at once,
    and each message carries the address it came from. */
-async function serverSync(p){
-  if(p!=='mail')return;
-  try{
-    const res=await apiFetch('/api/sync/mail');
-    if(res.error){toast(res.error);return}
-    await absorbMail(res);
-  }catch(e){
-    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
+/* One refresh at a time: a second request while one is running waits for
+   that one rather than signing in to every mailbox again. `quiet` is the
+   automatic refresh, which speaks only when there is new mail. */
+let SYNCING=null,lastSync=0;
+function serverSync(p,quiet){
+  if(p!=='mail')return Promise.resolve();
+  if(SYNCING)return SYNCING;
+  SYNCING=(async()=>{
+    lastSync=Date.now();
+    try{
+      /* In the app, what RATA already holds of each folder goes with the
+         request, so only new mail is downloaded. */
+      const res=await apiFetch('/api/sync/mail',window.__RATA_NATIVE__?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({known:heldKnown()})}:undefined);
+      if(res.error){if(!quiet)toast(res.error);return}
+      await absorbMail(res,quiet);
+    }catch(e){
+      if(!quiet)toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
+    }finally{SYNCING=null}
+  })();
+  return SYNCING;
+}
+/* The newest message RATA holds in each folder of each mailbox, and under
+   which UIDVALIDITY (0.1.27). The app downloads only what came after it,
+   and sends back read and starred for recent mail instead of the mail. */
+function heldKnown(){
+  const best=new Map();
+  for(const m of S.messages){
+    if(!m||m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
+    const folder=folderOf(m);if(!FOLDERS.includes(folder))continue;
+    const email=mailEmailOf(m),k=email+'|'+folder,b=best.get(k);
+    if(!b||m.uid>b.since)best.set(k,{email,folder,uidvalidity:m.uidvalidity,since:m.uid});
   }
+  return [...best.values()];
+}
+/* New mail comes in by itself (0.1.27): a little after start, every five
+   minutes while RATA is open, and when it comes back to the front after a
+   minute or more away. With only new mail downloaded, a refresh that finds
+   nothing costs a sign-in and a few hundred bytes per mailbox. A mailbox
+   that refused its password is not tried again until it is relinked. */
+const AUTO_EVERY=5*60e3,AUTO_BACK=60e3;let autoOn=false;
+function autoSync(){
+  if(!window.__RATA_NATIVE__||!(LIC&&LIC.licensed)||SYNCING)return;
+  return serverSync('mail',true);
+}
+function startAutoSync(){
+  if(autoOn||!window.__RATA_NATIVE__)return;
+  autoOn=true;
+  setTimeout(autoSync,800);
+  setInterval(()=>{if(Date.now()-lastSync>=AUTO_EVERY-5e3)autoSync()},30e3);
+  const back=()=>{if(document.visibilityState!=='hidden'&&Date.now()-lastSync>=AUTO_BACK)autoSync()};
+  addEventListener('focus',back);
+  document.addEventListener('visibilitychange',back);
 }
 
 /* A message from the app as RATA keeps it: whose mailbox, and who it is
@@ -3654,7 +3698,7 @@ function localTwin(m){
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
    says so by name rather than sinking the whole refresh. */
-async function absorbMail(res){
+async function absorbMail(res,quiet){
   const newIds=[];let added=0;
   for(const a of (res.accounts||[])){
     let l=linkedFind('mail',a.email)||addLinked('mail',a.email,{host:a.host||'',provLabel:a.label||''});
@@ -3674,6 +3718,12 @@ async function absorbMail(res){
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   tidyAccts();
+  /* Read and starred for mail RATA already has, from the server — another
+     device may have changed them. */
+  if((res.flags||[]).length){
+    const byId=new Map(S.messages.map(m=>[m.id,m]));
+    for(const f of res.flags){const have=byId.get(f.id);if(have){have.unread=!!f.unread;have.starred=!!f.starred}}
+  }
   for(const m of (res.messages||[])){
     if(isGone(m.id))continue;
     /* A message sent from RATA, now back from the Sent folder the provider
@@ -3693,8 +3743,11 @@ async function absorbMail(res){
   setTimeout(upgradeBodies,0);
   const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
   const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
-  await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
+  /* An automatic refresh that found nothing is not worth a line in the
+     audit log every five minutes. */
+  if(!quiet||added)await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
   renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();
+  if(quiet){if(added)toast(`${added} new message${added===1?'':'s'}`);return}
   const later=(res.deferred||[]).length;
   toast(stuck.length
     ? `${stuck.join(', ')} needs its app password again — relink it in Settings`

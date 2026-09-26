@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 158 tests, no network required
+cargo test          # 162 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -202,8 +202,9 @@ Be realistic about this before promising anything to a customer.
 - Adding a mailbox by address and app password
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
-- Fetching the newest messages from the inbox and the Sent folder, several
-  mailboxes at once, so a conversation shows both sides
+- Fetching new mail by itself — at start, every five minutes and when you come
+  back to the window — from the inbox, Sent, Archive and Spam of several
+  mailboxes at once, downloading only what is new
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
 - A guard that stops a hostile mail server redirecting the app at your own LAN
