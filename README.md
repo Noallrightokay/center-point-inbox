@@ -227,6 +227,10 @@ Be realistic about this before promising anything to a customer.
   in a locked-down frame (see *Traps*), with remote images off until asked.
   Links open in the browser — web addresses only, and from formatted mail
   only after a prompt naming where the link really goes (`links.rs`).
+- **AI needs the website deployed.** Summaries, translation and task flags
+  go through RATA's relay at `mailrata.org/api/ai` (Haiku, capped at $2 per
+  customer a month, nothing stored), which is not live until the site is
+  redeployed with `ANTHROPIC_API_KEY` set and `database.sql` §5 run.
 - No auto-update, and no code signing.
 
 ### What has never been tested

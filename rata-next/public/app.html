@@ -245,6 +245,13 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .m-prev{font-size:13px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m-meta{display:flex;gap:6px;margin-top:5px;align-items:center;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
 .m-subj.none{color:var(--faint);font-style:italic}
+.badge.flag{background:var(--amber-soft,rgba(245,158,11,.14));color:var(--ink);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge.flag.hot{background:var(--red-soft);color:var(--red)}
+.md-ai{margin-top:14px;white-space:pre-line}
+.md-ai-title{display:block;margin-bottom:4px}
+.md-ai-note{font-size:12px;color:var(--faint);margin-top:6px}
+.md-ai-note:empty{display:none}
+.md-trbar{display:flex;align-items:center;gap:10px;justify-content:space-between;font-size:12.5px;color:var(--slate);margin:0 0 8px}
 /* The list draws only what is in view (vlist): a spacer as tall as every row,
    and a window of real rows moved to where the eye is. Every row is the same
    height — each line of it is one line — measured once from a drawn row. */
@@ -1732,6 +1739,7 @@ function mailRowHTML(m){
           <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
           ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
+          ${m.flag?`<span class="badge flag${m.flag.important?' hot':''}" title="${esc(m.flag.task+(m.flag.due?' \u2014 by '+m.flag.due:''))}">\u2691 ${esc(m.flag.task)}</span>`:''}
           ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
           ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
         </div>
@@ -1752,7 +1760,7 @@ function renderMail(){
       : `<div class="empty" style="padding:48px 24px">
            <b style="font-size:19px">Let's get your email in here</b>
            <span style="display:block;max-width:340px;margin:8px auto 20px;line-height:1.55">
-             Connect an account and your messages appear in this inbox. Nothing is sent anywhere else.
+             Connect an account and your messages appear in this inbox, on this computer. Nothing is sent anywhere else unless you ask RATA to summarize or translate a message.
            </span>
            <button class="btn primary" id="empty-connect" style="font-size:15px;padding:12px 26px">Connect an email account</button>
          </div>`;
@@ -2032,7 +2040,10 @@ function openMail(id){
   /* Also when it may have an HTML version: the stored copy is text only, and
      mail stored before 0.1.12 does not say either way. */
   const wantWhole=native&&m.bodyV===2&&!whole&&(m.truncated||atts.length||m.html!==false);
-  const asHtml=!!(whole&&whole.html)&&VIEWMODE.get(id)!=='text';
+  /* A translation is shown as text, in place of the original, until the
+     customer asks for the original back. */
+  const tr=TRANSLATED.get(id),showTr=!!(tr&&!tr.hidden);
+  const asHtml=!showTr&&!!(whole&&whole.html)&&VIEWMODE.get(id)!=='text';
   const note=wantWhole?'Loading the rest of this message\u2026'
     :whole&&whole.error?'Only the start of this message could be shown \u2014 '+whole.error
     :(whole?whole.truncated:m.truncated)?'This is the start of a very long message. The rest is in your mailbox \u2014 open it in your provider\u2019s own app to read all of it.':'';
@@ -2051,6 +2062,7 @@ function openMail(id){
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
         <div class="md-sortwrap"><button class="btn" id="md-move">Sort ▾</button><div class="md-sortmenu" id="md-sortmenu">${Object.entries(CATS).map(([c,l])=>`<button data-mv="${c}">${l}</button>`).join('')}<label><input type="checkbox" id="mv-always"> Always from this sender</label></div></div>
         <button class="btn" id="md-sum">✦ Summarize</button>
+        ${window.__RATA_NATIVE__&&!m.sent?'<button class="btn" id="md-translate">\u21c4 Translate</button>':''}
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
         ${m.prov==='imap'&&m.uid?'<button class="btn" id="md-archive">Archive</button>':''}
@@ -2059,7 +2071,7 @@ function openMail(id){
     </div>
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
     ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
-      :`<div class="md-content" id="md-body">${linkify(whole?whole.text:m.body)}</div>
+      :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body">${linkify(showTr?tr.text:whole?whole.text:m.body)}</div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
@@ -2084,6 +2096,8 @@ function openMail(id){
   if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
   if($('#md-forward'))$('#md-forward').onclick=()=>forwardMessage(m);
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
+  if($('#md-translate'))$('#md-translate').onclick=()=>translateMessage(m.id);
+  if($('#md-trtoggle'))$('#md-trtoggle').onclick=()=>{tr.hidden=!tr.hidden;openMail(id)};
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
   /* Delete and Archive take the message off the screen at once, then tell the
@@ -3424,11 +3438,65 @@ function localSummary(m){
 }
 async function summarizeMessage(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
-  const box=$('#md-summary');
-  if(box){box.remove();}
-  const d=$('#mail-detail .md-inner');
-  d.insertAdjacentHTML('beforeend','<div id="md-summary" class="as-ai" style="margin-top:14px"><b style="font-family:Fredoka,var(--sans)">Summary</b>\n'+esc(localSummary(m))+'</div>');
-  await audit('msg.summary',m.subj||m.prev.slice(0,40));
+  const old=$('#md-summary');if(old)old.remove();
+  const d=$('#mail-detail .md-inner');if(!d)return;
+  d.insertAdjacentHTML('beforeend','<div id="md-summary" class="as-ai md-ai"><b class="md-ai-title"></b><div class="md-ai-text"></div><div class="md-ai-note"></div></div>');
+  const box=$('#md-summary'),title=box.querySelector('.md-ai-title'),text=box.querySelector('.md-ai-text'),note=box.querySelector('.md-ai-note');
+  const quick=why=>{title.textContent='Quick summary';text.textContent=localSummary(m);note.textContent=why||''};
+  if(!window.__RATA_NATIVE__||!aiOk()){quick(window.__RATA_NATIVE__?'Made on this computer, without AI.':'');await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
+  title.textContent='Summary';text.textContent='Summarizing\u2026';
+  const whole=OPENED.get(id);
+  const r=await askAI({task:'summarize',subject:m.subj||'',from:msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),text:(whole&&!whole.error&&whole.text)||m.body||m.prev||'',lang:userLang()});
+  if(!box.isConnected)return;
+  if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
+  title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
+  await audit('msg.summary.ai',m.subj||m.prev.slice(0,40));
+}
+/* ---------------- AI: SUMMARIES, TRANSLATION, TASK FLAGS ----------------
+   Done by RATA's AI relay (mailrata.org/api/ai, Anthropic's Haiku), paid for
+   by RATA within a monthly allowance per customer. It is the one feature that
+   sends mail text off this computer — only the message the customer asks
+   about, or for the briefing the start of their recent mail — so the
+   customer is told once, before the first time, and it never happens on its
+   own. Desktop app only: the relay takes the app's licence as its credential.
+   Where AI cannot be used (not in the plan, offline, allowance used up) the
+   reason is shown, and the version made on this computer stands in where
+   there is one. */
+const AI_NOTICE='Summaries, translation and task flags are done by RATA\u2019s AI service, run by Anthropic. The text of the message \u2014 or, for the briefing, the start of your recent mail \u2014 is sent to it to be answered, and RATA does not keep it. Carry on?';
+function aiOk(){
+  if(S.settings.aiOk)return true;
+  if(!confirm(AI_NOTICE))return false;
+  S.settings.aiOk=true;save();return true;
+}
+async function askAI(body){
+  let r;
+  try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
+  catch(e){r={error:String(e&&e.message||e)}}
+  return r&&typeof r==='object'?r:{error:'RATA\u2019s AI service did not answer.'};
+}
+/* The language RATA reads in, as a two-letter code the relay understands.
+   Some Linux desktops report it as "en-US@posix" or "en_US.UTF-8", which
+   is not a language tag, so only the leading letters are taken. */
+function userLang(){const m=String(navigator.language||'').match(/^[a-z]{2,3}/i);return m?m[0].toLowerCase():'en'}
+function langName(code){
+  for(const loc of [userLang(),'en']){try{const n=new Intl.DisplayNames([loc],{type:'language'}).of(code);if(n)return n}catch(e){}}
+  return code;
+}
+function allowanceNote(used){
+  return typeof used==='number'&&used>=0.5?`${Math.round(used*100)}% of this month\u2019s AI allowance is used.`:'';
+}
+/* Translations fetched this session, by message id: {text, cut, to, hidden}. */
+const TRANSLATED=new Map();
+async function translateMessage(id){
+  const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
+  const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
+  const whole=OPENED.get(id),to=userLang();
+  const r=await askAI({task:'translate',subject:m.subj||'',text:(whole&&!whole.error&&whole.text)||m.body||m.prev||'',to});
+  if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
+  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut,to,hidden:false,used:r.used});
+  VIEWMODE.set(id,'text');
+  await audit('msg.translate',(m.subj||m.prev.slice(0,40))+' \u2192 '+to);
+  if(selMail===id)openMail(id);
 }
 
 /* ---------------- RATA ASSIST (to-do & request bot) ---------------- */
@@ -3479,11 +3547,44 @@ function runLocalBrief(){
   out.querySelectorAll('.as-item').forEach(el=>el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)});
   audit('assist.brief',`${items.length} items · ${people} people`);
 }
+/* The briefing, by AI: the start of the most recent mail — read or not, since
+   a message already read can still need doing — goes to the relay, which says which messages need the customer to do something, what,
+   and by when. Those are flagged in the list (m.flag) and listed here, the
+   important ones first. The panel opens on the quick version made on this
+   computer; only pressing Run briefing sends anything. */
+const BRIEF_MAX=25,BRIEF_DAYS=14;
+async function runAIBrief(){
+  if(!window.__RATA_NATIVE__||!aiOk()){runLocalBrief();return}
+  const out=$('#as-out'),btn=$('#as-run');
+  const cutoff=Date.now()-BRIEF_DAYS*864e5;
+  const pool=S.messages.filter(m=>!m.sent&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
+  if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
+  btn.disabled=true;btn.textContent='Reading\u2026';
+  const r=await askAI({task:'tasks',messages:pool.map(m=>({id:m.id,from:msgFrom(m),subject:m.subj||'',text:String(m.body||m.prev||'').slice(0,1500)}))});
+  btn.disabled=false;btn.textContent='Run briefing';
+  if(r.error){runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.</p>`);return}
+  const found=new Map((r.tasks||[]).map(t=>[t.id,t]));
+  /* What the briefing looked at is re-flagged from its answer, so a message
+     that no longer needs anything loses its flag. */
+  for(const m of pool){const t=found.get(m.id);if(t)m.flag={task:t.task,due:t.due,important:t.important,at:Date.now()};else delete m.flag}
+  save();renderMail();
+  const items=pool.filter(m=>m.flag).sort((a,b)=>(b.flag.important-a.flag.important)||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
+  if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`;return}
+  out.innerHTML=`<p class="as-sum"><b>${items.length}</b> of your ${pool.length} most recent messages need${items.length===1?'s':''} something from you${items.some(m=>m.flag.important)?' \u2014 the important ones first':''}.</p>`
+    +items.map(m=>`<div class="as-item" data-mid="${esc(m.id)}">
+      <div class="as-line1">${m.flag.important?'<span class="badge flag hot">important</span>':''}<b>${esc(msgFrom(m))}</b><span class="as-t">${rel(m.ts)}</span></div>
+      <div class="as-text">\u2691 ${esc(m.flag.task)}${m.flag.due?` <span class="as-chip deadline">by ${esc(m.flag.due)}</span>`:''}</div>
+      <div class="as-why">${esc(m.subj||'')}</div>
+    </div>`).join('')
+    +(allowanceNote(r.used)?`<p class="as-sum">${esc(allowanceNote(r.used))}</p>`:'');
+  out.querySelectorAll('.as-item').forEach(el=>el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)});
+  audit('assist.brief.ai',`${items.length} of ${pool.length} flagged`);
+}
 function openAssist(){$('#assist-ov').classList.add('open');runLocalBrief()}
 function closeAssist(){$('#assist-ov').classList.remove('open')}
 $('#assist-fab').onclick=openAssist;
 $('#as-close').onclick=closeAssist;
-$('#as-run').onclick=runLocalBrief;
+$('#as-run').onclick=runAIBrief;
 $('#assist-ov').addEventListener('click',e=>{if(e.target===$('#assist-ov'))closeAssist()});
 
 /* ---------------- WELCOME (post-signup transfer) ---------------- */

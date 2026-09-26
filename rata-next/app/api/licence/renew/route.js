@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, LICENCE_DAYS } from '../../../../lib/licence';
+import { corsHeaders, preflight } from '../../../../lib/cors';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,19 @@ export const dynamic = 'force-dynamic';
 
    The signature is checked before anything touches the database, so an
    unsigned guess costs one Ed25519 verification and no query. */
+/* The app calls this from its own origin, so the answer has to say the app
+   may read it (lib/cors.js) — without that, renewal failed as "offline". */
+export function OPTIONS(req) {
+  return preflight(req);
+}
+
 export async function POST(req) {
+  const res = await renew(req);
+  for (const [k, v] of Object.entries(corsHeaders(req))) res.headers.set(k, v);
+  return res;
+}
+
+async function renew(req) {
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }); }
 

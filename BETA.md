@@ -87,6 +87,15 @@ Don't spend time reporting these — they are known and planned:
   longer with a very big mailbox (about a second at ten thousand messages)
   — tell us when it starts to feel slow, and at roughly how many messages.
 - No other folders yet — only the inbox is shown.
+- **AI, from v0.1.17:** **✦ Summarize** and **⇄ Translate** on a message, and
+  **Run briefing** in Assist, which flags the mail that needs you to do
+  something (⚑ in the list). The first time, RATA tells you what it sends:
+  the text of that message (or the start of your recent mail, for the
+  briefing) goes to RATA's AI service, run by Anthropic, and is not kept.
+  Summaries and flags are Pro; translation is in every plan. These only work
+  once mailrata.org is updated — until then they say the AI service could
+  not be reached, and Summarize and the briefing fall back to a quick version
+  made on your computer.
 - **HTML mail is shown formatted from v0.1.12** — layout, colours, tables and
   the pictures carried inside the message. Pictures from the internet stay off
   until you click **Load images** (loading them tells the sender you opened

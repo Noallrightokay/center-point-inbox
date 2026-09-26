@@ -117,3 +117,49 @@ create index if not exists subscriptions_status_idx
 --    TOKEN_ENC_KEY, so the safest order is to drop the tables
 --    first and destroy the key afterwards.
 -- ------------------------------------------------------------
+
+-- ------------------------------------------------------------
+-- 5. AI_USAGE — what each customer's AI requests cost, per month.
+--
+--    The AI relay (app/api/ai) pays for summaries, translation
+--    and task flags, and caps each customer at AI_MONTHLY_CAP_USD
+--    a month. This is the running total it checks. It holds an
+--    address, a month and a number — never any text: the mail
+--    passes through the relay and is not written anywhere.
+--
+--    Only the server (service role) touches it, through the two
+--    functions below; no policy lets a signed-in user read or
+--    write it.
+-- ------------------------------------------------------------
+create table if not exists public.ai_usage (
+  email text not null,
+  month text not null,                    -- 'YYYY-MM', UTC
+  micro_usd bigint not null default 0,    -- millionths of a dollar
+  requests integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (email, month)
+);
+
+alter table public.ai_usage enable row level security;
+
+create or replace function public.ai_spent(p_email text, p_month text)
+returns bigint language sql stable security definer set search_path = public as $$
+  select coalesce((select micro_usd from public.ai_usage where email = p_email and month = p_month), 0);
+$$;
+
+-- One statement, so two requests finishing together cannot lose a charge.
+create or replace function public.ai_charge(p_email text, p_month text, p_micro bigint)
+returns bigint language sql security definer set search_path = public as $$
+  insert into public.ai_usage (email, month, micro_usd, requests)
+  values (p_email, p_month, greatest(p_micro, 0), 1)
+  on conflict (email, month) do update
+    set micro_usd = public.ai_usage.micro_usd + greatest(excluded.micro_usd, 0),
+        requests = public.ai_usage.requests + 1,
+        updated_at = now()
+  returning micro_usd;
+$$;
+
+revoke all on function public.ai_spent(text, text) from public, anon, authenticated;
+revoke all on function public.ai_charge(text, text, bigint) from public, anon, authenticated;
+grant execute on function public.ai_spent(text, text) to service_role;
+grant execute on function public.ai_charge(text, text, bigint) to service_role;

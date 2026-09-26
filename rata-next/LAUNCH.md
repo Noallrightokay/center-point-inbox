@@ -83,6 +83,10 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `SUPABASE_URL` | your Supabase URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | the service-role key |
 | `LICENCE_PRIVATE_KEY` | from step 2 |
+| `LICENCE_PUBLIC_KEY` | the matching public key — renewal and the AI relay check licences with it |
+| `ANTHROPIC_API_KEY` | an API key from console.anthropic.com, for the AI relay. Paste it into hPanel only — never into a chat, an issue or a commit |
+| `AI_MONTHLY_CAP_USD` | optional; what AI may cost per customer per month. Default `2` |
+| `AI_MODEL` | optional; default `claude-haiku-4-5-20251001` |
 | `STRIPE_WEBHOOK_SECRET` | the `whsec_…` |
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
@@ -107,6 +111,18 @@ Leave unset unless you mean them: `GOOGLE_CLIENT_ID` (one-click sign-in stays
 off without it). The Microsoft and Slack variables are gone — those links are
 made in the desktop app now, and the server has no route that reads anybody's
 messages.
+
+### The AI relay
+
+`/api/ai` does summaries, translation and task flags for the desktop app, and
+RATA pays for them. It is off (answers "AI is not switched on") until
+`ANTHROPIC_API_KEY` is set **and** section 5 of `database.sql` has been run —
+that section creates `ai_usage`, the running total that caps each customer at
+`AI_MONTHLY_CAP_USD` a month. Without the table it refuses rather than
+spending without a limit. It passes each request's text to Anthropic and
+back and writes none of it anywhere: the table holds an address, a month and
+a number. In the Anthropic console, set a monthly spend limit on the key as
+well — the cap here is per customer, that one is for the whole bill.
 
 ## 5. Deploy
 

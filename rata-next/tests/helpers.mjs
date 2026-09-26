@@ -54,7 +54,7 @@ export async function startServer({ env = {} } = {}) {
          answers 308 and following it would make startup depend on the live
          site being reachable. Any answer below 500 means Next is serving. */
       const r = await fetch(url + '/', { redirect: 'manual', signal: AbortSignal.timeout(1500) });
-      if (r.status < 500) return { url, port, proc, stop };
+      if (r.status < 500) return { url, port, proc, stop, log: () => log };
     } catch { /* not up yet */ }
     await sleep(500);
   }
