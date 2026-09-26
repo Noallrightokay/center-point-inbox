@@ -45,8 +45,8 @@ pub use discover::{
 };
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
-    Account, Acted, Action, Fetched, Folder, Message, Verified, Verify, Whole, act, fetch_newest,
-    fetch_older, fetch_uids, fetch_whole, verify,
+    Account, Acted, Action, Fetched, Folder, Listed, Message, OwnFolder, Verified, Verify, Whole,
+    act, fetch_folder, fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify,
 };
 pub use key::{domain_of, mail_key};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};

@@ -167,6 +167,8 @@ fn main() {
             commands::change_messages,
             commands::older_mail,
             commands::reread_mail,
+            commands::list_folders,
+            commands::folder_mail,
             commands::open_message,
             commands::save_attachment,
             commands::open_link,

@@ -25,8 +25,8 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders. Standalone, knows nothing about the app. 153 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 57 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders and the customer's own. Standalone, knows nothing about the app. 158 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 58 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -103,7 +103,8 @@ text on disk until it is needed instead of in memory; v0.1.22 reads the
 Sent folder too; v0.1.23 can update itself (once the owner has added the
 update key — `rata-next/LAUNCH.md` §9); v0.1.24 takes the plan from the
 licence, so Pro opens Side by side in the app; v0.1.25 adds Archive and
-Spam. An
+Spam; v0.1.26 adds the customer's own folders and Move to, and files
+synced mail under its mailbox (replies had gone from the first one). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -473,8 +474,37 @@ message says it was in Spam and offers **Not spam**, an archived one **Move
 to inbox** — both `Action::Inbox` (a MOVE to INBOX; the message leaves RATA
 and the next refresh brings it back as inbox mail, since a moved message
 gets the newest UID). Older mail pages every folder (`FOLDER_DONE`).
-Also not built: the customer's own folders and Drafts; Gmail's archive; no
-code signing.
+**Your own folders (v0.1.26).** `Folder::Named(name)` — the server's own
+name, exactly as LIST gave it (modified UTF-7 and all; `folder_label` decodes
+it for showing, joins levels with " / " and drops an `INBOX.` prefix).
+`own_folders` is every selectable folder except the inbox, anything with a
+special-use attribute (Sent, Archive, Junk, Trash, Drafts, All, Flagged,
+Gmail's `\Important`), anything `places()` took by name, and Trash/Drafts/
+Outbox by name on servers that declare nothing. Gmail labels are folders here.
+A named folder is opened only while it is still one of those (`name_of`
+checks the LIST every time), so the page cannot make RATA open Trash or a
+folder that is not there, and Move never creates one. Unlike the four fixed
+folders these are **not read on a refresh**: Folders (a chip) lists them per
+mailbox (`list_folders`, asked each time it is opened, kept in `S.boxes`
+keyed by address), picking one reads its newest 50 (`folder_mail` →
+`fetch_folder`), and Load older mail in that view pages that folder. Ids are
+`<key>_f<12 hex of sha256(name)>_<uid>`; in the page the folder is
+`folder:'named'` with the name in `box`, and requests send `{named: box}`
+(`folderArg`). Filed mail shows only in its folder's view and in search
+(labelled); Gmail keeps the same message in the inbox and under each label,
+so `unDup` drops a label's copy wherever the inbox's copy is in the same list
+(People threads, search). **Move to** on a message (`Action::Move`, serde
+`{"move": folder}`) moves it on the server; it leaves RATA's list and is there
+when that folder is opened. **Mailbox attribution fix, same version:**
+`mailRecord` used to let the app's `acct` (the address) overwrite the linked
+entry's id, so everything that asked "which mailbox?" by id — reply's From,
+the per-mailbox chips, Side by side columns, "via" in the reading pane,
+drag-to-forward's "already in this inbox" — found none; a reply to mail in a
+second mailbox went from the first. Mail is now filed under the id with the
+address kept as `mailbox`; `tidyAccts` refiles stored mail on load and on
+every sync (also after a mailbox is removed and linked again).
+Also not built: Drafts; Gmail's archive; moving several messages at once to a
+folder; no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

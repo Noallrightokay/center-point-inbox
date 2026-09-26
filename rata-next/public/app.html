@@ -479,6 +479,13 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .md-sortwrap{position:relative;display:inline-block}
 .md-sortmenu{position:absolute;top:110%;left:0;background:var(--glass-strong);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-radius:var(--r-sm);box-shadow:var(--shadow-lg);padding:6px;display:none;z-index:30;min-width:170px}
 .md-sortmenu.open{display:block}
+.md-filemenu{max-height:300px;overflow-y:auto}
+.md-filemenu .box-note{display:block;padding:8px 10px}
+.box-panel{padding:0 16px 12px;display:flex;flex-direction:column;gap:8px;flex-shrink:0;max-height:40vh;overflow-y:auto}
+.box-panel[hidden]{display:none}
+.box-list{display:flex;flex-wrap:wrap;gap:7px}
+.box-acct{font-size:11px;font-weight:600;color:var(--slate);text-transform:uppercase;letter-spacing:.04em}
+.box-note{font-size:12.5px;color:var(--slate);line-height:1.45}
 .md-sortmenu button{display:block;width:100%;text-align:left;padding:8px 10px;border-radius:8px;font-family:var(--sans);font-size:12.5px;font-weight:600;color:var(--ink-c)}
 .md-sortmenu button:hover{background:var(--tint-soft)}
 .md-sortmenu label{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--slate);padding:8px 10px 4px;border-top:1px solid var(--hair-2);margin-top:4px}
@@ -773,6 +780,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
         <div class="chip-row" id="cat-tabs"></div>
         <button class="btn" id="sync-all" style="display:none;margin:0 14px 8px;align-self:flex-start">⟳ Sync linked inboxes</button>
         <div class="chip-row" id="mail-filters"></div>
+        <div class="box-panel" id="box-panel" hidden></div>
         <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button></div>
         <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
@@ -1331,6 +1339,7 @@ async function load(){
   /* A delete the window closed on before IndexedDB finished is still
      recorded in S.gone, which is written at once. */
   S.messages=[...byId.values()].filter(m=>(m.ch||'email')==='email'&&!isGone(m.id));
+  tidyAccts();
   if(!MS)return;
   /* If that first write fails, mail goes back to the old way for this
      session, and takes back the text the write had taken off it. */
@@ -1367,7 +1376,23 @@ const isGone=id=>!!(S.gone&&S.gone[id]);
    megabytes, and there older mail stops being loaded well before it is full,
    and says why. */
 const OLDER_PAGE=50,STORE_SOFT_CAP=3500000;
-function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).label||m.acct||'').toLowerCase()}
+function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).label||m.mailbox||m.acct||'').toLowerCase()}
+/* A message is filed under its mailbox's entry in S.linked (acct = that
+   entry's id), with the address kept beside it (mailbox). Until 0.1.26 the
+   address from the app overwrote the id, so nothing that asked "which
+   mailbox?" by id found one: a reply went from whichever mailbox was first,
+   and each mailbox's own view and Side by side column were empty. This
+   files such mail — and mail of a mailbox removed and linked again, which
+   gets a new entry — under the entry for its address. */
+function tidyAccts(){
+  let n=0;
+  for(const m of S.messages){
+    if(!m||m.prov!=='imap'||S.linked.some(l=>l.id===m.acct))continue;
+    const email=String(m.mailbox||m.acct||'').toLowerCase(),l=email&&linkedFind('mail',email);
+    if(l){m.mailbox=email;m.acct=l.id;n++}
+  }
+  return n;
+}
 /* Which folder of its mailbox a message is in (0.1.22): the inbox, or Sent.
    A UID only means something inside its folder, so every request about a
    message names it. Mail stored before 0.1.22 is all from the inbox. */
@@ -1376,7 +1401,25 @@ function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).labe
    count, the briefing and the to-dos. inInbox is what "the inbox" means. */
 const FOLDERS=['inbox','sent','archive','junk'];
 const FOLDER_LABEL={archive:'Archive',junk:'Spam'};
-const folderOf=m=>m&&FOLDERS.includes(m.folder)?m.folder:'inbox';
+/* 0.1.26: the customer's own folders (Gmail labels among them) are folder
+   'named', with the server's name for the folder in `box`. Unlike the four
+   above they are not read on a refresh: a folder is read when the customer
+   opens it from Folders, and its mail is shown in its own view and in
+   search, never in the inbox. A request names one as {named: box}. */
+const folderOf=m=>m&&m.folder==='named'&&m.box?'named':m&&FOLDERS.includes(m.folder)?m.folder:'inbox';
+const folderArg=m=>folderOf(m)==='named'?{named:m.box}:folderOf(m);
+/* Folders are kept per mailbox address (S.boxes[email]), as messages name
+   their mailbox (mailEmailOf). */
+function boxLabel(email,name){return ((((S.boxes||{})[email]||{}).list||[]).find(f=>f.name===name)||{}).label||name}
+function folderName(m){const f=folderOf(m);return f==='named'?boxLabel(mailEmailOf(m),m.box):FOLDER_LABEL[f]||''}
+/* Gmail keeps one message in the inbox and under each of its labels, so a
+   label's copy of a message can sit beside the inbox's. Wherever both are in
+   one list, the label's copy goes. */
+function unDup(list){
+  const seen=new Set();
+  for(const m of list)if(folderOf(m)!=='named'&&m.messageId)seen.add(mailEmailOf(m)+'\n'+m.messageId);
+  return list.filter(m=>folderOf(m)!=='named'||!m.messageId||!seen.has(mailEmailOf(m)+'\n'+m.messageId));
+}
 const inInbox=m=>!m.sent&&folderOf(m)==='inbox';
 /* Each folder's history is walked on its own and ends on its own. */
 const FOLDER_DONE={inbox:'historyDone',sent:'sentDone',archive:'archiveDone',junk:'junkDone'};
@@ -1447,7 +1490,7 @@ function frameDoc(html,images){
 }
 async function openWhole(m){
   let r;
-  try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
+  try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
   catch(e){r={error:String(e&&e.message||e)}}
   if(!r||r.error){OPENED.set(m.id,{text:await bodyOf(m),truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
   OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[],html:r.html||null,remoteImages:!!r.remoteImages});
@@ -1462,7 +1505,7 @@ async function saveAttachment(m,a,btn){
   if(!a)return;
   if(btn)btn.disabled=true;
   let r;
-  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected)btn.disabled=false;
   if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path);toast('Saved to '+r.path)}
@@ -1477,7 +1520,7 @@ async function convertAttachment(m,a,btn){
   if(!a)return;
   if(btn){btn.disabled=true;btn.textContent='Opening\u2026'}
   let r;
-  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Convert'}
   if(!r||!r.ok){toast('Could not open '+a.n+' \u2014 '+((r&&r.error)||'try again'));return}
@@ -1509,16 +1552,15 @@ async function rereadBodies(msgs){
   if(!window.__RATA_NATIVE__||!msgs.length)return 0;
   const groups=new Map();
   for(const m of msgs){
-    const k=mailEmailOf(m)+'|'+m.uidvalidity+'|'+folderOf(m);
-    if(!groups.has(k))groups.set(k,[]);
-    groups.get(k).push(m);
+    const k=mailEmailOf(m)+'|'+m.uidvalidity+'|'+JSON.stringify(folderArg(m));
+    if(!groups.has(k))groups.set(k,{email:mailEmailOf(m),uidvalidity:m.uidvalidity,folder:folderArg(m),list:[]});
+    groups.get(k).list.push(m);
   }
   let fixed=0;
-  for(const [k,list] of groups){
-    const [email,uv,folder]=k.split('|');
+  for(const {email,uidvalidity,folder,list} of groups.values()){
     const pick=list.sort((a,b)=>b.ts-a.ts).slice(0,REREAD_PAGE);
     let r;
-    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,folder,uids:pick.map(m=>m.uid),uidvalidity:+uv})})}
+    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,folder,uids:pick.map(m=>m.uid),uidvalidity})})}
     catch(e){continue}
     if(!r||r.error)continue;
     for(const got of (r.messages||[])){
@@ -1548,8 +1590,8 @@ async function serverAct(msgs,action){
     if(m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
     const email=(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
     if(!email)continue;
-    const k=email+'|'+m.uidvalidity+'|'+folderOf(m);
-    if(!groups.has(k))groups.set(k,{email,folder:folderOf(m),uidvalidity:m.uidvalidity,uids:[]});
+    const k=email+'|'+m.uidvalidity+'|'+JSON.stringify(folderArg(m));
+    if(!groups.has(k))groups.set(k,{email,folder:folderArg(m),uidvalidity:m.uidvalidity,uids:[]});
     groups.get(k).uids.push(m.uid);
   }
   const problems=[];
@@ -1720,9 +1762,101 @@ function renderMailFilters(){renderCats();
   S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
   chips.push(['sent','Sent']);
   for(const f of ['archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
+  if(BOX&&!boxMailbox(BOX.email))BOX=null;
+  if(BOX)chips.push(['box',boxLabel(BOX.email,BOX.name)]);
+  if(window.__RATA_NATIVE__&&boxAccts().length)chips.push(['folders',boxPanel?'Folders \u25b4':'Folders \u25be']);
   if(!chips.some(c=>c[0]===mailFilter))mailFilter='all';
-  $('#mail-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${mailFilter===f?'on':''}" data-f="${esc(f)}">${esc(l)}</button>`).join('');
-  $$('#mail-filters .pill').forEach(p=>p.onclick=()=>{mailFilter=p.dataset.f;renderMailFilters();renderMail()});
+  $('#mail-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${mailFilter===f?'on':''}" data-f="${esc(f)}"${f==='folders'?` aria-expanded="${boxPanel}"`:''}>${esc(l)}</button>`).join('');
+  $$('#mail-filters .pill').forEach(p=>p.onclick=()=>{
+    if(p.dataset.f==='folders'){toggleBoxPanel();return}
+    mailFilter=p.dataset.f;renderMailFilters();renderMail();
+  });
+  renderBoxPanel();
+}
+/* ---------------- YOUR OWN FOLDERS (0.1.26) ----------------
+   Folders lists each mailbox's own folders — asked of the server each time
+   it is opened, since folders are made and renamed elsewhere, and kept in
+   S.boxes so the list shows at once. Picking one reads its newest mail. */
+let BOX=null,boxPanel=false,BOX_ERR={};
+const BOX_PAGE=50,BOX_DONE=new Set(),BOX_LOADING=new Set();
+const boxAccts=()=>S.linked.filter(l=>l.type==='mail');
+const boxEmail=l=>String(l.label).toLowerCase();
+const boxMailbox=email=>boxAccts().find(l=>boxEmail(l)===email);
+const boxKey=(email,name)=>email+'\n'+name;
+async function fetchBoxes(l){
+  let r;
+  try{r=await apiFetch('/api/mail/folders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label})})}
+  catch(e){r={error:String(e&&e.message||e)}}
+  if(!r||!Array.isArray(r.folders))return (r&&r.error)||'Its folders could not be listed.';
+  S.boxes=S.boxes||{};
+  S.boxes[boxEmail(l)]={at:Date.now(),list:r.folders.map(f=>({name:String(f.name),label:String(f.label||f.name)}))};
+  save();return '';
+}
+async function toggleBoxPanel(open){
+  boxPanel=open===undefined?!boxPanel:open;
+  renderMailFilters();
+  if(!boxPanel)return;
+  await Promise.all(boxAccts().map(async l=>{
+    BOX_LOADING.add(l.id);renderBoxPanel();
+    const e=await fetchBoxes(l);
+    BOX_LOADING.delete(l.id);
+    if(e)BOX_ERR[l.id]=e;else delete BOX_ERR[l.id];
+  }));
+  renderBoxPanel();
+}
+function boxButtons(l,current,attr){
+  const got=((S.boxes||{})[boxEmail(l)]||{}).list;
+  if(got&&got.length)return got.filter(f=>!current||f.name!==current).map(f=>`<button class="${attr==='data-box'?'pill ':''}${BOX&&mailFilter==='box'&&BOX.email===boxEmail(l)&&BOX.name===f.name&&attr==='data-box'?'on':''}" ${attr}="${esc(f.name)}" data-email="${esc(boxEmail(l))}">${esc(f.label)}</button>`).join('')
+    ||'<span class="box-note">No other folders.</span>';
+  if(BOX_LOADING.has(l.id))return '<span class="box-note">Looking up your folders\u2026</span>';
+  if(BOX_ERR[l.id])return `<span class="box-note">${esc(BOX_ERR[l.id])}</span>`;
+  return '<span class="box-note">No folders of your own yet. Folders you make in your mail app \u2014 and Gmail labels \u2014 appear here.</span>';
+}
+function renderBoxPanel(){
+  const el=$('#box-panel');if(!el)return;
+  el.hidden=!boxPanel;if(!boxPanel)return;
+  const accts=boxAccts();
+  el.innerHTML=accts.map(l=>(accts.length>1?`<div class="box-acct">${esc(l.label)}</div>`:'')+`<div class="box-list">${boxButtons(l,null,'data-box')}</div>`).join('')
+    ||'<span class="box-note">Link a mailbox to see its folders.</span>';
+  el.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>openBox(b.dataset.email,b.dataset.box));
+}
+async function openBox(email,name){
+  BOX={email,name};mailFilter='box';boxPanel=false;
+  renderMailFilters();renderMail();
+  await loadBox(email,name,false);
+}
+/* The oldest message RATA holds from one folder, to page back from. */
+function oldestInBox(email,name){
+  let best=null;
+  for(const m of S.messages)if(folderOf(m)==='named'&&m.box===name&&m.uid&&m.uidvalidity&&mailEmailOf(m)===email&&(!best||m.uid<best.uid))best=m;
+  return best;
+}
+async function loadBox(email,name,older){
+  const l=boxMailbox(email),key=boxKey(email,name);
+  if(!l||!window.__RATA_NATIVE__||BOX_LOADING.has(key))return;
+  const ref=older?oldestInBox(email,name):null;
+  if(older&&!ref)return;
+  BOX_LOADING.add(key);renderMail();
+  let r;
+  try{
+    r=older
+      ?await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label,folder:{named:name},beforeUid:ref.uid,uidvalidity:ref.uidvalidity,limit:OLDER_PAGE})})
+      :await apiFetch('/api/mail/folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label,folder:{named:name},limit:BOX_PAGE})});
+  }catch(e){r={error:String(e&&e.message||e)}}
+  finally{BOX_LOADING.delete(key)}
+  if(!r||r.error){toast(boxLabel(email,name)+': '+((r&&r.error)||'no answer'));renderMail();return}
+  const got=r.messages||[];
+  /* Opened again, a folder may have grown: whether there is older mail is
+     decided afresh. */
+  if(!older)BOX_DONE.delete(key);
+  if(got.length<(older?OLDER_PAGE:BOX_PAGE))BOX_DONE.add(key);
+  for(const m of got){
+    if(isGone(m.id))continue;
+    const have=S.messages.find(x=>x.id===m.id);
+    if(have){have.unread=m.unread;have.starred=m.starred;takeBody(have,m);continue}
+    S.messages.push(mailRecord(m));
+  }
+  save();renderMailFilters();renderMail();
 }
 let mailSort='new',selecting=false,catFilter='all';const SEL=new Set();
 const CATS={priority:'Priority',people:'People',finance:'Finance',updates:'Updates',other:'Other'};
@@ -1746,12 +1880,13 @@ function mailPool(acctId){
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
   else if(mailFilter==='archive'||mailFilter==='junk')pool=pool.filter(m=>folderOf(m)===mailFilter);
+  else if(mailFilter==='box')pool=BOX?pool.filter(m=>folderOf(m)==='named'&&m.box===BOX.name&&mailEmailOf(m)===BOX.email):[];
   else if(mailFilter.startsWith('acct:'))pool=pool.filter(m=>m.acct===mailFilter.slice(5));
   /* Sent, Archive and Spam are each their own view; everywhere else they are
      left out. The old chain dropped sent mail last and unconditionally, so
      the Sent chip always showed an empty list. Starred also shows starred
      archived mail. */
-  if(!['sent','archive','junk'].includes(mailFilter)){
+  if(!['sent','archive','junk','box'].includes(mailFilter)){
     pool=pool.filter(m=>inInbox(m)||(mailFilter==='starred'&&!m.sent&&folderOf(m)==='archive'));
     if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
   }
@@ -1938,6 +2073,10 @@ function renderMail(){
      follows the filter chips as before. */
   const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
   $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&inInbox(m)&&channelEnabled(m.ch)).length;
+  const inBox=mailFilter==='box'&&BOX&&!splitOn,bkey=inBox?boxKey(BOX.email,BOX.name):'';
+  if(!pool.length&&inBox){
+    sc.innerHTML=`<div class="empty"><b>${BOX_LOADING.has(bkey)?'Loading '+esc(boxLabel(BOX.email,BOX.name))+'\u2026':'Nothing in '+esc(boxLabel(BOX.email,BOX.name))}</b>${BOX_LOADING.has(bkey)?'':'Mail you file in this folder appears here.'}</div>`;
+    return}
   if(!pool.length){
     const linked=S.linked.length;
     sc.innerHTML=linked
@@ -1953,9 +2092,10 @@ function renderMail(){
     if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
-  vlist(sc,pool,window.__RATA_NATIVE__&&olderCandidates().length?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
+  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&olderCandidates().length;
+  vlist(sc,pool,more?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
   const lo=document.getElementById('load-older');
-  if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await loadOlder()}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
+  if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await (inBox?loadBox(BOX.email,BOX.name,true):loadOlder())}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
   wireRows(sc,true);
   if(splitOn){
     /* Every pane accepts what another drops on it, and forwards from its own
@@ -2260,7 +2400,8 @@ function openMail(id){
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
         ${m.prov==='imap'&&m.uid&&inInbox(m)?'<button class="btn" id="md-archive">Archive</button>':''}
-        ${m.prov==='imap'&&m.uid&&folderOf(m)==='archive'?'<button class="btn" id="md-home">Move to inbox</button>':''}
+        ${m.prov==='imap'&&m.uid&&['archive','named'].includes(folderOf(m))?'<button class="btn" id="md-home">Move to inbox</button>':''}
+        ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
         ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
         <button class="btn danger" id="md-del">Delete</button>
       </div>
@@ -2300,15 +2441,38 @@ function openMail(id){
   /* Delete and Archive take the message off the screen at once, then tell the
      mailbox. If the mailbox cannot be told, say so — "gone from RATA but still
      in your inbox" is worth knowing, and the next attempt will work. */
-  const leave=async(action,verb)=>{
+  const leave=async(action,verb,tag=action)=>{
     const copy=Object.assign({},m);
-    dropMessages([id]);selMail=null;save();audit('msg.'+action,m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail();
+    dropMessages([id]);selMail=null;save();audit('msg.'+tag,m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail();
     const problems=await serverAct([copy],action);
     toast(problems.length?verb+' in RATA, but your mailbox was not updated — '+problems[0]:verb);
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
   /* Back to the inbox, where the next refresh brings it in as inbox mail. */
+  /* Into one of the customer's own folders: it leaves the list here, and is
+     there when that folder is opened. */
+  const fileMenu=()=>{
+    const el=$('#md-filemenu'),l=boxMailbox(mailEmailOf(m));if(!el||!l)return;
+    el.innerHTML=boxButtons(l,folderOf(m)==='named'?m.box:null,'data-to');
+    el.querySelectorAll('[data-to]').forEach(b=>b.onclick=()=>{
+      const name=b.dataset.to;el.classList.remove('open');
+      leave({move:{named:name}},'Moved to '+boxLabel(mailEmailOf(m),name),'move');
+    });
+  };
+  if($('#md-file'))$('#md-file').onclick=async e=>{
+    e.stopPropagation();
+    const el=$('#md-filemenu'),l=boxMailbox(mailEmailOf(m));
+    el.classList.toggle('open');
+    if(!el.classList.contains('open')||!l)return;
+    fileMenu();
+    if(BOX_LOADING.has(l.id))return;
+    BOX_LOADING.add(l.id);if(!((S.boxes||{})[boxEmail(l)]||{}).list)fileMenu();
+    const err=await fetchBoxes(l);
+    BOX_LOADING.delete(l.id);
+    if(err)BOX_ERR[l.id]=err;else delete BOX_ERR[l.id];
+    if(el.isConnected&&el.classList.contains('open'))fileMenu();
+  };
   if($('#md-home'))$('#md-home').onclick=()=>leave('inbox',folderOf(m)==='junk'?'Marked not spam — it appears in your inbox at the next refresh':'Moved to your inbox — it appears there at the next refresh');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
@@ -2332,7 +2496,7 @@ function renderPeopleFilters(){
   $$('#people-filters .pill').forEach(p=>p.onclick=()=>{if(p.dataset.f==='__add'){toggleAddPerson();return}peopleFilter=p.dataset.f;renderPeopleFilters();renderPeople()});
 }
 /* A person's thread leaves out Spam: a forger can put anybody's name on it. */
-function personMsgs(cid){return S.messages.filter(m=>channelEnabled(m.ch)&&folderOf(m)!=='junk'&&(m.cid===cid||(m.sent&&m.toId===cid))).sort((a,b)=>a.ts-b.ts)}
+function personMsgs(cid){return unDup(S.messages.filter(m=>channelEnabled(m.ch)&&folderOf(m)!=='junk'&&(m.cid===cid||(m.sent&&m.toId===cid)))).sort((a,b)=>a.ts-b.ts)}
 function renderPeople(){
   let pool=S.contacts.filter(c=>c.id!=='c8');
   pool.sort((a,b)=>{const la=personMsgs(a.id).at(-1)?.ts||0,lb=personMsgs(b.id).at(-1)?.ts||0;return lb-la});
@@ -2438,7 +2602,7 @@ async function doSearch(){
   const inText=await bodiesMatching(q);
   if(run!==SEARCH_RUN)return;
   const hits=[];
-  for(const m of S.messages){
+  for(const m of unDup(S.messages)){
     if(!channelEnabled(m.ch))continue;
     const nm=msgFrom(m);
     const hay=(nm+' '+(m.subj||'')+' '+(m.orig||'')+' '+m.atts.map(a=>a.n).join(' ')).toLowerCase();
@@ -2455,7 +2619,7 @@ async function doSearch(){
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
   const rp=$('#res-pane');
   rp.innerHTML=hits.length?hits.map((h,i)=>h.type==='msg'
-    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}${FOLDER_LABEL[folderOf(h.ref)]?' · <span class="badge">'+FOLDER_LABEL[folderOf(h.ref)]+'</span>':''}</div></div></div>`
+    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}${folderName(h.ref)?' · <span class="badge">'+esc(folderName(h.ref))+'</span>':''}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
     :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk(h.ref.addr||'No email address')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
@@ -3103,7 +3267,7 @@ async function forwardMessage(m,targetAcctId){
   const text=whole&&!whole.error?whole.text:String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
-  if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),folder:folderOf(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
+  if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
   DRAFT={kind:'forward'};renderDraftHead();
   renderCmpFiles();liveScan();
   const b=$('#cmp-body');b.setSelectionRange(0,0);b.scrollTop=0;
@@ -3474,7 +3638,8 @@ function mailRecord(m){
   const addr=String((m.sent?m.toAddr:m.fromAddr)||'').toLowerCase();
   /* Spam is not linked to a contact: a forged From would put it in their thread. */
   const match=addr&&m.folder!=='junk'?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===addr):null;
-  return Object.assign({cid:m.sent?null:(match?match.id:null),...(m.sent?{toId:match?match.id:null}:{}),acct:owner?owner.id:undefined,real:true,atts:[]},m);
+  return Object.assign({cid:m.sent?null:(match?match.id:null),...(m.sent?{toId:match?match.id:null}:{}),real:true,atts:[]},m,
+    owner?{acct:owner.id,mailbox:String(m.acct).toLowerCase()}:{});
 }
 /* RATA's own record of a message it sent that this copy from Sent is: the
    same Message-ID — or, for mail sent before RATA kept that (0.1.22), the
@@ -3508,6 +3673,7 @@ async function absorbMail(res){
        marking it would have the row claim a problem it does not have. */
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
+  tidyAccts();
   for(const m of (res.messages||[])){
     if(isGone(m.id))continue;
     /* A message sent from RATA, now back from the Sent folder the provider

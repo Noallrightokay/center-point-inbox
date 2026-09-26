@@ -64,7 +64,10 @@ pub struct Account {
 
 /// Which folder of a mailbox a message lives in. A UID only means something
 /// inside its own folder, so every request about a message names this too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Serialised as `"inbox"`, `"sent"`, `"archive"`, `"junk"`, or
+/// `{"named": "<server name>"}` for one of the customer's own folders.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Folder {
@@ -80,7 +83,32 @@ pub enum Folder {
     Archive,
     /// Spam, which is where real mail goes missing.
     Junk,
+    /// One of the customer's own folders — a Gmail label is one too — by the
+    /// name the server lists it under, exactly as LIST gave it (modified
+    /// UTF-7 and all), since that is what SELECT needs. Only ever opened if
+    /// it is still one of [`list_folders`]'s: never the inbox, never Trash,
+    /// Drafts or a folder that is really Sent, Archive or Spam under another
+    /// name, and never a name the server did not list.
+    Named(String),
 }
+
+/// What the other folders a server keeps for itself are called, when it does
+/// not say — so a server that declares nothing still does not show its Trash
+/// and Drafts among the customer's own folders.
+const SYSTEM_NAMES: &[&str] = &[
+    "Trash",
+    "Deleted",
+    "Deleted Items",
+    "Deleted Messages",
+    "Bin",
+    "Drafts",
+    "Draft",
+    "Outbox",
+];
+
+/// The most of the customer's own folders listed. Past this a folder list is
+/// not something anyone picks from.
+const FOLDERS_MAX: usize = 500;
 
 /// What Sent is called on servers that do not say which folder it is.
 const SENT_NAMES: &[&str] = &[
@@ -540,7 +568,7 @@ pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fe
         }
     };
 
-    let mut messages = match newest_in(&mut session, acct, Folder::Inbox, &mailbox, limit).await {
+    let mut messages = match newest_in(&mut session, acct, &Folder::Inbox, &mailbox, limit).await {
         Ok(m) => m,
         Err(failed) => return failed,
     };
@@ -548,11 +576,11 @@ pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fe
     // fails partway is left out, and the inbox still arrives.
     let found = places(&mut session).await;
     for folder in [Folder::Sent, Folder::Archive, Folder::Junk] {
-        let Some(name) = found.name(folder) else {
+        let Some(name) = found.name(&folder) else {
             continue;
         };
         if let Selected::Open(mailbox) = select_name(&mut session, name).await
-            && let Ok(mut more) = newest_in(&mut session, acct, folder, &mailbox, limit).await
+            && let Ok(mut more) = newest_in(&mut session, acct, &folder, &mailbox, limit).await
         {
             messages.append(&mut more);
         }
@@ -566,7 +594,7 @@ pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fe
 async fn newest_in<T>(
     session: &mut Session<T>,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     mailbox: &async_imap::types::Mailbox,
     limit: u32,
 ) -> Result<Vec<Message>, Fetched>
@@ -594,19 +622,38 @@ enum Selected {
 }
 
 /// Open `folder` for reading and acting on.
-async fn select<T>(session: &mut Session<T>, folder: Folder) -> Selected
+async fn select<T>(session: &mut Session<T>, folder: &Folder) -> Selected
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    if folder == Folder::Inbox {
+    if *folder == Folder::Inbox {
         return select_name(session, "INBOX").await;
     }
-    match places(session).await.name(folder) {
-        Some(name) => {
-            let name = name.to_string();
-            select_name(session, &name).await
-        }
+    match name_of(session, folder).await {
+        Some(name) => select_name(session, &name).await,
         None => Selected::Missing,
+    }
+}
+
+/// The server's name for `folder` on this mailbox, if it has one. For one of
+/// the customer's own folders that is its own name — but only while it is
+/// still one of them: a page asking for "Deleted Items" or for a folder that
+/// has since been removed gets nothing.
+async fn name_of<T>(session: &mut Session<T>, folder: &Folder) -> Option<String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if *folder == Folder::Inbox {
+        return Some("INBOX".into());
+    }
+    let listed = listing(session).await?;
+    let found = places_in(&listed);
+    match folder {
+        Folder::Named(want) => own_folders(&listed, &found)
+            .into_iter()
+            .find(|f| f.name == *want)
+            .map(|f| f.name),
+        other => found.name(other).map(str::to_string),
     }
 }
 
@@ -629,38 +676,64 @@ struct Places {
 }
 
 impl Places {
-    fn name(&self, folder: Folder) -> Option<&str> {
+    fn name(&self, folder: &Folder) -> Option<&str> {
         match folder {
             Folder::Inbox => Some("INBOX"),
             Folder::Sent => self.sent.as_deref(),
             Folder::Archive => self.archive.as_deref(),
             Folder::Junk => self.junk.as_deref(),
+            Folder::Named(_) => None,
         }
     }
+
+    fn holds(&self, name: &str) -> bool {
+        [&self.sent, &self.archive, &self.junk]
+            .iter()
+            .any(|p| p.as_deref() == Some(name))
+    }
+}
+
+/// Every folder the server lists, or nothing if it will not say.
+async fn listing<T>(session: &mut Session<T>) -> Option<Vec<async_imap::types::Name>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
+        .await
+        .ok()?
+        .ok()?;
+    let names: Vec<_> = stream.collect().await;
+    Some(names.into_iter().flatten().collect())
+}
+
+async fn places<T>(session: &mut Session<T>) -> Places
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    listing(session)
+        .await
+        .map(|l| places_in(&l))
+        .unwrap_or_default()
+}
+
+/// Whether a listed folder can be opened at all.
+fn selectable(n: &async_imap::types::Name) -> bool {
+    use async_imap::types::NameAttribute as A;
+    !n.attributes().iter().any(|a| match a {
+        A::NoSelect => true,
+        A::Extension(x) => x.eq_ignore_ascii_case("\\NonExistent"),
+        _ => false,
+    })
 }
 
 /// Each folder by the purpose the server declares for it (RFC 6154), else by
 /// the exact names providers give it — never by a name that merely contains
 /// the word. None is ever the inbox, and no folder is two of them.
-async fn places<T>(session: &mut Session<T>) -> Places
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+fn places_in(listed: &[async_imap::types::Name]) -> Places {
     use async_imap::types::NameAttribute as A;
-    let Some(stream) = timeout(COMMAND, session.list(Some(""), Some("*")))
-        .await
-        .ok()
-        .and_then(Result::ok)
-    else {
-        return Places::default();
-    };
-    let names: Vec<_> = stream.collect().await;
-    let usable: Vec<_> = names
+    let usable: Vec<_> = listed
         .iter()
-        .flatten()
-        .filter(|n| {
-            !n.attributes().contains(&A::NoSelect) && !n.name().eq_ignore_ascii_case("INBOX")
-        })
+        .filter(|n| selectable(n) && !n.name().eq_ignore_ascii_case("INBOX"))
         .collect();
     let mut taken: Vec<String> = Vec::new();
     let mut pick = |attr: A, fallback: &[&str]| -> Option<String> {
@@ -685,6 +758,247 @@ where
         sent,
         archive,
         junk,
+    }
+}
+
+/// One of the customer's own folders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct OwnFolder {
+    /// The server's name, exactly as listed — what [`Folder::Named`] carries.
+    /// Not for showing: it may be in IMAP's modified UTF-7.
+    pub name: String,
+    /// For showing: decoded, its levels joined by " / ", and without the
+    /// "INBOX." that some servers put in front of every folder.
+    pub label: String,
+}
+
+/// The folders that are the customer's own, from a LIST: every folder that
+/// can be opened, except the inbox and the ones the server keeps for itself —
+/// Sent, Archive, Spam, Trash, Drafts, and Gmail's All Mail, Starred and
+/// Important, which only show mail that is somewhere else already. Sorted by
+/// how they read.
+fn own_folders(listed: &[async_imap::types::Name], found: &Places) -> Vec<OwnFolder> {
+    use async_imap::types::NameAttribute as A;
+    let mut own: Vec<OwnFolder> = listed
+        .iter()
+        .filter(|n| selectable(n))
+        .filter(|n| {
+            !n.attributes().iter().any(|a| match a {
+                A::All | A::Archive | A::Drafts | A::Flagged | A::Junk | A::Sent | A::Trash => true,
+                A::Extension(x) => x.eq_ignore_ascii_case("\\Important"),
+                _ => false,
+            })
+        })
+        .filter(|n| !found.holds(n.name()))
+        .filter(|n| {
+            let bare = without_inbox(n.name(), n.delimiter());
+            !bare.eq_ignore_ascii_case("INBOX")
+                && !SYSTEM_NAMES.iter().any(|s| bare.eq_ignore_ascii_case(s))
+        })
+        .map(|n| OwnFolder {
+            name: n.name().to_string(),
+            label: folder_label(n.name(), n.delimiter()),
+        })
+        .collect();
+    own.sort_by(|a, b| {
+        a.label
+            .to_lowercase()
+            .cmp(&b.label.to_lowercase())
+            .then(a.name.cmp(&b.name))
+    });
+    own.truncate(FOLDERS_MAX);
+    own
+}
+
+/// A name without the "INBOX." (or "INBOX/") some servers put before every
+/// folder. The inbox itself is left as it is.
+fn without_inbox<'a>(name: &'a str, delimiter: Option<&str>) -> &'a str {
+    match delimiter {
+        // By `get`, not by slicing: a server that sends UTF-8 names can put a
+        // character across byte 5, and slicing there would panic.
+        Some(d) if !d.is_empty() && name.len() > 5 + d.len() => {
+            match (name.get(..5), name.get(5..)) {
+                (Some(head), Some(rest))
+                    if head.eq_ignore_ascii_case("INBOX") && rest.starts_with(d) =>
+                {
+                    &rest[d.len()..]
+                }
+                _ => name,
+            }
+        }
+        _ => name,
+    }
+}
+
+/// How a folder's name reads: decoded, and its levels joined by " / ".
+fn folder_label(name: &str, delimiter: Option<&str>) -> String {
+    let bare = without_inbox(name, delimiter);
+    let parts: Vec<String> = match delimiter {
+        Some(d) if !d.is_empty() => bare.split(d).map(utf7_imap).collect(),
+        _ => vec![utf7_imap(bare)],
+    };
+    parts.join(" / ")
+}
+
+/// IMAP's modified UTF-7 (RFC 3501 §5.1.3), which is how servers spell a
+/// folder called "Entwürfe": `Entw&APw-rfe`. Anything that does not decode
+/// is shown as it came.
+fn utf7_imap(s: &str) -> String {
+    fn sextet(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b',' => 63,
+            _ => return None,
+        } as u32)
+    }
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let Some(end) = after.find('-') else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        let chunk = &after[..end];
+        rest = &after[end + 1..];
+        if chunk.is_empty() {
+            out.push('&');
+            continue;
+        }
+        let mut bits = 0u32;
+        let mut held = 0u32;
+        let mut bytes = Vec::new();
+        let mut ok = true;
+        for c in chunk.bytes() {
+            let Some(v) = sextet(c) else {
+                ok = false;
+                break;
+            };
+            bits = (bits << 6) | v;
+            held += 6;
+            if held >= 8 {
+                held -= 8;
+                bytes.push((bits >> held) as u8);
+                bits &= (1 << held) - 1;
+            }
+        }
+        if !ok || bytes.len() % 2 != 0 {
+            out.push('&');
+            out.push_str(chunk);
+            out.push('-');
+            continue;
+        }
+        let units: Vec<u16> = bytes
+            .chunks(2)
+            .map(|p| u16::from_be_bytes([p[0], p[1]]))
+            .collect();
+        match String::from_utf16(&units) {
+            Ok(text) => out.push_str(&text),
+            Err(_) => {
+                out.push('&');
+                out.push_str(chunk);
+                out.push('-');
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// How listing a mailbox's folders went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Listed {
+    Folders(Vec<OwnFolder>),
+    Host(String),
+    Auth(String),
+    Net(String),
+}
+
+/// The customer's own folders in one mailbox — see [`own_folders`] for which
+/// those are. Asked when the customer looks for them, not on every refresh.
+pub async fn list_folders(resolver: &Resolver, acct: &Account) -> Listed {
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Listed::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Listed::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Listed::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Listed::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let found = folders_in(&mut session, acct).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+async fn folders_in<T>(session: &mut Session<T>, acct: &Account) -> Listed
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match listing(session).await {
+        Some(listed) => Listed::Folders(own_folders(&listed, &places_in(&listed))),
+        None => Listed::Net(unreachable_msg(acct, "its folders could not be listed")),
+    }
+}
+
+/// The newest `limit` messages of one folder, newest first — how one of the
+/// customer's own folders is read, when they open it.
+pub async fn fetch_folder(
+    resolver: &Resolver,
+    acct: &Account,
+    folder: Folder,
+    limit: u32,
+) -> Fetched {
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Fetched::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let found = folder_in(&mut session, acct, &folder, limit).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+async fn folder_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: &Folder,
+    limit: u32,
+) -> Fetched
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match select(session, folder).await {
+        Selected::Open(mailbox) => match newest_in(session, acct, folder, &mailbox, limit).await {
+            Ok(m) => Fetched::Messages(m),
+            Err(failed) => failed,
+        },
+        Selected::Missing => Fetched::Stale(format!(
+            "{} no longer has that folder — it was renamed or removed. Pick it again from Folders.",
+            acct.email
+        )),
+        Selected::Failed => Fetched::Net(unreachable_msg(acct, &cannot_open(folder))),
     }
 }
 
@@ -738,7 +1052,7 @@ pub async fn fetch_whole(
             return Whole::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = whole_in(&mut session, acct, folder, uid, uidvalidity).await;
+    let found = whole_in(&mut session, acct, &folder, uid, uidvalidity).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
@@ -746,7 +1060,7 @@ pub async fn fetch_whole(
 async fn whole_in<T>(
     session: &mut Session<T>,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     uid: u32,
     uidvalidity: u32,
 ) -> Whole
@@ -851,7 +1165,7 @@ pub async fn fetch_uids(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = uids_in(&mut session, acct, folder, &uids, uidvalidity).await;
+    let found = uids_in(&mut session, acct, &folder, &uids, uidvalidity).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
@@ -859,7 +1173,7 @@ pub async fn fetch_uids(
 async fn uids_in<T>(
     session: &mut Session<T>,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     uids: &[u32],
     uidvalidity: u32,
 ) -> Fetched
@@ -927,7 +1241,7 @@ pub async fn fetch_older(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = older_in(&mut session, acct, folder, before_uid, uidvalidity, limit).await;
+    let found = older_in(&mut session, acct, &folder, before_uid, uidvalidity, limit).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
@@ -936,7 +1250,7 @@ pub async fn fetch_older(
 async fn older_in<T>(
     session: &mut Session<T>,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     before_uid: u32,
     uidvalidity: u32,
     limit: u32,
@@ -993,7 +1307,7 @@ where
 async fn read_range<T>(
     session: &mut Session<T>,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     range: &str,
     generation: u32,
 ) -> Result<Vec<Message>, Fetched>
@@ -1019,7 +1333,7 @@ where
 async fn collect<S>(
     stream: S,
     acct: &Account,
-    folder: Folder,
+    folder: &Folder,
     generation: u32,
 ) -> Result<Vec<Message>, Fetched>
 where
@@ -1068,7 +1382,9 @@ where
 // ----------------------------------------------------------------------- act
 
 /// Something the customer did to a message in RATA, done to the real mailbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialised as `"read"`, `"trash"`… or `{"move": <folder>}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Action {
@@ -1083,6 +1399,10 @@ pub enum Action {
     Archive,
     /// Moved back to the inbox — from Spam ("not spam") or from Archive.
     Inbox,
+    /// Moved to another folder — in practice one of the customer's own. The
+    /// folder must be one this mailbox has; a name it does not list is
+    /// refused rather than created.
+    Move(Folder),
 }
 
 /// How acting on messages went.
@@ -1148,7 +1468,7 @@ pub async fn act(
             return Acted::Net(unreachable_msg(acct, &why));
         }
     };
-    let done = apply(&mut session, folder, &uids, uidvalidity, action).await;
+    let done = apply(&mut session, &folder, &uids, uidvalidity, &action).await;
     let _ = timeout(COMMAND, session.logout()).await;
     done
 }
@@ -1157,10 +1477,10 @@ pub async fn act(
 /// over the stream so it can be driven by a scripted server in tests.
 async fn apply<T>(
     session: &mut Session<T>,
-    folder: Folder,
+    folder: &Folder,
     uids: &[u32],
     uidvalidity: u32,
-    action: Action,
+    action: &Action,
 ) -> Acted
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
@@ -1212,7 +1532,7 @@ where
         Action::Unread => Some(flag('-', "\\Seen")),
         Action::Star => Some(flag('+', "\\Flagged")),
         Action::Unstar => Some(flag('-', "\\Flagged")),
-        Action::Trash | Action::Archive | Action::Inbox => None,
+        Action::Trash | Action::Archive | Action::Inbox | Action::Move(_) => None,
     };
     if let Some(change) = stored {
         return match timeout(COMMAND, store(session, &set, &change)).await {
@@ -1225,17 +1545,26 @@ where
         };
     }
 
-    if action == Action::Inbox && folder == Folder::Inbox {
+    let already = match action {
+        Action::Inbox => *folder == Folder::Inbox,
+        Action::Move(to) => to == folder,
+        _ => false,
+    };
+    if already {
         return Acted::Done {
             done: present,
             gone,
         };
     }
     let Some(dest) = destination(session, action).await else {
-        let what = if action == Action::Trash {
-            "a Trash folder, so RATA left the messages where they are rather than delete them for good"
-        } else {
-            "an Archive folder, so RATA left the messages in the inbox"
+        let what = match action {
+            Action::Trash => {
+                "a Trash folder, so RATA left the messages where they are rather than delete them for good"
+            }
+            Action::Move(_) => {
+                "that folder any more — it was renamed or removed — so RATA left the messages where they are"
+            }
+            _ => "an Archive folder, so RATA left the messages in the inbox",
         };
         return Acted::NoPlace(format!("This mailbox does not have {what}."));
     };
@@ -1298,13 +1627,15 @@ where
 /// "[Gmail]/Bin" and "Papierkorb" are all the same folder to a server that
 /// says so. Archive falls back to Gmail's "All Mail", where moving a message
 /// out of the inbox is exactly what archiving means.
-async fn destination<T>(session: &mut Session<T>, action: Action) -> Option<String>
+async fn destination<T>(session: &mut Session<T>, action: &Action) -> Option<String>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
     use async_imap::types::NameAttribute as A;
-    if action == Action::Inbox {
-        return Some("INBOX".into());
+    match action {
+        Action::Inbox => return Some("INBOX".into()),
+        Action::Move(to) => return name_of(session, to).await,
+        _ => {}
     }
     let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
         .await
@@ -1326,12 +1657,16 @@ where
 }
 
 /// "its inbox could not be opened", for whichever folder it was.
-fn cannot_open(folder: Folder) -> String {
+fn cannot_open(folder: &Folder) -> String {
     match folder {
         Folder::Inbox => "its inbox could not be opened".into(),
         Folder::Sent => "its Sent folder could not be opened".into(),
         Folder::Archive => "its Archive folder could not be opened".into(),
         Folder::Junk => "its Spam folder could not be opened".into(),
+        Folder::Named(name) => format!(
+            "its folder \u{201c}{}\u{201d} could not be opened",
+            utf7_imap(name)
+        ),
     }
 }
 
@@ -1374,8 +1709,25 @@ fn thread_id(raw: &[u8]) -> String {
     if clean { id.to_string() } else { String::new() }
 }
 
+/// A short, stable tag for one of the customer's own folders, for message ids:
+/// its name can hold anything, and the same UID in two folders must not
+/// collide.
+fn named_tag(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(name.as_bytes())
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// One IMAP response into one message.
-fn build(acct: &Account, f: &async_imap::types::Fetch, folder: Folder, generation: u32) -> Message {
+fn build(
+    acct: &Account,
+    f: &async_imap::types::Fetch,
+    folder: &Folder,
+    generation: u32,
+) -> Message {
     let env = f.envelope();
     let sender = env.and_then(|e| e.from.as_ref()).and_then(|a| a.first());
     let recipient = env.and_then(|e| e.to.as_ref()).and_then(|a| a.first());
@@ -1457,14 +1809,15 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, folder: Folder, generatio
 
     let uid = f.uid.unwrap_or(f.message);
     let place = match folder {
-        Folder::Inbox => "",
-        Folder::Sent => "sent_",
-        Folder::Archive => "archive_",
-        Folder::Junk => "junk_",
+        Folder::Inbox => String::new(),
+        Folder::Sent => "sent_".into(),
+        Folder::Archive => "archive_".into(),
+        Folder::Junk => "junk_".into(),
+        Folder::Named(name) => format!("f{}_", named_tag(name)),
     };
     Message {
         id: format!("{}_{place}{uid}", mail_key(&acct.email)),
-        folder,
+        folder: folder.clone(),
         acct: acct.email.clone(),
         acct_label: if acct.label.is_empty() {
             acct.email.clone()
@@ -1737,7 +2090,7 @@ mod tests {
         rt_act().block_on(async {
             // RATA holds 40, 50, 60; ask for two older than 40.
             let (mut s, log) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
-            let got = older_in(&mut s, &me(), Folder::Inbox, 40, 7, 2).await;
+            let got = older_in(&mut s, &me(), &Folder::Inbox, 40, 7, 2).await;
             assert_eq!(uids_of(got), vec![30, 20], "newest first, nothing RATA has");
             let log = log.lock().unwrap();
             assert!(log.iter().any(|c| c.starts_with("FETCH 2:3 ")), "{log:?}");
@@ -1750,7 +2103,7 @@ mod tests {
             // RATA's oldest was 40, which has since been deleted on a phone.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), Folder::Inbox, 40, 7, 2).await),
+                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 40, 7, 2).await),
                 vec![30, 20]
             );
         });
@@ -1763,7 +2116,7 @@ mod tests {
             // skip 60; it must come back as older.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), Folder::Inbox, 70, 7, 2).await),
+                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 70, 7, 2).await),
                 vec![60, 50]
             );
         });
@@ -1774,7 +2127,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), Folder::Inbox, 10, 7, 50).await),
+                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 10, 7, 50).await),
                 Vec::<u32>::new()
             );
             assert!(
@@ -1789,7 +2142,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert!(matches!(
-                older_in(&mut s, &me(), Folder::Inbox, 30, 9, 50).await,
+                older_in(&mut s, &me(), &Folder::Inbox, 30, 9, 50).await,
                 Fetched::Stale(_)
             ));
             assert!(
@@ -1809,7 +2162,7 @@ mod tests {
             loop {
                 let (mut s, _) = scripted_inbox(inbox, 7).await;
                 let oldest = *seen.iter().min().unwrap();
-                let page = uids_of(older_in(&mut s, &me(), Folder::Inbox, oldest, 7, 3).await);
+                let page = uids_of(older_in(&mut s, &me(), &Folder::Inbox, oldest, 7, 3).await);
                 if page.is_empty() {
                     break;
                 }
@@ -1843,7 +2196,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42, 43, 57], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42, 43, 57], 7, &Action::Trash).await,
                 Acted::Done {
                     done: vec![42, 57],
                     gone: vec![43]
@@ -1880,7 +2233,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Read).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Read).await,
                 done(&[42])
             );
             let log = log.lock().unwrap();
@@ -1905,7 +2258,7 @@ mod tests {
             })
             .await;
             assert!(matches!(
-                apply(&mut s, Folder::Inbox, &[42], 9, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 9, &Action::Trash).await,
                 Acted::Stale(_)
             ));
             let log = log.lock().unwrap();
@@ -1928,7 +2281,7 @@ mod tests {
             .await;
             // Not a failure: what the customer wanted is already true.
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 Acted::Done {
                     done: vec![],
                     gone: vec![42]
@@ -1949,7 +2302,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 done(&[42])
             );
             let log = log.lock().unwrap();
@@ -1976,7 +2329,7 @@ mod tests {
             })
             .await;
             assert!(matches!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 Acted::NoPlace(_)
             ));
             assert!(changed(&log.lock().unwrap()).is_empty());
@@ -1994,7 +2347,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Archive).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Archive).await,
                 done(&[42])
             );
             assert!(
@@ -2013,7 +2366,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 done(&[42])
             );
             assert!(
@@ -2036,7 +2389,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 done(&[42])
             );
             let log = log.lock().unwrap();
@@ -2066,7 +2419,7 @@ mod tests {
             })
             .await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[42], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
                 done(&[42])
             );
             assert!(
@@ -2241,7 +2594,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             // 25 was never there; 20 and 30 are.
-            let got = uids_in(&mut s, &me(), Folder::Inbox, &[20, 25, 30], 7).await;
+            let got = uids_in(&mut s, &me(), &Folder::Inbox, &[20, 25, 30], 7).await;
             let Fetched::Messages(m) = got else {
                 panic!("{got:?}")
             };
@@ -2269,7 +2622,7 @@ mod tests {
     fn stored_mail_is_not_re_read_from_a_rebuilt_mailbox() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20], 8).await;
-            let got = uids_in(&mut s, &me(), Folder::Inbox, &[10], 7).await;
+            let got = uids_in(&mut s, &me(), &Folder::Inbox, &[10], 7).await;
             assert!(matches!(got, Fetched::Stale(_)), "{got:?}");
             assert!(
                 !log.lock()
@@ -2286,7 +2639,7 @@ mod tests {
     fn an_opened_message_arrives_whole_and_decoded() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20], 7).await;
-            let Whole::Raw(raw) = whole_in(&mut s, &me(), Folder::Inbox, 20, 7).await else {
+            let Whole::Raw(raw) = whole_in(&mut s, &me(), &Folder::Inbox, 20, 7).await else {
                 panic!("expected the message")
             };
             assert_eq!(body::read_whole(&raw).text, "Body of 20 — café");
@@ -2309,7 +2662,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[99], 7).await;
             assert!(matches!(
-                whole_in(&mut s, &me(), Folder::Inbox, 99, 7).await,
+                whole_in(&mut s, &me(), &Folder::Inbox, 99, 7).await,
                 Whole::TooLarge(_)
             ));
             assert!(!log.lock().unwrap().iter().any(|c| c.contains("BODY.PEEK")));
@@ -2321,12 +2674,12 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, _) = scripted_inbox(&[10], 7).await;
             assert!(matches!(
-                whole_in(&mut s, &me(), Folder::Inbox, 11, 7).await,
+                whole_in(&mut s, &me(), &Folder::Inbox, 11, 7).await,
                 Whole::Gone
             ));
             let (mut s, _) = scripted_inbox(&[10], 8).await;
             assert!(matches!(
-                whole_in(&mut s, &me(), Folder::Inbox, 10, 7).await,
+                whole_in(&mut s, &me(), &Folder::Inbox, 10, 7).await,
                 Whole::Stale(_)
             ));
         });
@@ -2358,7 +2711,7 @@ mod tests {
     fn fetched_mail_carries_what_a_reply_needs() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_inbox(&[7, 9], 5).await;
-            let got = read_range(&mut s, &me(), Folder::Inbox, "1:2", 5)
+            let got = read_range(&mut s, &me(), &Folder::Inbox, "1:2", 5)
                 .await
                 .ok()
                 .unwrap();
@@ -2484,7 +2837,7 @@ mod tests {
                 (DOVECOT_OLD, "INBOX.Sent"),
             ] {
                 let (mut s, log) = scripted_folders(list, name).await;
-                assert!(matches!(select(&mut s, Folder::Sent).await, Selected::Open(m) if m.uid_validity == Some(8)), "{name}");
+                assert!(matches!(select(&mut s, &Folder::Sent).await, Selected::Open(m) if m.uid_validity == Some(8)), "{name}");
                 assert_eq!(selected(&log.lock().unwrap()), vec![name.to_string()]);
             }
         });
@@ -2495,7 +2848,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(NO_SENT, "Sent").await;
             assert!(matches!(
-                select(&mut s, Folder::Sent).await,
+                select(&mut s, &Folder::Sent).await,
                 Selected::Missing
             ));
             assert!(
@@ -2503,10 +2856,10 @@ mod tests {
                 "nothing was opened"
             );
             // And the inbox is still read, with nothing from Sent.
-            let Selected::Open(inbox) = select(&mut s, Folder::Inbox).await else {
+            let Selected::Open(inbox) = select(&mut s, &Folder::Inbox).await else {
                 panic!("the inbox opens");
             };
-            let got = newest_in(&mut s, &me(), Folder::Inbox, &inbox, 15)
+            let got = newest_in(&mut s, &me(), &Folder::Inbox, &inbox, 15)
                 .await
                 .unwrap();
             assert_eq!(got.len(), 3);
@@ -2521,10 +2874,10 @@ mod tests {
     fn sent_mail_has_ids_of_its_own_and_says_who_it_went_to() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_folders(OUTLOOK, "Sent Items").await;
-            let Selected::Open(sent) = select(&mut s, Folder::Sent).await else {
+            let Selected::Open(sent) = select(&mut s, &Folder::Sent).await else {
                 panic!("Sent opens");
             };
-            let got = newest_in(&mut s, &me(), Folder::Sent, &sent, 15)
+            let got = newest_in(&mut s, &me(), &Folder::Sent, &sent, 15)
                 .await
                 .unwrap();
             let ids: Vec<&str> = got.iter().map(|m| m.id.as_str()).collect();
@@ -2550,7 +2903,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(OUTLOOK, "Sent Items").await;
             assert_eq!(
-                apply(&mut s, Folder::Sent, &[11], 8, Action::Trash).await,
+                apply(&mut s, &Folder::Sent, &[11], 8, &Action::Trash).await,
                 Acted::Done {
                     done: vec![11],
                     gone: vec![]
@@ -2574,7 +2927,7 @@ mod tests {
             // Sent (UIDVALIDITY 8), it must not touch the inbox's message 2.
             let (mut s, log) = scripted_folders(OUTLOOK, "Sent Items").await;
             assert!(matches!(
-                apply(&mut s, Folder::Sent, &[2], 7, Action::Trash).await,
+                apply(&mut s, &Folder::Sent, &[2], 7, &Action::Trash).await,
                 Acted::Stale(_)
             ));
             assert!(changed(&log.lock().unwrap()).is_empty());
@@ -2627,17 +2980,17 @@ mod tests {
     fn spam_has_ids_of_its_own_and_not_spam_moves_it_home() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(OUTLOOK_ALL, "Junk Email").await;
-            let Selected::Open(junk) = select(&mut s, Folder::Junk).await else {
+            let Selected::Open(junk) = select(&mut s, &Folder::Junk).await else {
                 panic!("Spam opens");
             };
-            let got = newest_in(&mut s, &me(), Folder::Junk, &junk, 15)
+            let got = newest_in(&mut s, &me(), &Folder::Junk, &junk, 15)
                 .await
                 .unwrap();
             let key = mail_key("me@example.com");
             assert_eq!(got[0].id, format!("{key}_junk_12"));
             assert_eq!(got[0].folder, Folder::Junk);
             assert_eq!(
-                apply(&mut s, Folder::Junk, &[11], 8, Action::Inbox).await,
+                apply(&mut s, &Folder::Junk, &[11], 8, &Action::Inbox).await,
                 Acted::Done {
                     done: vec![11],
                     gone: vec![]
@@ -2662,7 +3015,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(OUTLOOK_ALL, "x").await;
             assert_eq!(
-                apply(&mut s, Folder::Inbox, &[2], 7, Action::Inbox).await,
+                apply(&mut s, &Folder::Inbox, &[2], 7, &Action::Inbox).await,
                 Acted::Done {
                     done: vec![2],
                     gone: vec![]
@@ -2670,5 +3023,188 @@ mod tests {
             );
             assert!(changed(&log.lock().unwrap()).is_empty());
         });
+    }
+
+    // ------------------------------------------------------- own folders
+    const GMAIL_LABELS: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\All \\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n* LIST (\\Drafts \\HasNoChildren) \"/\" \"[Gmail]/Drafts\"\r\n* LIST (\\HasNoChildren \\Important) \"/\" \"[Gmail]/Important\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n* LIST (\\HasNoChildren \\Junk) \"/\" \"[Gmail]/Spam\"\r\n* LIST (\\Flagged \\HasNoChildren) \"/\" \"[Gmail]/Starred\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n* LIST (\\HasChildren) \"/\" \"Work\"\r\n* LIST (\\HasNoChildren) \"/\" \"Work/Clients\"\r\n* LIST (\\HasNoChildren) \"/\" \"Receipts\"\r\n* LIST (\\HasNoChildren) \"/\" \"Entw&APw-rfe\"\r\n";
+    /// A server that declares nothing and keeps every folder under INBOX.
+    const DOVECOT_TREE: &str = "* LIST (\\HasChildren) \".\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Drafts\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Sent\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Trash\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Spam\"\r\n* LIST (\\HasChildren) \".\" \"INBOX.Projects\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Projects.2026\"\r\n* LIST (\\HasNoChildren \\NonExistent) \".\" \"INBOX.Gone\"\r\n* LIST (\\HasNoChildren) \".\" \"Notes\"\r\n";
+
+    fn labels(l: Listed) -> Vec<(String, String)> {
+        let Listed::Folders(f) = l else {
+            panic!("folders were listed: {l:?}")
+        };
+        f.into_iter().map(|f| (f.name, f.label)).collect()
+    }
+
+    #[test]
+    fn own_folders_are_the_customers_and_nothing_the_server_keeps() {
+        rt_act().block_on(async {
+            let pair = |n: &str, l: &str| (n.to_string(), l.to_string());
+            let (mut s, _) = scripted_folders(GMAIL_LABELS, "x").await;
+            assert_eq!(
+                labels(folders_in(&mut s, &me()).await),
+                vec![
+                    pair("Entw&APw-rfe", "Entwürfe"),
+                    pair("Receipts", "Receipts"),
+                    pair("Work", "Work"),
+                    pair("Work/Clients", "Work / Clients"),
+                ]
+            );
+            let (mut s, _) = scripted_folders(DOVECOT_TREE, "x").await;
+            assert_eq!(
+                labels(folders_in(&mut s, &me()).await),
+                vec![
+                    pair("Notes", "Notes"),
+                    pair("INBOX.Projects", "Projects"),
+                    pair("INBOX.Projects.2026", "Projects / 2026"),
+                ]
+            );
+            // Outlook: its own folders are Sent, Archive, Spam and Trash.
+            let (mut s, _) = scripted_folders(OUTLOOK_ALL, "x").await;
+            assert_eq!(labels(folders_in(&mut s, &me()).await), vec![]);
+        });
+    }
+
+    #[test]
+    fn a_folder_of_the_customers_is_read_under_ids_of_its_own() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(GMAIL_LABELS, "Work/Clients").await;
+            let work = Folder::Named("Work/Clients".into());
+            let Fetched::Messages(got) = folder_in(&mut s, &me(), &work, 50).await else {
+                panic!("the folder is read");
+            };
+            let key = mail_key("me@example.com");
+            let tag = named_tag("Work/Clients");
+            assert_eq!(
+                got.iter().map(|m| m.id.clone()).collect::<Vec<_>>(),
+                vec![format!("{key}_f{tag}_12"), format!("{key}_f{tag}_11")]
+            );
+            assert!(got.iter().all(|m| m.folder == work && m.uidvalidity == 8));
+            assert_ne!(named_tag("Work"), tag);
+            assert_eq!(selected(&log.lock().unwrap()), vec!["Work/Clients"]);
+        });
+    }
+
+    #[test]
+    fn a_folder_that_is_not_the_customers_is_never_opened() {
+        rt_act().block_on(async {
+            for name in [
+                "[Gmail]/Trash",
+                "[Gmail]/All Mail",
+                "[Gmail]/Sent Mail",
+                "[Gmail]",
+                "INBOX",
+                "Nowhere",
+            ] {
+                let (mut s, log) = scripted_folders(GMAIL_LABELS, name).await;
+                let asked = Folder::Named(name.into());
+                assert!(
+                    matches!(
+                        folder_in(&mut s, &me(), &asked, 50).await,
+                        Fetched::Stale(_)
+                    ),
+                    "{name}"
+                );
+                assert!(
+                    matches!(
+                        apply(&mut s, &asked, &[11], 8, &Action::Trash).await,
+                        Acted::Stale(_)
+                    ),
+                    "{name}"
+                );
+                let log = log.lock().unwrap();
+                assert!(selected(&log).is_empty(), "{name}: {log:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn moving_to_a_folder_goes_there_and_nowhere_else() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(GMAIL_LABELS, "Receipts").await;
+            let to = |n: &str| Action::Move(Folder::Named(n.into()));
+            assert_eq!(
+                apply(&mut s, &Folder::Inbox, &[2], 7, &to("Receipts")).await,
+                Acted::Done {
+                    done: vec![2],
+                    gone: vec![]
+                }
+            );
+            // A folder the server keeps for itself, or one it does not have,
+            // is not somewhere to move mail — and nothing is created.
+            for name in ["[Gmail]/Trash", "Nowhere", "INBOX"] {
+                assert!(
+                    matches!(
+                        apply(&mut s, &Folder::Inbox, &[2], 7, &to(name)).await,
+                        Acted::NoPlace(_)
+                    ),
+                    "{name}"
+                );
+            }
+            // Already there: nothing to do.
+            assert_eq!(
+                apply(
+                    &mut s,
+                    &Folder::Named("Receipts".into()),
+                    &[11],
+                    8,
+                    &to("Receipts")
+                )
+                .await,
+                Acted::Done {
+                    done: vec![11],
+                    gone: vec![]
+                }
+            );
+            // And out of it again, home to the inbox.
+            assert_eq!(
+                apply(
+                    &mut s,
+                    &Folder::Named("Receipts".into()),
+                    &[12],
+                    8,
+                    &Action::Inbox
+                )
+                .await,
+                Acted::Done {
+                    done: vec![12],
+                    gone: vec![]
+                }
+            );
+            let log = log.lock().unwrap();
+            let moves: Vec<String> = changed(&log).into_iter().cloned().collect();
+            assert_eq!(
+                moves,
+                vec![
+                    "UID MOVE 2 \"Receipts\"".to_string(),
+                    "UID MOVE 12 \"INBOX\"".to_string()
+                ],
+                "{log:?}"
+            );
+            assert!(
+                !log.iter()
+                    .any(|c| c.to_ascii_uppercase().starts_with("CREATE"))
+            );
+        });
+    }
+
+    #[test]
+    fn folder_names_are_decoded_for_showing() {
+        assert_eq!(utf7_imap("Entw&APw-rfe"), "Entwürfe");
+        assert_eq!(utf7_imap("Caf&AOk-"), "Café");
+        assert_eq!(utf7_imap("&ZeVnLIqe-"), "日本語");
+        assert_eq!(utf7_imap("Tom &- Jerry"), "Tom & Jerry");
+        // What does not decode is shown as it came, never dropped.
+        assert_eq!(utf7_imap("Odd &%%-"), "Odd &%%-");
+        assert_eq!(utf7_imap("Open &AOk"), "Open &AOk");
+        assert_eq!(
+            folder_label("INBOX.Caf&AOk-.2026", Some(".")),
+            "Café / 2026"
+        );
+        assert_eq!(folder_label("INBOXES", Some(".")), "INBOXES");
+        // A server sending raw UTF-8 names must not bring RATA down.
+        assert_eq!(folder_label("Entwürfe", Some("/")), "Entwürfe");
+        assert_eq!(folder_label("Añoß.2026", Some(".")), "Añoß / 2026");
     }
 }
