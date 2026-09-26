@@ -180,13 +180,39 @@ pub async fn save_attachment(
     uidvalidity: u32,
     index: u32,
 ) -> Result<Saved, Problem> {
-    let dir = handle.path().download_dir().map_err(|e| Problem {
+    let dir = downloads(&handle).ok_or_else(|| Problem {
         email: email.clone(),
         kind: "disk".into(),
-        error: format!("This computer has no Downloads folder RATA can find ({e})."),
+        error: "This computer has no Downloads folder RATA can find.".into(),
     })?;
     app.save_attachment(&email, uid, uidvalidity, index, &dir)
         .await
+}
+
+/// The Downloads folder. On Linux Tauri only finds it through the desktop's
+/// `user-dirs.dirs`, which not every system has — without it, every save
+/// failed there — so the conventional `~/Downloads` stands in.
+fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
+    let paths = handle.path();
+    paths
+        .download_dir()
+        .ok()
+        .or_else(|| paths.home_dir().ok().map(|h| h.join("Downloads")))
+}
+
+/// A file the interface made (a conversion, an export), into Downloads. The
+/// bytes come as base64, since the bridge carries text.
+#[tauri::command]
+pub fn save_file(
+    handle: AppHandle,
+    name: String,
+    data: String,
+) -> Result<crate::core::Saved, String> {
+    let dir = downloads(&handle).ok_or("This computer has no Downloads folder RATA can find.")?;
+    if data.len() > crate::core::SAVE_MAX / 3 * 4 + 4 {
+        return Err("That file is too large to save from RATA.".into());
+    }
+    crate::core::save_file(&dir, &name, &rata_mail::words::base64(data.as_bytes()))
 }
 
 /// A web address from the interface — a link in the text of a message, or

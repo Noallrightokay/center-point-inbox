@@ -87,6 +87,13 @@ Don't spend time reporting these — they are known and planned:
   longer with a very big mailbox (about a second at ten thousand messages)
   — tell us when it starts to feel slow, and at roughly how many messages.
 - No other folders yet — only the inbox is shown.
+- **Converting files (Files → Format Bridge), rebuilt in v0.1.18:** Word
+  output is now a real .docx that Word, Google Docs and Pages open without
+  complaint; headings, bold and italic, lists and tables survive; every
+  sheet of a spreadsheet is kept. In the app, the converted file is saved
+  to your Downloads folder (before v0.1.18 it silently went nowhere). It
+  can't yet read PDFs or old .doc files, and pictures are left out — send
+  us the files that come out wrong.
 - **AI, from v0.1.17:** **✦ Summarize** and **⇄ Translate** on a message, and
   **Run briefing** in Assist, which flags the mail that needs you to do
   something (⚑ in the list). The first time, RATA tells you what it sends:

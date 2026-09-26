@@ -95,7 +95,9 @@ keeps mail in IndexedDB, one record per message, with no storage cap;
 v0.1.14 opens links in the browser, asking first for links in formatted mail;
 v0.1.15 keeps a closed draft whole; v0.1.16 draws only the rows of the
 list that are on screen; v0.1.17 adds AI summaries, translation and task
-flags through the relay (which needs the website deployed — see below). An
+flags through the relay (which needs the website deployed — see below);
+v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
+and makes its downloads work in the app at all. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -313,6 +315,28 @@ works for testers until the site is redeployed with the variables in
 this container's Chromium reports `navigator.language` as `en-US@posix`,
 which `Intl.DisplayNames` rejects — `userLang()` takes only the leading
 letters.
+**Format Bridge (v0.1.18).** Every input is read into one model —
+headings 1–3, paragraphs, list items, tables, with bold/italic runs — or,
+for spreadsheets, every sheet's rows (`BR.blocks` / `BR.sheets`), and every
+output is written from it: `.docx` by `blocksToDocx` (a stored zip written
+by `zipStore`, with Heading1–3, a list style and a bordered table style —
+the old "Word" output was HTML named `.doc`), Markdown, PDF (jsPDF), `.xlsx`
+with all sheets, CSV (several sheets → one CSV each in a `.zip`). `.docx` is
+read through mammoth's HTML, `.html` directly — both parsed with
+**DOMParser**, never `innerHTML`: a stranger's `<img onerror>` put into this
+page's DOM, even detached, runs with the app's powers (the old HTML reader
+did exactly that). PDF's standard fonts are Windows-1252 only, so
+`pdfBlocker` refuses text outside it, naming the script, rather than
+producing gibberish. Pictures are not carried over, and the note says so.
+Checked by reading the outputs back with LibreOffice (install
+`libreoffice-writer-nogui libreoffice-calc-nogui`; the container has only
+the core) and in CI with mammoth and SheetJS. **Downloads in the app:** the
+webview silently drops a page's downloads, so "Convert & download" and
+Export did nothing in the desktop build; `brDownload` now sends the bytes
+to `save_file` (core.rs: `safe_file_name`, `write_new`, 100 MB cap). And on
+Linux Tauri's `download_dir()` exists only when the desktop has
+`user-dirs.dirs` — without it every save, attachments included, failed —
+so `commands::downloads` falls back to `~/Downloads`.
 Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 

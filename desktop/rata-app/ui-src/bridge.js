@@ -244,6 +244,17 @@
       }
     },
 
+    /* A file the interface made, into Downloads (core::save_file). */
+    async '/api/file/save'(opts) {
+      const b = body(opts);
+      try {
+        const saved = await invoke('save_file', { name: String(b.name || 'file'), data: String(b.data || '') });
+        return { ok: true, path: saved.path, name: saved.name };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e) };
+      }
+    },
+
     /* A web address the customer chose to open. Rust checks it is one. */
     async '/api/link/open'(opts) {
       const b = body(opts);
