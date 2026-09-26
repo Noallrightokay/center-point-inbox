@@ -101,7 +101,8 @@ and makes its downloads work in the app at all; v0.1.19 reads PDFs; v0.1.20
 converts an attachment straight from the message; v0.1.21 keeps message
 text on disk until it is needed instead of in memory; v0.1.22 reads the
 Sent folder too; v0.1.23 can update itself (once the owner has added the
-update key — `rata-next/LAUNCH.md` §9). An
+update key — `rata-next/LAUNCH.md` §9); v0.1.24 takes the plan from the
+licence, so Pro opens Side by side in the app. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -445,8 +446,15 @@ Verified here with a throwaway key: a 0.1.23 AppImage fetched a local feed,
 installed a signed 0.1.99 (the file on disk replaced, the app back up as
 "RATA 0.1.99 beta", still signed in), and refused both a wrong signature and
 a genuine 0.1.23 announced as 0.1.99, leaving the file untouched.
-Also not built: folders other than the inbox and Sent; no code signing. Settings shows the website's plan ("No plan yet") rather than the
-licence's.
+**The plan in the app is the licence's (v0.1.24).** `tier()`/`can()` read
+`planKey()`: on the website the subscription the site recorded
+(`S.settings.plan`), in the desktop app the licence's plan (`LIC`, from
+`/api/licence` → `licence_status` at boot, and the `rata-standing` event
+bridge.js fires after it settles and renews). Until 0.1.24 the app read the
+website's record, which it never fills, so every paying tester saw "No plan
+yet" and Side by side locked behind Pro. Settings → Current plan now shows the
+licence's own sentence ("Licensed for RATA Pro until …").
+Also not built: folders other than the inbox and Sent; no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the
