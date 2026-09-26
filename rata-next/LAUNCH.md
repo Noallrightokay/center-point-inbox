@@ -186,6 +186,36 @@ turn it off, and the whole class goes away.
 - **Uptime and error alerts.** Without them you find out about an outage from
   a customer. Free at this size.
 
+## 9. The update key (so RATA updates itself)
+
+From v0.1.23 the desktop app can update itself — but only with installers
+signed by a key that is yours. Without it every release still works exactly
+as before; testers just download each new version by hand. Do this once, on
+your own computer, **before** the release you want to be the first that
+updates itself:
+
+1. Make the key: `npx @tauri-apps/cli signer generate -w ~/.tauri/rata-updates.key`
+   and choose a password. It writes two files: `rata-updates.key` (private)
+   and `rata-updates.key.pub` (public).
+2. In GitHub → the repository → Settings → Secrets and variables → Actions,
+   add three repository secrets:
+   - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `rata-updates.key`
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password you chose
+   - `RATA_UPDATER_PUBKEY` — the contents of `rata-updates.key.pub`
+3. Back up `rata-updates.key` and its password somewhere offline. Lose them
+   and every installed copy can only be updated by reinstalling by hand.
+
+The private key and its password go into GitHub's secrets and nowhere else —
+never into a chat, an issue or a commit. The release workflow refuses to run
+with only half of them set.
+
+**How to tell it worked:** the next release's run log says "Signing this
+build's installers for updates", and afterwards a release called *Update
+feed (not an installer)* has a `latest.json` naming that version. Copies
+installed before that release have no key and cannot update themselves: each
+tester installs that one release by hand, and from then on RATA offers every
+new version itself ("RATA x.y.z is ready — Restart to update").
+
 ---
 
 ## What is deliberately not in this launch

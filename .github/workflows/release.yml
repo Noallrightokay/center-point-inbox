@@ -275,6 +275,45 @@ jobs:
             echo "::warning::Signing but not notarising — APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID are not all set. A signed but un-notarised app still warns on first open."
           fi
 
+      # Updates are signed, and all-or-nothing like the Apple signing above.
+      # TAURI_SIGNING_PRIVATE_KEY (and its password) is the key the owner made
+      # with `tauri signer generate`, held nowhere but these secrets;
+      # RATA_UPDATER_PUBKEY is its public half, compiled into the app so every
+      # update is checked against it (update.rs). With both, the bundler signs
+      # each installer and the publish job below writes the update feed. With
+      # neither, the build is what it always was: an app that updates from the
+      # releases page. Half of the pair is refused — an app that checks a feed
+      # nothing signs, or signed installers no app can check, is a mistake
+      # better found now than by a customer.
+      - name: Configure updates
+        id: updates
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PUBKEY: ${{ secrets.RATA_UPDATER_PUBKEY }}
+        run: |
+          if [ -z "${KEY}" ] && [ -z "${PUBKEY}" ]; then
+            echo "No update key — this build cannot update itself."
+            echo "::warning::No update signing key (TAURI_SIGNING_PRIVATE_KEY, RATA_UPDATER_PUBKEY). This build updates from the releases page only. See rata-next/LAUNCH.md."
+            exit 0
+          fi
+          if [ -z "${KEY}" ] || [ -z "${PUBKEY}" ]; then
+            echo "::error::Only half of the update key is set. TAURI_SIGNING_PRIVATE_KEY and RATA_UPDATER_PUBKEY go together — see rata-next/LAUNCH.md." >&2
+            exit 1
+          fi
+          {
+            printf 'TAURI_SIGNING_PRIVATE_KEY<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${KEY}"
+            printf 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<__RATA_EOF__\n%s\n__RATA_EOF__\n' "${KEY_PASSWORD}"
+          } >> "$GITHUB_ENV"
+          # Merged over tauri.conf.json by the CLI: the public key, which is
+          # what the bundler signs against and what the app checks with, and
+          # the signed update bundles. Written here, never committed, so a
+          # build without the key cannot have one by accident.
+          PUBKEY="${PUBKEY}" node -e 'require("fs").writeFileSync("desktop/rata-app/src-tauri/tauri.updater.conf.json", JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.PUBKEY.trim()}}}))'
+          echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+          echo "Signing this build's installers for updates."
+
       - uses: tauri-apps/tauri-action@v0
         env:
           # Required whenever this runs from a tag, because that is when the
@@ -285,11 +324,11 @@ jobs:
           # installer had been built — with "GITHUB_TOKEN is required".
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
-          # The Apple variables arrive from the step above, and only when they
-          # are real. Do not add them here.
+          # The Apple and update variables arrive from the steps above, and
+          # only when they are real. Do not add them here.
         with:
           projectPath: desktop/rata-app
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ steps.updates.outputs.args }}
           # The release made by create-release, or nothing for a build-only
           # run — with no release id and no tag the action only builds.
           releaseId: ${{ needs.create-release.outputs.id }}
@@ -350,3 +389,70 @@ jobs:
             }
             await github.rest.repos.updateRelease({ ...context.repo, release_id, draft: false });
             core.info(`Published ${r.tag_name}: https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${r.tag_name}`);
+
+      # The update feed: latest.json on a release tagged `updater`, rewritten
+      # to point at this release. A fixed address, because 0.x releases are
+      # pre-releases and GitHub's "latest release" link skips those. Only
+      # installers with a signature go in it — the app refuses anything else
+      # anyway — and each under its own installer's name, so a .deb install
+      # is never handed the AppImage. Never moves backwards.
+      - uses: actions/github-script@v7
+        env:
+          ID: ${{ needs.create-release.outputs.id }}
+        with:
+          script: |
+            const release_id = Number(process.env.ID);
+            const { data: r } = await github.rest.repos.getRelease({ ...context.repo, release_id });
+            if (r.draft) { core.info('Still a draft; the feed is left alone.'); return; }
+            const version = r.tag_name.replace(/^v/, '');
+            const byName = new Map(r.assets.map((a) => [a.name, a]));
+            const read = async (a) => {
+              const res = await github.rest.repos.getReleaseAsset({ ...context.repo, asset_id: a.id, headers: { accept: 'application/octet-stream' } });
+              return Buffer.from(res.data).toString('utf8').trim();
+            };
+            const keysFor = (n) => {
+              if (n.endsWith('.AppImage')) return ['linux-x86_64-appimage'];
+              if (n.endsWith('.deb')) return ['linux-x86_64-deb'];
+              if (n.endsWith('-setup.exe')) return ['windows-x86_64-nsis', 'windows-x86_64'];
+              if (n.endsWith('.app.tar.gz')) return /aarch64|arm64/.test(n) ? ['darwin-aarch64-app', 'darwin-aarch64'] : ['darwin-x86_64-app', 'darwin-x86_64'];
+              return [];
+            };
+            const platforms = {};
+            for (const a of r.assets) {
+              const keys = keysFor(a.name);
+              const sig = byName.get(a.name + '.sig');
+              if (!keys.length || !sig) continue;
+              const signature = await read(sig);
+              for (const k of keys) platforms[k] = { signature, url: a.browser_download_url };
+            }
+            if (!Object.keys(platforms).length) {
+              core.info('No signed installers on this release — no update key is configured — so the feed is left alone.');
+              return;
+            }
+            core.info(`Feed for ${version}: ${Object.keys(platforms).join(', ')}`);
+            const feed = JSON.stringify({ version, notes: '', pub_date: r.published_at || new Date().toISOString(), platforms }, null, 2);
+
+            const all = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
+            let home = all.find((x) => x.tag_name === 'updater');
+            if (!home) {
+              home = (await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: 'updater',
+                target_commitish: context.sha,
+                name: 'Update feed (not an installer)',
+                body: 'RATA reads latest.json from here to learn when a newer version is out. The installers are on the version releases.',
+                prerelease: true,
+              })).data;
+            }
+            const old = home.assets.find((a) => a.name === 'latest.json');
+            if (old) {
+              const was = JSON.parse(await read(old)).version || '0';
+              const n = (v) => v.split(/[.-]/).map((x) => Number(x) || 0);
+              const [a, b] = [n(was), n(version)];
+              let cmp = 0;
+              for (let i = 0; i < Math.max(a.length, b.length) && !cmp; i++) cmp = (b[i] || 0) - (a[i] || 0);
+              if (cmp < 0) { core.info(`The feed already offers ${was}, newer than ${version}; left alone.`); return; }
+              await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: old.id });
+            }
+            await github.rest.repos.uploadReleaseAsset({ ...context.repo, release_id: home.id, name: 'latest.json', data: feed, headers: { 'content-type': 'application/json' } });
+            core.info(`The update feed now offers ${version}.`);

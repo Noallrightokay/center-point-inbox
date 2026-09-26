@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent folder. Standalone, knows nothing about the app. 150 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 55 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 57 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -100,7 +100,8 @@ v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
 and makes its downloads work in the app at all; v0.1.19 reads PDFs; v0.1.20
 converts an attachment straight from the message; v0.1.21 keeps message
 text on disk until it is needed instead of in memory; v0.1.22 reads the
-Sent folder too. An
+Sent folder too; v0.1.23 can update itself (once the owner has added the
+update key — `rata-next/LAUNCH.md` §9). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -418,7 +419,33 @@ Sent with the same id it replaces that record (`localTwin`). Mail sent by
 and a quarter of an hour. RATA does not APPEND to Sent itself: a provider
 that does not file mail sent over SMTP (Gmail and Outlook do; not every
 provider does) shows only RATA's own record, as before.
-Also not built: folders other than the inbox and Sent; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**Updating itself (v0.1.23).** `update.rs`, with `tauri-plugin-updater`.
+The app checks `latest.json` on the release tagged `updater` (a fixed
+address — 0.x releases are pre-releases, which GitHub's "latest" link
+skips) a few seconds after start and twice a day, and offers "RATA x is
+ready — Restart to update" (`#upd-bar`, above the licence prompt so a copy
+whose licence check fails can still update). Nothing downloads until that
+click. An update installs only if its minisign signature verifies against
+the public key in the app's config, **and** the signature names the version
+the feed announced (`requireSignedVersion`) — so a feed cannot relabel an
+older signed build as newer. The key is not committed: `plugins.updater.pubkey`
+is empty in `tauri.conf.json`, and the release workflow writes
+`src-tauri/tauri.updater.conf.json` (gitignored) from the
+`RATA_UPDATER_PUBKEY` secret and passes it with `--config`, which also turns
+on `createUpdaterArtifacts`; the private key is `TAURI_SIGNING_PRIVATE_KEY`
+(+ `_PASSWORD`). Half the pair fails the build. A build with no key
+registers no updater and checks nothing (`has_key`). The publish job then
+maps each signed asset to its own key in the feed — `linux-x86_64-appimage`,
+`linux-x86_64-deb` (installed through pkexec), `windows-x86_64-nsis`,
+`darwin-{aarch64,x86_64}-app` — never a bare `linux-x86_64`, which would
+hand a .deb install the AppImage; the feed never moves backwards. The
+Tauri CLI ignores a `TAURI_CONFIG` variable: use `--config`, and it signs
+against the config's pubkey, so an empty one fails the bundling step.
+Verified here with a throwaway key: a 0.1.23 AppImage fetched a local feed,
+installed a signed 0.1.99 (the file on disk replaced, the app back up as
+"RATA 0.1.99 beta", still signed in), and refused both a wrong signature and
+a genuine 0.1.23 announced as 0.1.99, leaving the file untouched.
+Also not built: folders other than the inbox and Sent; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

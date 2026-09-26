@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 55 tests
+cargo test          # 57 tests
 ```
 
 On Linux you need the system webview first:
@@ -207,6 +207,11 @@ Be realistic about this before promising anything to a customer.
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
 - A guard that stops a hostile mail server redirecting the app at your own LAN
+
+**Updates:** from v0.1.23 the app offers each new version itself and
+installs it only if it is signed with the project's update key — once that key
+is configured (`rata-next/LAUNCH.md` §9). Until then, and in any build without
+it, new versions are a download from the releases page.
 
 **Not built yet:**
 

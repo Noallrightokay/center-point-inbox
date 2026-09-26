@@ -23,3 +23,4 @@ Thumbs.db
 *.pfx
 .env
 .env*.local
+desktop/rata-app/src-tauri/tauri.updater.conf.json
