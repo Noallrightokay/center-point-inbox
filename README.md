@@ -230,7 +230,8 @@ Be realistic about this before promising anything to a customer.
 - **The Format Bridge reads .pdf, .docx, .xlsx, .csv, .md, .txt and .html**
   and writes real .docx, .xlsx (every sheet), .csv, Markdown and PDF, keeping
   headings, bold/italic, lists and tables (from a PDF: text, headings, lists
-  and simple tables, rebuilt from where the words sit). Not yet: scanned
+  and simple tables, rebuilt from where the words sit), and takes an email
+  attachment straight from the message with **⇄ Convert**. Not yet: scanned
   PDFs (no OCR), .doc, .pptx or Apple files as input; pictures; PDFs of text
   outside Western European letters (refused, with the reason).
 - **AI needs the website deployed.** Summaries, translation and task flags

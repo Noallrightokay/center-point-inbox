@@ -123,6 +123,20 @@ pub struct Forwarded {
     pub indexes: Vec<u32>,
 }
 
+/// The most an attachment handed to the interface for converting may be.
+/// Bigger than nearly every document anyone mails; a file past it can still
+/// be saved.
+pub const READ_MAX: usize = 25 * 1024 * 1024;
+
+/// An attachment handed to the interface: its name as the sender gave it
+/// (only ever shown or used to pick a reader, never a path), type and bytes.
+#[derive(Debug)]
+pub struct Handed {
+    pub name: String,
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
 /// Where an attachment was saved.
 #[derive(Debug, Serialize)]
 pub struct Saved {
@@ -543,13 +557,7 @@ impl Rata {
             kind: kind.into(),
             error,
         };
-        let raw = self.whole(email, uid, uidvalidity).await?;
-        let Some((info, bytes)) = body::attachment(&raw, index) else {
-            return Err(problem(
-                "gone",
-                "That attachment is no longer in the message.".into(),
-            ));
-        };
+        let (info, bytes) = self.attachment_of(email, uid, uidvalidity, index).await?;
         let name = safe_file_name(&info.name);
         let path = write_new(dir, &name, &bytes).map_err(|e| {
             problem(
@@ -564,6 +572,51 @@ impl Rata {
                 .unwrap_or(name),
             path: path.display().to_string(),
             size: bytes.len() as u64,
+        })
+    }
+
+    /// One attachment's bytes, for the interface to convert (the Format
+    /// Bridge) rather than to save. Fetched from the mailbox like a save, and
+    /// capped: the bytes cross into the page as text.
+    pub async fn read_attachment(
+        &self,
+        email: &str,
+        uid: u32,
+        uidvalidity: u32,
+        index: u32,
+    ) -> Result<Handed, Problem> {
+        let (info, bytes) = self.attachment_of(email, uid, uidvalidity, index).await?;
+        if bytes.len() > READ_MAX {
+            return Err(Problem {
+                email: email.to_string(),
+                kind: "too-large".into(),
+                error: format!(
+                    "{} is too large to convert in RATA ({} MB; the most is {} MB). Save it and convert it elsewhere.",
+                    info.name,
+                    bytes.len() / (1024 * 1024),
+                    READ_MAX / (1024 * 1024)
+                ),
+            });
+        }
+        Ok(Handed {
+            name: info.name,
+            mime: info.mime,
+            data: bytes,
+        })
+    }
+
+    async fn attachment_of(
+        &self,
+        email: &str,
+        uid: u32,
+        uidvalidity: u32,
+        index: u32,
+    ) -> Result<(body::Attachment, Vec<u8>), Problem> {
+        let raw = self.whole(email, uid, uidvalidity).await?;
+        body::attachment(&raw, index).ok_or_else(|| Problem {
+            email: email.to_string(),
+            kind: "gone".into(),
+            error: "That attachment is no longer in the message.".into(),
         })
     }
 
@@ -1331,6 +1384,13 @@ mod tests {
             );
             assert_eq!(
                 app.save_attachment("owner@example.com", 1, 7, 0, &dir)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "auth"
+            );
+            assert_eq!(
+                app.read_attachment("owner@example.com", 1, 7, 0)
                     .await
                     .unwrap_err()
                     .kind,

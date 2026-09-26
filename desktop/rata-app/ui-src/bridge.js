@@ -266,6 +266,17 @@
       }
     },
 
+    /* One attachment's bytes, for the Format Bridge (core::read_attachment). */
+    async '/api/mail/attachment/read'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('read_attachment', { email: b.email, uid: b.uid, uidvalidity: b.uidvalidity, index: b.index });
+        return { ok: true, name: got.name, mime: got.mime, data: got.data };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
     async '/api/mail/read'(opts) {
       const b = body(opts);
       try {
