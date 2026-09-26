@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies. Standalone, knows nothing about the app. 123 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 40 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments. Standalone, knows nothing about the app. 131 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 43 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -77,7 +77,8 @@ the run as an artifact). v0.1.2 shipped with a broken first screen (see the
 CSP note above) and must not be given to anyone. **v0.1.3 is the beta build
 testers started on**; v0.1.4 adds server-side read/star/delete/archive;
 v0.1.5 adds Load older mail and shipped all five files; v0.1.6 adds Reply and
-removes every control that led nowhere; v0.1.7 decodes message bodies. An
+removes every control that led nowhere; v0.1.7 decodes message bodies;
+v0.1.8 opens whole messages and saves attachments. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -158,8 +159,19 @@ webview to an outside page would hand that page the IPC bridge. Mail stored
 by an older build (no `bodyV: 2`) is re-read by UID (`reread_mail` →
 `rata_mail::imap::fetch_uids`), 50 per mailbox after each sync and at once
 when opened.
-Also not built: INBOX only; no HTML rendering or attachments (next: fetch the
-whole message when one is opened); no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**Opening in full (v0.1.8).** A message marked `truncated`, or with
+attachments seen in its first 64 KiB, is fetched whole when opened
+(`openWhole` → `open_message` → `rata_mail::imap::fetch_whole`, which asks
+`RFC822.SIZE` first and refuses over `WHOLE_MAX`, 60 MB). The full text lives
+in `OPENED` for the session only; the attachment list is stored, which is what
+puts 📎 in the list. Inline images with a Content-ID are not listed. Saving
+(`save_attachment`) re-fetches the message and writes one part into the
+Downloads folder: the page supplies only message and index, and Rust picks the
+folder, cleans the name (`safe_file_name`: no path parts, Windows device
+names, or bidi controls that disguise `.exe` as `.pdf`) and creates the file
+exclusively (`write_new`, `name (2).pdf`). RATA never opens a saved file.
+Also not built: INBOX only; no HTML rendering; no attaching files when
+sending; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

@@ -23,6 +23,16 @@
   /* The interface's own vocabulary for a message. The Rust side uses its own
      names, and translating here keeps the mail layer from being shaped by one
      particular screen's field names. */
+  /* An attachment as the interface draws it: a short type label, the name,
+     a readable size, and the index a download asks for. */
+  function asAttachment(a) {
+    const ext = (String(a.name || '').match(/\.([A-Za-z0-9]{1,5})$/) || [])[1];
+    const kind = (ext || String(a.mime || '').split('/')[1] || 'file').replace(/[^A-Za-z0-9]/g, '').slice(0, 5).toUpperCase() || 'FILE';
+    const n = Number(a.size) || 0;
+    const size = !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+    return { i: a.index, n: a.name, f: kind, s: size, mime: a.mime };
+  }
+
   function asMessage(m) {
     return {
       id: m.id,
@@ -50,6 +60,7 @@
          as it arrived on the wire and is re-read when it can be. */
       bodyV: 2,
       truncated: !!m.truncated,
+      atts: (m.attachments || []).map(asAttachment),
     };
   }
 
@@ -175,6 +186,31 @@
         return { messages: got.map(asMessage) };
       } catch (e) {
         return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/mail/open'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('open_message', { email: b.email, uid: b.uid, uidvalidity: b.uidvalidity });
+        return { text: got.text, truncated: !!got.truncated, atts: (got.attachments || []).map(asAttachment) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/mail/attachment'(opts) {
+      const b = body(opts);
+      try {
+        const saved = await invoke('save_attachment', {
+          email: b.email,
+          uid: b.uid,
+          uidvalidity: b.uidvalidity,
+          index: b.index,
+        });
+        return { ok: true, path: saved.path, name: saved.name };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }
     },
 

@@ -12,7 +12,7 @@
 //! start of a message, not all of it), and keeping the result a sensible size
 //! to hold on the customer's machine.
 
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{Message as Parsed, MessageParser, MimeHeaders, PartType};
 
 use crate::{html, words};
 
@@ -27,14 +27,36 @@ pub const MESSAGE_BYTES: usize = 64 * 1024;
 /// characters of text; this keeps any one message from crowding out the rest.
 pub const BODY_CHARS: usize = 16_000;
 
-/// The text of one message.
+/// How much text is shown when a message is opened in full. Not stored, so it
+/// can be generous; still bounded, because a sender decides how long it is.
+pub const WHOLE_CHARS: usize = 400_000;
+
+/// The text of one message, and what is attached to it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Body {
     /// Readable text, line breaks kept.
     pub text: String,
     /// True when the message goes on beyond what is shown — either past what
-    /// was fetched or past [`BODY_CHARS`]. The rest is in the mailbox.
+    /// was fetched or past the character limit. The rest is in the mailbox.
     pub truncated: bool,
+    /// The attachments seen. From a partial fetch, those whose headers arrived.
+    pub attachments: Vec<Attachment>,
+}
+
+/// One attachment, as the reading pane lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Attachment {
+    /// Its position among the message's attachments: what a download asks
+    /// for. Stable between a partial and a whole fetch of the same message,
+    /// since both parse the same structure from the same start.
+    pub index: u32,
+    /// The sender's file name, or one made up from the type. Not yet safe to
+    /// use as a path — the app cleans it before anything is written.
+    pub name: String,
+    pub mime: String,
+    /// Decoded size in bytes; 0 when only part of it was fetched.
+    pub size: u64,
 }
 
 /// Decode `raw` — a whole message, or its first `MESSAGE_BYTES` — into text.
@@ -42,15 +64,42 @@ pub struct Body {
 /// `cut` says whether `raw` stopped short of the end of the message, which the
 /// caller knows from how many bytes the server sent back.
 pub fn read(raw: &[u8], cut: bool) -> Body {
+    read_capped(raw, cut, BODY_CHARS)
+}
+
+/// A whole message, opened: the same decoding with room for a long one.
+pub fn read_whole(raw: &[u8]) -> Body {
+    read_capped(raw, false, WHOLE_CHARS)
+}
+
+/// One attachment's decoded bytes, by its [`Attachment::index`].
+pub fn attachment(raw: &[u8], index: u32) -> Option<(Attachment, Vec<u8>)> {
+    if !starts_with_header(raw) {
+        return None;
+    }
+    let msg = MessageParser::default().parse(raw)?;
+    let part = msg.attachment(index)?;
+    let info = describe(index, part, raw.len(), false);
+    Some((info, part.contents().to_vec()))
+}
+
+fn read_capped(raw: &[u8], cut: bool, cap: usize) -> Body {
     // A parser takes the first line as a header whatever it says, so text
     // with no header block would lose its opening line. Decide that here.
     if !starts_with_header(raw) {
-        return fallback(raw, cut);
+        return fallback(raw, cut, cap);
     }
     let Some(msg) = MessageParser::default().parse(raw) else {
-        return fallback(raw, cut);
+        return fallback(raw, cut, cap);
     };
+    let attachments = listed(&msg, raw.len(), cut);
+    Body {
+        attachments,
+        ..text_of(&msg, raw, cut, cap)
+    }
+}
 
+fn text_of(msg: &Parsed<'_>, raw: &[u8], cut: bool, cap: usize) -> Body {
     // The plain-text version where the sender wrote one, since that is what
     // they meant to be read as text; otherwise mail-parser's rendering of the
     // HTML version. Either way, never an attachment's text.
@@ -61,8 +110,8 @@ pub fn read(raw: &[u8], cut: bool) -> Body {
         .or_else(|| msg.html_body.first().copied());
     let Some(index) = choice else {
         return Body {
-            text: String::new(),
             truncated: cut,
+            ..Body::default()
         };
     };
     let part = &msg.parts[index as usize];
@@ -70,8 +119,8 @@ pub fn read(raw: &[u8], cut: bool) -> Body {
         part.is_content_type("message", "rfc822") || part.attachment_name().is_some();
     if is_attachment {
         return Body {
-            text: String::new(),
             truncated: cut,
+            ..Body::default()
         };
     }
     let text = match &part.body {
@@ -83,7 +132,77 @@ pub fn read(raw: &[u8], cut: bool) -> Body {
     // A part that runs to the last byte fetched was cut with it. One that ends
     // earlier arrived whole, even if an attachment after it did not.
     let part_cut = cut && part.offset_end as usize + 4 >= raw.len();
-    finish(&text, part_cut)
+    finish(&text, part_cut, cap)
+}
+
+/// The attachments a person would call attachments. A picture embedded in the
+/// message's own HTML — a logo, a signature image, marked inline and given a
+/// Content-ID so the HTML can point at it — is part of the letter, not
+/// something sent with it, and listing it would bury the one PDF that matters
+/// under a row of signature icons.
+fn listed(msg: &Parsed<'_>, raw_len: usize, cut: bool) -> Vec<Attachment> {
+    (0..msg.attachments.len() as u32)
+        .filter_map(|i| {
+            let part = msg.attachment(i)?;
+            let inline = part
+                .content_disposition()
+                .is_some_and(|d| d.c_type.eq_ignore_ascii_case("inline"));
+            if inline && part.content_id().is_some() {
+                return None;
+            }
+            Some(describe(i, part, raw_len, cut))
+        })
+        .collect()
+}
+
+fn describe(
+    index: u32,
+    part: &mail_parser::MessagePart<'_>,
+    raw_len: usize,
+    cut: bool,
+) -> Attachment {
+    let mime = part
+        .content_type()
+        .map(|ct| match &ct.c_subtype {
+            Some(sub) => format!("{}/{}", ct.c_type, sub),
+            None => ct.c_type.to_string(),
+        })
+        .unwrap_or_else(|| "application/octet-stream".into())
+        .to_ascii_lowercase();
+    let name = part
+        .attachment_name()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            part.message()
+                .and_then(|m| m.subject())
+                .map(|s| format!("{}.eml", s.trim()))
+        })
+        .unwrap_or_else(|| format!("attachment-{}{}", index + 1, extension_for(&mime)));
+    // Only a part that ended before the cut has a size worth showing.
+    let whole = !cut || (part.offset_end as usize + 4) < raw_len;
+    Attachment {
+        index,
+        name,
+        mime,
+        size: if whole { part.len() as u64 } else { 0 },
+    }
+}
+
+fn extension_for(mime: &str) -> &'static str {
+    match mime {
+        "application/pdf" => ".pdf",
+        "image/jpeg" => ".jpg",
+        "image/png" => ".png",
+        "image/gif" => ".gif",
+        "text/plain" => ".txt",
+        "text/calendar" => ".ics",
+        "text/csv" => ".csv",
+        "message/rfc822" => ".eml",
+        "application/zip" => ".zip",
+        _ => "",
+    }
 }
 
 /// Whether `raw` opens with a header line — `Name: value`, the name made of
@@ -100,23 +219,23 @@ fn starts_with_header(raw: &[u8]) -> bool {
 
 /// Not MIME at all, or too broken to parse: show the bytes as text, which is
 /// what a plain RFC 822 message is — after its header block, if it has one.
-fn fallback(raw: &[u8], cut: bool) -> Body {
+fn fallback(raw: &[u8], cut: bool, cap: usize) -> Body {
     let text = String::from_utf8_lossy(raw);
     let body = match text.find("\r\n\r\n").or_else(|| text.find("\n\n")) {
         Some(i) if starts_with_header(raw) => &text[i..],
         _ => &text[..],
     };
-    finish(body, cut)
+    finish(body, cut, cap)
 }
 
-fn finish(text: &str, cut: bool) -> Body {
+fn finish(text: &str, cut: bool, cap: usize) -> Body {
     let tidy = tidy(text);
-    let mut out: String = tidy.chars().take(BODY_CHARS).collect();
+    let mut out: String = tidy.chars().take(cap).collect();
     let over = out.len() < tidy.len();
     if over {
         // End on a whole line rather than mid-word.
         if let Some(i) = out.rfind('\n')
-            && i > BODY_CHARS / 2
+            && i > cap / 2
         {
             out.truncate(i);
         }
@@ -124,6 +243,7 @@ fn finish(text: &str, cut: bool) -> Body {
     Body {
         text: out.trim_end().to_string(),
         truncated: cut || over,
+        ..Body::default()
     }
 }
 
@@ -280,6 +400,60 @@ mod tests {
             "--b1\r\nContent-Type: text/plain; name=notes.txt\r\nContent-Disposition: attachment; filename=notes.txt\r\n\r\nsecret notes\r\n--b1--\r\n",
         );
         assert_eq!(read(&only, false).text, "");
+    }
+
+    fn with_attachments() -> Vec<u8> {
+        msg(
+            "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b1\r\n",
+            concat!(
+                "--b1\r\nContent-Type: multipart/related; boundary=b2\r\n\r\n",
+                "--b2\r\nContent-Type: text/html\r\n\r\n<p>See attached.</p><img src=\"cid:logo\">\r\n",
+                "--b2\r\nContent-Type: image/png; name=logo.png\r\nContent-Disposition: inline; filename=logo.png\r\nContent-ID: <logo>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n",
+                "--b2--\r\n",
+                "--b1\r\nContent-Type: application/pdf; name=\"Q3 figures.pdf\"\r\nContent-Disposition: attachment; filename=\"Q3 figures.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n",
+                "--b1\r\nContent-Type: text/calendar\r\nContent-Disposition: attachment\r\n\r\nBEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+                "--b1--\r\n",
+            ),
+        )
+    }
+
+    #[test]
+    fn attachments_are_listed_without_the_pictures_inside_the_letter() {
+        let b = read_whole(&with_attachments());
+        assert_eq!(b.text, "See attached.");
+        let names: Vec<(&str, &str, u64)> = b
+            .attachments
+            .iter()
+            .map(|a| (a.name.as_str(), a.mime.as_str(), a.size))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Q3 figures.pdf", "application/pdf", 9),
+                ("attachment-3.ics", "text/calendar", 30)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_attachment_comes_back_as_its_decoded_bytes() {
+        let raw = with_attachments();
+        let pdf = read_whole(&raw).attachments[0].index;
+        let (info, bytes) = attachment(&raw, pdf).unwrap();
+        assert_eq!(info.name, "Q3 figures.pdf");
+        assert_eq!(bytes, b"%PDF-1.4\n");
+        assert!(attachment(&raw, 99).is_none());
+        assert!(attachment(b"no headers", 0).is_none());
+    }
+
+    #[test]
+    fn a_partly_fetched_attachment_is_listed_without_a_size() {
+        let raw = with_attachments();
+        let cut_at = raw.windows(8).position(|w| w == b"JVBERi0x").unwrap() + 4;
+        let b = read(&raw[..cut_at], true);
+        assert_eq!(b.attachments.len(), 1);
+        assert_eq!(b.attachments[0].name, "Q3 figures.pdf");
+        assert_eq!(b.attachments[0].size, 0);
     }
 
     #[test]
