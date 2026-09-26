@@ -83,7 +83,8 @@ attachments; v0.1.10 shrinks the window to fit small screens (it opened
 1280×860, taller than a 1366×768 laptop, with Send below the edge — see
 `fit_to_screen` in `main.rs`, which has to use the configured size because
 the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
-the original's attachments; v0.1.12 shows HTML mail formatted. An
+the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
+keeps mail in IndexedDB, one record per message, with no storage cap. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -133,9 +134,8 @@ translation and the AI brief sent mail text to Google or Anthropic. `tidyV6`
 strips their leftovers from an older saved workspace. Adding a mailbox has one
 home: Settings → Linked accounts (`openAddMailbox`).
 
-Stored, and acted on for real: the interface keeps every fetched message in
-one `localStorage` blob (`save()` in `app.html`), so mail persists between
-launches and is searchable. Read, unread, star, delete and archive change RATA's
+Stored, and acted on for real: the interface keeps every fetched message, so
+mail persists between launches and is searchable. Read, unread, star, delete and archive change RATA's
 copy at once and then the real mailbox (`serverAct` → `/api/mail/act` →
 `change_messages` → `rata_mail::imap::act`), one connection per mailbox for a
 whole selection. `act` never permanently deletes (Trash is a move to the
@@ -147,9 +147,27 @@ missing is scale. A refresh fetches the newest ~15; older mail comes 50 at a
 time through **Load older mail** (`loadOlder` → `/api/mail/older` →
 `older_mail` → `rata_mail::imap::fetch_older`), which pages by position below
 the oldest UID RATA holds, and a newly linked mailbox gets one page straight
-away. But the single `localStorage` blob has a few-MB cap, so `loadOlder`
-refuses past `STORE_SOFT_CAP` — **the largest gap**, fixed by a per-message
-store (IndexedDB), after which that cap can go.
+away.
+**Where mail is kept (v0.1.13).** Each message is its own record in
+IndexedDB (`rata-mail-<uid>`, store `messages`, key = id, value = the
+message as JSON); everything else in `S` stays one small `localStorage`
+entry, marked `store:'idb'` and written without `messages`. `S.messages` is
+still all in memory, so nothing else in the page changed. `save()` finds
+what changed by comparing each message with how it was last stored
+(`MS_HELD`: the body by identity — nearly all the bytes, almost never
+changed — and the rest as JSON), and writes only that, plus deletions, in
+one transaction started in the same turn. At 10 000 messages a star costs
+~27 ms (it was ~480 ms comparing whole JSON). `load()` reads both, merges
+(the `localStorage` copy wins), drops anything in `S.gone` — a delete the
+window closed on still holds — and moves mail an older build kept in the
+entry into IndexedDB, rewriting the entry only after IndexedDB confirms.
+If IndexedDB will not open (5 s timeout) mail stays in the entry the old
+way and `loadOlder` keeps its `STORE_SOFT_CAP`; the two halves merge the
+next time it opens. Deleting the account deletes this database too.
+Verified in the packaged WebKit build: 1 500 messages (12 MB) written,
+the app killed and restarted, all back with bodies and a star intact. What
+does not scale yet is the rendering: `renderMail` draws every row (~0.8 s
+at 10 000), and start-up parses every message.
 **Bodies are decoded (v0.1.7).** Fetch takes `BODY.PEEK[]<0.65536>` — headers
 and the start of the message, since the text cannot be decoded without the
 headers that declare its encoding — and `body::read` parses it with

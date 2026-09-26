@@ -941,7 +941,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 /* =====================================================================
    RATA v1.2 — standalone console
    Unified channels · People threads · Create studio · Format Autopilot
-   Single file. localStorage persistence. No external dependencies.
+   Single file. Kept in localStorage and IndexedDB. No external dependencies.
    ===================================================================== */
 const SESSION=JSON.parse(localStorage.getItem('centra_session')||'null');
 if(!SESSION){location.replace('auth.html')}
@@ -1052,8 +1052,113 @@ function migrate(old){
   }
   return fresh;
 }
-function load(){try{const raw=localStorage.getItem(LS_KEY);S=migrate(raw?JSON.parse(raw):null)}catch(e){S=seed()}}
-function save(){try{localStorage.setItem(LS_KEY,JSON.stringify(S))}catch(e){toast('Storage full — export and reset')}scheduleCloudSync()}
+/* ---------------- WHERE MAIL IS KEPT ----------------
+   Messages are kept in IndexedDB, one record per message, and everything
+   else in S in one small localStorage entry. They used to share that entry,
+   and localStorage holds a few megabytes per site: a few thousand messages
+   and "Storage full". IndexedDB holds as much as the disk allows.
+
+   The interface still works on S.messages in memory, all of it, as before.
+   save() writes what changed, and finding that out has to be cheap: it runs
+   on every click, over every message. So each message is remembered as it
+   was last stored in two halves — its body, which is nearly all of its size
+   and almost never changes, compared by identity; and everything else, a few
+   hundred bytes, compared as JSON. Only messages that differ, and those no
+   longer in S.messages, touch the disk — in one transaction, started in the
+   same turn as the change, so a window closed straight after a delete still
+   takes the delete with it.
+
+   If IndexedDB cannot be opened, messages stay in the localStorage entry the
+   old way, with its cap (STORE_SOFT_CAP); nothing is lost either way. */
+const MS_DB='rata-mail-'+(SESSION?SESSION.uid:'anon'),MS_STORE='messages';
+let MS=null;              /* the open database, or null: the old way */
+const MS_HELD=new Map();  /* id → [the rest as JSON, the body] as stored */
+let msQueued=false,msWarned=false,msLast=Promise.resolve();
+const msRest=m=>{const {body,...rest}=m;return JSON.stringify(rest)};
+function msOpen(){
+  return new Promise((res,rej)=>{
+    /* Some webviews have been known to leave open() pending forever; the
+       app must still start. */
+    const t=setTimeout(()=>rej(new Error('IndexedDB did not open')),5000);
+    let rq;try{rq=indexedDB.open(MS_DB,1)}catch(e){clearTimeout(t);rej(e);return}
+    rq.onupgradeneeded=()=>{const db=rq.result;if(!db.objectStoreNames.contains(MS_STORE))db.createObjectStore(MS_STORE)};
+    rq.onsuccess=()=>{clearTimeout(t);const db=rq.result;db.onversionchange=()=>db.close();res(db)};
+    rq.onerror=()=>{clearTimeout(t);rej(rq.error)};
+  });
+}
+/* Every record as [key, JSON], in key order. */
+function msAll(db){
+  return new Promise((res,rej)=>{
+    const tx=db.transaction(MS_STORE,'readonly'),st=tx.objectStore(MS_STORE);
+    const ks=st.getAllKeys(),vs=st.getAll();
+    tx.oncomplete=()=>res(ks.result.map((k,i)=>[String(k),vs.result[i]]));
+    tx.onerror=tx.onabort=()=>rej(tx.error);
+  });
+}
+/* Writes what changed since the store was last written, and returns when
+   that and every earlier write is on disk. A failed write forgets what it
+   tried, so the next save tries it again. */
+function msFlush(){
+  msQueued=false;
+  if(!MS)return msLast;
+  const now=new Set(),put=[],del=[];
+  for(const m of S.messages){
+    if(!m||m.id==null)continue;
+    const id=String(m.id),rest=msRest(m),was=MS_HELD.get(id);
+    now.add(id);
+    if(!was||was[1]!==m.body||was[0]!==rest)put.push([id,m,rest]);
+  }
+  for(const id of MS_HELD.keys())if(!now.has(id))del.push(id);
+  if(!put.length&&!del.length)return msLast;
+  for(const [id,m,rest] of put)MS_HELD.set(id,[rest,m.body]);
+  for(const id of del)MS_HELD.delete(id);
+  const undo=e=>{
+    for(const [id] of put)MS_HELD.delete(id);
+    for(const id of del)MS_HELD.set(id,['',undefined]);
+    if(!msWarned){msWarned=true;toast('RATA could not save mail on this computer'+(e&&e.name==='QuotaExceededError'?': the disk is full.':'.')+' It is still on the server.')}
+    throw e;
+  };
+  try{
+    const tx=MS.transaction(MS_STORE,'readwrite'),st=tx.objectStore(MS_STORE);
+    for(const [id,m] of put)st.put(JSON.stringify(m),id);
+    for(const id of del)st.delete(id);
+    return msLast=new Promise((res,rej)=>{tx.oncomplete=()=>{msWarned=false;res()};tx.onerror=tx.onabort=()=>rej(tx.error||new Error('aborted'))}).catch(undo);
+  }catch(e){return msLast=Promise.reject(e).catch(undo)}
+}
+function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb';return o}
+/* Before anything is shown: the small entry from localStorage, the messages
+   from IndexedDB. Mail an older build kept in the localStorage entry moves
+   into IndexedDB here, and the entry is only rewritten without it once
+   IndexedDB has confirmed the write. */
+async function load(){
+  let st=null;
+  try{const raw=localStorage.getItem(LS_KEY);st=raw?JSON.parse(raw):null}catch(e){st=null}
+  let held=[];
+  try{MS=await msOpen();held=await msAll(MS)}catch(e){console.warn('message store unavailable, keeping mail in localStorage',e);MS=null;held=[]}
+  const inBlob=!!(st&&Array.isArray(st.messages)&&st.messages.length);
+  try{S=migrate(st)}catch(e){S=seed()}
+  const byId=new Map();
+  for(const [id,j] of held){
+    /* Unreadable, or filed under a key that is not its id: remembered as
+       something no message matches, so the next write replaces or removes it. */
+    let m=null;try{m=JSON.parse(j)}catch(e){}
+    if(m&&m.id!=null&&String(m.id)===id){MS_HELD.set(id,[msRest(m),m.body]);byId.set(id,m)}
+    else MS_HELD.set(id,['',undefined]);
+  }
+  /* The localStorage copy wins: it is the newer one whenever both exist. */
+  for(const m of S.messages)if(m&&m.id!=null)byId.set(String(m.id),m);
+  /* A delete the window closed on before IndexedDB finished is still
+     recorded in S.gone, which is written at once. */
+  S.messages=[...byId.values()].filter(m=>(m.ch||'email')==='email'&&!isGone(m.id));
+  if(!MS)return;
+  try{await msFlush()}catch(e){MS=null;return}
+  if(inBlob)saveLocal();
+}
+function saveLocal(){
+  if(MS&&!msQueued){msQueued=true;queueMicrotask(()=>{msFlush().catch(()=>{})})}
+  try{localStorage.setItem(LS_KEY,JSON.stringify(MS?metaOf(S):S))}catch(e){toast('Storage full — export and reset')}
+}
+function save(){saveLocal();scheduleCloudSync()}
 /* Deleting a message has to survive the next sync. Sync adds anything it has
    not seen, and a deleted message is by definition not there any more — so
    without a record of the deletion, the next refresh put it straight back.
@@ -1074,9 +1179,10 @@ const isGone=id=>!!(S.gone&&S.gone[id]);
    walks back from the oldest message RATA holds for each mailbox, fifty at a
    time, until the mailbox says there is nothing older. Desktop app only.
 
-   Everything lives in one localStorage blob with a cap of a few megabytes, and
-   running into it is "Storage full" at the moment of saving. So older mail
-   stops being loaded well before that, and says why. */
+   Mail is kept in IndexedDB, which has room for all of it. Only where that
+   could not be opened does mail share one localStorage entry of a few
+   megabytes, and there older mail stops being loaded well before it is full,
+   and says why. */
 const OLDER_PAGE=50,STORE_SOFT_CAP=3500000;
 function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).label||m.acct||'').toLowerCase()}
 function olderCandidates(only){
@@ -1092,8 +1198,8 @@ function oldestRef(email){
 }
 async function loadOlder(only,quiet){
   if(!window.__RATA_NATIVE__)return;
-  if(JSON.stringify(S).length>STORE_SOFT_CAP){
-    if(!quiet)toast('RATA\u2019s storage on this computer is nearly full, so older mail was not loaded. Deleting old messages frees space; a larger store is coming in a later beta.');
+  if(!MS&&JSON.stringify(S).length>STORE_SOFT_CAP){
+    if(!quiet)toast('RATA\u2019s storage on this computer is nearly full, so older mail was not loaded. Deleting old messages frees space.');
     return;
   }
   let added=0,finished=0;const notes=[];
@@ -2438,6 +2544,9 @@ async function wipeThisDevice(){
   /* The file vault is the one store the server has never seen, so nothing
      else would ever remove it. */
   try{await new Promise(res=>{const r=indexedDB.deleteDatabase('rata-files');r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
+  /* And the mail. This page's own connection would hold the deletion open. */
+  try{if(MS){MS.close();MS=null}}catch(e){}
+  try{await new Promise(res=>{const r=indexedDB.deleteDatabase(MS_DB);r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
 }
 
 async function deleteAccount(){
@@ -2727,7 +2836,7 @@ async function cloudPull(){
     const {data:{session}}=await sb.auth.getSession();
     if(!session){localStorage.removeItem('centra_session');location.replace('auth.html');return}
     const {data}=await sb.from('workspaces').select('data').eq('id',session.user.id).maybeSingle();
-    if(data&&data.data){applyCloud(data.data);localStorage.setItem(LS_KEY,JSON.stringify(S))}
+    if(data&&data.data){applyCloud(data.data);saveLocal()}
   }catch(e){console.warn('cloud pull failed',e)}
 }
 
@@ -3178,7 +3287,7 @@ function showWelcome(ob){
      SESSION.mode, throw, and abandon everything after it. Nothing here is worth
      doing for a page that is leaving. */
   if(!SESSION)return;
-  load();
+  await load();
   await cloudPull();
   // Stripe checkout return
   const q=new URLSearchParams(location.search);

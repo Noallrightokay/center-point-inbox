@@ -260,6 +260,110 @@ export default async function run(state) {
       S.settings.name = 'Owner'; save();
     });
 
+    /* ---- where the mail is kept ---- */
+    console.log('\n— mail is kept in IndexedDB, with room for all of it —');
+    {
+      /* A second window on the same workspace, so reloading it leaves the
+         page the other blocks share alone. Everything it adds, it removes. */
+      const p2 = await ctx.newPage();
+      p2.on('pageerror', e => errs.push('storage page: ' + e.message));
+      const boot = async (pg) => {
+        await pg.waitForFunction(() => typeof S !== 'undefined' && !!S && typeof msFlush === 'function', null, { timeout: 25000 });
+        await pg.evaluate(() => { window.__toasts = []; const t = toast; toast = (m) => { window.__toasts.push(String(m)); return t(m); }; });
+      };
+      await p2.goto(s.url + '/app.html'); await boot(p2);
+      const T6 = 400, BODY = 20000;
+      const big = await p2.evaluate(async ({ T6, BODY }) => {
+        for (let i = 0; i < T6; i++) S.messages.push({ id: 't6-' + i, ch: 'email', prov: 'imap', cid: null, fromName: 'Bulk',
+          fromAddr: 'bulk@example.com', subj: 'Stored ' + i, prev: 'p', body: String(i).padEnd(BODY, '.'), ts: 1e12 + i,
+          unread: true, starred: false, atts: [] });
+        save(); await msFlush();
+        const raw = localStorage.getItem(LS_KEY), meta = JSON.parse(raw);
+        return { toasts: window.__toasts.splice(0), metaBytes: raw.length, hasMessages: 'messages' in meta, store: meta.store, open: !!MS };
+      }, { T6, BODY });
+      check(big.open, 'the message store opens');
+      check(!big.toasts.some(t => /full|could not save/i.test(t)),
+        `${T6} messages of ${BODY / 1000} KB each (${(T6 * BODY / 1e6).toFixed(0)} MB, past localStorage's cap) save without complaint: ${big.toasts.join(' | ') || 'no toast'}`);
+      check(!big.hasMessages && big.store === 'idb' && big.metaBytes < 200000,
+        `and the localStorage entry holds no mail: ${(big.metaBytes / 1000).toFixed(1)} KB, store=${big.store}`);
+
+      await p2.reload(); await boot(p2);
+      const back = await p2.evaluate(({ T6, BODY }) => {
+        const mine = S.messages.filter(m => String(m.id).startsWith('t6-'));
+        return { n: mine.length, intact: mine.every(m => m.body.length === BODY && m.body.startsWith(m.id.slice(3))) };
+      }, { T6, BODY });
+      check(back.n === T6 && back.intact, `after a relaunch all ${back.n} are there, bodies intact`);
+
+      /* Starring one message writes one record, not the mailbox. */
+      const writes = await p2.evaluate(async () => {
+        await msFlush();
+        let puts = 0; const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (...a) { if (this.name === 'messages') puts++; return put.apply(this, a); };
+        S.messages.find(m => m.id === 't6-7').starred = true; save(); await msFlush();
+        IDBObjectStore.prototype.put = put;
+        return puts;
+      });
+      check(writes === 1, `starring one message writes one record (${writes})`);
+
+      /* Deleted, then the window closed at once: the delete still holds. */
+      await p2.evaluate(() => { dropMessages(['t6-3']); save(); });
+      await p2.reload(); await boot(p2);
+      const afterDel = await p2.evaluate(() => ({ gone: !S.messages.some(m => m.id === 't6-3'), starred: S.messages.find(m => m.id === 't6-7').starred }));
+      check(afterDel.gone, 'a message deleted just before closing stays deleted');
+      check(afterDel.starred, 'and the star from before that is still there');
+
+      /* If the window closed before IndexedDB caught up, S.gone (written at
+         once) still keeps the message away, and the store is tidied. */
+      await p2.evaluate(() => { const meta = JSON.parse(localStorage.getItem(LS_KEY)); meta.gone = Object.assign(meta.gone || {}, { 't6-4': Date.now() }); localStorage.setItem(LS_KEY, JSON.stringify(meta)); });
+      await p2.reload(); await boot(p2);
+      check(await p2.evaluate(async () => { await msFlush(); const held = await msAll(MS); return !S.messages.some(m => m.id === 't6-4') && !held.some(([id]) => id === 't6-4'); }),
+        'a delete recorded only in the workspace entry is honoured, and removed from the store');
+
+      /* Mail an older build kept in the localStorage entry moves across. */
+      await p2.evaluate(() => {
+        const meta = JSON.parse(localStorage.getItem(LS_KEY)); delete meta.store;
+        meta.messages = [{ id: 't6-legacy', ch: 'email', prov: 'imap', subj: 'From 0.1.12', prev: '', body: 'old', ts: 5, atts: [] },
+          { id: 't6-slack', ch: 'slack', prov: 'slack', subj: '', prev: '', body: '', ts: 6, atts: [] }];
+        localStorage.setItem(LS_KEY, JSON.stringify(meta));
+      });
+      await p2.reload(); await boot(p2);
+      const moved = await p2.evaluate(async () => {
+        await msFlush();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY)), held = (await msAll(MS)).map(([id]) => id);
+        return { shown: S.messages.some(m => m.id === 't6-legacy'), slack: S.messages.some(m => m.id === 't6-slack'),
+          inStore: held.includes('t6-legacy'), entryHasMail: 'messages' in meta, bulk: S.messages.filter(m => String(m.id).startsWith('t6-')).length };
+      });
+      check(moved.shown && moved.inStore && !moved.entryHasMail,
+        `mail saved by an older build moves into IndexedDB and out of localStorage (shown ${moved.shown}, stored ${moved.inStore}, left in entry ${moved.entryHasMail})`);
+      check(!moved.slack && moved.bulk === T6 - 2 + 1, `and joins what was already there (${moved.bulk} held), minus a channel this build dropped`);
+
+      /* Where IndexedDB will not open, mail stays in localStorage as before —
+         and loading older mail keeps its old limit there. */
+      const p3 = await ctx.newPage();
+      p3.on('pageerror', e => errs.push('fallback page: ' + e.message));
+      await p3.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (String(name).startsWith('rata-mail-')) throw new Error('no IndexedDB here'); return o.call(this, name, ...a); }; });
+      await p3.goto(s.url + '/app.html'); await boot(p3);
+      const fb = await p3.evaluate(() => {
+        S.messages.push({ id: 't6-fallback', ch: 'email', prov: 'imap', subj: 'Kept the old way', prev: '', body: 'x', ts: 7, atts: [] });
+        save();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { open: !!MS, inEntry: (meta.messages || []).some(m => m.id === 't6-fallback'), capped: String(loadOlder).includes('!MS&&') };
+      });
+      await p3.close();
+      check(!fb.open && fb.inEntry && fb.capped, 'without IndexedDB, mail is kept in localStorage the old way, under the old cap');
+      await p2.reload(); await boot(p2);
+      const merged = await p2.evaluate(async () => {
+        await msFlush();
+        return { fallback: S.messages.some(m => m.id === 't6-fallback'), bulk: S.messages.filter(m => /^t6-\d+$/.test(m.id)).length,
+          entryHasMail: 'messages' in JSON.parse(localStorage.getItem(LS_KEY)) };
+      });
+      check(merged.fallback && merged.bulk === T6 - 2 && !merged.entryHasMail,
+        `and when it opens again, both halves are one inbox (${merged.bulk + 1} + legacy), nothing lost`);
+
+      await p2.evaluate(async () => { S.messages = S.messages.filter(m => !String(m.id).startsWith('t6-')); save(); await msFlush(); });
+      await p2.close();
+    }
+
     /* ---- as many inboxes on one screen as fit ---- */
     console.log('\n— inboxes side by side —');
     /* Four mailboxes with mail in each, which is the case this exists for:

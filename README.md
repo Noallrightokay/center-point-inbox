@@ -209,12 +209,13 @@ Be realistic about this before promising anything to a customer.
 
 **Not built yet:**
 
-- **Mail is stored in one blob with a cap.** The interface keeps everything
-  it has fetched, so mail persists between launches and is searchable;
-  read/unread, star, delete (to the server's Trash) and archive reach the real
-  mailbox; and older mail loads 50 at a time on request. But everything sits
-  in one `localStorage` blob with a cap of a few MB, so loading older mail
-  stops near it. A per-message store is the largest gap.
+- **The whole mailbox is held in memory.** Since v0.1.13 each message is its
+  own record in IndexedDB, which has room for as much mail as the disk does
+  (it used to share one `localStorage` blob of a few MB with everything
+  else), and only what changed is written. But the interface still loads
+  every message at start and redraws the whole list: at 10,000 messages
+  (45 MB) a start takes a second or more and the list about as long to draw.
+  Past that needs a list that draws only what is on screen.
 - **INBOX only.** No other folders are shown.
 - **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
   — MIME, quoted-printable, base64, any charset — and an HTML-only message is
