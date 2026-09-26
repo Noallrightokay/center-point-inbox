@@ -18,7 +18,7 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments. Standalone, knows nothing about the app. 138 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML. Standalone, knows nothing about the app. 145 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 46 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -83,7 +83,7 @@ attachments; v0.1.10 shrinks the window to fit small screens (it opened
 1280×860, taller than a 1366×768 laptop, with Send below the edge — see
 `fit_to_screen` in `main.rs`, which has to use the configured size because
 the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
-the original's attachments. An
+the original's attachments; v0.1.12 shows HTML mail formatted. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -191,8 +191,27 @@ original's mailbox, UID, UIDVALIDITY and attachment indexes — never bytes.
 `core::send` fetches those attachments from the mailbox (`forwarded_files`)
 before the size check. The drag-between-panes forward uses the same path; it
 used to announce files it never sent.
-Also not built: INBOX only; no HTML rendering; no auto-update; no code
-signing. Settings shows the website's plan ("No plan yet") rather than the
+**HTML mail (v0.1.12) — three locks, keep all three.** (1) `html::safe`
+sanitises with ammonia: scripts, handlers, forms, frames, `<meta>`, `<base>`,
+relative URLs and every link's `href` go; layout, `<style>`, an allowlist of
+CSS properties and `cid:` pictures (inlined as `data:`, images only, capped)
+stay. (2) The interface shows it in `<iframe sandbox="">` — never add
+`allow-scripts` or `allow-same-origin`; together they undo the sandbox, and
+this page can call the app — with `<base target="_blank">` so any link that
+slipped through tries a popup the sandbox refuses. (3) The frame's own CSP
+(`frameDoc`) fetches nothing but `https:` pictures after **Load images**; the
+app CSP's `img-src … https:` exists only so that can work, and its
+`frame-src 'none'` also blocks a frame navigating itself. Verified in the
+packaged WebKit build with a hostile message that bypassed the sanitiser: it
+rendered, and neither its script nor its `onerror` ran. Testing traps found
+on the way: Chromium fires a `request` event for pictures its CSP then
+refuses — count what reaches the network (a route handler or a real server),
+not request events; and the desktop harness (`beta-fixes.mjs` in the session
+scratchpad) now serves the page under the app's real CSP from
+`tauri.conf.json`. Opening a message fetches it whole when it may have HTML
+(`m.html`, or unknown for mail stored before 0.1.12).
+Also not built: INBOX only; clickable links (needs the system browser — an
+opener with an allowlist of schemes); no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

@@ -253,6 +253,10 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .md-fromtext b{display:block;font-size:14px}
 .md-fromtext span{font-size:12.5px;color:var(--faint)}
 .md-actions{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}
+.md-viewbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.md-viewbar .seg button{padding:6px 12px;font-size:12.5px}
+.md-viewbar .why{font-size:12px;color:var(--faint)}
+.md-html{display:block;width:100%;height:calc(100vh - 290px);min-height:360px;border:0;border-radius:var(--r);background:#fff;box-shadow:var(--shadow)}
 .md-note{margin-top:10px;font-size:12.5px;color:var(--faint);padding:0 4px}
 .md-content{background:var(--card);padding:26px;font-size:15px;line-height:1.65;white-space:pre-line;overflow-wrap:anywhere;border-top:1px solid var(--hair-2);box-shadow:var(--shadow)}
 .md-content:last-child{border-radius:0 0 var(--r) var(--r)}
@@ -1119,16 +1123,35 @@ async function loadOlder(only,quiet){
    the stored copy stays the bounded start of it, so a few newsletters cannot
    fill the workspace. */
 const OPENED=new Map();
+/* Per message, for this session: Formatted or Text, and whether the customer
+   chose to load its internet pictures. */
+const VIEWMODE=new Map(),SHOWIMG=new Set();
+/* The document an HTML email is shown as. Its HTML was sanitised in Rust
+   already; this is the second lock. It goes in an iframe with an empty
+   sandbox — no scripts, no forms, no popups, no navigating the app, and an
+   origin of its own, so nothing in it can reach this page or the app behind
+   it — and its own content security policy allows nothing to be fetched
+   except, once asked for, pictures over https. Links inside it are inert;
+   their addresses are in the Text view. */
+function frameDoc(html,images){
+  const csp="default-src 'none'; script-src 'none'; object-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:"+(images?' https:':'');
+  return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+    /* Second lock on links: every one tries to open a new window, which the
+       sandbox refuses, so even a link that reached this far does nothing. */
+    +'<base target="_blank">'
+    +'<style>html,body{margin:0;background:#fff;color:#1b1b1b}body{padding:18px;font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}</style>'
+    +'</head><body>'+html+'</body></html>';
+}
 async function openWhole(m){
   let r;
   try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
   catch(e){r={error:String(e&&e.message||e)}}
   if(!r||r.error){OPENED.set(m.id,{text:m.body,truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
-  OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[]});
+  OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[],html:r.html||null,remoteImages:!!r.remoteImages});
   /* The list of attachments is small and worth keeping: it is what puts the
      paperclip on the message in the list. */
   const have=S.messages.find(x=>x.id===m.id);
-  if(have){have.atts=r.atts||[];save();renderMail()}
+  if(have){have.atts=r.atts||[];have.html=!!r.html;save();renderMail()}
 }
 /* An attachment goes to the Downloads folder and is never opened by RATA:
    it is a stranger's file, and running it is the customer's decision. */
@@ -1723,7 +1746,10 @@ function openMail(id){
   const savable=native;
   /* A long message, or one with attachments, is fetched in full when opened:
      the stored copy is the start of it, and the attachments are not kept. */
-  const wantWhole=native&&m.bodyV===2&&!whole&&(m.truncated||atts.length);
+  /* Also when it may have an HTML version: the stored copy is text only, and
+     mail stored before 0.1.12 does not say either way. */
+  const wantWhole=native&&m.bodyV===2&&!whole&&(m.truncated||atts.length||m.html!==false);
+  const asHtml=!!(whole&&whole.html)&&VIEWMODE.get(id)!=='text';
   const note=wantWhole?'Loading the rest of this message\u2026'
     :whole&&whole.error?'Only the start of this message could be shown \u2014 '+whole.error
     :(whole?whole.truncated:m.truncated)?'This is the start of a very long message. The rest is in your mailbox \u2014 open it in your provider\u2019s own app to read all of it.':'';
@@ -1748,8 +1774,10 @@ function openMail(id){
         <button class="btn danger" id="md-del">Delete</button>
       </div>
     </div>
-    <div class="md-content" id="md-body">${esc(whole?whole.text:m.body)}</div>
-    ${note?`<div class="md-note">${esc(note)}</div>`:''}
+    ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
+    ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
+      :`<div class="md-content" id="md-body">${esc(whole?whole.text:m.body)}</div>
+    ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
       ?`<button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>`
@@ -1787,6 +1815,8 @@ function openMail(id){
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
+  $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
+  if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
   if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
@@ -2838,7 +2868,7 @@ async function absorbMail(res){
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
-    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;continue}
+    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;continue}
     const owner=linkedFind('mail',m.acct||'');
     const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
     S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));

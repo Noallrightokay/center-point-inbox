@@ -41,6 +41,11 @@ pub struct Body {
     pub truncated: bool,
     /// The attachments seen. From a partial fetch, those whose headers arrived.
     pub attachments: Vec<Attachment>,
+    /// Whether the sender wrote an HTML version.
+    pub has_html: bool,
+    /// That HTML version, made safe — only from [`read_whole`], since it is for
+    /// showing now and is never stored.
+    pub html: Option<html::Safe>,
 }
 
 /// One attachment, as the reading pane lists it.
@@ -67,9 +72,45 @@ pub fn read(raw: &[u8], cut: bool) -> Body {
     read_capped(raw, cut, BODY_CHARS)
 }
 
-/// A whole message, opened: the same decoding with room for a long one.
+/// A whole message, opened: the same decoding with room for a long one, and
+/// its HTML version made safe to show.
 pub fn read_whole(raw: &[u8]) -> Body {
-    read_capped(raw, false, WHOLE_CHARS)
+    let mut body = read_capped(raw, false, WHOLE_CHARS);
+    if body.has_html
+        && let Some(msg) = MessageParser::default().parse(raw)
+    {
+        body.html = formatted(&msg);
+    }
+    body
+}
+
+/// The HTML part, sanitised, with the pictures the message carries inline.
+fn formatted(msg: &Parsed<'_>) -> Option<html::Safe> {
+    let part = msg
+        .html_body
+        .first()
+        .and_then(|&i| msg.parts.get(i as usize))?;
+    let PartType::Html(source) = &part.body else {
+        return None;
+    };
+    let inline: Vec<(String, String, Vec<u8>)> = msg
+        .parts
+        .iter()
+        .filter_map(|p| {
+            let cid = p
+                .content_id()?
+                .trim()
+                .trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_string();
+            let mime = p
+                .content_type()
+                .map(|ct| format!("{}/{}", ct.c_type, ct.c_subtype.as_deref().unwrap_or("")))?
+                .to_ascii_lowercase();
+            Some((cid, mime, p.contents().to_vec()))
+        })
+        .collect();
+    Some(html::safe(source, &inline))
 }
 
 /// One attachment's decoded bytes, by its [`Attachment::index`].
@@ -93,8 +134,16 @@ fn read_capped(raw: &[u8], cut: bool, cap: usize) -> Body {
         return fallback(raw, cut, cap);
     };
     let attachments = listed(&msg, raw.len(), cut);
+    // mail-parser lists a plain-text part as the HTML body of a message that
+    // has no HTML, so the part itself is what says.
+    let has_html = msg
+        .html_body
+        .first()
+        .and_then(|&i| msg.parts.get(i as usize))
+        .is_some_and(|p| p.is_text_html());
     Body {
         attachments,
+        has_html,
         ..text_of(&msg, raw, cut, cap)
     }
 }
@@ -454,6 +503,47 @@ mod tests {
         assert_eq!(b.attachments.len(), 1);
         assert_eq!(b.attachments[0].name, "Q3 figures.pdf");
         assert_eq!(b.attachments[0].size, 0);
+    }
+
+    #[test]
+    fn an_opened_html_message_comes_with_its_safe_html_and_pictures() {
+        let raw = msg(
+            "MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=r\r\n",
+            concat!(
+                "--r\r\nContent-Type: multipart/alternative; boundary=a\r\n\r\n",
+                "--a\r\nContent-Type: text/plain\r\n\r\nYour order shipped.\r\n",
+                "--a\r\nContent-Type: text/html\r\n\r\n<p onclick=\"steal()\">Your order <b>shipped</b>.</p><img src=\"cid:logo\"><script>steal()</script>\r\n",
+                "--a--\r\n",
+                "--r\r\nContent-Type: image/png\r\nContent-ID: <logo>\r\nContent-Disposition: inline\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw==\r\n",
+                "--r--\r\n",
+            ),
+        );
+        let listed = read(&raw, false);
+        assert!(
+            listed.has_html && listed.html.is_none(),
+            "the list fetch only notes it"
+        );
+        let opened = read_whole(&raw);
+        assert_eq!(opened.text, "Your order shipped.");
+        let html = opened.html.expect("html");
+        assert!(html.html.contains("<b>shipped</b>"), "{}", html.html);
+        assert!(
+            html.html.contains("data:image/png;base64,"),
+            "{}",
+            html.html
+        );
+        assert!(
+            !html.html.contains("onclick") && !html.html.contains("<script"),
+            "{}",
+            html.html
+        );
+        assert!(!html.remote_images);
+    }
+
+    #[test]
+    fn a_plain_message_has_no_html_to_show() {
+        let b = read_whole(&msg("", "Just text.\r\n"));
+        assert!(!b.has_html && b.html.is_none());
     }
 
     #[test]

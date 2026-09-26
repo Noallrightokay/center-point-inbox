@@ -61,6 +61,7 @@
       bodyV: 2,
       truncated: !!m.truncated,
       atts: (m.attachments || []).map(asAttachment),
+      html: !!m.html,
     };
   }
 
@@ -193,7 +194,13 @@
       const b = body(opts);
       try {
         const got = await invoke('open_message', { email: b.email, uid: b.uid, uidvalidity: b.uidvalidity });
-        return { text: got.text, truncated: !!got.truncated, atts: (got.attachments || []).map(asAttachment) };
+        return {
+          text: got.text,
+          truncated: !!got.truncated,
+          atts: (got.attachments || []).map(asAttachment),
+          html: got.html || null,
+          remoteImages: !!got.remote_images,
+        };
       } catch (e) {
         return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }

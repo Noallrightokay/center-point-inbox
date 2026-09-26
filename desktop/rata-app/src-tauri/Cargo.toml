@@ -1,6 +1,6 @@
 [package]
 name = "rata-app"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 description = "RATA — your mail, on your machine"
 default-run = "rata-app"
