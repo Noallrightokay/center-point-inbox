@@ -93,6 +93,9 @@ pub struct Message {
     /// True when `body` is not the whole message: it ran past what is fetched
     /// or past what RATA keeps. The rest is in the mailbox.
     pub truncated: bool,
+    /// Attachments whose headers were in what was fetched. Opening the message
+    /// gives the full list.
+    pub attachments: Vec<body::Attachment>,
     /// Where the sender asked for replies to go, when that is not the From
     /// address — a mailing list, a ticket system. Empty means reply to
     /// `from_addr`.
@@ -493,6 +496,125 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
     };
     let _ = timeout(COMMAND, session.logout()).await;
     Fetched::Messages(messages)
+}
+
+/// The largest message RATA will download when one is opened. Mail providers
+/// cap messages at 25–50 MB; anything larger is not mail a person reads.
+pub const WHOLE_MAX: u32 = 60 * 1024 * 1024;
+
+/// How long a whole message may take to arrive: a large attachment over a slow
+/// connection is minutes, not the seconds a command normally gets.
+const DOWNLOAD: Duration = Duration::from_secs(300);
+
+/// One message, in full — for reading all of it and saving its attachments.
+#[derive(Debug)]
+pub enum Whole {
+    /// The raw message, every byte.
+    Raw(Vec<u8>),
+    /// Not in the mailbox any more: deleted or moved elsewhere.
+    Gone,
+    /// Larger than [`WHOLE_MAX`]; its size in bytes.
+    TooLarge(u32),
+    Stale(String),
+    Host(String),
+    Auth(String),
+    Net(String),
+}
+
+/// The whole of one message, by UID. Its size is asked first, so a message too
+/// large to be reasonable is refused before any of it is downloaded.
+pub async fn fetch_whole(resolver: &Resolver, acct: &Account, uid: u32, uidvalidity: u32) -> Whole {
+    if uid == 0 || uidvalidity == 0 {
+        return Whole::Stale("RATA has no server reference for this message.".into());
+    }
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Whole::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Whole::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Whole::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Whole::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let found = whole_in(&mut session, acct, uid, uidvalidity).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+async fn whole_in<T>(session: &mut Session<T>, acct: &Account, uid: u32, uidvalidity: u32) -> Whole
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match timeout(COMMAND, session.select("INBOX")).await {
+        Ok(Ok(m)) if m.uid_validity == Some(uidvalidity) => {}
+        Ok(Ok(_)) => {
+            return Whole::Stale(
+                "The mailbox has been reorganised since RATA last read it. Refresh, then open the message again.".into(),
+            );
+        }
+        _ => return Whole::Net(unreachable_msg(acct, "its inbox could not be opened")),
+    }
+    let size = match timeout(
+        COMMAND,
+        session.uid_fetch(uid.to_string(), "(UID RFC822.SIZE)"),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => {
+            let got: Vec<_> = stream.collect().await;
+            got.iter()
+                .filter_map(|f| f.as_ref().ok())
+                .find(|f| f.uid == Some(uid))
+                .and_then(|f| f.size)
+        }
+        _ => return Whole::Net(unreachable_msg(acct, "the message could not be found")),
+    };
+    let Some(size) = size else { return Whole::Gone };
+    if size > WHOLE_MAX {
+        return Whole::TooLarge(size);
+    }
+    let stream = match timeout(
+        COMMAND,
+        session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[])"),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        _ => return Whole::Net(unreachable_msg(acct, "the message could not be downloaded")),
+    };
+    futures::pin_mut!(stream);
+    let mut raw = None;
+    loop {
+        match timeout(DOWNLOAD, stream.next()).await {
+            Ok(Some(Ok(f))) => {
+                if f.uid == Some(uid)
+                    && let Some(body) = f.body()
+                {
+                    raw = Some(body.to_vec());
+                }
+            }
+            Ok(Some(Err(_))) => {
+                return Whole::Net(unreachable_msg(
+                    acct,
+                    "the connection failed while downloading the message",
+                ));
+            }
+            Ok(None) => break,
+            Err(_) => {
+                return Whole::Net(unreachable_msg(
+                    acct,
+                    "the server stopped sending the message",
+                ));
+            }
+        }
+    }
+    raw.map_or(Whole::Gone, Whole::Raw)
 }
 
 /// Particular messages again, by UID, newest first — for mail RATA stored before
@@ -1096,6 +1218,7 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
             text.text
         },
         truncated: text.truncated,
+        attachments: text.attachments,
         preview,
         ts,
         unread,
@@ -1255,6 +1378,17 @@ mod tests {
                         "* {} EXISTS\r\n* OK [UIDVALIDITY {uidvalidity}] ok\r\n",
                         uids.len()
                     )
+                } else if up.starts_with("UID FETCH") && up.contains("RFC822.SIZE") {
+                    // UID 99 is a message far too large to download.
+                    let want: u32 = arg.parse().unwrap_or(0);
+                    uids.iter()
+                        .enumerate()
+                        .filter(|(_, u)| **u == want)
+                        .map(|(i, u)| {
+                            let size = if *u == 99 { u32::MAX } else { 400 };
+                            format!("* {} FETCH (UID {u} RFC822.SIZE {size})\r\n", i + 1)
+                        })
+                        .collect()
                 } else if up.starts_with("UID FETCH") && up.contains("BODY.PEEK") {
                     // Particular messages by UID, in full.
                     let want: Vec<u32> = arg.split(',').filter_map(|u| u.parse().ok()).collect();
@@ -1859,6 +1993,55 @@ mod tests {
                     .iter()
                     .any(|c| c.to_ascii_uppercase().starts_with("UID FETCH"))
             );
+        });
+    }
+
+    // ------------------------------------------------------ opening in full
+
+    #[test]
+    fn an_opened_message_arrives_whole_and_decoded() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[10, 20], 7).await;
+            let Whole::Raw(raw) = whole_in(&mut s, &me(), 20, 7).await else {
+                panic!("expected the message")
+            };
+            assert_eq!(body::read_whole(&raw).text, "Body of 20 — café");
+            let log = log.lock().unwrap();
+            let asked: Vec<&String> = log
+                .iter()
+                .filter(|c| c.to_ascii_uppercase().starts_with("UID FETCH"))
+                .collect();
+            // Size first, then the message — and never a fetch that marks it read.
+            assert!(asked[0].contains("RFC822.SIZE"), "{asked:?}");
+            assert!(
+                asked[1].contains("BODY.PEEK[]") && !asked[1].contains("<0."),
+                "{asked:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_message_too_large_is_refused_before_it_is_downloaded() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[99], 7).await;
+            assert!(matches!(
+                whole_in(&mut s, &me(), 99, 7).await,
+                Whole::TooLarge(_)
+            ));
+            assert!(!log.lock().unwrap().iter().any(|c| c.contains("BODY.PEEK")));
+        });
+    }
+
+    #[test]
+    fn a_message_that_has_gone_says_so() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_inbox(&[10], 7).await;
+            assert!(matches!(whole_in(&mut s, &me(), 11, 7).await, Whole::Gone));
+            let (mut s, _) = scripted_inbox(&[10], 8).await;
+            assert!(matches!(
+                whole_in(&mut s, &me(), 10, 7).await,
+                Whole::Stale(_)
+            ));
         });
     }
 

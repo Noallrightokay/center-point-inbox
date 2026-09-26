@@ -6,11 +6,12 @@
 //! skipped, what happens to a password when a mailbox is unlinked, whether a
 //! rejected sign-in is retried — has nothing to do with windows or webviews.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, act,
-    fetch_inbox, fetch_older, fetch_uids, send, verify,
+    Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, Whole,
+    act, body, fetch_inbox, fetch_older, fetch_uids, fetch_whole, send, verify,
 };
 use serde::Serialize;
 
@@ -80,6 +81,22 @@ pub struct Problem {
     pub email: String,
     pub kind: String,
     pub error: String,
+}
+
+/// A message opened in full.
+#[derive(Debug, Serialize)]
+pub struct Opened {
+    pub text: String,
+    pub truncated: bool,
+    pub attachments: Vec<body::Attachment>,
+}
+
+/// Where an attachment was saved.
+#[derive(Debug, Serialize)]
+pub struct Saved {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
 }
 
 /// What doing something to messages on the server came to, in the shape the
@@ -436,6 +453,92 @@ impl Rata {
         self.answer(&acct.email, found)
     }
 
+    /// One message in full: all of its text and every attachment.
+    pub async fn open_message(
+        &self,
+        email: &str,
+        uid: u32,
+        uidvalidity: u32,
+    ) -> Result<Opened, Problem> {
+        let raw = self.whole(email, uid, uidvalidity).await?;
+        let b = body::read_whole(&raw);
+        Ok(Opened {
+            text: b.text,
+            truncated: b.truncated,
+            attachments: b.attachments,
+        })
+    }
+
+    /// One attachment, saved into `dir` under a cleaned-up version of its own
+    /// name and never over an existing file. The page names the message and
+    /// the attachment; the name, the bytes and the folder are all decided here.
+    pub async fn save_attachment(
+        &self,
+        email: &str,
+        uid: u32,
+        uidvalidity: u32,
+        index: u32,
+        dir: &Path,
+    ) -> Result<Saved, Problem> {
+        let problem = |kind: &str, error: String| Problem {
+            email: email.to_string(),
+            kind: kind.into(),
+            error,
+        };
+        let raw = self.whole(email, uid, uidvalidity).await?;
+        let Some((info, bytes)) = body::attachment(&raw, index) else {
+            return Err(problem(
+                "gone",
+                "That attachment is no longer in the message.".into(),
+            ));
+        };
+        let name = safe_file_name(&info.name);
+        let path = write_new(dir, &name, &bytes).map_err(|e| {
+            problem(
+                "disk",
+                format!("{name} could not be saved in {}: {e}", dir.display()),
+            )
+        })?;
+        Ok(Saved {
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(name),
+            path: path.display().to_string(),
+            size: bytes.len() as u64,
+        })
+    }
+
+    async fn whole(&self, email: &str, uid: u32, uidvalidity: u32) -> Result<Vec<u8>, Problem> {
+        let acct = self.readable(email)?;
+        let problem = |kind: &str, error: String| Problem {
+            email: email.to_string(),
+            kind: kind.into(),
+            error,
+        };
+        match fetch_whole(&self.resolver, &acct, uid, uidvalidity).await {
+            Whole::Raw(raw) => Ok(raw),
+            Whole::Gone => Err(problem(
+                "gone",
+                "That message is no longer in the inbox — it was deleted or moved from another device.".into(),
+            )),
+            Whole::TooLarge(size) => Err(problem(
+                "large",
+                format!(
+                    "That message is {} MB, larger than RATA opens. Open it in your provider's own app.",
+                    size / (1024 * 1024)
+                ),
+            )),
+            Whole::Stale(error) => Err(problem("stale", error)),
+            Whole::Auth(error) => {
+                self.note_auth_failure(&acct.email);
+                Err(problem("auth", error))
+            }
+            Whole::Host(error) => Err(problem("host", error)),
+            Whole::Net(error) => Err(problem("net", error)),
+        }
+    }
+
     /// A linked mailbox ready to read — licensed, known, not parked for a
     /// rejected password, and with its password readable — or why not, all
     /// decided before anything is dialled.
@@ -632,6 +735,93 @@ impl Rata {
             let _ = store.save();
         }
     }
+}
+
+/// An attachment's name made safe to create in the Downloads folder.
+///
+/// The name is the sender's, so it is treated as hostile: no directory parts
+/// (`../../.bashrc`), nothing a filesystem rejects or reads specially, no
+/// Windows device names (`CON`, `NUL.txt`), and no bidirectional-text controls
+/// — `invoice\u{202e}fdp.exe` displays as `invoiceexe.pdf`, which is how a
+/// program passes itself off as a PDF.
+pub fn safe_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let mut clean: String = base
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+                && !matches!(*c as u32, 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069 | 0x061c)
+        })
+        .collect();
+    clean = clean
+        .trim_matches(|c: char| c == '.' || c.is_whitespace())
+        .to_string();
+    let stem = clean
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        clean.insert(0, '_');
+    }
+    if clean.is_empty() {
+        return "attachment".into();
+    }
+    // Long enough for any real name, short enough for every filesystem.
+    if clean.len() > 150 {
+        let ext = clean
+            .rfind('.')
+            .map(|i| clean[i..].to_string())
+            .filter(|e| e.len() <= 12)
+            .unwrap_or_default();
+        let mut keep = 150 - ext.len();
+        while !clean.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        clean = format!("{}{ext}", &clean[..keep]);
+    }
+    clean
+}
+
+/// Write `bytes` to a new file in `dir` named `name`, or `name (2)` and so on
+/// if that is taken. Created exclusively, so an existing file is never
+/// overwritten, even one that appears between the check and the write.
+fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    for n in 1..1000 {
+        let candidate = if n == 1 {
+            name.to_string()
+        } else {
+            format!("{stem} ({n}){ext}")
+        };
+        let path = dir.join(&candidate);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => {
+                f.write_all(bytes)?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(
+        "too many files with that name already",
+    ))
 }
 
 #[cfg(test)]
@@ -904,6 +1094,71 @@ mod tests {
             app.note_auth_failure("owner@example.com");
             let e = app.reread("owner@example.com", &[1], 7).await.unwrap_err();
             assert_eq!(e.kind, "auth");
+        });
+    }
+
+    #[test]
+    fn an_attachment_name_cannot_escape_or_disguise_itself() {
+        assert_eq!(safe_file_name("../../.bashrc"), "bashrc");
+        assert_eq!(safe_file_name("C:\\Windows\\evil.dll"), "evil.dll");
+        assert_eq!(safe_file_name("invoice\u{202e}fdp.exe"), "invoicefdp.exe");
+        assert_eq!(safe_file_name("CON"), "_CON");
+        assert_eq!(safe_file_name("nul.txt"), "_nul.txt");
+        assert_eq!(safe_file_name("COM3.pdf"), "_COM3.pdf");
+        assert_eq!(safe_file_name("what?:<>|*\".pdf"), "what.pdf");
+        assert_eq!(safe_file_name(" . "), "attachment");
+        assert_eq!(safe_file_name("Q3 figures.pdf"), "Q3 figures.pdf");
+        assert_eq!(safe_file_name("résumé.docx"), "résumé.docx");
+        let long = safe_file_name(&format!("{}.pdf", "é".repeat(200)));
+        assert!(long.len() <= 150 && long.ends_with(".pdf"), "{long}");
+    }
+
+    #[test]
+    fn a_saved_attachment_never_overwrites_a_file() {
+        let dir = std::env::temp_dir().join(format!("rata-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = write_new(&dir, "report.pdf", b"one").unwrap();
+        let b = write_new(&dir, "report.pdf", b"two").unwrap();
+        let c = write_new(&dir, "README", b"three").unwrap();
+        let d = write_new(&dir, "README", b"four").unwrap();
+        assert_eq!(a.file_name().unwrap(), "report.pdf");
+        assert_eq!(b.file_name().unwrap(), "report (2).pdf");
+        assert_eq!(d.file_name().unwrap(), "README (2)");
+        assert_eq!(std::fs::read(&a).unwrap(), b"one");
+        assert_eq!(std::fs::read(&b).unwrap(), b"two");
+        assert_eq!(std::fs::read(&c).unwrap(), b"three");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_or_saving_refuses_before_ever_dialling() {
+        rt().block_on(async {
+            let dir = std::env::temp_dir();
+            let app = unlicensed(tmpfile("open-unlic"));
+            assert_eq!(
+                app.open_message("owner@example.com", 1, 7)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "unlicensed"
+            );
+            let app = rata(tmpfile("open-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            assert_eq!(
+                app.open_message("owner@example.com", 1, 7)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "auth"
+            );
+            assert_eq!(
+                app.save_attachment("owner@example.com", 1, 7, 0, &dir)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "auth"
+            );
         });
     }
 

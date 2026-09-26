@@ -7,15 +7,18 @@
 //! The commands are the app's entire attack surface from the page: the webview
 //! can call these and nothing else. No filesystem plugin, no shell plugin, no
 //! arbitrary HTTP — so a script that somehow got into a rendered message can
-//! ask to refresh the mail, and cannot ask to read `~/.ssh`.
+//! ask to refresh the mail, and cannot ask to read `~/.ssh`. The one command
+//! that writes a file, `save_attachment`, takes a message and an attachment
+//! number: the folder (Downloads), the file name and the bytes are all decided
+//! in Rust, so the page can at most save a real attachment into Downloads.
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use rata_mail::{Action, Message};
 
-use crate::core::{Changed, Linked, Problem, Rata, Refreshed, Standing};
+use crate::core::{Changed, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -113,4 +116,34 @@ pub async fn reread_mail(
     uidvalidity: u32,
 ) -> Result<Vec<Message>, Problem> {
     app.reread(&email, &uids, uidvalidity).await
+}
+
+/// One message in full: all of its text and its attachments.
+#[tauri::command]
+pub async fn open_message(
+    app: App<'_>,
+    email: String,
+    uid: u32,
+    uidvalidity: u32,
+) -> Result<Opened, Problem> {
+    app.open_message(&email, uid, uidvalidity).await
+}
+
+/// Save one attachment into the Downloads folder.
+#[tauri::command]
+pub async fn save_attachment(
+    handle: AppHandle,
+    app: App<'_>,
+    email: String,
+    uid: u32,
+    uidvalidity: u32,
+    index: u32,
+) -> Result<Saved, Problem> {
+    let dir = handle.path().download_dir().map_err(|e| Problem {
+        email: email.clone(),
+        kind: "disk".into(),
+        error: format!("This computer has no Downloads folder RATA can find ({e})."),
+    })?;
+    app.save_attachment(&email, uid, uidvalidity, index, &dir)
+        .await
 }

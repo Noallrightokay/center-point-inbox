@@ -61,6 +61,8 @@ fn main() {
             commands::change_messages,
             commands::older_mail,
             commands::reread_mail,
+            commands::open_message,
+            commands::save_attachment,
         ])
         .run(tauri::generate_context!())
         .expect("RATA could not start");

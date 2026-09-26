@@ -261,6 +261,9 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .att-card .fmt{font-size:10px;font-weight:700;letter-spacing:.03em;background:var(--tint);color:#fff;padding:2.5px 7px;border-radius:6px}
 @media (prefers-color-scheme:dark){.att-card .fmt{color:#fff}}
 .att-card .sz{color:var(--faint);font-size:11.5px}
+button.att-card{border:0;font:inherit;color:inherit;cursor:pointer;text-align:left;transition:background .15s}
+button.att-card:hover{background:var(--tint-soft)}
+button.att-card:disabled{opacity:.6;cursor:progress}
 .md-back{display:none}
 
 /* ---------- people thread ---------- */
@@ -1103,6 +1106,34 @@ async function loadOlder(only,quiet){
   if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
   if(!quiet&&finished)toast('That\u2019s everything in your inbox');
 }
+/* The whole of a message, fetched when it is opened, for this session only:
+   the full text of a long message and its attachments' details. Not stored —
+   the stored copy stays the bounded start of it, so a few newsletters cannot
+   fill the workspace. */
+const OPENED=new Map();
+async function openWhole(m){
+  let r;
+  try{r=await apiFetch('/api/mail/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity})})}
+  catch(e){r={error:String(e&&e.message||e)}}
+  if(!r||r.error){OPENED.set(m.id,{text:m.body,truncated:m.truncated,atts:m.atts||[],error:(r&&r.error)||'no answer'});return}
+  OPENED.set(m.id,{text:r.text,truncated:r.truncated,atts:r.atts||[]});
+  /* The list of attachments is small and worth keeping: it is what puts the
+     paperclip on the message in the list. */
+  const have=S.messages.find(x=>x.id===m.id);
+  if(have){have.atts=r.atts||[];save();renderMail()}
+}
+/* An attachment goes to the Downloads folder and is never opened by RATA:
+   it is a stranger's file, and running it is the customer's decision. */
+async function saveAttachment(m,a,btn){
+  if(!a)return;
+  if(btn)btn.disabled=true;
+  let r;
+  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  catch(e){r={ok:false,error:String(e&&e.message||e)}}
+  if(btn&&btn.isConnected)btn.disabled=false;
+  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path);toast('Saved to '+r.path)}
+  else toast('Could not save '+a.n+' \u2014 '+((r&&r.error)||'try again'));
+}
 /* Message bodies are decoded from MIME since 0.1.7 (bodyV 2). Mail stored by an
    earlier build holds the raw wire text — boundaries, =20s, base64 — and a
    refresh only re-fetches the newest few, so it would stay unreadable. It is
@@ -1112,6 +1143,7 @@ const REREAD_PAGE=50;
 function takeBody(have,m){
   if(m.bodyV!==2||have.bodyV===2)return false;
   have.body=m.body;have.prev=m.prev;have.truncated=!!m.truncated;have.bodyV=2;
+  if((m.atts||[]).length)have.atts=m.atts;
   if(m.messageId)have.messageId=m.messageId;
   if(m.replyTo)have.replyTo=m.replyTo;
   return true;
@@ -1682,6 +1714,16 @@ function openMail(id){
   const d=$('#mail-detail');
   d.classList.add('open');
   const nm=msgFrom(m);
+  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity;
+  const whole=OPENED.get(id);
+  const atts=(whole&&whole.atts)||m.atts||[];
+  const savable=native;
+  /* A long message, or one with attachments, is fetched in full when opened:
+     the stored copy is the start of it, and the attachments are not kept. */
+  const wantWhole=native&&m.bodyV===2&&!whole&&(m.truncated||atts.length);
+  const note=wantWhole?'Loading the rest of this message\u2026'
+    :whole&&whole.error?'Only the start of this message could be shown \u2014 '+whole.error
+    :(whole?whole.truncated:m.truncated)?'This is the start of a very long message. The rest is in your mailbox \u2014 open it in your provider\u2019s own app to read all of it.':'';
   d.innerHTML=`<div class="md-inner">
     <button class="md-back" id="md-back">← Messages</button>
     <div class="md-head">
@@ -1702,10 +1744,12 @@ function openMail(id){
         <button class="btn danger" id="md-del">Delete</button>
       </div>
     </div>
-    <div class="md-content" id="md-body">${esc(m.body)}</div>
-    ${m.truncated?`<div class="md-note">This is the start of a long message. The rest is in your mailbox — open it in your provider’s own app to read all of it.</div>`:''}
+    <div class="md-content" id="md-body">${esc(whole?whole.text:m.body)}</div>
+    ${note?`<div class="md-note">${esc(note)}</div>`:''}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
-    ${m.atts.length?`<div class="md-atts">${m.atts.map(a=>`<div class="att-card"><span class="fmt">${a.f}</span><span>${esc(a.n)}</span><span class="sz">${a.s}</span></div>`).join('')}</div>`:''}
+    ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
+      ?`<button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>`
+      :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
   $('#md-person')&&($('#md-person').onclick=()=>{go('people');openPerson(c.id)});
@@ -1737,6 +1781,8 @@ function openMail(id){
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
+  $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
+  if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
   if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:m.body;$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
@@ -2732,7 +2778,7 @@ async function absorbMail(res){
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
-    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);continue}
+    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;continue}
     const owner=linkedFind('mail',m.acct||'');
     const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
     S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
