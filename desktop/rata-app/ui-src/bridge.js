@@ -153,6 +153,23 @@
       }
     },
 
+    /* One page of history from one mailbox, just older than the oldest
+       message RATA already holds for it. */
+    async '/api/mail/older'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('older_mail', {
+          email: b.email,
+          beforeUid: b.beforeUid,
+          uidvalidity: b.uidvalidity,
+          limit: b.limit ?? null,
+        });
+        return { messages: got.map(asMessage) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
     async '/api/send/mail'(opts) {
       const b = body(opts);
       try {

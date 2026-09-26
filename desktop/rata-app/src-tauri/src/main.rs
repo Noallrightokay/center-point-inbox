@@ -59,6 +59,7 @@ fn main() {
             commands::refresh_mail,
             commands::send_mail,
             commands::change_messages,
+            commands::older_mail,
         ])
         .run(tauri::generate_context!())
         .expect("RATA could not start");

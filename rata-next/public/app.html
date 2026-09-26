@@ -1260,6 +1260,54 @@ function dropMessages(ids){
   return before-S.messages.length;
 }
 const isGone=id=>!!(S.gone&&S.gone[id]);
+/* Older mail, a page at a time. A refresh brings the newest fifteen; this
+   walks back from the oldest message RATA holds for each mailbox, fifty at a
+   time, until the mailbox says there is nothing older. Desktop app only.
+
+   Everything lives in one localStorage blob with a cap of a few megabytes, and
+   running into it is "Storage full" at the moment of saving. So older mail
+   stops being loaded well before that, and says why. */
+const OLDER_PAGE=50,STORE_SOFT_CAP=3500000;
+function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).label||m.acct||'').toLowerCase()}
+function olderCandidates(only){
+  return S.linked.filter(l=>l.type==='mail'&&!l.historyDone&&(!only||l.label.toLowerCase()===String(only).toLowerCase()));
+}
+function oldestRef(email){
+  let best=null;const want=String(email).toLowerCase();
+  for(const m of S.messages){
+    if(m.prov!=='imap'||!m.uid||!m.uidvalidity||mailEmailOf(m)!==want)continue;
+    if(!best||m.uid<best.uid)best=m;
+  }
+  return best;
+}
+async function loadOlder(only,quiet){
+  if(!window.__RATA_NATIVE__)return;
+  if(JSON.stringify(S).length>STORE_SOFT_CAP){
+    if(!quiet)toast('RATA\u2019s storage on this computer is nearly full, so older mail was not loaded. Deleting old messages frees space; a larger store is coming in a later beta.');
+    return;
+  }
+  let added=0,finished=0;const notes=[];
+  for(const l of olderCandidates(only)){
+    const ref=oldestRef(l.label);if(!ref)continue;
+    let r;
+    try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:l.label,beforeUid:ref.uid,uidvalidity:ref.uidvalidity,limit:OLDER_PAGE})})}
+    catch(e){r={error:String(e&&e.message||e)}}
+    if(!r||r.error){notes.push(l.label+': '+((r&&r.error)||'no answer'));continue}
+    const got=r.messages||[];
+    if(!got.length){l.historyDone=true;finished++;continue}
+    for(const m of got){
+      if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
+      const owner=linkedFind('mail',m.acct||'');
+      const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
+      S.messages.push(Object.assign({cid:match?match.id:null,acct:owner?owner.id:undefined,real:true,atts:[]},m));
+      added++;
+    }
+  }
+  save();renderChSeg();renderMailFilters();renderMail();
+  if(notes.length){if(!quiet||added)toast((added?added+' older loaded, but ':'Older mail did not load — ')+notes[0]);return}
+  if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
+  if(!quiet&&finished)toast('That\u2019s everything in your inbox');
+}
 /* In the desktop app, what the customer does to a message happens to the real
    mailbox too: read, unread, star, delete (to the server's Trash) and archive.
    RATA's own copy changes first, so the screen never waits on a server; the
@@ -1706,7 +1754,10 @@ function renderMail(){
     if(b)b.onclick=()=>{go('conn');document.getElementById('nav-more')?.removeAttribute('hidden')};
     return}
   bulkRefresh();
-  sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('');
+  sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('')+
+    (window.__RATA_NATIVE__&&olderCandidates().length?'<div style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
+  const lo=document.getElementById('load-older');
+  if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await loadOlder()}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
   sc.querySelectorAll('.selbox').forEach(cb=>cb.onclick=e=>{e.stopPropagation();const id=cb.dataset.sel;SEL.has(id)?SEL.delete(id):SEL.add(id);cb.classList.toggle('on');cb.textContent=SEL.has(id)?'✓':'';bulkRefresh()});
   sc.querySelectorAll('.mail-row').forEach(r=>{
     r.onclick=()=>{if(selecting){const cb=r.querySelector('.selbox');if(cb)cb.click();return}openMail(r.dataset.id)};
@@ -2678,6 +2729,9 @@ async function mailLink(email,pass,host){
       ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
       :res.email+' linked — pulling messages…');
     await serverSync('mail');
+    /* A new mailbox arrives with its newest fifteen; take one page of history
+       straight away so it does not look nearly empty. */
+    await loadOlder(res.email,true);
   }catch(e){
     toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }finally{btn.disabled=false;btn.textContent='Link'}

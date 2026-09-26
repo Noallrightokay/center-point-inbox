@@ -128,6 +128,9 @@ pub enum Fetched {
     Host(String),
     Auth(String),
     Net(String),
+    /// Only from [`fetch_older`]: the mailbox was rebuilt since RATA read it,
+    /// so "older than UID n" no longer means anything. Refresh first.
+    Stale(String),
 }
 
 /// How a connection attempt failed, internally.
@@ -469,56 +472,170 @@ pub async fn fetch_inbox(resolver: &Resolver, acct: &Account, limit: u32) -> Fet
     let from = total.saturating_sub(limit - 1).max(1);
     let range = format!("{from}:*");
 
+    let messages = match read_range(&mut session, acct, &range, generation).await {
+        Ok(m) => m,
+        Err(failed) => return failed,
+    };
+    let _ = timeout(COMMAND, session.logout()).await;
+    Fetched::Messages(messages)
+}
+
+/// Messages older than `before_uid` — the oldest one RATA already has — newest
+/// first, at most `limit` of them. An empty list means there is nothing older.
+///
+/// Paged by position rather than by date or UID arithmetic, because both of
+/// those break on a real mailbox. The messages at or above `before_uid` are
+/// counted, and the block just below them is fetched by sequence number. That
+/// holds when `before_uid` itself has since been deleted from another device,
+/// and it is immune to IMAP's `n:*` quirk — asking for "70 onwards" when the
+/// newest is 60 returns 60, which is filtered out rather than counted.
+pub async fn fetch_older(
+    resolver: &Resolver,
+    acct: &Account,
+    before_uid: u32,
+    uidvalidity: u32,
+    limit: u32,
+) -> Fetched {
+    if before_uid == 0 || uidvalidity == 0 {
+        return Fetched::Stale(
+            "RATA has no server reference for its oldest message yet. Refresh, then try again."
+                .into(),
+        );
+    }
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Fetched::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Fetched::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let found = older_in(&mut session, acct, before_uid, uidvalidity, limit).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+/// The part of [`fetch_older`] that talks to a signed-in session.
+async fn older_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    before_uid: u32,
+    uidvalidity: u32,
+    limit: u32,
+) -> Fetched
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let mailbox = match timeout(COMMAND, session.select("INBOX")).await {
+        Ok(Ok(m)) => m,
+        _ => {
+            return Fetched::Net(unreachable_msg(acct, "its inbox could not be opened"));
+        }
+    };
+    if mailbox.uid_validity != Some(uidvalidity) {
+        return Fetched::Stale(
+            "The mailbox has been reorganised since RATA last read it. Refresh, then load older mail again.".into(),
+        );
+    }
+    if mailbox.exists == 0 || limit == 0 {
+        return Fetched::Messages(vec![]);
+    }
+
+    // How many messages sit at or above the oldest one RATA has.
+    let newer = match timeout(COMMAND, session.uid_fetch(format!("{before_uid}:*"), "UID")).await {
+        Ok(Ok(stream)) => {
+            let found: Vec<_> = stream.collect().await;
+            found
+                .iter()
+                .filter_map(|f| f.as_ref().ok()?.uid)
+                .filter(|u| *u >= before_uid)
+                .count() as u32
+        }
+        _ => return Fetched::Net(unreachable_msg(acct, "the inbox could not be counted")),
+    };
+    let older = mailbox.exists.saturating_sub(newer);
+    if older == 0 {
+        return Fetched::Messages(vec![]);
+    }
+    let from = older.saturating_sub(limit - 1).max(1);
+    let range = format!("{from}:{older}");
+    match read_range(session, acct, &range, uidvalidity).await {
+        // Filtered again by UID: if something was expunged between the count
+        // and the fetch, positions shift, and a message RATA already has must
+        // not come back as "older".
+        Ok(m) => Fetched::Messages(m.into_iter().filter(|m| m.uid < before_uid).collect()),
+        Err(failed) => failed,
+    }
+}
+
+/// FETCH one range of sequence numbers and turn it into messages, newest
+/// first. Shared by the newest-first refresh and paging back through history.
+async fn read_range<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    range: &str,
+    generation: u32,
+) -> Result<Vec<Message>, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
     let mut messages: Vec<Message> = Vec::new();
-    {
-        let stream = match timeout(COMMAND, session.fetch(&range, items())).await {
-            Ok(Ok(s)) => s,
-            // No logout on this path, and not from carelessness: the stream
-            // borrows the session for as long as it exists, so the only way to
-            // say goodbye politely would be to keep a connection that has
-            // already failed. Dropping it closes the socket.
-            _ => return Fetched::Net(unreachable_msg(acct, "the inbox could not be listed")),
-        };
-        futures::pin_mut!(stream);
-        // A message that will not parse is skipped rather than failing the
-        // refresh: one malformed message must not cost the customer the other
-        // fourteen. A connection that stops answering is different — what
-        // arrived so far is an arbitrary slice of the inbox, and presenting it
-        // as the inbox would be a refresh that silently lost mail.
-        loop {
-            match timeout(COMMAND, stream.next()).await {
-                // A message flagged \Deleted is on its way out — deleted
-                // by RATA on a server without UIDPLUS, or by another client —
-                // and showing it would undo the delete on screen.
-                Ok(Some(Ok(fetched))) if fetched.flags().any(|f| f == Flag::Deleted) => {}
-                Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, generation)),
-                Ok(Some(Err(ImapError::Io(e)))) => {
-                    return Fetched::Net(unreachable_msg(
-                        acct,
-                        &format!("the connection failed partway through the inbox ({e})"),
-                    ));
-                }
-                Ok(Some(Err(ImapError::ConnectionLost))) => {
-                    return Fetched::Net(unreachable_msg(
-                        acct,
-                        "the connection was lost partway through the inbox",
-                    ));
-                }
-                Ok(Some(Err(_))) => {}
-                Ok(None) => break,
-                Err(_) => {
-                    return Fetched::Net(unreachable_msg(
-                        acct,
-                        "the server stopped answering partway through the inbox",
-                    ));
-                }
+    let stream = match timeout(COMMAND, session.fetch(range, items())).await {
+        Ok(Ok(s)) => s,
+        // The stream borrows the session for as long as it exists, so the
+        // caller cannot say goodbye politely on this path; dropping the
+        // connection closes the socket.
+        _ => {
+            return Err(Fetched::Net(unreachable_msg(
+                acct,
+                "the inbox could not be listed",
+            )));
+        }
+    };
+    futures::pin_mut!(stream);
+    // A message that will not parse is skipped rather than failing the
+    // refresh: one malformed message must not cost the customer the other
+    // fourteen. A connection that stops answering is different — what
+    // arrived so far is an arbitrary slice of the inbox, and presenting it
+    // as the inbox would be a refresh that silently lost mail.
+    loop {
+        match timeout(COMMAND, stream.next()).await {
+            // A message flagged \Deleted is on its way out — deleted by RATA
+            // on a server without UIDPLUS, or by another client — and showing
+            // it would undo the delete on screen.
+            Ok(Some(Ok(fetched))) if fetched.flags().any(|f| f == Flag::Deleted) => {}
+            Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, generation)),
+            Ok(Some(Err(ImapError::Io(e)))) => {
+                return Err(Fetched::Net(unreachable_msg(
+                    acct,
+                    &format!("the connection failed partway through the inbox ({e})"),
+                )));
+            }
+            Ok(Some(Err(ImapError::ConnectionLost))) => {
+                return Err(Fetched::Net(unreachable_msg(
+                    acct,
+                    "the connection was lost partway through the inbox",
+                )));
+            }
+            Ok(Some(Err(_))) => {}
+            Ok(None) => break,
+            Err(_) => {
+                return Err(Fetched::Net(unreachable_msg(
+                    acct,
+                    "the server stopped answering partway through the inbox",
+                )));
             }
         }
     }
-    let _ = timeout(COMMAND, session.logout()).await;
-
     messages.sort_by(|a, b| b.ts.cmp(&a.ts));
-    Fetched::Messages(messages)
+    Ok(messages)
 }
 
 // ----------------------------------------------------------------------- act
@@ -962,6 +1079,209 @@ mod tests {
                     || u.contains("EXPUNGE")
             })
             .collect()
+    }
+
+    // ------------------------------------------------------- older-mail tests
+    //
+    // A scripted inbox with real positions and UIDs, answering FETCH with full
+    // envelopes and bodies, and reproducing IMAP's `n:*` quirk. What is under
+    // test is the paging arithmetic, which is where history gets duplicated
+    // or skipped.
+
+    async fn scripted_inbox(
+        uids: &'static [u32],
+        uidvalidity: u32,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            let full = |seq: usize, uid: u32| {
+                let body = format!("Body of {uid}");
+                format!(
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Subject {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\") BODY[TEXT]<0> {{{}}}\r\n{body})\r\n",
+                    uid / 2, // minutes that keep receive-order equal to UID order for 0..119
+                    body.len()
+                )
+            };
+            while let Ok(Some(line)) = lines.next_line().await {
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                log.lock().unwrap().push(cmd.to_string());
+                let up = cmd.to_ascii_uppercase();
+                let arg = cmd
+                    .split_whitespace()
+                    .nth(if up.starts_with("UID ") { 2 } else { 1 })
+                    .unwrap_or("");
+                let body = if up.starts_with("SELECT") {
+                    format!(
+                        "* {} EXISTS\r\n* OK [UIDVALIDITY {uidvalidity}] ok\r\n",
+                        uids.len()
+                    )
+                } else if up.starts_with("UID FETCH") {
+                    // "n:*" — every message with UID >= n, or, if there is
+                    // none, the newest message anyway (RFC 3501's quirk).
+                    let n: u32 = arg.trim_end_matches(":*").parse().unwrap_or(0);
+                    let mut hits: Vec<(usize, u32)> = uids
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, u)| **u >= n)
+                        .map(|(i, u)| (i + 1, *u))
+                        .collect();
+                    if hits.is_empty() && !uids.is_empty() {
+                        hits.push((uids.len(), *uids.last().unwrap()));
+                    }
+                    hits.iter()
+                        .map(|(seq, u)| format!("* {seq} FETCH (UID {u})\r\n"))
+                        .collect()
+                } else if up.starts_with("FETCH") {
+                    let (a, b) = arg.split_once(':').unwrap();
+                    let a: usize = a.parse().unwrap();
+                    let b: usize = if b == "*" {
+                        uids.len()
+                    } else {
+                        b.parse().unwrap()
+                    };
+                    (a..=b)
+                        .filter(|s| *s >= 1 && *s <= uids.len())
+                        .map(|s| full(s, uids[s - 1]))
+                        .collect()
+                } else if up.starts_with("LOGOUT") {
+                    "* BYE\r\n".to_string()
+                } else {
+                    String::new()
+                };
+                if w.write_all(format!("{body}{tag} OK done\r\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        let session = client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap();
+        (session, seen)
+    }
+
+    fn me() -> Account {
+        Account {
+            email: "me@example.com".into(),
+            pass: "pw".into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Me".into(),
+        }
+    }
+
+    fn uids_of(f: Fetched) -> Vec<u32> {
+        match f {
+            Fetched::Messages(m) => m.iter().map(|m| m.uid).collect(),
+            other => panic!("expected messages, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn older_mail_is_the_block_just_below_what_rata_has() {
+        rt_act().block_on(async {
+            // RATA holds 40, 50, 60; ask for two older than 40.
+            let (mut s, log) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
+            let got = older_in(&mut s, &me(), 40, 7, 2).await;
+            assert_eq!(uids_of(got), vec![30, 20], "newest first, nothing RATA has");
+            let log = log.lock().unwrap();
+            assert!(log.iter().any(|c| c.starts_with("FETCH 2:3 ")), "{log:?}");
+        });
+    }
+
+    #[test]
+    fn older_mail_still_lines_up_when_the_anchor_was_deleted_elsewhere() {
+        rt_act().block_on(async {
+            // RATA's oldest was 40, which has since been deleted on a phone.
+            let (mut s, _) = scripted_inbox(&[10, 20, 30, 50, 60], 7).await;
+            assert_eq!(
+                uids_of(older_in(&mut s, &me(), 40, 7, 2).await),
+                vec![30, 20]
+            );
+        });
+    }
+
+    #[test]
+    fn the_n_star_quirk_does_not_hide_or_duplicate_a_message() {
+        rt_act().block_on(async {
+            // "70:*" with nothing above 60 returns 60 anyway. Counting it would
+            // skip 60; it must come back as older.
+            let (mut s, _) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
+            assert_eq!(
+                uids_of(older_in(&mut s, &me(), 70, 7, 2).await),
+                vec![60, 50]
+            );
+        });
+    }
+
+    #[test]
+    fn at_the_start_of_the_mailbox_there_is_nothing_older() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
+            assert_eq!(
+                uids_of(older_in(&mut s, &me(), 10, 7, 50).await),
+                Vec::<u32>::new()
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|c| c.starts_with("FETCH")),
+                "fetched when nothing was older"
+            );
+        });
+    }
+
+    #[test]
+    fn older_mail_from_a_rebuilt_mailbox_is_refused() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
+            assert!(matches!(
+                older_in(&mut s, &me(), 30, 9, 50).await,
+                Fetched::Stale(_)
+            ));
+            assert!(
+                !log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().contains("FETCH"))
+            );
+        });
+    }
+
+    #[test]
+    fn paging_all_the_way_back_returns_every_message_exactly_once() {
+        rt_act().block_on(async {
+            let inbox: &'static [u32] = &[3, 7, 11, 19, 23, 42, 57, 58, 61, 99];
+            let mut seen: Vec<u32> = vec![99, 61]; // what the first refresh brought
+            loop {
+                let (mut s, _) = scripted_inbox(inbox, 7).await;
+                let oldest = *seen.iter().min().unwrap();
+                let page = uids_of(older_in(&mut s, &me(), oldest, 7, 3).await);
+                if page.is_empty() {
+                    break;
+                }
+                assert!(page.len() <= 3);
+                for u in &page {
+                    assert!(!seen.contains(u), "{u} came back twice");
+                }
+                seen.extend(page);
+            }
+            seen.sort();
+            assert_eq!(seen, inbox.to_vec());
+        });
     }
 
     fn done(uids: &[u32]) -> Acted {
