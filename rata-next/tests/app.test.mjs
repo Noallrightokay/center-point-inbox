@@ -105,19 +105,50 @@ export default async function run(state) {
       await page.waitForSelector('#welcome-ov.open', { state: 'detached', timeout: 8000 }).catch(() => {});
     }
 
-    /* ---- a new workspace arrives switched off ---- */
+    /* ---- a new workspace is email only, and empty ---- */
     console.log('\n— nothing is connected until the user connects it —');
     const fresh = await page.evaluate(() => ({
-      plugins: S.plugins, connections: S.connections, linked: S.linked.length,
+      leftovers: ['plugins', 'connections', 'jobs'].filter(k => k in S),
+      linked: S.linked.length,
+      views: [...document.querySelectorAll('[data-view]')].map(b => b.dataset.view),
+      sections: ['create', 'plug', 'conn'].filter(v => document.getElementById('view-' + v)),
     }));
-    const onByDefault = [
-      ...Object.entries(fresh.plugins).filter(([, v]) => v).map(([k]) => 'plugin:' + k),
-      ...Object.entries(fresh.connections).filter(([, v]) => v).map(([k]) => 'connection:' + k),
-    ];
-    check(onByDefault.length === 0, onByDefault.length
-      ? `switched on without asking: ${onByDefault.join(', ')}`
-      : 'every plugin and connection starts off');
+    check(fresh.leftovers.length === 0, `no switches for channels that do not exist: ${fresh.leftovers.join(', ') || 'none'}`);
     check(fresh.linked === 0, `no accounts assumed: ${fresh.linked} linked`);
+    check(fresh.sections.length === 0 && !fresh.views.some(v => ['create', 'plug', 'conn'].includes(v)),
+      `no Extras, Connections or launcher screens to lead nowhere: ${[...new Set(fresh.views)].join(', ')}`);
+
+    /* ---- nothing leaves for another company's server ---- */
+    const offMachine = await page.evaluate(() => ({
+      translate: !!document.querySelector('#md-translate, #set-autotrans, #br-lang, #set-lang'),
+      ai: !!document.querySelector('#as-ai, #cfg-akey'),
+      operator: !!document.querySelector('#cfg-gcid, #cfg-sburl, #cfg-sbkey, #set-api'),
+      chat: [...document.querySelectorAll('[data-addlink]')].map(b => b.dataset.addlink).filter(t => t !== 'mail'),
+      source: [...document.scripts].map(x => x.textContent).join('\n'),
+    }));
+    check(!offMachine.translate && !offMachine.ai,
+      'no translate or AI controls — both sent the text of your mail to Google or Anthropic');
+    check(!/translate\.googleapis|api\.anthropic|gmail\.googleapis|accounts\.google/.test(offMachine.source),
+      'and no code that could reach those hosts is left in the page');
+    check(!offMachine.operator, 'no operator settings (OAuth client, Supabase, Stripe links, API endpoint) shown to customers');
+    check(offMachine.chat.length === 0, `no Slack, Discord or phone to add: ${offMachine.chat.join(', ') || 'email only'}`);
+
+    /* A workspace saved by an older build still opens, minus what it can no
+       longer show. */
+    const legacy = await page.evaluate(() => {
+      const old = { v: 5, settings: { name: 'Old', api: 'x' }, plugins: { slack: true, discord: true },
+        connections: { gmail: true }, jobs: ['Consulting'], rules: [], folders: [], contacts: [], documents: [], audit: [],
+        counters: { scans: 0, warned: 0, blocked: 0, conversions: 0, autopilot: 3 },
+        linked: [{ id: 'a', type: 'mail', label: 'me@example.com' }, { id: 'b', type: 'slack', label: '@me' }, { id: 'c', type: 'google', label: 'g@gmail.com' }],
+        messages: [{ id: 'e', ch: 'email', prov: 'imap', subj: 'kept', prev: '', body: '', ts: 1, atts: [] },
+          { id: 's', ch: 'slack', prov: 'slack', subj: '', prev: 'gone', body: '', ts: 2, atts: [] }] };
+      const m = migrate(JSON.parse(JSON.stringify(old)));
+      return { v: m.v, linked: m.linked.map(l => l.type), msgs: m.messages.map(x => x.id),
+        leftovers: ['plugins', 'connections', 'jobs'].filter(k => k in m), api: 'api' in m.settings };
+    });
+    check(legacy.v === 6 && legacy.linked.join() === 'mail' && legacy.msgs.join() === 'e',
+      `an older workspace keeps its mailbox and its mail: v${legacy.v}, linked ${legacy.linked.join()}, messages ${legacy.msgs.join()}`);
+    check(legacy.leftovers.length === 0 && !legacy.api, 'and sheds the Slack feed, the switches and the API key');
 
     /* ---- one mail form, any provider ---- */
     console.log('\n— adding an email account —');
@@ -210,19 +241,22 @@ export default async function run(state) {
     /* Another device signing in must not wipe what this one has read. */
     const afterPull = await page.evaluate(() => {
       const before = S.messages.length;
-      applyCloud({ settings: { name: 'Renamed Elsewhere' }, folders: ['From another device'], plugins: { jobs: true } });
-      return { before, after: S.messages.length, name: S.settings.name, folders: S.folders.length, jobs: S.plugins.jobs };
+      applyCloud({ settings: { name: 'Renamed Elsewhere' }, folders: ['From another device'], rules: [{ match: 'news@', cat: 'updates' }],
+        linked: [{ id: 'g1', type: 'google', label: 'old@gmail.com' }] });
+      return { before, after: S.messages.length, name: S.settings.name, folders: S.folders.length, rules: S.rules.length,
+        foreign: S.linked.filter(l => l.type !== 'mail').length };
     });
     check(afterPull.after === afterPull.before,
       `a pull from another device leaves this one's mail alone: ${afterPull.before} → ${afterPull.after}`);
-    check(afterPull.name === 'Renamed Elsewhere' && afterPull.jobs === true,
+    check(afterPull.name === 'Renamed Elsewhere' && afterPull.rules === 1,
       'while preferences set elsewhere do arrive');
+    check(afterPull.foreign === 0, 'but an account type this build cannot read is not brought back');
 
     await page.evaluate(() => {
       S.messages = S.messages.filter(m => m.id !== 'p1');
       S.contacts = S.contacts.filter(c => c.id !== 'pc1');
       S.documents = S.documents.filter(d => d.id !== 'pd1');
-      S.folders = []; S.audit = []; delete S.settings.api; S.plugins.jobs = false;
+      S.folders = []; S.audit = []; S.rules = []; S.linked = []; delete S.settings.api;
       S.settings.name = 'Owner'; save();
     });
 
@@ -415,44 +449,6 @@ export default async function run(state) {
       `selected filters are bubbles too: ${depth.pillRound}px, gradient ${depth.pillGradient}`);
     check(/cubic-bezier/.test(depth.springy), `with an overshoot curve for the lift: ${depth.springy}`);
 
-    /* ---- the New document page is a launcher, not an editor ---- */
-    console.log('\n— making something new opens the app you already use —');
-    await page.evaluate(() => go('create'));
-    await page.waitForTimeout(200);
-    const launcher = await page.evaluate(() => ({
-      editor: !!document.querySelector('#cr-body, #b-frame, #app-toolbar'),
-      groups: [...document.querySelectorAll('.launch-group-head b')].map(b => b.textContent),
-      tiles: [...document.querySelectorAll('.launch-tile')].map(a => ({
-        name: a.querySelector('.launch-name').textContent,
-        href: a.getAttribute('href'),
-        target: a.getAttribute('target'),
-        rel: a.getAttribute('rel'),
-      })),
-    }));
-    check(!launcher.editor, 'RATA no longer carries a document editor of its own');
-    check(launcher.groups.join(', ') === 'Google, Microsoft, Adobe, Apple, Signing',
-      `grouped by whose app it is: ${launcher.groups.join(', ')}`);
-    check(launcher.tiles.length >= 18, `${launcher.tiles.length} apps to open`);
-    check(launcher.tiles.every(t => /^https:\/\//.test(t.href)),
-      'every tile is a real https link, so it can be middle-clicked or copied');
-    check(launcher.tiles.every(t => t.target === '_blank' && /noopener/.test(t.rel || '')),
-      'each opens in its own tab, with noopener');
-    const adobe = launcher.tiles.filter(t => /Acrobat|Fill|Express|Convert/.test(t.name)).map(t => t.name);
-    check(adobe.length >= 3, `Adobe is covered: ${adobe.join(', ')}`);
-    check(launcher.tiles.some(t => t.name === 'DocuSign'), 'and signing has somewhere to go');
-
-    /* Every tile carries the product's mark, not a letter on a square. */
-    const marks = await page.evaluate(() => ({
-      glyphs: document.querySelectorAll('.launch-tile .brand-glyph').length,
-      tiles: document.querySelectorAll('.launch-tile').length,
-      labelled: [...document.querySelectorAll('.launch-tile .brand-glyph')].every(g => !!g.getAttribute('aria-label')),
-      external: [...document.querySelectorAll('.launch-tile img, .launch-tile image')].length,
-      colours: new Set([...document.querySelectorAll('.launch-tile .brand-glyph')].map(g => g.getAttribute('fill'))).size,
-    }));
-    check(marks.glyphs === marks.tiles, `${marks.glyphs} of ${marks.tiles} tiles show the real mark`);
-    check(marks.external === 0, 'drawn inline, so nothing is fetched and they work offline');
-    check(marks.labelled, 'each mark names the product for a screen reader');
-    check(marks.colours >= 8, `in the vendors' own colours, not RATA's: ${marks.colours} distinct`);
     await page.evaluate(() => go('docs'));
 
     /* ---- the Business file library ---- */

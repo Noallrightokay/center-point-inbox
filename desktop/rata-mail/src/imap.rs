@@ -89,6 +89,14 @@ pub struct Message {
     /// is never acted on.
     pub uid: u32,
     pub uidvalidity: u32,
+    /// The message's own `Message-ID`, without the angle brackets, so a reply
+    /// can name what it answers and land in the same thread. Empty when the
+    /// sender gave none.
+    pub message_id: String,
+    /// Where the sender asked for replies to go, when that is not the From
+    /// address — a mailing list, a ticket system. Empty means reply to
+    /// `from_addr`.
+    pub reply_to: String,
 }
 
 /// What a successful link found.
@@ -895,26 +903,57 @@ fn revoked_msg(acct: &Account, why: &str) -> String {
     )
 }
 
+/// A `Message-ID` fit to be written back into a reply's headers, or nothing.
+///
+/// Written by the sender, so checked rather than trusted: one `left@right`
+/// token with no whitespace, control characters or brackets inside, and a sane
+/// length. Anything else is dropped, and the reply simply goes out unthreaded —
+/// a lost thread is a far smaller failure than a header a stranger wrote.
+fn thread_id(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let id = text.trim().trim_start_matches('<').trim_end_matches('>');
+    let clean = !id.is_empty()
+        && id.len() < 400
+        && id.contains('@')
+        && !id
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '<' || c == '>');
+    if clean { id.to_string() } else { String::new() }
+}
+
 /// One IMAP response into one message.
 fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Message {
     let env = f.envelope();
     let sender = env.and_then(|e| e.from.as_ref()).and_then(|a| a.first());
+    let address = |a: &async_imap::imap_proto::types::Address| {
+        let mbox = a.mailbox.as_deref().unwrap_or_default();
+        let host = a.host.as_deref().unwrap_or_default();
+        if mbox.is_empty() || host.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{}@{}",
+                String::from_utf8_lossy(mbox),
+                String::from_utf8_lossy(host)
+            )
+            .to_ascii_lowercase()
+        }
+    };
 
-    let from_addr = sender
-        .map(|a| {
-            let mbox = a.mailbox.as_deref().unwrap_or_default();
-            let host = a.host.as_deref().unwrap_or_default();
-            if mbox.is_empty() || host.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "{}@{}",
-                    String::from_utf8_lossy(mbox),
-                    String::from_utf8_lossy(host)
-                )
-                .to_ascii_lowercase()
-            }
-        })
+    let from_addr = sender.map(address).unwrap_or_default();
+
+    // Servers fill Reply-To with the From address when the sender set none, so
+    // only a different address is worth keeping.
+    let reply_to = env
+        .and_then(|e| e.reply_to.as_ref())
+        .and_then(|a| a.first())
+        .map(address)
+        .filter(|r| !r.is_empty() && *r != from_addr)
+        .unwrap_or_default();
+
+    let message_id = env
+        .and_then(|e| e.message_id.as_deref())
+        .map(thread_id)
         .unwrap_or_default();
 
     let from_name = sender
@@ -979,6 +1018,8 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, generation: u32) -> Messa
         // how the wrong message gets deleted.
         uid: f.uid.unwrap_or(0),
         uidvalidity: generation,
+        message_id,
+        reply_to,
     }
 }
 
@@ -1674,5 +1715,40 @@ mod tests {
         assert!(msg.contains("Google Workspace"), "{msg}");
         assert!(msg.contains("app password"), "{msg}");
         assert!(msg.contains("apppasswords"), "{msg}");
+    }
+
+    // -------------------------------------------------------- reply threading
+
+    #[test]
+    fn a_message_id_is_kept_for_the_reply_to_thread_on() {
+        assert_eq!(thread_id(b"<m42@example.org>"), "m42@example.org");
+        assert_eq!(
+            thread_id(b"  <CAF=x+y@mail.gmail.com>  "),
+            "CAF=x+y@mail.gmail.com"
+        );
+    }
+
+    #[test]
+    fn a_message_id_that_could_smuggle_a_header_is_dropped() {
+        // A reply writes this back into its own headers, so anything that could
+        // break out of the angle brackets or the line is refused outright.
+        assert_eq!(thread_id(b"<a@b>\r\nBcc: everyone@example.com"), "");
+        assert_eq!(thread_id(b"<a@b> <c@d>"), "");
+        assert_eq!(thread_id(b"<no-at-sign>"), "");
+        assert_eq!(thread_id(b""), "");
+        assert_eq!(thread_id(&[b'x'; 500]), "");
+    }
+
+    #[test]
+    fn fetched_mail_carries_what_a_reply_needs() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_inbox(&[7, 9], 5).await;
+            let got = read_range(&mut s, &me(), "1:2", 5).await.ok().unwrap();
+            let seven = got.iter().find(|m| m.uid == 7).unwrap();
+            assert_eq!(seven.message_id, "m7@example.org");
+            // The fixture's Reply-To is the sender again, which is what servers
+            // fill in when none was set; that is not worth keeping.
+            assert_eq!(seven.reply_to, "");
+        });
     }
 }

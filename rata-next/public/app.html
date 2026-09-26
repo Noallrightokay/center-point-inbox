@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="RATA">
 
-<title>RATA — Every message. Every language. One inbox.</title>
+<title>RATA — Your mail, on your machine.</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <style>
 :root{
@@ -88,9 +88,14 @@
      the movement. The interface still reads as dimensional without anything
      sliding under someone who asked for that not to happen. */
   *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
-  .btn:hover,.pill:hover,.mail-row:hover,.doc-card:hover,.launch-tile:hover,#compose-btn:hover,
-  .btn:active,.pill:active,.launch-tile:active,#compose-btn:active{transform:none}
-  .launch-tile:hover .brand-glyph{transform:none}
+  .btn:hover,
+.pill:hover,
+.mail-row:hover,
+.doc-card:hover,
+#compose-btn:hover,
+.btn:active,
+.pill:active,
+#compose-btn:active{transform:none}
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
@@ -140,8 +145,10 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 
 /* ---------- generic ---------- */
 .badge{font-size:10px;font-weight:600;letter-spacing:.02em;padding:2.5px 8px;border-radius:999px;background:var(--fill);color:var(--slate);white-space:nowrap;text-transform:capitalize}
-.badge.gmail,.badge.outlook,.badge.imap,.badge.email,.badge.slack,.badge.sms,.badge.discord{color:var(--tint);background:var(--tint-soft)}
-.badge.drive,.badge.onedrive,.badge.dropbox{color:var(--slate);background:var(--fill)}
+.badge.gmail,
+.badge.outlook,
+.badge.imap,
+.badge.email{color:var(--tint);background:var(--tint-soft)}
 .badge.work{color:var(--tint);background:var(--tint-soft)}
 .badge.personal{color:var(--slate);background:var(--fill)}
 .badge.job{color:var(--bg);background:var(--tint-mid)}
@@ -170,48 +177,6 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .sel{border:none;padding:8px 12px;background:var(--fill);outline:none;border-radius:10px;font-weight:500;-webkit-appearance:none;appearance:none}
 .txt{border:none;padding:9px 13px;background:var(--fill);outline:none;border-radius:10px;transition:box-shadow .15s;width:100%}
 .txt:focus{box-shadow:0 0 0 3px var(--tint-soft)}
-
-/* ---------- two-pane (messages / people) ---------- */
-/* ---- the launcher ----
-   Tiles, not cards: no shadow, no heavy border. They are doors to somewhere
-   else, and should read as quieter than the message list they sit beside. The
-   accent belongs to each vendor rather than to RATA, which is the honest
-   signal that these open somebody else's application. */
-.launch-wrap{max-width:900px;margin:0 auto;padding:28px 22px 80px;display:flex;flex-direction:column;gap:26px}
-.launch-head h2{margin:0 0 6px;font-size:22px;letter-spacing:-.01em;text-wrap:balance}
-.launch-head p{margin:0;max-width:62ch;color:var(--faint);line-height:1.6;font-size:14px}
-.launch-group{display:flex;flex-direction:column;gap:10px}
-.launch-group-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
-.launch-group-head b{font-size:14px}
-.launch-group-head span:last-child{font-size:12.5px;color:var(--faint)}
-.launch-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;align-self:center}
-.launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:9px}
-/* Name every cell. Placing only some of them leaves the rest to
-   auto-placement, which put the app's name in the arrow's column. */
-.launch-tile{display:grid;
-  grid-template-columns:auto 1fr auto;
-  grid-template-areas:"badge name go" "badge kind go";
-  column-gap:11px;row-gap:1px;align-items:center;
-  padding:12px 13px;border:1px solid var(--hair-2);border-radius:9px;
-  background:var(--card);text-decoration:none;color:inherit;transition:var(--lift)}
-.launch-tile:hover{border-color:transparent;background:var(--grad-card);transform:translateY(-2px);
-  box-shadow:var(--ring),var(--sheen-soft),0 10px 24px -8px rgba(10,14,26,.3)}
-.launch-tile:active{transform:translateY(0) scale(.99);transition-duration:.06s}
-.launch-tile .brand-glyph{transition:transform .18s var(--pop)}
-.launch-tile:hover .brand-glyph{transform:scale(1.12)}
-.launch-tile:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
-/* The mark sits on the page, not on a coloured chip: these are other people's
-   logos and a tinted square behind each one would be RATA restyling them. */
-.launch-badge{grid-area:badge;width:30px;height:30px;
-  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
-.brand-glyph{display:block}
-.launch-name{grid-area:name;font-weight:600;font-size:14px;text-align:left}
-.launch-kind{grid-area:kind;font-size:11.5px;color:var(--faint);text-align:left}
-.launch-go{grid-area:go;color:var(--faint);font-size:13px}
-.launch-tile:hover .launch-go{color:var(--tint)}
-.launch-foot{font-size:13px;line-height:1.6;color:var(--faint);border-top:1px solid var(--hair-2);padding-top:16px;max-width:66ch}
-.linkish{background:none;border:0;padding:0;font:inherit;color:var(--tint);font-weight:600;cursor:pointer;text-decoration:underline}
-.linkish:hover{color:var(--tint-deep)}
 .pane-view{flex-direction:row}
 /* Two inboxes at once. The reading pane gives way rather than squeezing three
    columns onto a laptop, and each inbox keeps the full width it needs to be
@@ -244,7 +209,6 @@ body.split-on .side-list,body.split-on .split-pane{flex:1 1 0;min-width:330px}
    its own picker and its own list. */
 body.split-on .side-list > #digest,
 body.split-on .side-list > #sources,
-body.split-on .side-list > #ch-seg,
 body.split-on .side-list > #cat-tabs,
 body.split-on .side-list > #mail-filters,
 body.split-on .side-list > #sync-all{display:none}
@@ -327,47 +291,14 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .dlp-inline{display:none;font-size:11.5px;font-weight:600;padding:8px 16px;border-top:1px solid var(--hair-2)}
 .dlp-inline.warn{display:block;background:var(--amber-soft);color:var(--amber)}
 .dlp-inline.block{display:block;background:var(--red-soft);color:var(--red)}
-
-/* ---------- create studio ---------- */
-#view-create.active{display:block}
-#view-create{overflow-y:auto!important}
-.create-wrap{max-width:880px;margin:0 auto;padding:28px 26px 90px}
 .seg{display:inline-flex;background:var(--fill);border-radius:11px;padding:3px;gap:2px}
 .seg button{padding:7px 18px;border-radius:9px;font-weight:600;font-size:13px;color:var(--slate)}
 .seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.1)}
-.create-card{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:24px;margin-top:16px}
-.b-frame input.title{width:100%;border:none;outline:none;background:transparent;font-size:22px;font-weight:700;letter-spacing:-.02em;padding:4px 0 12px;border-bottom:1px solid var(--hair-2)}
-.b-frame textarea{width:100%;border:none;outline:none;background:transparent;min-height:300px;resize:vertical;font-size:15px;line-height:1.65;padding:16px 22px;flex:1}
-
-.create-opts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--hair-2);padding-top:16px}
-.opt-label{font-size:12px;color:var(--faint);font-weight:600}
-.deliver-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px;background:var(--fill-2);border-radius:var(--r-sm);padding:14px 16px}
-.autopilot-note{font-size:12.5px;color:var(--slate);flex-basis:100%}
-.autopilot-note b{color:var(--tint)}
-.sheet-hint{font-size:12px;color:var(--faint);margin-top:6px;display:none}
-.sheet-hint.show{display:block}
-
-/* ---------- plugins ---------- */
-#view-plug.active{display:block}
-#view-plug{overflow-y:auto!important}
-.plug-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
-.plug-card{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:20px;display:flex;flex-direction:column;gap:8px}
-.plug-top{display:flex;align-items:center;gap:12px}
-.plug-ic{width:40px;height:40px;flex-shrink:0}
-.plug-ic svg,.conn-ic svg{width:100%;height:100%;display:block}
-.conn-ic{width:36px;height:36px;flex-shrink:0}
-.conn-top{display:flex;align-items:center;gap:11px;margin-bottom:2px}
-.plug-card b{font-size:15px;letter-spacing:-.015em}
-.plug-card p{font-size:12.5px;color:var(--slate)}
 .switch{margin-left:auto;width:46px;height:28px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.32,.72,.35,1)}
 .switch.on{background:linear-gradient(180deg,#38D68C 0%,var(--green) 100%);box-shadow:var(--glow-green),var(--sheen)}
 .switch.on::after{transform:translateX(18px)}
 .jobs-box{margin-top:14px}
-.job-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-.job-chip{display:inline-flex;align-items:center;gap:7px;background:var(--violet-soft);color:var(--violet);font-weight:600;font-size:13px;padding:6px 8px 6px 13px;border-radius:999px}
-.job-chip button{color:inherit;opacity:.65;font-size:14px;line-height:1}
-.job-add{display:flex;gap:8px}
 
 /* ---------- docs / compliance / conn / settings (carried) ---------- */
 #view-docs{flex-direction:column}
@@ -431,15 +362,10 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .verify-out{font-size:13px;font-weight:500;padding:12px 16px;margin-bottom:16px;display:none;border-radius:var(--r-sm)}
 .verify-out.ok{display:block;background:var(--green-soft);color:var(--green)}
 .verify-out.bad{display:block;background:var(--red-soft);color:var(--red)}
-#view-conn.active,#view-set.active{display:block}
-#view-conn,#view-set,#view-people-wrap{overflow-y:auto!important}
-.conn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:12px}
-.conn-card{background:var(--card);border-radius:var(--r);padding:22px;box-shadow:var(--shadow)}
-.conn-card .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:8px}
+#view-set.active{display:block}
+#view-set{overflow-y:auto!important}
 .dot.on{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
 .dot.off{background:var(--faint)}
-.conn-card b{font-size:15.5px}
-.conn-card p{font-size:12.5px;color:var(--faint);margin:7px 0 15px}
 .set-row{background:var(--card);border-radius:var(--r);padding:19px 22px;margin-bottom:10px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;box-shadow:var(--shadow)}
 .set-row .grow{flex:1;min-width:200px}
 .set-row b{display:block;font-size:14px}
@@ -719,8 +645,6 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .b-urlbar{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--hair-2)}
 .b-nav{color:var(--faint);font-size:16px;display:flex;gap:8px;padding:0 4px;user-select:none}
 .b-url{flex:1;background:var(--fill);border-radius:999px;padding:6px 14px;font-size:12px;color:var(--slate);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.b-frame{min-height:400px;display:flex;flex-direction:column}
-.b-frame input.title{border-bottom:1px solid var(--hair-2);padding:14px 22px 12px}
 .app-toolbar{border-bottom:1px solid var(--hair-2)}
 .menu-words{display:flex;gap:16px;font-size:12.5px;color:var(--slate);padding:10px 22px;align-items:center;flex-wrap:wrap}
 .ribbon{color:#fff;padding:10px 22px;font-size:12.5px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
@@ -728,28 +652,20 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .ribbon span{opacity:.85}
 .fx-bar{display:flex;gap:10px;align-items:center;padding:7px 22px;border-top:1px solid var(--hair-2);font-family:var(--mono);font-size:11.5px;color:var(--slate)}
 .fx-bar .fx{font-style:italic;font-weight:700;color:var(--faint)}
-.b-frame.gridmode textarea{font-family:var(--mono);font-size:13px;line-height:28px;background-image:linear-gradient(var(--hair-2) 1px,transparent 1px);background-size:100% 28px;background-position:0 6px}
-/* ---------- channel splitter ---------- */
-.seg-row{padding:10px 16px 0}
-.seg-row .seg{display:flex;width:100%}
-.seg-row .seg button{flex:1;padding:7px 4px;font-size:12px}
-.seg-row .cnt{font-size:10px;color:var(--faint);margin-left:4px;font-weight:700}
-.seg-row .on .cnt{color:var(--tint)}
 /* ---------- add person ---------- */
 .addp{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:14px;margin:10px 12px 4px;display:grid;gap:8px}
 .addp .row{display:flex;gap:8px}
 .addp .row>*{flex:1;min-width:0}
-/* ---------- person web ---------- */
-.web-wrap{flex:1;overflow-y:auto;padding:14px 18px 22px}
-.web-svg{width:100%;max-width:440px;margin:0 auto;display:block}
-.web-node{cursor:pointer}
-.web-node circle{transition:stroke-width .15s}
-.web-node:hover circle{stroke-width:3.5}
-.web-lists{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;max-width:760px;margin:6px auto 0}
-.web-item{background:var(--card);border-radius:10px;box-shadow:var(--shadow);padding:9px 12px;font-size:12px;margin-bottom:8px;color:var(--slate)}
-.web-item span{display:block;color:var(--faint);font-size:10.5px;margin-top:2px}
 /* Meridian type system — Sora carries display, Instrument Sans carries UI */
-.topbar h1,.md-head h2,.sum-pane h3,.p-name,.prof-card b,.conn-card b,.plug-card b,.stat-card b,.rules-n,.b-frame input.title,.cmp-head b,.thread-head .who b{font-family:'Sora',var(--sans)}
+.topbar h1,
+.md-head h2,
+.sum-pane h3,
+.p-name,
+.prof-card b,
+.stat-card b,
+.rules-n,
+.cmp-head b,
+.thread-head .who b{font-family:'Sora',var(--sans)}
 .mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
 </style>
 </head>
@@ -758,7 +674,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
   <nav id="rail">
     <div class="brand">
       <div class="brand-mark"><img class="mk" src="icons/mark-256.png" alt="" width="38" height="38"></div>
-      <div class="brand-text"><div class="brand-name">RATA</div><div class="brand-sub">Every message. Every language.</div></div>
+      <div class="brand-text"><div class="brand-name">RATA</div><div class="brand-sub">Your mail, on your machine.</div></div>
     </div>
     <button id="compose-btn">Compose</button>
     <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg><span class="nav-label">Mail</span><span class="nav-count" id="nc-inbox">0</span></button>
@@ -766,10 +682,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
     <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Files</span><span class="nav-count" id="nc-docs">0</span></button>
     <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg><span class="nav-label">More</span></button>
     <div id="nav-more" hidden>
-      <button class="nav-item" data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span class="nav-label">New document</span></button>
       <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-label">Search</span></button>
-      <button class="nav-item" data-view="conn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg><span class="nav-label">Accounts</span></button>
-      <button class="nav-item" data-view="plug"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a2 2 0 002-2v-2h2a2 2 0 002-2v-3h1a2 2 0 000-4h-1V6a2 2 0 00-2-2h-3V3a2 2 0 00-4 0v1H6a2 2 0 00-2 2v3H3a2 2 0 000 4h1v3a2 2 0 002 2h3v2a2 2 0 002 2z" transform="scale(.92) translate(1,1)"/></svg><span class="nav-label">Extras</span><span class="nav-count" id="nc-plug">0</span></button>
       <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Privacy checks</span></button>
     </div>
     <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg><span class="nav-label">Settings</span></button>
@@ -783,7 +696,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 
   <div id="main">
     <div class="topbar">
-      <div><span class="eyebrow" id="tb-eyebrow">All channels</span><h1 id="tb-title">Messages</h1></div>
+      <div><span class="eyebrow" id="tb-eyebrow">Every mailbox</span><h1 id="tb-title">Messages</h1></div>
       <button class="top-search" id="top-search-btn" style="margin-left:auto"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>Search everything…</span><kbd>⌘K</kbd></button>
       <button id="acct-btn" aria-label="Account"></button>
       <div id="acct-menu">
@@ -807,7 +720,6 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         </div>
         <div id="digest"></div>
         <div id="sources"></div>
-        <div class="seg-row" id="ch-seg"></div>
         <div class="chip-row" id="cat-tabs"></div>
         <button class="btn" id="sync-all" style="display:none;margin:0 14px 8px;align-self:flex-start">⟳ Sync linked inboxes</button>
         <div class="chip-row" id="mail-filters"></div>
@@ -826,25 +738,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <div id="addp-host"></div>
         <div class="side-scroll" id="people-scroll"></div>
       </div>
-      <div class="detail-pane" id="person-detail"><div class="empty" style="padding-top:120px"><b>Pick a person</b>Every email, Slack message, and text with them — one thread.</div></div>
-    </section>
-
-    <!-- CREATE -->
-    <section class="view" id="view-create">
-      <div class="launch-wrap">
-        <div class="launch-head">
-          <h2>Make something new</h2>
-          <p>RATA is not a word processor, and does not want to be. Open the app you already
-             use — it opens in its own tab, signed in as you — and what you send or receive
-             comes back to the inbox here.</p>
-        </div>
-        <div id="launch-groups"></div>
-        <div class="launch-foot">
-          <b>Different formats, one inbox.</b> A file that arrives as .docx, .pages or .xlsx
-          can be turned into whichever format you need in <button class="linkish" data-goto="docs">Files → Format Bridge</button>,
-          and the original is kept beside the conversion rather than replaced.
-        </div>
-      </div>
+      <div class="detail-pane" id="person-detail"><div class="empty" style="padding-top:120px"><b>Pick a person</b>Every email with them, from every mailbox — one thread.</div></div>
     </section>
 
     <!-- DOCUMENTS -->
@@ -857,16 +751,11 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
         <span id="folder-hint" style="font-size:12px;color:var(--faint)"></span>
       </div>
       <div class="doc-toolbar">
-        <button class="pill on" data-df="all">All</button>
-        <button class="pill" data-df="drive">Drive</button>
-        <button class="pill" data-df="onedrive">OneDrive</button>
-        <button class="pill" data-df="dropbox">Dropbox</button>
-        <button class="pill" data-df="rata">Created in Rata</button>
         <span style="flex:1"></span>
         <button class="btn" id="doc-viewtoggle">List view</button>
       </div>
       <div class="bridge-card">
-        <div class="bridge-head"><b>Format Bridge</b><span>Drop any document — get it back in the format Google, Office, or Apple actually opens. Optionally translated.</span></div>
+        <div class="bridge-head"><b>Format Bridge</b><span>Drop any document — get it back in the format Google, Office, or Apple actually opens. Converted on this computer; nothing is uploaded.</span></div>
         <div class="bridge-drop" id="br-drop">Drop a file here or <label class="br-pick">browse<input type="file" id="br-file" accept=".docx,.txt,.md,.html,.csv,.xlsx" hidden></label><div class="br-formats">.docx · .txt · .md · .html · .csv · .xlsx</div></div>
         <div class="bridge-loaded" id="br-loaded" style="display:none">
           <b id="br-name"></b><span id="br-kind"></span>
@@ -879,8 +768,6 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
               <button class="pill" data-eco="pdf">PDF</button>
               <button class="pill" data-eco="plain">Plain / Markdown</button>
             </div>
-            <span class="br-lbl">Translate content</span>
-            <select class="sel" id="br-lang"><option value="">Keep original language</option></select>
           </div>
           <div class="br-actions"><button class="btn primary" id="br-go">Convert &amp; download</button><button class="btn" id="br-save">Convert into Documents</button><button class="btn" id="br-clear">✕</button></div>
           <div class="br-note" id="br-note"></div>
@@ -906,27 +793,6 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
       </div>
     </section>
 
-    <!-- PLUGINS -->
-    <section class="view" id="view-plug">
-      <div class="comp-sec" style="margin:0 0 14px">
-        <div class="sec-label">Ecosystem plugins — token-based sign-in</div>
-        <div class="plug-grid" id="eco-grid"></div>
-      </div>
-      <div class="comp-wrap">
-        <div class="comp-sec">
-          <div class="sec-label">Installed plugins</div>
-          <div class="plug-grid" id="plug-grid"></div>
-        </div>
-        <div class="comp-sec" id="jobs-sec" style="display:none">
-          <div class="sec-label">Job contexts</div>
-          <div class="jobs-box">
-            <div class="job-chips" id="job-chips"></div>
-            <div class="job-add"><input class="txt" id="job-new" type="text" placeholder="Add a job context — e.g. Consulting" style="max-width:280px"><button class="btn primary" id="job-add-btn">Add</button></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <!-- COMPLIANCE -->
     <section class="view" id="view-comp">
       <div class="comp-wrap">
@@ -945,24 +811,12 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
       </div>
     </section>
 
-    <!-- CONNECTIONS -->
-    <section class="view" id="view-conn">
-      <div class="comp-wrap">
-        <div class="comp-sec"><div class="sec-label">Mail providers</div><div class="conn-grid" id="conn-mail"></div></div>
-        <div class="comp-sec"><div class="sec-label">Chat & phone</div><div class="conn-grid" id="conn-chat"></div></div>
-        <div class="comp-sec"><div class="sec-label">Cloud storage</div><div class="conn-grid" id="conn-cloud"></div></div>
-      </div>
-    </section>
-
     <!-- SETTINGS -->
     <section class="view" id="view-set">
       <div class="comp-wrap">
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
-          <div class="set-row"><div class="grow"><b>Your language</b><span>Translations target this language — messages and bridged files.</span></div><select class="sel" id="set-lang"></select></div>
-          <div class="set-row"><div class="grow"><b>Auto-translate incoming</b><span>Foreign-language messages arrive already translated, original one tap away.</span></div><button class="switch" id="set-autotrans" role="switch"></button></div>
-          <div class="set-row"><div class="grow"><b>API endpoint</b><span>Point at a live Rata backend. Blank = standalone mode, data lives in this browser.</span></div><input type="text" id="set-api" placeholder="https://rata.yourdomain.com/api"></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Data</div>
@@ -991,30 +845,16 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
           <div class="sec-label">Linked accounts</div>
           <div id="linked-list"></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Add an account</b><span id="quota-line">Email works with any provider — Gmail, Outlook, Yahoo, your work address, anything. Chat and phone are separate.</span></div>
+            <div class="grow"><b>Add an account</b><span id="quota-line">Email works with any provider — Gmail, Outlook, Yahoo, your work address, anything.</span></div>
             <button class="btn primary" data-addlink="mail">＋ Email account</button>
-            <button class="btn" data-addlink="slack">＋ Slack</button>
-            <button class="btn" data-addlink="discord">＋ Discord</button>
-            <button class="btn" data-addlink="phone">＋ Phone</button>
           </div>
           <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Add your Stripe links below to enable checkout</span></div>
+          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
           <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
-        </div>
-        <div class="comp-sec">
-          <div class="sec-label">Deployment — real services</div>
-          <div class="set-row"><div class="grow"><b>Google OAuth Client ID</b><span>Enables the real Gmail plugin. Create at console.cloud.google.com → Credentials → OAuth client (Web), add this site as an authorized JavaScript origin.</span></div><input type="text" id="cfg-gcid" placeholder="1234567890-xxxx.apps.googleusercontent.com"></div>
-          <div class="set-row"><div class="grow"><b>Supabase URL</b><span>Enables real cloud accounts + cross-device sync. Free at supabase.com.</span></div><input type="text" id="cfg-sburl" placeholder="https://xxxx.supabase.co"></div>
-          <div class="set-row"><div class="grow"><b>Supabase anon key</b><span>Public anon key from your Supabase project settings.</span></div><input type="text" id="cfg-sbkey" placeholder="eyJhbGciOi…"></div>
-          <div class="set-row"><div class="grow"><b id="lbl-stb">Stripe payment link — Base</b><span>Stripe Dashboard → Payment Links. Set the after-payment redirect to this app with ?checkout=success</span></div><input type="text" id="cfg-stb" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b id="lbl-stpr">Stripe payment link — Pro</b><span>Same, for the Pro price.</span></div><input type="text" id="cfg-stpr" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe payment link — Enterprise $72</b><span>Not on sale yet — the CRM, texts and automations are not built. Set this only when they are.</span></div><input type="text" id="cfg-ste" placeholder="https://buy.stripe.com/…"></div>
-          <div class="set-row"><div class="grow"><b>Stripe customer portal link</b><span>Stripe Dashboard → Settings → Billing → Customer portal → activate, copy the link.</span></div><input type="text" id="cfg-stp" placeholder="https://billing.stripe.com/p/login/…"></div>
-          <div class="set-row"><div class="grow"><b>Anthropic API key</b><span>Powers real AI briefings in Rata Assist. Stored only in this browser — personal use only, never ship a key in a public product.</span></div><input type="text" id="cfg-akey" placeholder="sk-ant-…"></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">About</div>
@@ -1029,7 +869,6 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 <nav id="mnav">
   <button class="active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Messages</button>
   <button data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>People</button>
-  <button data-view="create"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Create</button>
   <button data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Docs</button>
   <button data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg>More</button>
 </nav>
@@ -1056,9 +895,8 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
     </div>
     <div class="as-actions">
       <button class="btn primary" id="as-run">Run briefing</button>
-      <button class="btn" id="as-ai">AI brief ✦</button>
     </div>
-    <div class="as-out" id="as-out"><div class="empty" style="padding:30px 10px"><b>Your day, distilled</b>Assist scans every channel for to-dos, requests, and deadlines hiding in your messages.</div></div>
+    <div class="as-out" id="as-out"><div class="empty" style="padding:30px 10px"><b>Your day, distilled</b>Assist reads your mail on this computer for to-dos, requests, and deadlines hiding in it.</div></div>
   </aside>
 </div>
 
@@ -1072,8 +910,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
     <input type="text" id="cmp-subj" placeholder="Subject">
     <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-foot">
-      <select class="sel" id="cmp-from"><option value="gmail">Gmail account</option><option value="outlook">Outlook account</option><option value="imap">IMAP account</option></select>
-      <select class="sel" id="cmp-ctx" style="display:none"><option value="work">Work</option><option value="personal">Personal</option></select>
+      <select class="sel" id="cmp-from"></select>
       <span class="dlp-live" id="dlp-live">DLP idle</span>
       <button class="btn primary" id="cmp-send">Send</button>
     </div>
@@ -1145,87 +982,45 @@ function runDLP(text,profileName){
   return findings;
 }
 
-/* ---------------- FORMAT ECOSYSTEMS ---------------- */
-const ECOS={
-  google:{label:'Google Workspace',doc:'GDOC',sheet:'GSHEET',note:'GDOC'},
-  microsoft:{label:'Microsoft 365',doc:'DOCX',sheet:'XLSX',note:'DOCX'},
-  apple:{label:'Apple iWork',doc:'PAGES',sheet:'NUMBERS',note:'PAGES'},
-  pdf:{label:'Universal PDF',doc:'PDF',sheet:'PDF',note:'PDF'},
-  plain:{label:'Plain / Markdown',doc:'MD',sheet:'CSV',note:'TXT'}
-};
-const CHANNELS={email:{label:'Email'},slack:{label:'Slack'},sms:{label:'Text'},discord:{label:'Discord'}};
-/* Looked up rather than indexed.
-
-   A contact saved before `pref` existed, imported from somewhere, or seeded by
-   a demo has no preference, and `ECOS[undefined].label` does not degrade — it
-   throws, and takes the whole People view down with it. One missing field on
-   one contact should cost that contact a badge, not everybody the screen. The
-   same for a channel this build has never heard of. */
+const CHANNELS={email:{label:'Email'}};
+/* Looked up rather than indexed, so a message saved by some older build on a
+   channel this one has never heard of costs that message a badge instead of
+   taking the whole list down. */
 const chan=c=>CHANNELS[c]||{label:String(c||'message').replace(/^./,x=>x.toUpperCase())};
-const eco=p=>ECOS[p]||null;
-/* ---------------- BRAND ICON TILES (inline SVG, no assets) ---------------- */
-const _tile=(bg,inner,stroke)=>`<svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect width="40" height="40" rx="9" fill="${bg}"${stroke?` stroke="var(--hair)" stroke-width="1"`:''}/>${inner}</svg>`;
-const _slackGlyph=`<g transform="translate(8 8) scale(0.1954)"><path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z" fill="#E01E5A"/><path d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/><path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z" fill="#36C5F0"/><path d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/><path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z" fill="#2EB67D"/><path d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/><path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z" fill="#ECB22C"/><path d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22C"/></g>`;
-const _discordGlyph=`<path transform="translate(8 8)" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" fill="#fff"/>`;
-const _gmailGlyph=`<path transform="translate(8 8)" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z" fill="#EA4335"/>`;
-const _driveGlyph=`<g transform="translate(8 9.3) scale(0.275)"><path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="M43.65 25 29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0-1.2 4.5h27.5z" fill="#00ac47"/><path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75L86.1 57.5c.8-1.4 1.2-2.95 1.2-4.5H59.798l5.852 11.5z" fill="#ea4335"/><path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/><path d="M59.85 53H27.45L13.7 76.8c1.35.8 2.9 1.2 4.5 1.2h50.9c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/><path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/></g>`;
-const _dropboxGlyph=`<path transform="translate(8 8)" d="M6 1.807 0 5.629l6 3.822 6.001-3.822L6 1.807m12 0-6 3.822 6 3.822 6-3.822-6-3.822M0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822m18-3.822-6 3.822 6 3.822 6-3.822-6-3.822M6.1 18.371l6.001 3.822 6-3.822-6-3.822L6.1 18.371Z" fill="#0061FF"/>`;
-const _cloudGlyph=`<path transform="translate(8 8)" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" fill="#0078D4"/>`;
-const _smsGlyph=`<defs><linearGradient id="smsg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5AF575"/><stop offset="1" stop-color="#13BD2C"/></linearGradient></defs><rect width="40" height="40" rx="9" fill="url(#smsg)"/><path d="M20 10.5c-5.8 0-10.5 3.9-10.5 8.7 0 2.8 1.6 5.2 4 6.8-.2 1.2-.9 2.4-1.9 3.3-.25.23 0 .62.32.56 2-.36 3.68-1.06 4.98-2.06 1 .25 2.03.37 3.1.37 5.8 0 10.5-3.9 10.5-8.7s-4.7-8.9-10.5-8.9z" fill="#fff"/>`;
-const ICONS={
-  plug_slack:_tile('#FFFFFF',_slackGlyph,true),
-  plug_discord:_tile('#5865F2',_discordGlyph),
-  plug_sms:`<svg viewBox="0 0 40 40" fill="none" aria-hidden="true">${_smsGlyph}</svg>`,
-  plug_split:_tile('var(--tint-soft)',`<circle cx="20" cy="20" r="9" fill="none" stroke="var(--tint)" stroke-width="2.5"/><path d="M20 11a9 9 0 0 1 0 18z" fill="var(--tint)"/>`),
-  plug_jobs:_tile('var(--tint-soft)',`<rect x="11" y="15.5" width="18" height="12.5" rx="2.5" fill="none" stroke="var(--tint)" stroke-width="2.5"/><path d="M11 20.5h18" stroke="var(--tint)" stroke-width="2.5"/><path d="M16 15.5v-2a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" fill="none" stroke="var(--tint)" stroke-width="2.5"/>`),
-  plug_autopilot:_tile('var(--tint-soft)',`<path d="M28.5 17a9 9 0 1 0 1.3 6.5" fill="none" stroke="var(--tint)" stroke-width="2.5" stroke-linecap="round"/><path d="M30 11.5V17h-5.5" fill="none" stroke="var(--tint)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`),
-  conn_gmail:_tile('#FFFFFF',_gmailGlyph,true),
-  conn_outlook:_tile('#0F6CBD',`<text x="20" y="27" text-anchor="middle" fill="#fff" font-size="19" font-weight="700" font-family="Sora,sans-serif">O</text>`),
-  conn_imap:_tile('var(--tint-soft)',`<rect x="9.5" y="13.5" width="21" height="14" rx="2" fill="none" stroke="var(--tint)" stroke-width="2.2"/><path d="m10.5 15.5 9.5 6.5 9.5-6.5" fill="none" stroke="var(--tint)" stroke-width="2.2"/>`),
-  conn_slackc:_tile('#FFFFFF',_slackGlyph,true),
-  conn_smsc:`<svg viewBox="0 0 40 40" fill="none" aria-hidden="true">${_smsGlyph}</svg>`,
-  conn_discordc:_tile('#5865F2',_discordGlyph),
-  conn_drive:_tile('#FFFFFF',_driveGlyph,true),
-  conn_onedrive:_tile('#FFFFFF',_cloudGlyph,true),
-  conn_dropbox:_tile('#FFFFFF',_dropboxGlyph,true)
-};
-const PLUGINS={
-  split:{name:'Work / Personal Split',ic:'⚖️',tintvar:'--tint',desc:'Separates every message and contact into work and personal, with filter chips across the app.'},
-  jobs:{name:'Job Contexts',ic:'🗂️',tintvar:'--violet',desc:'Tags work messages by venture. Add each business you run and filter your stream by it.'},
-  slack:{name:'Slack Bridge',ic:'💬',tintvar:'--violet',desc:'Pulls Slack DMs into Messages and merges them into each person\'s unified thread.'},
-  sms:{name:'Text Bridge',ic:'📱',tintvar:'--green',desc:'Pulls SMS / iMessage into Messages and merges texts into each person\'s unified thread.'},
-  discord:{name:'Discord Bridge',ic:'🎮',tintvar:'--violet',desc:'Pulls Discord DMs into Messages and People threads — servers stay out, direct messages come in.'},
-  autopilot:{name:'Format Autopilot',ic:'🔄',tintvar:'--amber',desc:'Every file you deliver is converted to the recipient\'s preferred ecosystem — Google, Microsoft, Apple, or PDF — automatically.'}
-};
 
 /* ---------------- SEED DATA ---------------- */
-/* A new workspace starts with nothing switched on. Every source of messages
-   and every extra is something the user turns on deliberately, after signing
-   in to that service — so the app never shows a Slack filter to somebody who
-   has no Slack, and never implies it is reading mail it cannot see. */
+/* A new workspace starts empty. Mail arrives only from a mailbox the user
+   links, so the app never implies it is reading mail it cannot see. */
 const seed=()=>({
-  v:5,
-  settings:{name:'Bear',api:'',profile:'HIPAA',plan:null},
+  v:6,
+  settings:{name:'Bear',profile:'HIPAA',plan:null},
   linked:[],
   rules:[],
-  plugins:{split:false,jobs:false,slack:false,sms:false,discord:false,autopilot:false},
-  jobs:[],
   contacts:[],
   messages:[],
   documents:[],
   folders:[],
-  connections:{gmail:false,outlook:false,imap:false,slackc:false,smsc:false,discordc:false,drive:false,onedrive:false,dropbox:false},
-  counters:{scans:0,warned:0,blocked:0,conversions:0,autopilot:0},
+  counters:{scans:0,warned:0,blocked:0,conversions:0},
   audit:[]
 });
 
 /* ---------------- STATE + MIGRATION ---------------- */
 let S=null;
+/* v6 is email only. Slack, Discord, texts, Google and Microsoft sign-in were
+   never built past a switch, and the app now reads mail over IMAP and nothing
+   else. A workspace saved by an older build can still hold their leftovers —
+   messages on those channels, accounts linked by type, the switches — and
+   every one of them would otherwise reach a screen that no longer knows what
+   it is. The mail and the mailboxes stay; the rest goes. */
+function tidyV6(st){
+  st.messages=(st.messages||[]).filter(m=>m&&(m.ch||'email')==='email');
+  st.linked=(st.linked||[]).filter(l=>l&&l.type==='mail');
+  delete st.plugins;delete st.connections;delete st.jobs;
+  if(st.settings)delete st.settings.api;
+  if(st.counters)delete st.counters.autopilot;
+}
 function migrate(old){
-  /* v5 turned the defaults off for new workspaces. An existing one keeps what
-     its owner already switched on — silently disabling somebody's Slack feed
-     because the default moved would be a bug, not a preference. */
-  if(old&&old.v>=3){old.v=5;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(!Array.isArray(old.folders))old.folders=[];if(old.plugins)old.plugins.discord=old.plugins.discord===undefined?true:old.plugins.discord;if(old.connections)old.connections.discordc=old.connections.discordc===undefined?true:old.connections.discordc;(old.contacts||[]).forEach(c=>{if(c.discord===undefined)c.discord='';if(c.nick===undefined)c.nick=''});return old}
+  if(old&&old.v>=3){old.v=6;if(!Array.isArray(old.linked))old.linked=[];if(!Array.isArray(old.rules))old.rules=[];if(!Array.isArray(old.folders))old.folders=[];tidyV6(old);return old}
   const fresh=seed();
   if(!old)return fresh;
   /* v1/v2 (emails[]) → v3: carry settings/audit/docs/counters, rebuild stream */
@@ -1233,7 +1028,6 @@ function migrate(old){
   if(old.audit)fresh.audit=old.audit;
   if(old.documents)fresh.documents=old.documents;
   if(old.counters)Object.assign(fresh.counters,old.counters);
-  if(old.connections)Object.assign(fresh.connections,old.connections);
   if(Array.isArray(old.emails)){
     const byAddr=Object.fromEntries(fresh.contacts.map(c=>[c.addr,c.id]));
     for(const m of old.emails){
@@ -1303,7 +1097,7 @@ async function loadOlder(only,quiet){
       added++;
     }
   }
-  save();renderChSeg();renderMailFilters();renderMail();
+  save();renderSyncAll();renderMailFilters();renderMail();
   if(notes.length){if(!quiet||added)toast((added?added+' older loaded, but ':'Older mail did not load — ')+notes[0]);return}
   if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
   if(!quiet&&finished)toast('That\u2019s everything in your inbox');
@@ -1337,8 +1131,6 @@ async function serverAct(msgs,action){
 }
 const contact=id=>S.contacts.find(c=>c.id===id);
 const msgFrom=m=>m.sent?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
-const msgCtx=m=>m.ctx||contact(m.cid)?.context||'work';
-const msgJob=m=>m.job!==undefined?m.job:(contact(m.cid)?.job||'');
 
 /* ---------------- AUDIT CHAIN ---------------- */
 async function sha256(str){
@@ -1385,30 +1177,33 @@ function rel(ts){
   return new Date(ts).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._to);t._to=setTimeout(()=>t.classList.remove('show'),2600)}
-function channelEnabled(ch){return ch==='email'||(ch==='slack'&&S.plugins.slack)||(ch==='sms'&&S.plugins.sms)||(ch==='discord'&&S.plugins.discord)}
+/* Only email is read. Kept as a check rather than assumed, so a message from an
+   older build's other channels can never slip into a list. */
+function channelEnabled(ch){return (ch||'email')==='email'}
 
 /* ---------------- NAV ---------------- */
 let currentView='inbox';
-const TITLES={inbox:['All channels','Messages'],people:['One thread per person','People'],create:['Opens in its own tab','New document'],search:['Everything, one query','Universal search'],docs:['All storage providers','Documents'],plug:['Extend the platform','Plugins'],comp:['DLP · Audit','Compliance'],conn:['Providers','Connections'],set:['Workspace','Settings']};
+const TITLES={inbox:['Every mailbox','Messages'],people:['One thread per person','People'],search:['Everything, one query','Universal search'],docs:['On this computer','Documents'],comp:['DLP · Audit','Compliance'],set:['Workspace','Settings']};
 function go(v){
+  const view=$('#view-'+v);if(!view)return;
   currentView=v;
   $$('.view').forEach(x=>x.classList.remove('active'));
-  $('#view-'+v).classList.add('active');
+  view.classList.add('active');
   $$('#rail .nav-item,#mnav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
   $('#tb-eyebrow').textContent=TITLES[v][0];$('#tb-title').textContent=TITLES[v][1];
-  if(v==='inbox'){renderChSeg();renderMailFilters();renderMail()}
+  if(v==='inbox'){renderSyncAll();renderMailFilters();renderMail()}
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
-  if(v==='create')renderCreate();
   if(v==='inbox')renderSplitLock();
   if(v==='docs'){renderFolders();renderDocs()}
-  if(v==='plug')renderPlugins();
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
-  if(v==='conn'){renderConn();refreshQuota()}
-  if(v==='set')renderSettings();
+  if(v==='set'){renderSettings();refreshQuota()}
   if(v==='search')setTimeout(()=>$('#search-input').focus(),50);
 }
 $$('#rail .nav-item,#mnav button').forEach(b=>{if(b.dataset.view)b.onclick=()=>go(b.dataset.view)});
+/* Adding a mailbox has one home, Settings → Linked accounts, and every "add an
+   account" button in the app goes straight to its form. */
+function openAddMailbox(){go('set');openMailForm();setTimeout(()=>$('#linkform')?.scrollIntoView({behavior:'smooth',block:'center'}),60)}
 /* The advanced views still exist and still work — they are just not the first
    thing a new person has to make sense of. */
 (function(){
@@ -1418,7 +1213,7 @@ $$('#rail .nav-item,#mnav button').forEach(b=>{if(b.dataset.view)b.onclick=()=>g
 })();
 
 /* ---------------- MESSAGES ---------------- */
-let mailFilter='all',chFilter='all',selMail=null;
+let mailFilter='all',selMail=null;
 $('#mail-sort').onchange=e=>{mailSort=e.target.value;renderMail()};
 $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#sel-mode').textContent=selecting?'✕ Cancel':'☑ Select';renderMail()};
 $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
@@ -1443,7 +1238,7 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
   }
   SEL.clear();save();
   await audit('mail.bulk',act+' × '+n);
-  renderChSeg();renderMailFilters();renderMail();
+  renderSyncAll();renderMailFilters();renderMail();
   const done=({read:'Marked read',unread:'Marked unread',star:'Star toggled',del:'Deleted'})[act]+' — '+n;
   const problems=(await Promise.all(pending)).flat();
   toast(problems.length?done+' in RATA, but your mailbox was not updated — '+problems[0]:done);
@@ -1463,42 +1258,21 @@ function renderSources(){renderDigest();
   if(!S.linked.length){el.innerHTML='';return}
   el.innerHTML='<div class="src-row">'+S.linked.map(l=>{
     const live=l.status==='live';
-    const syncable=SYNCABLE.includes(l.type);
-    return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="${syncable?'Tap to sync now':'Awaiting backend bridge'}">
+    const syncable=l.type==='mail';
+    return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="Tap to sync now">
       <span class="src-dot ${live?'on':''}"></span>${esc(l.label)}
       <span class="src-meta">${l.lastSync?rel(l.lastSync)+' ago':(syncable?'never synced':'pending')}</span>
     </button>`;
   }).join('')+'</div>';
-  el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>{
-    const l=S.linked.find(x=>x.id===b.dataset.src);if(!l)return;
-    if(l.type==='google')gmailSyncAccount(l);
-    else if(SYNCABLE.includes(l.type))serverSync(l.type);
-  });
+  el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>serverSync('mail'));
 }
 function renderSyncAll(){renderSources();
   const b=$('#sync-all');if(!b)return;
-  const gs=S.linked.filter(l=>l.type==='google');
-  b.style.display=S.linked.some(l=>SYNCABLE.includes(l.type))?'':'none';
-  b.onclick=async()=>{
-    b.disabled=true;
-    for(const l of gs){await gmailSyncAccount(l)}
-    for(const t of ['ms','slack','gmail_imap','apple']){
-      if(S.linked.some(l=>l.type===t))await serverSync(t);
-    }
-    b.disabled=false;
-  };
-}
-function renderChSeg(){renderSyncAll();
-  const defs=[['all','All'],['email','Email'],['sms','Text'],['slack','Slack'],['discord','Discord']].filter(([v])=>v==='all'||channelEnabled(v));
-  /* With one channel connected, "All 13" and "Email 13" are two buttons
-     showing the same number. The segment only earns its space once there is a
-     second channel to switch between. */
-  const seg=$('#ch-seg');
-  if(defs.length<3){seg.innerHTML='';chFilter='all';return}
-  if(!defs.some(d=>d[0]===chFilter))chFilter='all';
-  const cnt=v=>S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)&&(v==='all'||m.ch===v)).length;
-  $('#ch-seg').innerHTML='<div class="seg">'+defs.map(([v,l])=>`<button class="${chFilter===v?'on':''}" data-c="${v}">${l}<span class="cnt">${cnt(v)}</span></button>`).join('')+'</div>';
-  $$('#ch-seg button').forEach(b=>b.onclick=()=>{chFilter=b.dataset.c;renderChSeg();renderMail()});
+  b.style.display=S.linked.some(l=>l.type==='mail')?'':'none';
+  /* It never synced a mailbox linked by address — it only walked the provider
+     types that no longer exist — so the one button meant to refresh
+     everything did nothing at all. */
+  b.onclick=async()=>{b.disabled=true;try{await serverSync('mail')}finally{b.disabled=false}};
 }
 function renderCats(){
   const el=$('#cat-tabs');if(!el)return;
@@ -1511,8 +1285,6 @@ function renderCats(){
 }
 function renderMailFilters(){renderCats();
   let chips=[['all','All'],['unread','Unread'],['starred','Starred']];
-  if(S.plugins.split)chips.push(['ctx:work','Work'],['ctx:personal','Personal']);
-  if(S.plugins.jobs)S.jobs.forEach(j=>chips.push(['job:'+j,j]));
   S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
   chips.push(['sent','Sent']);
   if(!chips.some(c=>c[0]===mailFilter))mailFilter='all';
@@ -1537,16 +1309,17 @@ function categorize(m){
 function mailPool(acctId){
   let pool=S.messages.filter(m=>channelEnabled(m.ch));
   if(acctId)pool=pool.filter(m=>m.acct===acctId);
-  if(chFilter!=='all')pool=pool.filter(m=>m.ch===chFilter);
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
-  else if(mailFilter.startsWith('ctx:'))pool=pool.filter(m=>!m.sent&&msgCtx(m)===mailFilter.slice(4));
-  else if(mailFilter.startsWith('job:'))pool=pool.filter(m=>!m.sent&&msgJob(m)===mailFilter.slice(4));
   else if(mailFilter.startsWith('acct:'))pool=pool.filter(m=>m.acct===mailFilter.slice(5));
-  if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
-  else if(mailFilter.startsWith('ch:'))pool=pool.filter(m=>!m.sent&&m.ch===mailFilter.slice(3));
-  else pool=pool.filter(m=>!m.sent);
+  /* Sent is the one view made of sent mail; everywhere else it is left out.
+     The old chain dropped sent mail last and unconditionally, so the Sent chip
+     always showed an empty list. */
+  if(mailFilter!=='sent'){
+    pool=pool.filter(m=>!m.sent);
+    if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
+  }
   const s=mailSort;
   return pool.sort((a,b)=>{
     if(s==='old')return a.ts-b.ts;
@@ -1711,7 +1484,7 @@ function setSplit(on){
 
 
 function mailRowHTML(m){
-  const nm=msgFrom(m),ctx=msgCtx(m),job=msgJob(m);
+  const nm=msgFrom(m);
   return `
     <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
       <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
@@ -1724,8 +1497,6 @@ function mailRowHTML(m){
           <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
           ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
-          ${S.plugins.split?`<span class="badge ${ctx}">${ctx}</span>`:''}
-          ${S.plugins.jobs&&job?`<span class="badge job">${esc(job)}</span>`:''}
           ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
           ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
         </div>
@@ -1751,7 +1522,7 @@ function renderMail(){
            <button class="btn primary" id="empty-connect" style="font-size:15px;padding:12px 26px">Connect an email account</button>
          </div>`;
     const b=document.getElementById('empty-connect');
-    if(b)b.onclick=()=>{go('conn');document.getElementById('nav-more')?.removeAttribute('hidden')};
+    if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
   sc.innerHTML=pool.map(m=>mailRowHTML(m)).join('')+
@@ -1787,14 +1558,14 @@ function renderResting(){
   if(!d||selMail)return;
   d.classList.remove('open');
 
-  const boxes=S.linked.filter(l=>l.type==='mail'||imapKeyFor(l.type));
+  const boxes=S.linked.filter(l=>l.type==='mail');
   if(!boxes.length){
     d.innerHTML=`<div class="rest-wrap"><div class="rest-empty">
       <h2>Nothing connected yet</h2>
       <p>RATA brings every mailbox you have into one stream — Gmail, Outlook, iCloud, a work address on your own domain. Add the first one and it starts filling in.</p>
       <button class="btn primary" id="rest-add">＋ Add an email account</button>
     </div></div>`;
-    const b=$('#rest-add');if(b)b.onclick=()=>{go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)};
+    const b=$('#rest-add');if(b)b.onclick=openAddMailbox;
     return;
   }
 
@@ -1858,10 +1629,6 @@ function renderResting(){
 
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
-  if((m.ch==='sms'||m.ch==='slack'||m.ch==='discord')&&m.cid){
-    if(m.unread){m.unread=false;save();audit('msg.read',`${m.prev.slice(0,40)} (${m.ch})`)}
-    go('people');openPerson(m.cid,m.ch);return;
-  }
   selMail=id;
   const c=contact(m.cid);
   if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`);serverAct([m],'read')}
@@ -1874,14 +1641,13 @@ function openMail(id){
       <h2>${esc(m.subj||chan(m.ch).label+' message')}</h2>
       <div class="md-fromline">
         <div class="avatar" style="background:${avColor(nm)}">${initials(nm)}</div>
-        <div class="md-fromtext"><b>${esc(nm)}</b><span>${esc(c?(m.ch==='email'?c.addr:m.ch==='slack'?c.slack:c.phone):(m.fromAddr||''))} · <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
+        <div class="md-fromtext"><b>${esc(nm)}</b><span>${esc((m.fromAddr||(c&&c.addr)||''))} · <span class="badge ${m.prov||'email'}">${esc(m.prov||'email')}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
       </div>
       <div class="md-actions">
+        ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
-        ${m.gmailId?`<a class="btn" target="_blank" rel="noopener" href="https://mail.google.com/mail/u/0/#inbox/${m.gmailId}">Open in Gmail ↗</a>`:''}
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
         <div class="md-sortwrap"><button class="btn" id="md-move">Sort ▾</button><div class="md-sortmenu" id="md-sortmenu">${Object.entries(CATS).map(([c,l])=>`<button data-mv="${c}">${l}</button>`).join('')}<label><input type="checkbox" id="mv-always"> Always from this sender</label></div></div>
-        <button class="btn" id="md-translate">⇄ Translate</button>
         <button class="btn" id="md-sum">✦ Summarize</button>
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
@@ -1908,7 +1674,7 @@ function openMail(id){
     }else{toast('Moved to '+CATS[cat])}
     save();$('#md-sortmenu').classList.remove('open');renderCats();renderMail();
   });
-  $('#md-translate').onclick=()=>translateMessage(m.id);
+  if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
   $('#md-sum').onclick=()=>summarizeMessage(m.id);
   $('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
   $('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
@@ -1928,11 +1694,9 @@ function openMail(id){
 }
 
 /* ---------------- PEOPLE ---------------- */
-let peopleFilter='all',selPerson=null,personCh='all',personMode='thread';
+let peopleFilter='all',selPerson=null;
 function renderPeopleFilters(){
   let chips=[['all','All']];
-  if(S.plugins.split)chips.push(['work','Work'],['personal','Personal']);
-  if(S.plugins.jobs)S.jobs.forEach(j=>chips.push(['job:'+j,j]));
   if(!chips.some(c=>c[0]===peopleFilter))peopleFilter='all';
   $('#people-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${peopleFilter===f?'on':''}" data-f="${esc(f)}">${esc(l)}</button>`).join('')+'<button class="pill" data-f="__add">＋ New person</button>';
   $$('#people-filters .pill').forEach(p=>p.onclick=()=>{if(p.dataset.f==='__add'){toggleAddPerson();return}peopleFilter=p.dataset.f;renderPeopleFilters();renderPeople()});
@@ -1940,8 +1704,6 @@ function renderPeopleFilters(){
 function personMsgs(cid){return S.messages.filter(m=>channelEnabled(m.ch)&&(m.cid===cid||(m.sent&&m.toId===cid))).sort((a,b)=>a.ts-b.ts)}
 function renderPeople(){
   let pool=S.contacts.filter(c=>c.id!=='c8');
-  if(peopleFilter==='work'||peopleFilter==='personal')pool=pool.filter(c=>c.context===peopleFilter);
-  else if(peopleFilter.startsWith('job:'))pool=pool.filter(c=>c.job===peopleFilter.slice(4));
   pool.sort((a,b)=>{const la=personMsgs(a.id).at(-1)?.ts||0,lb=personMsgs(b.id).at(-1)?.ts||0;return lb-la});
   $('#people-scroll').innerHTML=pool.map(c=>{
     const msgs=personMsgs(c.id),last=msgs.at(-1);
@@ -1953,11 +1715,9 @@ function renderPeople(){
         <div class="m-prev">${last?esc(last.prev):'No messages yet'}</div>
         <div class="p-sub">
           ${chans.map(ch=>`<span class="badge ${ch}">${chan(ch).label}</span>`).join('')}
-          ${S.plugins.split?`<span class="badge ${c.context}">${c.context}</span>`:''}
-          ${eco(c.pref)?`<span class="badge pref">${eco(c.pref).label}</span>`:''}
         </div>
       </div>
-    </div>`}).join('')||'<div class="empty"><b>No people yet</b>Tap ＋ New person to add your first contact — a name and any handle is enough.</div>';
+    </div>`}).join('')||'<div class="empty"><b>No people yet</b>Tap ＋ New person to add your first contact — a name and an email address is enough.</div>';
   $$('#people-scroll .person-row').forEach(r=>r.onclick=()=>openPerson(r.dataset.id));
 }
 function toggleAddPerson(){
@@ -1966,20 +1726,14 @@ function toggleAddPerson(){
   h.innerHTML=`<div class="addp">
     <div class="row"><input class="txt" id="ap-name" placeholder="Name"><input class="txt" id="ap-nick" placeholder="Nickname (optional)"></div>
     <input class="txt" id="ap-email" placeholder="Email (optional)">
-    <div class="row"><input class="txt" id="ap-phone" placeholder="Phone (optional)"><input class="txt" id="ap-slack" placeholder="Slack @ (optional)"></div>
-    <input class="txt" id="ap-discord" placeholder="Discord @ (optional)">
-    <div class="row">
-      <select class="sel" id="ap-pref">${Object.entries(ECOS).map(([k,e])=>`<option value="${k}">${e.label}</option>`).join('')}</select>
-      <select class="sel" id="ap-ctx"><option value="work">Work</option><option value="personal">Personal</option></select>
-    </div>
     <div class="row"><button class="btn primary" id="ap-save" style="flex:1">Add person</button><button class="btn" id="ap-cancel">Cancel</button></div>
-    <div style="font-size:11.5px;color:var(--faint)">They don't need Rata — a nickname and any handle is enough to start threading their messages.</div>
+    <div style="font-size:11.5px;color:var(--faint)">They don't need RATA — a name and their email address is enough to thread everything they send you.</div>
   </div>`;
   $('#ap-cancel').onclick=()=>{h.innerHTML=''};
   $('#ap-save').onclick=async()=>{
     const name=$('#ap-name').value.trim();
     if(!name){toast('Name required');return}
-    const c={id:'c'+Date.now(),name,nick:$('#ap-nick').value.trim(),addr:$('#ap-email').value.trim(),phone:$('#ap-phone').value.trim(),slack:$('#ap-slack').value.trim(),discord:$('#ap-discord').value.trim(),pref:$('#ap-pref').value,context:$('#ap-ctx').value,job:''};
+    const c={id:'c'+Date.now(),name,nick:$('#ap-nick').value.trim(),addr:$('#ap-email').value.trim()};
     S.contacts.push(c);save();
     await audit('contact.add',name+(c.nick?' “'+c.nick+'”':''));
     h.innerHTML='';renderPeople();toast(name+' added');
@@ -1991,292 +1745,40 @@ function bubbleHTML(m){
       <div class="bubble-meta"><span class="badge ${m.ch==='email'?(m.prov||'email'):m.ch}">${m.ch==='email'?'Email':chan(m.ch).label}</span>${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}${rel(m.ts)}</div>
     </div>`;
 }
-function webHTML(c,all,avail){
-  const n=Math.max(avail.length,1);
-  const nodes=avail.map((x,i)=>{const a=-Math.PI/2+i*(2*Math.PI/n);return {x:220+150*Math.cos(a),y:160+108*Math.sin(a),ch:x,count:all.filter(m=>m.ch===x).length}});
-  return `<div class="web-wrap"><svg class="web-svg" viewBox="0 0 440 320" role="img" aria-label="Message web for ${esc(c.name)}">
-    ${nodes.map(nd=>`<line x1="220" y1="160" x2="${nd.x}" y2="${nd.y}" stroke="var(--tint)" stroke-opacity=".35" stroke-width="1.5"/>`).join('')}
-    <circle cx="220" cy="160" r="40" fill="var(--tint)"/>
-    <text x="220" y="167" text-anchor="middle" fill="#fff" font-size="20" font-weight="700" font-family="Sora,sans-serif">${initials(c.nick||c.name)}</text>
-    ${nodes.map(nd=>`<g class="web-node" data-ch="${nd.ch}"><circle cx="${nd.x}" cy="${nd.y}" r="28" fill="var(--card)" stroke="var(--tint)" stroke-width="2"/><text x="${nd.x}" y="${nd.y+5}" text-anchor="middle" fill="var(--tint)" font-size="15" font-weight="700" font-family="Sora,sans-serif">${nd.count}</text><text x="${nd.x}" y="${nd.y+44}" text-anchor="middle" fill="var(--slate)" font-size="10">${chan(nd.ch).label}</text></g>`).join('')}
-  </svg>
-  <div class="web-lists">${avail.map(x=>{const list=all.filter(m=>m.ch===x).slice(-3).reverse();return `<div class="web-col"><div class="sec-label" style="margin-bottom:8px">${chan(x).label}</div>${list.map(m=>`<div class="web-item">${m.sent?'You: ':''}${esc(m.prev.slice(0,70))}<span>${rel(m.ts)}</span></div>`).join('')||'<div class="web-item">No messages</div>'}</div>`}).join('')}</div></div>`;
-}
-function openPerson(cid,ch){
+function openPerson(cid){
   const c=contact(cid);if(!c)return;
   selPerson=cid;
-  if(ch!==undefined)personCh=ch;
   const d=$('#person-detail');
   d.classList.add('open');
   const all=personMsgs(cid);
-  all.filter(m=>m.unread).forEach(m=>m.unread=false);save();
-  const avail=['email','sms','slack','discord'].filter(x=>channelEnabled(x)&&all.some(m=>m.ch===x));
-  if(personCh!=='all'&&!avail.includes(personCh))personCh='all';
-  const msgs=personCh==='all'?all:all.filter(m=>m.ch===personCh);
-  const chOpts=[['email','Email']];
-  if(S.plugins.slack&&c.slack)chOpts.push(['slack','Slack']);
-  if(S.plugins.sms&&c.phone)chOpts.push(['sms','Text']);
-  if(S.plugins.discord&&c.discord)chOpts.push(['discord','Discord']);
-  const handle=[c.addr,c.phone,c.slack,c.discord].filter(Boolean).join(' · ');
+  /* Opening the thread reads it, in the real mailbox too — otherwise the next
+     refresh would bring every one of them back as unread. */
+  const unread=all.filter(m=>m.unread);
+  if(unread.length){unread.forEach(m=>m.unread=false);save();serverAct(unread,'read')}
+  const lastIn=[...all].reverse().find(m=>!m.sent&&(m.replyTo||m.fromAddr));
+  const first=esc((c.nick||c.name).split(' ')[0]);
   d.innerHTML=`
     <button class="md-back" id="pd-back">← People</button>
     <div class="thread-head">
       <div class="avatar" style="background:${avColor(c.name)}">${initials(c.nick||c.name)}</div>
-      <div class="who"><b>${esc(c.nick||c.name)}${c.nick?` <span style="color:var(--faint);font-weight:400;font-size:12px">(${esc(c.name)})</span>`:''}</b><span>${esc(handle||'No handles yet')}</span></div>
-      <div class="seg"><button id="pd-mthread" class="${personMode==='thread'?'on':''}">Thread</button><button id="pd-mweb" class="${personMode==='web'?'on':''}">Web</button></div>
-      <select class="sel" id="pd-pref" title="Preferred file format">${Object.entries(ECOS).map(([k,e])=>`<option value="${k}" ${c.pref===k?'selected':''}>${e.label}</option>`).join('')}</select>
-      ${S.plugins.split?`<select class="sel" id="pd-ctx"><option value="work" ${c.context==='work'?'selected':''}>Work</option><option value="personal" ${c.context==='personal'?'selected':''}>Personal</option></select>`:''}
-      ${S.plugins.jobs?`<select class="sel" id="pd-job"><option value="">No job</option>${S.jobs.map(j=>`<option ${c.job===j?'selected':''}>${esc(j)}</option>`).join('')}</select>`:''}
+      <div class="who"><b>${esc(c.nick||c.name)}${c.nick?` <span style="color:var(--faint);font-weight:400;font-size:12px">(${esc(c.name)})</span>`:''}</b><span>${esc(c.addr||'No email address yet')}</span></div>
     </div>
-    <div class="chip-row" id="pd-chips" style="flex-shrink:0">
-      <button class="pill ${personCh==='all'?'on':''}" data-ch="all">All · ${all.length}</button>
-      ${avail.map(x=>`<button class="pill ${personCh===x?'on':''}" data-ch="${x}">${chan(x).label} · ${all.filter(m=>m.ch===x).length}</button>`).join('')}
-    </div>
-    ${personMode==='web'?webHTML(c,all,avail):`<div class="thread-scroll" id="thread-scroll">${msgs.length?msgs.map(bubbleHTML).join(''):'<div class="empty"><b>No messages yet</b>Start the thread below.</div>'}</div>`}
-    <div class="dlp-inline" id="pd-dlp"></div>
-    <div class="reply-bar">
-      <select class="sel" id="pd-channel">${chOpts.map(([v,l])=>`<option value="${v}" ${personCh===v?'selected':''}>${l}</option>`).join('')}</select>
-      <input type="text" id="pd-input" placeholder="Message ${esc((c.nick||c.name).split(' ')[0])}…" autocomplete="off">
-      <button class="reply-send" id="pd-send" aria-label="Send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+    <div class="thread-scroll" id="thread-scroll">${all.length?all.map(bubbleHTML).join(''):'<div class="empty"><b>No messages yet</b>Mail with them appears here as it arrives.</div>'}</div>
+    <div class="reply-bar" style="justify-content:flex-end">
+      <button class="btn primary" id="pd-write">${lastIn?'Reply to '+first:'Write to '+first}</button>
     </div>`;
   const ts=$('#thread-scroll');if(ts)ts.scrollTop=ts.scrollHeight;
   $('#pd-back')&&($('#pd-back').onclick=()=>d.classList.remove('open'));
-  $('#pd-mthread').onclick=()=>{personMode='thread';openPerson(cid)};
-  $('#pd-mweb').onclick=()=>{personMode='web';openPerson(cid);audit('person.web',c.name)};
-  $$('#pd-chips .pill').forEach(p=>p.onclick=()=>{personCh=p.dataset.ch;openPerson(cid)});
-  d.querySelectorAll('.web-node').forEach(nd=>nd.onclick=()=>{personCh=nd.dataset.ch;personMode='thread';openPerson(cid)});
-  $('#pd-pref').onchange=e=>{c.pref=e.target.value;save();audit('contact.pref',`${c.name} → ${eco(c.pref)?.label||c.pref}`);toast(`${(c.nick||c.name).split(' ')[0]} now receives ${eco(c.pref)?.label||c.pref} formats`);renderPeople()};
-  $('#pd-ctx')&&($('#pd-ctx').onchange=e=>{c.context=e.target.value;save();audit('contact.context',`${c.name} → ${c.context}`);renderPeople()});
-  $('#pd-job')&&($('#pd-job').onchange=e=>{c.job=e.target.value;save();audit('contact.job',`${c.name} → ${c.job||'none'}`);renderPeople()});
-  const sendReply=async()=>{
-    const input=$('#pd-input'),body=input.value.trim();if(!body)return;
-    const ch=$('#pd-channel').value;
-    const findings=runDLP(body,S.settings.profile);
-    S.counters.scans++;
-    const blocks=findings.filter(f=>f.sev==='block');
-    const bar=$('#pd-dlp');
-    if(blocks.length){
-      S.counters.blocked++;save();
-      bar.className='dlp-inline block';
-      bar.textContent=`Blocked by ${S.settings.profile} DLP — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`;
-      await audit('dlp.block',`${chan(ch).label} to ${c.name} blocked — ${[...new Set(blocks.map(f=>f.name))].join(', ')}`);
-      return;
-    }
-    if(findings.length){
-      S.counters.warned++;
-      bar.className='dlp-inline warn';
-      bar.textContent=`Sent with ${findings.length} DLP warning(s) — logged`;
-      await audit('dlp.warn',`${chan(ch).label} to ${c.name} sent with ${findings.length} warning(s)`);
-      setTimeout(()=>{bar.className='dlp-inline'},3000);
-    }else{bar.className='dlp-inline'}
-    S.messages.push({id:'x'+Date.now(),ch,prov:ch==='email'?'gmail':ch,cid:null,toId:cid,sent:true,subj:'',prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[]});
-    save();
-    await audit('msg.send',`${chan(ch).label} to ${c.name}`);
-    input.value='';
-    openPerson(cid);
+  /* This used to be a message box that "sent" by adding a bubble to the
+     thread and nothing else — no mail ever left. Writing now goes through the
+     composer, which sends for real and scans against the DLP profile. */
+  $('#pd-write').onclick=()=>{
+    if(lastIn){replyTo(lastIn);return}
+    if(!c.addr){toast('Add an email address for '+(c.nick||c.name)+' first');return}
+    openCompose();$('#cmp-to').value=c.addr;liveScan();$('#cmp-subj').focus();
   };
-  $('#pd-send').onclick=sendReply;
-  $('#pd-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendReply()});
   renderPeople();
 }
-
-/* ---------------- CREATE — APP BRIDGE ---------------- */
-/* BRAND-ICONS:START — generated by scripts/brand-icons.mjs, do not edit by hand.
-   s:'official' is the vendor's own mark (simple-icons, CC0); s:'drawn' is a
-   recreation, used where no redistributable set carries the mark — Microsoft
-   and Adobe both had theirs removed on request. Put an official file in
-   public/brand/<key>.svg to replace one. */
-const BRAND={
-  acrobat:{h:'#EC1C24',t:"Adobe Acrobat",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4.2 14.6c.9 0 1.7-.8 2.5-2.2a18 18 0 0 1 3.3-.9c.9.7 1.7 1.1 2.4 1.1.8 0 1.3-.4 1.3-1 0-.7-.7-1.1-1.9-1.1-.6 0-1.3.1-2.1.2-.8-.8-1.5-1.8-2-2.9.3-1.1.5-2 .5-2.7 0-1-.4-1.6-1.1-1.6s-1.1.6-1.1 1.5c0 .8.3 1.8.8 2.9-.4 1.2-.9 2.4-1.5 3.6-1.5.6-2.4 1.4-2.4 2.2 0 .6.4.9 1.3.9zm.2-1.1c-.3 0-.4-.1-.4-.3 0-.3.5-.8 1.4-1.2-.4.9-.7 1.5-1 1.5zm2.4-2.5c.4-.8.7-1.6 1-2.4.4.7.9 1.4 1.4 2-.8.1-1.6.2-2.4.4zm.9-4.9c0-.4.1-.6.3-.6s.3.2.3.6c0 .4-.1 1-.3 1.6-.2-.6-.3-1.2-.3-1.6zm5 5.5c.5 0 .8.1.8.4 0 .2-.2.3-.5.3-.4 0-.9-.2-1.5-.6.5-.1.9-.1 1.2-.1z'},
-  adobeexpress:{h:'#FF3366',t:"Adobe Express",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm8 4.4-4 9.2h1.9l.8-2h2.6l.8 2H18l-4-9.2h-2zm1 2.6 .9 2.9h-1.8l.9-2.9z'},
-  adobesign:{h:'#EC1C24',t:"Adobe Acrobat Sign",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2.6 14.9h10.8v1.2H6.6v-1.2zm1.1-2.1 5.9-5.9a.8.8 0 0 1 1.1 0l1.4 1.4a.8.8 0 0 1 0 1.1l-5.9 5.9H7.7v-2.5zm7.5-4.7.9-.9a.5.5 0 0 0 0-.8l-.8-.8a.5.5 0 0 0-.8 0l-.9.9 1.6 1.6z'},
-  apple:{h:'#000000',t:"Apple",s:'official',d:'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701'},
-  docusign:{h:'#FFCC22',t:"DocuSign",s:'drawn',d:'M5 2h9l5 5v15H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm9 1.8V7h3.2L14 3.8zM8.2 10.4h3c2 0 3.4 1.3 3.4 3.3s-1.4 3.3-3.4 3.3h-3v-6.6zm1.7 1.5v3.6h1.2c1 0 1.7-.7 1.7-1.8s-.7-1.8-1.7-1.8H9.9z'},
-  dropbox:{h:'#0061FF',t:"Dropbox",s:'official',d:'M6 1.807L0 5.629l6 3.822 6.001-3.822L6 1.807zM18 1.807l-6 3.822 6 3.822 6-3.822-6-3.822zM0 13.274l6 3.822 6.001-3.822L6 9.452l-6 3.822zM18 9.452l-6 3.822 6 3.822 6-3.822-6-3.822zM6 18.371l6.001 3.822 6-3.822-6-3.822L6 18.371z'},
-  excel:{h:'#217346',t:"Microsoft Excel",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8 9l1.9 3.3L7.8 16h1.9l1.2-2.3 1.2 2.3h2l-2.1-3.7L13.9 9h-1.9l-1.1 2.1L9.9 9H8z'},
-  gdocs:{h:'#4285F4',t:"Google Docs",s:'official',d:'M14.727 6.727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zm-.545 10.455H7.09v-1.364h7.09v1.364zm2.727-3.273H7.091v-1.364h9.818v1.364zm0-3.273H7.091V9.273h9.818v1.363zM14.727 6h6l-6-6v6z'},
-  gdrive:{h:'#4285F4',t:"Google Drive",s:'official',d:'M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z'},
-  gforms:{h:'#7248B9',t:"Google Forms",s:'official',d:'M14.727 6h6l-6-6v6zm0 .727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zM7.91 17.318a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm0-3.273a.819.819 0 1 1 .001-1.637.819.819 0 0 1 0 1.637zm0-3.272a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm9 6.409h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818V9.273h6.818v1.363z'},
-  gsheets:{h:'#34A853',t:"Google Sheets",s:'official',d:'M11.318 12.545H7.91v-1.909h3.41v1.91zM14.728 0v6h6l-6-6zm1.363 10.636h-3.41v1.91h3.41v-1.91zm0 3.273h-3.41v1.91h3.41v-1.91zM20.727 6.5v15.864c0 .904-.732 1.636-1.636 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.318v6.5h6.5zm-3.273 2.773H6.545v7.909h10.91v-7.91zm-6.136 4.636H7.91v1.91h3.41v-1.91z'},
-  gslides:{h:'#FBBC04',t:"Google Slides",s:'official',d:'M16.09 15.273H7.91v-4.637h8.18v4.637zm1.728-8.523h2.91v15.614c0 .904-.733 1.636-1.637 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.068v6.75h3.841zm-.363 2.523H6.545v7.363h10.91V9.273zm-2.728-5.979V6h6.001l-6-6v3.294z'},
-  icloud:{h:'#3693F3',t:"iCloud",s:'official',d:'M13.762 4.29a6.51 6.51 0 0 0-5.669 3.332 3.571 3.571 0 0 0-1.558-.36 3.571 3.571 0 0 0-3.516 3A4.918 4.918 0 0 0 0 14.796a4.918 4.918 0 0 0 4.92 4.914 4.93 4.93 0 0 0 .617-.045h14.42c2.305-.272 4.041-2.258 4.043-4.589v-.009a4.594 4.594 0 0 0-3.727-4.508 6.51 6.51 0 0 0-6.511-6.27z'},
-  keynote:{h:'#1C9BF0',t:"Keynote",s:'drawn',d:'M4 4h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-6.2l2.4 3.4-1.4 1L12 16.6l-2.8 3.8-1.4-1L10.2 16H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1.8 2.6v6.8h12.4V6.6H5.8z'},
-  numbers:{h:'#31A952',t:"Numbers",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 17V13h1.8v4H7.5zm3.2 0V9.5h1.8V17h-1.8zm3.2 0v-5.6h1.8V17h-1.8z'},
-  onedrive:{h:'#0078D4',t:"Microsoft OneDrive",s:'drawn',d:'M10.2 6.3a5.1 5.1 0 0 1 4.6 2.9 3.9 3.9 0 0 1 .7-.1 3.9 3.9 0 0 1 3.8 3.2 3.2 3.2 0 0 1-.7 6.3H6.1A4.1 4.1 0 0 1 5.4 10a5.1 5.1 0 0 1 4.8-3.7z'},
-  onenote:{h:'#7719AA',t:"Microsoft OneNote",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.4 9v8.6h1.7v-5.4l3.1 5.4h1.8V9h-1.7v5.3L10.2 9H8.4z'},
-  pages:{h:'#F2870D',t:"Pages",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 9.5h9V11h-9V9.5zm0 3h9V14h-9v-1.5zm0 3h6V17h-6v-1.5z'},
-  powerpoint:{h:'#D24726',t:"Microsoft PowerPoint",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.6 9v8.6h1.8v-2.8h1.4c1.8 0 3-1.1 3-2.9S13.6 9 11.8 9H8.6zm1.8 1.5h1.2c.9 0 1.4.5 1.4 1.4s-.5 1.4-1.4 1.4h-1.2v-2.8z'},
-  word:{h:'#2B579A',t:"Microsoft Word",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.4 9l1.1 6.2L9.7 9h1.4l1.2 6.2L13.4 9h1.5l-1.9 8.6h-1.6l-1.2-6-1.2 6H7.4L5.5 9h1.9z'},
-};
-/* The drawn marks put their detail inside the body as extra subpaths, which
-   under nonzero winding fills them in and leaves a solid blob. evenodd makes
-   the inner shapes cut through. The official paths are built for nonzero and
-   are left alone. */
-const brandSVG=(k,size)=>{const b=BRAND[k];if(!b)return '';const r=b.s==='drawn'?' fill-rule="evenodd"':'';return `<svg class="brand-glyph" viewBox="0 0 24 24" width="${size||20}" height="${size||20}" role="img" aria-label="${b.t}" fill="${b.h}"${r}><path d="${b.d}"/></svg>`};
-/* BRAND-ICONS:END */
-
-/* ---------------- MAKE SOMETHING NEW ----------------
-   RATA used to carry its own document editor: a mock browser frame around a
-   textarea that wrote a file into the workspace. It was the weakest thing in
-   the product — nobody wants a worse Google Docs — and it misrepresented what
-   RATA is for. RATA holds mail and files from several accounts at once,
-   translates, and converts between formats. Making the document is somebody
-   else's job, and the user already has an account with them.
-
-   So this page is a launcher. Every tile opens the real application in its own
-   tab, signed in as whoever the user already is there. Nothing is embedded: an
-   iframe of Google Docs would be blocked anyway, and pretending otherwise is
-   how the old page got into trouble. */
-const LAUNCH=[
-  {eco:'Google', accent:'#1a73e8', note:'Opens in your Google account.', apps:[
-    {name:'Docs',   kind:'Document',     url:'https://docs.new',            icon:'gdocs'},
-    {name:'Sheets', kind:'Spreadsheet',  url:'https://sheets.new',          icon:'gsheets'},
-    {name:'Slides', kind:'Presentation', url:'https://slides.new',          icon:'gslides'},
-    {name:'Forms',  kind:'Form',         url:'https://forms.new',           icon:'gforms'},
-    {name:'Drive',  kind:'All your files', url:'https://drive.google.com',  icon:'gdrive'},
-  ]},
-  {eco:'Microsoft', accent:'#2b579a', note:'Opens in Microsoft 365 on the web.', apps:[
-    {name:'Word',       kind:'Document',     url:'https://www.office.com/launch/word',       icon:'word'},
-    {name:'Excel',      kind:'Spreadsheet',  url:'https://www.office.com/launch/excel',      icon:'excel'},
-    {name:'PowerPoint', kind:'Presentation', url:'https://www.office.com/launch/powerpoint', icon:'powerpoint'},
-    {name:'OneNote',    kind:'Notebook',     url:'https://www.office.com/launch/onenote',    icon:'onenote'},
-    {name:'OneDrive',   kind:'All your files', url:'https://onedrive.live.com',              icon:'onedrive'},
-  ]},
-  {eco:'Adobe', accent:'#e34f26', note:'PDFs, signing and design.', apps:[
-    {name:'Acrobat',      kind:'Read & edit PDF', url:'https://acrobat.adobe.com',                            icon:'acrobat'},
-    {name:'Fill & Sign',  kind:'Sign a PDF',      url:'https://acrobat.adobe.com/link/acrobat/fillsign',       icon:'adobesign'},
-    {name:'Convert',      kind:'To and from PDF', url:'https://www.adobe.com/acrobat/online/convert-pdf.html', icon:'acrobat'},
-    {name:'Express',      kind:'Design',          url:'https://new.express.adobe.com',                         icon:'adobeexpress'},
-  ]},
-  {eco:'Apple', accent:'#ff9f0a', note:'iCloud on the web — works from any browser.', apps:[
-    {name:'Pages',   kind:'Document',     url:'https://www.icloud.com/pages/',   icon:'pages'},
-    {name:'Numbers', kind:'Spreadsheet',  url:'https://www.icloud.com/numbers/', icon:'numbers'},
-    {name:'Keynote', kind:'Presentation', url:'https://www.icloud.com/keynote/', icon:'keynote'},
-  ]},
-  {eco:'Signing', accent:'#6b46c1', note:'Send something out for signature.', apps:[
-    {name:'DocuSign',     kind:'Send for signature', url:'https://app.docusign.com', icon:'docusign'},
-    {name:'Acrobat Sign', kind:'Send for signature', url:'https://sign.adobe.com',   icon:'adobesign'},
-  ]},
-];
-
-function renderCreate(){
-  const host=$('#launch-groups');if(!host)return;
-  host.innerHTML=LAUNCH.map(g=>`
-    <section class="launch-group">
-      <div class="launch-group-head">
-        <span class="launch-dot" style="background:${g.accent}"></span>
-        <b>${esc(g.eco)}</b>
-        <span>${esc(g.note)}</span>
-      </div>
-      <div class="launch-grid">
-        ${g.apps.map(a=>`
-          <a class="launch-tile" href="${a.url}" target="_blank" rel="noopener noreferrer"
-             data-launch="${esc(g.eco+' · '+a.name)}">
-            <span class="launch-badge">${brandSVG(a.icon,22)||`<b style="color:${g.accent}">${esc(a.name[0])}</b>`}</span>
-            <span class="launch-name">${esc(a.name)}</span>
-            <span class="launch-kind">${esc(a.kind)}</span>
-            <span class="launch-go" aria-hidden="true">↗</span>
-          </a>`).join('')}
-      </div>
-    </section>`).join('');
-  /* A real link, so it opens in a tab and can be middle-clicked or copied like
-     any other. The audit entry is the only thing added on top. */
-  host.querySelectorAll('[data-launch]').forEach(t=>t.addEventListener('click',()=>{
-    audit('app.open',t.dataset.launch);
-  }));
-  const jump=document.querySelector('[data-goto]');
-  if(jump)jump.onclick=()=>{go(jump.dataset.goto);setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)};
-}
-
-/* ---------------- PLUGINS ---------------- */
-function ecoCard(o){
-  const linked=S.linked.filter(l=>o.types.includes(l.type));
-  const live=linked.filter(l=>l.status==='live');
-  return `<div class="plug-card">
-    <div class="plug-top"><span class="conn-ic">${o.icon}</span><b>${o.name}</b>
-      <span class="dot ${live.length?'on':'off'}" style="margin-left:auto"></span></div>
-    <p>${o.desc}</p>
-    ${linked.length?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin:8px 0 2px">${linked.map(l=>`<span style="font-size:10.5px;font-weight:600;background:var(--tint-soft);color:var(--tint);padding:3px 9px;border-radius:999px">${esc(l.label)}${l.status==='live'?' · token active':''}</span>`).join('')}</div>`:''}
-    <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">${o.actions.map(x=>`<button class="btn ${x[2]?'primary':''}" data-eco-act="${x[1]}">${x[0]}</button>`).join('')}</div>
-    <div style="font-size:11px;color:var(--faint);margin-top:9px">${o.note}</div>
-  </div>`;
-}
-function renderEco(){
-  const g=$('#eco-grid');if(!g)return;
-  g.innerHTML=[
-    {name:'Email',types:['google','ms'],icon:ICONS.conn_gmail||'✉️',
-     desc:'Every mail account in one stream — Gmail, Outlook, Yahoo, your work address, anything with IMAP. Each account is added separately and can be removed on its own.',
-     actions:[['Add any email account','mail',1],['Sign in with Google','google',0],['Sign in with Microsoft','ms',0]],
-     note:'App passwords are per-account and revocable from your provider at any time — revoking one stops RATA reading that mailbox immediately.'},
-    {name:'Google Workspace',types:['google'],icon:ICONS.conn_gmail||'G',
-     desc:'Gmail live sync + real sending, and the Bridge delivers files Google Drive auto-converts into Docs and Sheets.',
-     actions:[['Sign in with Google','google',1],['Add Gmail by app password','mail',0],['Open Bridge','bridge',0]],
-     note:'One-click OAuth needs a Google client ID, and public use needs Google verification. The app-password IMAP link works today with neither.'},
-    {name:'Microsoft Office',types:['ms'],icon:ICONS.conn_outlook||'M',
-     desc:'Outlook live sync via Microsoft Graph, and the Bridge delivers real .docx / .xlsx for Word and Excel.',
-     actions:[['Sign in with Microsoft','ms',1],['Open Bridge','bridge',0]],
-     note:'Microsoft consent screen · tokens held server-side, auto-refreshed, revocable at account.microsoft.com.'},
-    {name:'Apple',types:[],icon:'',
-     desc:'The Bridge delivers files Pages and Numbers open natively — Apple\u2019s own formats are sealed, so this is how everyone interops with Apple, including Microsoft.',
-     actions:[['Add iCloud Mail','mail',1],['Open Bridge','bridge',0]],
-     note:'iCloud Mail signs in with an app-specific password over IMAP \u2014 Apple publishes no OAuth for Mail.'}
-  ].map(ecoCard).join('');
-  g.querySelectorAll('[data-eco-act]').forEach(b=>b.onclick=()=>{
-    const act=b.dataset.ecoAct;
-    if(act==='google')googleAddAccount();
-    else if(act==='mail'){go('conn');setTimeout(()=>document.querySelector('[data-addlink="mail"]')?.click(),60)}
-    else if(act==='ms')linkProviderLive('ms');
-    else if(act==='bridge'){go('docs');setTimeout(()=>{bridgeInit();document.querySelector('.bridge-card')?.scrollIntoView({behavior:'smooth'})},60)}
-  });
-}
-/* Which bridges are a view onto a connected account rather than a local
-   preference. Work/Personal split, job tags and Autopilot need nothing signed
-   in, so they stay free-standing switches. */
-const PLUGIN_ACCOUNT={slack:'slack',discord:'discord',sms:'phone'};
-function renderPlugins(){renderEco();
-  $('#nc-plug').textContent=Object.values(S.plugins).filter(Boolean).length;
-  $('#plug-grid').innerHTML=Object.entries(PLUGINS).map(([k,p])=>`
-    <div class="plug-card">
-      <div class="plug-top">
-        <span class="plug-ic">${ICONS['plug_'+k]||''}</span>
-        <b>${p.name}</b>
-        <button class="switch ${S.plugins[k]?'on':''}" data-p="${k}" role="switch" aria-checked="${S.plugins[k]}" aria-label="${p.name}"></button>
-      </div>
-      <p>${p.desc}</p>
-    </div>`).join('');
-  $$('#plug-grid .switch').forEach(sw=>sw.onclick=()=>{
-    const k=sw.dataset.p;
-    /* A bridge with nothing behind it is a switch that does nothing: turning on
-       Slack without a Slack account would add an empty filter and imply RATA is
-       reading messages it cannot see. So switching one on sends you to sign in
-       to that service, and linking the account is what turns it on. */
-    const needs=PLUGIN_ACCOUNT[k];
-    if(!S.plugins[k]&&needs&&!S.linked.some(l=>l.type===needs)){
-      toast(`Sign in to ${PLUGINS[k].name.replace(/ Bridge$/,'')} first — then it switches itself on`);
-      go('conn');
-      setTimeout(()=>document.querySelector('[data-addlink="'+needs+'"]')?.click(),80);
-      return;
-    }
-    S.plugins[k]=!S.plugins[k];save();
-    audit('plugin.'+(S.plugins[k]?'enable':'disable'),PLUGINS[k].name);
-    renderPlugins();
-    toast(`${PLUGINS[k].name} ${S.plugins[k]?'enabled':'disabled'}`);
-  });
-  $('#jobs-sec').style.display=S.plugins.jobs?'block':'none';
-  $('#job-chips').innerHTML=S.jobs.map((j,i)=>`<span class="job-chip">${esc(j)}<button data-i="${i}" aria-label="Remove ${esc(j)}">✕</button></span>`).join('');
-  $$('#job-chips button').forEach(b=>b.onclick=()=>{
-    const j=S.jobs[+b.dataset.i];
-    S.jobs.splice(+b.dataset.i,1);
-    S.contacts.forEach(c=>{if(c.job===j)c.job=''});
-    save();audit('jobs.remove',j);renderPlugins();
-  });
-}
-$('#job-add-btn').onclick=()=>{
-  const v=$('#job-new').value.trim();
-  if(!v||S.jobs.includes(v))return;
-  S.jobs.push(v);save();audit('jobs.add',v);
-  $('#job-new').value='';renderPlugins();toast(`Job context "${v}" added`);
-};
 
 /* ---------------- SEARCH ---------------- */
 /* One search box over every connected inbox. With several mailboxes the
@@ -2303,7 +1805,7 @@ function doSearch(){
   }
   for(const c of S.contacts){
     if(c.id==='c8')continue;
-    if((c.name+' '+(c.nick||'')+' '+c.addr+' '+(c.slack||'')+' '+(c.discord||'')+' '+(c.phone||'')).toLowerCase().includes(ql))hits.push({type:'person',ref:c});
+    if((c.name+' '+(c.nick||'')+' '+(c.addr||'')).toLowerCase().includes(ql))hits.push({type:'person',ref:c});
   }
   audit('search.run',`"${q}" — ${hits.length} results across ${new Set(S.messages.map(m=>m.acct).filter(Boolean)).size||1} inbox(es)`);
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
@@ -2312,12 +1814,12 @@ function doSearch(){
     ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
-    :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk([h.ref.addr,h.ref.phone,h.ref.slack,h.ref.discord].filter(Boolean).join(' · ')||'No handles')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
+    :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk(h.ref.addr||'No email address')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
   ).join(''):'<div class="empty"><b>No matches</b>Nothing across your channels, people, or files matched that query.</div>';
   rp.querySelectorAll('.res-row').forEach(r=>r.onclick=()=>{
     const h=hits[+r.dataset.i];
     if(h.type==='msg'){go('inbox');openMail(h.ref.id)}
-    else if(h.type==='person'){go('people');personMode='web';openPerson(h.ref.id)}
+    else if(h.type==='person'){go('people');openPerson(h.ref.id)}
     else{go('docs')}
   });
   const msgs=hits.filter(h=>h.type==='msg').map(h=>h.ref);
@@ -2348,15 +1850,8 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ---------------- DOCUMENTS ---------------- */
-let docFilter='all',docList=false;
-$('.doc-toolbar').addEventListener('click',e=>{
-  const p=e.target.closest('.pill');if(!p)return;
-  docFilter=p.dataset.df;
-  $$('.doc-toolbar .pill').forEach(x=>x.classList.toggle('on',x===p));
-  renderDocs();
-});
+let docList=false;
 $('#doc-viewtoggle').onclick=()=>{docList=!docList;$('#doc-viewtoggle').textContent=docList?'Grid view':'List view';renderDocs()};
-const CONVERT_TO={PDF:['DOCX','GDOC','TXT'],DOCX:['PDF','GDOC','TXT'],GDOC:['DOCX','PDF'],XLSX:['CSV','GSHEET','PDF'],GSHEET:['XLSX','CSV'],CSV:['XLSX','GSHEET'],MD:['PDF','DOCX'],TXT:['PDF','DOCX'],PAGES:['PDF','DOCX'],NUMBERS:['XLSX','PDF']};
 /* The plan ladder, mirroring lib/plan.js — the server enforces it, this
    decides what to show. There is no free tier: an account with no plan is
    unsubscribed, and is told the price rather than handed a lesser product. */
@@ -2451,14 +1946,14 @@ function fileInto(docId,folder){
 function renderDocs(){
   const g=$('#doc-grid');
   g.classList.toggle('listmode',docList);
-  let pool=S.documents.filter(d=>docFilter==='all'||(docFilter==='rata'?d.origin==='rata':d.prov===docFilter));
+  let pool=S.documents.slice();
   if(hasFileLibrary()&&folderFilter!=='all')pool=pool.filter(d=>folderFilter==='none'?!d.folder:d.folder===folderFilter);
   pool=pool.sort((a,b)=>b.ts-a.ts);
   $('#nc-docs').textContent=S.documents.length;
   if(!pool.length){
     g.innerHTML=(hasFileLibrary()&&folderFilter!=='all'&&S.documents.length)
       ?`<div class="empty"><b>Nothing in ${folderFilter==='none'?'Unfiled':esc(folderFilter)}</b>Drag a file onto a folder to put it there.</div>`
-      :'<div class="empty"><b>No files yet</b>Create one in the Create tab, or they will appear as attachments arrive.</div>';
+      :'<div class="empty"><b>No files yet</b>Drop a document on the Format Bridge above and choose Convert into Documents.</div>';
     return}
   g.innerHTML=pool.map(d=>`
     <div class="doc-card" data-doc="${d.id}" draggable="${hasFileLibrary()?'true':'false'}">
@@ -2467,7 +1962,7 @@ function renderDocs(){
       <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}${d.folder?`<span class="badge job">📁 ${esc(d.folder)}</span>`:''}<span class="doc-sz">${d.size}</span></div>
       ${d.role==='converted'&&d.fromName?`<div class="doc-pairline">⇄ translated from <b>${esc(d.fromName)}</b>${d.lang?' · '+esc(d.lang):''}</div>`:''}
       ${d.role==='source'?`<div class="doc-pairline">⇄ original — kept alongside its conversion</div>`:''}
-      <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}${(CONVERT_TO[d.fmt]||[]).map(t=>`<button class="cv" data-id="${d.id}" data-to="${t}">→ ${t}</button>`).join('')||''}</div>
+      <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}</div>
     </div>`).join('');
   if(hasFileLibrary()){
     g.querySelectorAll('.doc-card[data-doc]').forEach(c=>{
@@ -2492,14 +1987,6 @@ function renderDocs(){
       brDownload(blob,d.name);
       await audit('doc.download',d.name);
     }catch(e){toast('Could not open the file vault on this device')}
-  });
-  g.querySelectorAll('.cv[data-id]').forEach(b=>b.onclick=()=>{
-    const d=S.documents.find(x=>x.id===b.dataset.id);
-    const nn=d.name.replace(/\.[^.]+$/,'')+'.'+b.dataset.to.toLowerCase();
-    S.documents.unshift({id:'d'+Date.now(),prov:d.prov,name:nn,fmt:b.dataset.to,size:d.size,ts:Date.now(),origin:d.origin,content:d.content});
-    S.counters.conversions++;save();
-    audit('doc.convert',`${d.name} → ${b.dataset.to}`);
-    renderDocs();toast(`Converted to ${b.dataset.to}: ${nn}`);
   });
 }
 
@@ -2530,7 +2017,6 @@ function renderCompStats(){
     <div class="stat-card"><b>${c.scans}</b><span>Outbound scans</span></div>
     <div class="stat-card warn"><b>${c.warned}</b><span>Sent with warnings</span></div>
     <div class="stat-card bad"><b>${c.blocked}</b><span>Blocked sends</span></div>
-    <div class="stat-card"><b>${c.autopilot||0}</b><span>Autopilot conversions</span></div>
     <div class="stat-card"><b>${S.audit.length}</b><span>Audit entries</span></div>`;
 }
 function renderChain(brokenAt=-2,allOK=false){
@@ -2553,83 +2039,22 @@ $('#tamper-demo').onclick=()=>{
   renderChain();
 };
 
-/* ---------------- CONNECTIONS ---------------- */
-const CONN_META={gmail:['Gmail','OAuth 2.0 · PKCE'],outlook:['Outlook / Microsoft 365','OAuth 2.0 · PKCE'],imap:['IMAP / SMTP','App password'],slackc:['Slack','OAuth 2.0 · Bot + DM scope'],smsc:['SMS / iMessage bridge','Device relay'],discordc:['Discord','OAuth 2.0 · Bot + DM scope'],drive:['Google Drive','OAuth 2.0 · PKCE'],onedrive:['OneDrive','OAuth 2.0 · PKCE'],dropbox:['Dropbox','OAuth 2.0 · PKCE']};
-function renderConn(){
-  const REAL={gmail:'google',outlook:'ms',slackc:'slack'};
-  const mk=key=>{
-    const [name,auth]=CONN_META[key];
-    if(REAL[key]){
-      const linked=S.linked.filter(l=>l.type===REAL[key]);
-      const live=linked.some(l=>l.status==='live');
-      return `<div class="conn-card"><div class="conn-top"><span class="conn-ic">${ICONS['conn_'+key]||''}</span><b>${name}</b><span class="dot ${live?'on':'off'}" style="margin-left:auto;margin-right:0"></span></div><p>${auth} · ${linked.length?linked.length+' account'+(linked.length===1?'':'s')+' · token-based':'Requires sign-in — no account is touched without your consent'}</p><button class="btn primary" data-real="${REAL[key]}">Sign in${linked.length?' · add another':''}</button></div>`;
-    }
-    const on=S.connections[key];
-    return `<div class="conn-card"><div class="conn-top"><span class="conn-ic">${ICONS['conn_'+key]||''}</span><b>${name}</b><span class="dot ${on?'on':'off'}" style="margin-left:auto;margin-right:0"></span></div><p>${auth} · ${on?'Enabled in workspace — live sign-in arrives with the RATA backend':'Not enabled'}</p><button class="btn ${on?'danger':''}" data-c="${key}">${on?'Disable':'Enable in workspace'}</button></div>`;
-  };
-  $('#conn-mail').innerHTML=['gmail','outlook','imap'].map(mk).join('');
-  $('#conn-chat').innerHTML=['slackc','smsc','discordc'].map(mk).join('');
-  $('#conn-cloud').innerHTML=['drive','onedrive','dropbox'].map(mk).join('');
-  const chipify=(sel,type)=>{
-    const card=$(sel);if(!card)return;
-    const ls=S.linked.filter(l=>l.type===type);if(!ls.length)return;
-    card.insertAdjacentHTML('beforeend','<div style="margin-top:9px;display:flex;gap:6px;flex-wrap:wrap">'+ls.map(l=>`<span style="font-size:10.5px;font-weight:600;background:var(--tint-soft);color:var(--tint);padding:3px 10px;border-radius:999px">${esc(l.label)}${l.status==='live'?' ·  live':''}</span>`).join('')+'</div>');
-  };
-  $$('#view-conn [data-real]').forEach(b=>b.onclick=()=>{
-    const t=b.dataset.real;
-    if(t==='google')googleAddAccount();else linkProviderLive(t);
-  });
-  chipify('#conn-mail .conn-card:nth-child(1)','google');
-  chipify('#conn-mail .conn-card:nth-child(2)','ms');
-  chipify('#conn-chat .conn-card:nth-child(1)','slack');
-  chipify('#conn-chat .conn-card:nth-child(2)','phone');
-  chipify('#conn-chat .conn-card:nth-child(3)','discord');
-  $$('#view-conn [data-c]').forEach(b=>b.onclick=()=>{
-    const k=b.dataset.c;S.connections[k]=!S.connections[k];save();
-    audit('provider.'+(S.connections[k]?'connect':'disconnect'),CONN_META[k][0]);
-    renderConn();toast(`${CONN_META[k][0]} ${S.connections[k]?'connected':'disconnected'}`);
-  });
-}
-
 /* ---------------- SETTINGS ---------------- */
 function renderSettings(){
   $('#set-name').value=S.settings.name;
-  const sl=$('#set-lang');
-  if(sl&&!sl.options.length)sl.innerHTML=Object.entries(LANGS).map(([c,n])=>`<option value="${c}">${n}</option>`).join('');
-  if(sl)sl.value=myLang();
-  $('#set-autotrans')&&$('#set-autotrans').classList.toggle('on',!!S.settings.autoTrans);
-  $('#set-api').value=S.settings.api;
-  const c=cfg();
-  $('#cfg-gcid').value=c.googleClientId||'';
-  $('#cfg-sburl').value=c.supabaseUrl||'';
-  $('#cfg-sbkey').value=c.supabaseKey||'';
-  $('#cfg-akey').value=c.anthropicKey||'';
-  $('#cfg-stb').value=c.stripeBase||'';
-  $('#cfg-stpr').value=c.stripePro||'';
-  $('#cfg-ste').value=c.stripeEnterprise||'';
-  $('#cfg-stp').value=c.stripePortal||'';
   renderPlan();
   renderLinked();
   $('#about-line').textContent=`${S.messages.length} messages · ${S.contacts.length} people · ${S.documents.length} files · ${S.audit.length} audit entries · profile ${S.settings.profile}`;
 }
-$('#set-autotrans')&&($('#set-autotrans').onclick=()=>{S.settings.autoTrans=!S.settings.autoTrans;$('#set-autotrans').classList.toggle('on',S.settings.autoTrans);save();toast(S.settings.autoTrans?'Incoming messages will auto-translate to '+(LANGS[myLang()]||myLang()):'Auto-translate off')});
-$('#set-lang').addEventListener('change',e=>{S.settings.lang=e.target.value;save();toast('Language set to '+(LANGS[e.target.value]||e.target.value))});
 $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim()||'User';save();toast('Name saved')});
-$('#cfg-gcid').addEventListener('change',e=>{setCfg({googleClientId:e.target.value.trim()});toast('Google Client ID saved — Connect Gmail from Connections')});
-$('#cfg-sburl').addEventListener('change',e=>{setCfg({supabaseUrl:e.target.value.trim()});toast('Supabase URL saved')});
-$('#cfg-sbkey').addEventListener('change',e=>{setCfg({supabaseKey:e.target.value.trim()});toast('Supabase key saved — sign out and back in to activate cloud accounts')});
-$('#cfg-stb').addEventListener('change',e=>{setCfg({stripeBase:e.target.value.trim()});renderPlan();toast('Base checkout link saved')});
-$('#cfg-stpr').addEventListener('change',e=>{setCfg({stripePro:e.target.value.trim()});renderPlan();toast('Pro checkout link saved')});
-$('#cfg-ste').addEventListener('change',e=>{setCfg({stripeEnterprise:e.target.value.trim()});renderPlan();toast('Enterprise checkout link saved')});
-$('#cfg-stp').addEventListener('change',e=>{setCfg({stripePortal:e.target.value.trim()});renderPlan();toast('Billing portal link saved')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
   if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'AWAITING BACKEND')}</span></b><span>${esc(l.type==='mail'?(l.provLabel||'Email')+(l.host?' · '+l.host:''):LINK_META[l.type][0])} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:(SYNCABLE.includes(l.type)?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`:'')}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'NOT SYNCED YET')}</span></b><span>${esc((l.provLabel||'Email')+(l.host?' · '+l.host:''))} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
-  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);if(!l)return;if(l.type==='google')gmailSyncAccount(l);else if(SYNCABLE.includes(l.type))serverSync(l.type)});
+  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>serverSync('mail'));
   /* Relink opens the same form with the address already in it: the thing that
      needs replacing is the password, and making someone retype the address
      they can see on the row is the kind of friction that ends in a support
@@ -2641,7 +2066,6 @@ function renderLinked(){
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
-const LF_COPY={discord:['Discord handle','@yourhandle'],phone:['phone number','+1 555 555 5555']};
 /* One form for every provider. The address decides the rest — which server to
    reach and where that provider keeps its app-password screen — so the user is
    not asked to know any of it. Called both to add a mailbox and to repair one
@@ -2661,38 +2085,11 @@ function openMailForm(email,why){
   (email?$('#lf-pass'):$('#lf-input')).focus();
 }
 
-$$('[data-addlink]').forEach(b=>b.onclick=()=>{
-  const t=b.dataset.addlink;
-  if(t==='google'){googleAddAccount();return}
-  if(t==='ms'){linkProviderLive('ms');return}
-  if(t==='slack'){linkProviderLive('slack');return}
-  const im=t.startsWith('imap:')?IMAP_LINK[t.slice(5)]:null;
-  lfType=t;
-  $('#lf-host').style.display='none';$('#lf-host').value='';
-  if(t==='mail'){
-    openMailForm();return;
-  }else if(im){
-    $('#lf-title').textContent='Link '+im.label;
-    $('#lf-sub').textContent='App-specific password — create one at '+im.help+'. Your normal password will not work.';
-    $('#lf-input').placeholder=im.ph;
-    $('#lf-pass').style.display='';$('#lf-pass').value='';
-  }else{
-    $('#lf-title').textContent='Link '+LF_COPY[t][0];
-    $('#lf-sub').textContent='Verified format required — this becomes part of your RATA identity.';
-    $('#lf-input').placeholder=LF_COPY[t][1];
-    $('#lf-pass').style.display='none';
-  }
-  $('#lf-input').value='';
-  $('#linkform').style.display='flex';$('#lf-input').focus();
-});
+$$('[data-addlink]').forEach(b=>b.onclick=()=>openMailForm());
 $('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none'};
 $('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
-  if(lfType==='mail'){await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());return}
-  if(lfType&&lfType.startsWith('imap:')){await imapLink(lfType.slice(5),v,$('#lf-pass').value);return}
-  if(!validLink(lfType,v)){toast('That format doesn\u2019t look right \u2014 check and try again');return}
-  const l=addLinked(lfType,v);
-  if(l){$('#linkform').style.display='none';renderLinked();renderConn();toast(LINK_META[lfType][0]+' linked \u2014 live in your inbox')}
+  await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());
 };
 $('#lf-input').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
 $('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
@@ -2723,7 +2120,7 @@ async function mailLink(email,pass,host){
     let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
     if(l){l.status='live';l.host=res.host;l.provLabel=res.label;delete l.needsRelink;delete l.lastError;save()}
     $('#linkform').style.display='none';
-    renderLinked();renderConn();refreshQuota();
+    renderLinked();refreshQuota();
     await audit('mail.link',res.email+' linked ('+res.label+(res.foundBy?' · found by '+res.foundBy:'')+')');
     toast(res.label&&res.foundBy==='mx'
       ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
@@ -2750,11 +2147,8 @@ async function refreshQuota(){
     const m=q.limits.mail===null
       ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — no limit`
       : `${q.used.mail} of up to ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
-    const c=q.limits.chat===null?'chat workspaces without limit'
-      :q.limits.chat?`${q.used.chat} of ${q.limits.chat} chat workspace${q.limits.chat===1?'':'s'}`
-      :'no chat workspaces';
     const full=q.limits.mail!==null&&q.remaining.mail===0;
-    line.textContent=`${q.planLabel}: ${m}, ${c} in use.`+(full?' Upgrade in Settings to add another mailbox.':'');
+    line.textContent=`${q.planLabel}: ${m}.`+(full?' Upgrade in Settings to add another mailbox.':'');
   }catch(e){
     /* On the website there is nothing to ask any more: plans are enforced by
        the licence the app checks, and saying "could not check just now" would
@@ -2765,30 +2159,6 @@ async function refreshQuota(){
   }
 }
 
-/* The server proves the credentials against the real IMAP host before storing
-   them, so a wrong password fails here rather than as an inbox that never fills. */
-async function imapLink(key,email,pass){
-  const im=IMAP_LINK[key];if(!im)return;
-  if(!/.+@.+\..+/.test(email)){toast('Enter your '+im.label+' address');return}
-  if(pass.replace(/\s+/g,'').length<8){toast('Paste the app-specific password from '+im.help);return}
-  const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
-  try{
-    const res=await apiFetch('/api/link/imap/'+key,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({email,appPassword:pass})});
-    if(!res.ok){toast(res.error||'Could not link '+im.label);return}
-    $('#lf-pass').value='';
-    let l=linkedFind(im.type,res.label)||addLinked(im.type,res.label);
-    if(l){l.status='live';save()}
-    $('#linkform').style.display='none';
-    renderLinked();renderConn();
-    await audit('imap.link',im.label+' linked — '+res.label);
-    toast(im.label+' linked — pulling messages…');
-    await serverSync(im.type);
-  }catch(e){
-    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
-  }finally{btn.disabled=false;btn.textContent='Link'}
-}
 /* Every price on this screen is read from TIERS rather than typed into the
    markup. Three copies of "$8" in three places is how a price change ships
    half-done — the plan updates, a settings row still quotes last quarter's
@@ -2796,9 +2166,6 @@ async function imapLink(key,email,pass){
 function renderPrices(){
   const c=$('#plan-compare');
   if(c)c.textContent=SELLABLE.map(k=>`${TIERS[k].label.replace('RATA ','')} ${money(TIERS[k].price)} — ${PLAN_ONELINE[k]}`).join(' ');
-  const lb=$('#lbl-stb'),lp=$('#lbl-stpr');
-  if(lb)lb.textContent=`Stripe payment link — Base ${money(TIERS.base.price)}`;
-  if(lp)lp.textContent=`Stripe payment link — Pro ${money(TIERS.pro.price)}`;
 }
 const ORDER=['base','pro','enterprise'];
 const SELLABLE=ORDER.filter(k=>TIERS[k].sellable);
@@ -2854,8 +2221,6 @@ function renderPlan(){
   $('#bill-nolinks').style.display=SELLABLE.some(k=>links[k])?'none':'';
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
-$('#cfg-akey').addEventListener('change',e=>{setCfg({anthropicKey:e.target.value.trim()});toast(e.target.value?'AI briefings enabled in Rata Assist':'AI key removed')});
-$('#set-api').addEventListener('change',e=>{S.settings.api=e.target.value.trim();save();toast(S.settings.api?'API endpoint saved — standalone data remains local':'Standalone mode')});
 $('#btn-export').onclick=()=>{
   const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
   const a=document.createElement('a');
@@ -2984,37 +2349,38 @@ let dlpTimer=null,lastFindings=[];
 function fillComposeFrom(){
   const sel=$('#cmp-from');
   /* Anything that can really send goes first, so the default is a real send
-     rather than a note to self. Mail accounts send over SMTP through the
-     server; Google accounts send through the Gmail API in the browser. */
-  const sendable=S.linked.filter(l=>l.type==='mail'||l.type==='google');
+     rather than a note to self. */
+  const sendable=S.linked.filter(l=>l.type==='mail');
   sel.innerHTML=sendable.map(l=>`<option value="${l.id}">${esc(l.label)} · real send</option>`).join('')
     +'<option value="local">Record only (no linked email)</option>';
   if(sendable.length)sel.value=sendable[0].id;
 }
-function b64url(str){
-  return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-async function gmailSend(l,to,subj,body){
-  let token=gTokens[l.id];
-  if(!token){token=await googleOAuth(l.label);gTokens[l.id]=token}
-  const raw=b64url(`From: ${S.settings.name} <${l.label}>\r\nTo: ${to}\r\nSubject: ${subj}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${body}`);
-  const r=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{
-    method:'POST',
-    headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-    body:JSON.stringify({raw})
-  });
-  const data=await r.json();
-  if(data.error)throw new Error(data.error.message||'send failed');
-  return data;
-}
+/* The message being answered, while the composer holds a reply. Its id goes
+   out as In-Reply-To so the answer lands in the same thread at the other end. */
+let REPLYING=null;
 function openCompose(){
+  REPLYING=null;
   fillComposeFrom();
   ov.classList.add('open');
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
-  $('#cmp-ctx').style.display=S.plugins.split?'':'none';
   $('#cmp-to').focus();
 }
-function closeCompose(){ov.classList.remove('open')}
+function closeCompose(){ov.classList.remove('open');REPLYING=null}
+/* Reply from the mailbox the message arrived in, to whoever the sender asked
+   replies to go to, quoting what RATA has of the original. */
+function replyTo(m){
+  openCompose();
+  const from=$('#cmp-from');
+  if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
+  $('#cmp-to').value=m.replyTo||m.fromAddr||'';
+  const subj=m.subj&&m.subj!=='(no subject)'?m.subj:'';
+  $('#cmp-subj').value=(/^re:/i.test(subj)?'':'Re: ')+subj;
+  const orig=String(m.body||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
+  $('#cmp-body').value=`\n\nOn ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
+  REPLYING={id:m.id,messageId:m.messageId||''};
+  liveScan();
+  const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
+}
 /* Two-inbox controls. */
 $$('#inbox-mode button').forEach(b=>b.onclick=()=>{
   setSplit(b.dataset.mode==='split');
@@ -3069,35 +2435,31 @@ $('#cmp-send').onclick=async()=>{
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===to.toLowerCase());
   const acctSel=prov;
   const acct=S.linked.find(l=>l.id===acctSel);
-  const gAcct=acct&&acct.type==='google'?acct:null;
   const mAcct=acct&&acct.type==='mail'?acct:null;
   let realSent=false;
-  if(gAcct||mAcct){
+  if(mAcct){
     if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
     const sb=$('#cmp-send');sb.disabled=true;sb.textContent='Sending…';
     try{
-      if(gAcct)await gmailSend(gAcct,to,subj,body);
-      else{
-        const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({from:mAcct.label,to,subject:subj,body})});
-        if(!r.ok)throw new Error(r.error||'send failed');
-      }
+      const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null})});
+      if(!r.ok)throw new Error(r.error||'send failed');
       realSent=true;
     }catch(e){
       sb.disabled=false;sb.textContent='Send';
       toast(e.message==='needs-the-app'
         ? 'Sending from a linked mailbox happens in the RATA app — download it at mailrata.org.'
-        : (gAcct?'Gmail send failed — ':'Send failed — ')+(e.message||'reconnect and try again'));
+        : 'Send failed — '+(e.message||'reconnect and try again'));
       return;
     }
     sb.disabled=false;sb.textContent='Send';
   }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:gAcct?'gmail':(mAcct?'imap':'local'),acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[],ctx:S.plugins.split?$('#cmp-ctx').value:undefined});
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[]});
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
   liveScan();closeCompose();renderMail();
-  toast(realSent?('Sent for real via '+gAcct.label):'Recorded — link a Google account to send real email');
+  toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
 };
 
 /* ---------------- CLOUD SYNC (Supabase) ---------------- */
@@ -3126,7 +2488,7 @@ async function supa(){
    leaves, which is why this is a list of what is allowed rather than a list
    of what is stripped — a new field added to the workspace is private by
    default rather than uploaded by oversight. */
-const CLOUD_FIELDS=['settings','plugins','connections','folders','rules','jobs','linked'];
+const CLOUD_FIELDS=['settings','folders','rules','linked'];
 
 /* Per-device facts, even inside a field that does travel. An API key belongs
    to the browser that holds it; when a mailbox last synced is true of one
@@ -3166,7 +2528,7 @@ function applyCloud(remote){
       if(f==='linked'){
         /* Keep this device's sync state for mailboxes it already knows. */
         const mine=Object.fromEntries((S.linked||[]).map(l=>[l.id,l]));
-        S.linked=v.map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink}:{status:'pending'}));
+        S.linked=v.filter(l=>l&&l.type==='mail').map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink}:{status:'pending'}));
       }else S[f]=v;
     }else if(v&&typeof v==='object'){
       S[f]=Object.assign({},S[f],v);
@@ -3210,7 +2572,7 @@ function renderAcctMenu(){
 }
 $('#acct-btn').onclick=e=>{e.stopPropagation();renderAcctMenu();$('#acct-menu').classList.toggle('open')};
 document.addEventListener('click',e=>{if(!$('#acct-menu').contains(e.target))$('#acct-menu').classList.remove('open')});
-$('#am-manage').onclick=()=>{$('#acct-menu').classList.remove('open');go('settings')};
+$('#am-manage').onclick=()=>{$('#acct-menu').classList.remove('open');go('set')};
 $('#am-signout').onclick=()=>$('#btn-signout').click();
 $('#btn-signout').onclick=async()=>{
   try{if(SESSION.mode==='supabase'){const sb=await supa();if(sb)await sb.auth.signOut()}}catch(e){}
@@ -3218,34 +2580,16 @@ $('#btn-signout').onclick=async()=>{
   location.replace('auth.html');
 };
 
-/* ---------------- REAL GMAIL (Google OAuth, read-only) ---------------- */
-let gTokens={};
 function loadScript(u){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 
 /* ---- linked accounts registry ---- */
-const LINK_META={mail:['Email'],google:['Google — Gmail'],ms:['Microsoft — Outlook & OneDrive'],slack:['Slack'],discord:['Discord'],phone:['Texts / SMS'],gmail_imap:['Gmail — app password (IMAP)'],apple:['iCloud Mail — app password (IMAP)']};
-/* Mail linked over IMAP rather than OAuth. Apple publishes no OAuth for Mail;
-   Gmail's read scopes are restricted, so one-click Gmail needs Google verification
-   and an annual CASA assessment. An app-specific password needs neither. */
-const IMAP_LINK={gmail:{type:'gmail_imap',label:'Gmail',ph:'you@gmail.com',help:'myaccount.google.com/apppasswords — needs 2-Step Verification on'},apple:{type:'apple',label:'iCloud Mail',ph:'you@icloud.com',help:'appleid.apple.com → Sign-In and Security → App-Specific Passwords'}};
-const imapKeyFor=type=>Object.keys(IMAP_LINK).find(k=>IMAP_LINK[k].type===type)||null;
+const LINK_META={mail:['Email']};
 function linkedFind(type,label){return S.linked.find(l=>l.type===type&&l.label.toLowerCase()===label.toLowerCase())}
-function validLink(type,val){
-  if(type==='ms')return /.+@.+\..+/.test(val);
-  if(type==='phone')return /^\+?[\d\s().-]{7,}$/.test(val);
-  if(type==='slack'||type==='discord')return /^@?[\w.#-]{2,32}$/.test(val);
-  return !!val;
-}
 function addLinked(type,label,extra){
   if(linkedFind(type,label)){toast('That account is already linked');return null}
-  const l=Object.assign({id:'lk'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),type,label,status:type==='google'?'live':'pending',addedAt:Date.now()},extra||{});
+  const l=Object.assign({id:'lk'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),type,label,status:'pending',addedAt:Date.now()},extra||{});
   S.linked.push(l);
-  if(type==='google')S.connections.gmail=true;
-  if(type==='ms'){S.connections.outlook=true;S.connections.onedrive=true}
-  if(type==='slack'){S.connections.slackc=true;S.plugins.slack=true}
-  if(type==='discord'){S.connections.discordc=true;S.plugins.discord=true}
-  if(type==='phone'){S.connections.smsc=true;S.plugins.sms=true}
-  save();audit('account.link',`${LINK_META[type][0]} — ${label}`);
+  save();audit('account.link',`${(LINK_META[type]||[type])[0]} — ${label}`);
   return l;
 }
 async function removeLinked(id){
@@ -3263,19 +2607,11 @@ async function removeLinked(id){
   }
   const i=S.linked.findIndex(x=>x.id===id);if(i<0)return;
   S.linked.splice(i,1);
-  const still=t=>S.linked.some(x=>x.type===t);
-  if(l.type==='google'&&!still('google'))S.connections.gmail=false;
-  if(l.type==='ms'&&!still('ms')){S.connections.outlook=false;S.connections.onedrive=false}
-  if(l.type==='slack'&&!still('slack')){S.connections.slackc=false;S.plugins.slack=false}
-  if(l.type==='discord'&&!still('discord')){S.connections.discordc=false;S.plugins.discord=false}
-  if(l.type==='phone'&&!still('phone')){S.connections.smsc=false;S.plugins.sms=false}
-  delete gTokens[id];
-  save();await audit('account.unlink',`${LINK_META[l.type][0]} — ${l.label}`);
-  renderLinked();renderConn();renderMailFilters();renderMail();
+  save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
+  renderLinked();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
 }
 
-/* ---- RATA backend (Next.js API routes): live Outlook + Slack ---- */
 /* What the website still answers for.
 
    Everything else on this list used to be a server route: linking a mailbox,
@@ -3307,45 +2643,14 @@ async function apiFetch(path,opts){
   if(!r.ok&&r.status===404)throw new Error('backend-missing');
   return r.json();
 }
-async function linkProviderLive(p){
-  try{
-    const res=await apiFetch('/api/link/'+p+'/state',{method:'POST'});
-    if(!res.state){toast(res.error||'Outlook and Slack are linked in the RATA app — download it at mailrata.org.');return}
-    location.href='/api/link/'+p+'/start?state='+encodeURIComponent(res.state);
-  }catch(e){
-    toast('Outlook and Slack are linked in the RATA app, on your own computer — download it at mailrata.org.');
-  }
-}
-/* Mailboxes sync together at /api/sync/mail; the older per-provider IMAP links
-   keep their own path so accounts linked before this change still work. */
-function syncPathFor(type){if(type==='mail')return '/api/sync/mail';const k=imapKeyFor(type);return k?'/api/sync/imap/'+k:'/api/sync/'+type}
-const SYNCABLE=['mail','google','ms','slack','gmail_imap','apple'];
+/* Every mailbox syncs together: /api/sync/mail answers for all of them at once,
+   and each message carries the address it came from. */
 async function serverSync(p){
-  const newIds=[];
+  if(p!=='mail')return;
   try{
-    const res=await apiFetch(syncPathFor(p));
+    const res=await apiFetch('/api/sync/mail');
     if(res.error){toast(res.error);return}
-    /* /api/sync/mail answers for every mailbox at once, so the reply names the
-       accounts rather than one label. Each message already carries the address
-       it came from, which is what the combined inbox filters on. */
-    if(p==='mail'){await absorbMail(res);return}
-    let l=S.linked.find(x=>x.type===p&&x.label.toLowerCase()===String(res.label||'').toLowerCase());
-    if(!l)l=addLinked(p,res.label);
-    if(!l)return;
-    l.status='live';
-    let added=0;
-    for(const m of (res.messages||[])){
-      if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
-      const match=m.fromAddr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===m.fromAddr.toLowerCase()):null;
-      S.messages.push(Object.assign({cid:match?match.id:null,acct:l.id,real:true,atts:[]},m));
-      added++;newIds.push(m.id);
-    }
-    l.lastSync=Date.now();
-    save();
-    autoTranslateNew(newIds);
-    await audit(p+'.sync',`${res.label} — ${added} real messages pulled via RATA backend`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
-    toast(res.label+(added?` synced — ${added} new message${added===1?'':'s'}`:' is up to date'));
+    await absorbMail(res);
   }catch(e){
     toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }
@@ -3386,14 +2691,13 @@ async function absorbMail(res){
     added++;newIds.push(m.id);
   }
   save();
-  autoTranslateNew(newIds);
-  const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
+    const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
   const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
   await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
-  renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
+  renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();
   const later=(res.deferred||[]).length;
   toast(stuck.length
-    ? `${stuck.join(', ')} needs its app password again — relink it in Accounts`
+    ? `${stuck.join(', ')} needs its app password again — relink it in Settings`
     : failed.length
       ? `${failed.join(', ')} could not be reached — RATA will try again on the next refresh`
       : later
@@ -3401,81 +2705,6 @@ async function absorbMail(res){
         : (added?`${added} new message${added===1?'':'s'}`:'Your mail is up to date'));
 }
 
-/* ---- Google: real OAuth per account ---- */
-function googleOAuth(hint){
-  return new Promise(async(res,rej)=>{
-    try{
-      const cid=cfg().googleClientId;
-      if(!cid){rej(new Error('no-client-id'));return}
-      if(!window.google?.accounts?.oauth2)await loadScript('https://accounts.google.com/gsi/client');
-      const tc=google.accounts.oauth2.initTokenClient({
-        client_id:cid,
-        scope:'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send',
-        hint:hint||'',
-        prompt:hint?'':'consent',
-        callback:r=>r.error?rej(new Error(r.error)):res(r.access_token)
-      });
-      tc.requestAccessToken();
-    }catch(e){rej(e)}
-  });
-}
-async function googleAddAccount(){
-  if(!cfg().googleClientId){toast('Gmail needs GOOGLE_CLIENT_ID set in the site\u2019s environment settings');return}
-  try{
-    const token=await googleOAuth();
-    const prof=await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile',{headers:{Authorization:'Bearer '+token}})).json();
-    const email=(prof.emailAddress||'').toLowerCase();
-    if(!email){toast('Could not read the Google account');return}
-    let l=linkedFind('google',email);
-    if(!l){l=addLinked('google',email)}else{toast('Reconnected '+email)}
-    gTokens[l.id]=token;
-    renderLinked();renderConn();
-    await gmailSyncAccount(l);
-  }catch(e){if(String(e.message)!=='access_denied')toast('Google sign-in didn\u2019t complete');console.warn(e)}
-}
-const gmailConnect=googleAddAccount;
-async function gmailSyncAccount(l){
-  let token=gTokens[l.id];
-  if(!token){
-    try{token=await googleOAuth(l.label);gTokens[l.id]=token}
-    catch(e){toast('Sign in to '+l.label+' to sync');return}
-  }
-  toast('Syncing '+l.label+'…');
-  const newIds=[];
-  try{
-    const H={Authorization:'Bearer '+token};
-    const list=await (await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=15&labelIds=INBOX',{headers:H})).json();
-    let added=0;
-    for(const ref of (list.messages||[])){
-      const id='g_'+ref.id;
-      if(S.messages.some(m=>m.id===id))continue;
-      const msg=await (await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${ref.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,{headers:H})).json();
-      const h=n=>(msg.payload.headers.find(x=>x.name===n)||{}).value||'';
-      const fromRaw=h('From');
-      const fm=fromRaw.match(/^\s*"?([^"<]*)"?\s*<?([^>]*)>?\s*$/)||[];
-      const fromName=(fm[1]||'').trim()||fromRaw, fromAddr=(fm[2]||'').trim()||fromRaw;
-      const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===fromAddr.toLowerCase());
-      S.messages.push({
-        id,ch:'email',prov:'gmail',acct:l.id,cid:match?match.id:null,
-        fromName,fromAddr,gmailId:ref.id,real:true,
-        subj:h('Subject')||'(no subject)',
-        prev:(msg.snippet||'').slice(0,120),
-        body:(msg.snippet||'')+'\n\n\u2014 Synced from '+l.label+' (snippet). Open in Gmail for the full message.',
-        ts:msg.internalDate?+msg.internalDate:Date.parse(h('Date'))||Date.now(),
-        unread:(msg.labelIds||[]).includes('UNREAD'),
-        starred:(msg.labelIds||[]).includes('STARRED'),
-        atts:[]
-      });
-      added++;newIds.push(id);
-    }
-    l.lastSync=Date.now();l.status='live';
-    save();
-    autoTranslateNew(newIds);
-    await audit('gmail.sync',`${l.label} — ${added} real messages pulled`);
-    renderLinked();renderChSeg();renderMailFilters();renderMail();renderSplit();
-    toast(added?`${l.label} synced — ${added} new message${added===1?'':'s'}`:l.label+' is up to date');
-  }catch(e){toast('Sync failed for '+l.label+' — reconnect and try again');console.error(e)}
-}
 /* ---------------- FORMAT BRIDGE (real conversion) ---------------- */
 let BR={name:'',kind:'',text:'',rows:null,eco:'office'};
 const BR_LIBS={
@@ -3572,29 +2801,16 @@ function brNote(){
     pdf:'Delivers a print-ready PDF — universal, uneditable.',
     plain:sheet?'Delivers .csv — the universal spreadsheet interchange.':'Delivers Markdown — clean text that pastes anywhere.'
   };
-  $('#br-note').textContent=notes[eco]+(($('#br-lang').value)?' Content will be translated to '+(LANGS[$('#br-lang').value]||'')+' first.':'');
+  $('#br-note').textContent=notes[eco];
 }
 async function brConvert(saveToDocs){
   if(!BR.name){toast('Load a file first');return}
   const go=$('#br-go');go.disabled=true;go.textContent='Converting…';
   try{
     let text=BR.text,rows=BR.rows;
-    const tl=$('#br-lang').value;
-    if(tl){
-      toast('Translating content…');
-      if(rows){
-        const flat=rows.map(r=>r.join(' \u2502 ')).join('\n');
-        const res=await translateText(flat,tl);
-        rows=res.text.split('\n').map(r=>r.split(/\s*\u2502\s*/));
-        text=rows.map(r=>r.join(',')).join('\n');
-      }else{
-        const res=await translateText(text,tl);
-        text=res.text;
-      }
-    }
-    const base=BR.name.replace(/\.[^.]+$/,'')+(tl?'-'+tl:'');
+    const base=BR.name.replace(/\.[^.]+$/,'');
     const eco=BR.eco;
-    BR.outText=text;BR.outLang=tl||'';
+    BR.outText=text;BR.outLang='';
     if(rows){
       const X=await brLib('xlsx','XLSX');
       if(eco==='plain'){
@@ -3629,7 +2845,7 @@ async function brConvert(saveToDocs){
       }
     }
     const tgt={office:'Microsoft Office',google:'Google Workspace',apple:'Apple iWork',pdf:'PDF',plain:'plain formats'}[eco];
-    await audit('bridge.convert',`${BR.name} \u2192 ${tgt}${tl?' + translated to '+tl:''}`);
+    await audit('bridge.convert',`${BR.name} \u2192 ${tgt}`);
     S.counters.conv=(S.counters.conv||0)+1;save();
   }catch(e){toast('Conversion failed — '+(e.message||'try again'));console.error(e)}
   finally{go.disabled=false;go.textContent='Convert & download'}
@@ -3676,9 +2892,6 @@ async function brFinish(blob,fname,saveToDocs,fmt){
 }
 function bridgeInit(){
   const drop=$('#br-drop');if(!drop||drop.dataset.wired)return;drop.dataset.wired='1';
-  const langSel=$('#br-lang');
-  langSel.innerHTML='<option value="">Keep original language</option>'+Object.entries(LANGS).map(([c,n])=>`<option value="${c}">Translate \u2192 ${n}</option>`).join('');
-  langSel.onchange=brNote;
   drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over')});
   drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
   drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])brIngest(e.dataTransfer.files[0])});
@@ -3687,70 +2900,6 @@ function bridgeInit(){
   $('#br-go').onclick=()=>brConvert(false);
   $('#br-save').onclick=()=>brConvert(true);
   $('#br-clear').onclick=()=>{BR={name:'',kind:'',text:'',rows:null,eco:BR.eco};$('#br-loaded').style.display='none'};
-}
-
-/* ---------------- AUTO-TRANSLATE new arrivals ---------------- */
-async function autoTranslateNew(ids){
-  if(!S.settings.autoTrans)return;
-  let done=0;
-  for(const id of ids.slice(0,6)){
-    const m=S.messages.find(x=>x.id===id);
-    if(!m||m.sent||m.lang||!m.body)continue;
-    try{
-      const res=await translateText(m.body,myLang());
-      if(res.src&&res.src!=='auto'&&res.src!==myLang()&&res.text){
-        m.orig=m.body;m.body=res.text;m.prev=res.text.slice(0,120);m.lang=LANGS[res.src]||res.src;done++;
-      }
-    }catch(e){break}
-  }
-  if(done){save();renderMail();toast(done+' message'+(done===1?'':'s')+' auto-translated to '+(LANGS[myLang()]||myLang()))}
-}
-
-/* ---------------- TRANSLATOR (real) ---------------- */
-const LANGS={en:'English',es:'Spanish',fr:'French',de:'German',pt:'Portuguese',it:'Italian',nl:'Dutch',no:'Norwegian',pl:'Polish',ru:'Russian',uk:'Ukrainian',ar:'Arabic',hi:'Hindi',zh:'Chinese',ja:'Japanese',ko:'Korean',vi:'Vietnamese',tl:'Filipino'};
-function myLang(){return S.settings.lang||'en'}
-async function translateText(text,target){
-  target=target||myLang();
-  const key=cfg().anthropicKey;
-  if(key){
-    try{
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
-        headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:2000,
-          system:'You are a translator. Reply with ONLY the translation into '+(LANGS[target]||target)+', nothing else. Also on the very first line output the ISO 639-1 code of the SOURCE language followed by ::: then the translation.',
-          messages:[{role:'user',content:text.slice(0,6000)}]})});
-      const d=await r.json();
-      const out=(d.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-      const ci=out.indexOf(':::');
-      if(ci>0&&ci<8)return{src:out.slice(0,ci).trim().toLowerCase(),text:out.slice(ci+3).trim()};
-      if(out)return{src:'auto',text:out.trim()};
-    }catch(e){console.warn('claude translate failed, falling back',e)}
-  }
-  const chunks=[];let cur='';
-  for(const s of text.split(/(?<=[.!?\n])\s+/)){if((cur+' '+s).length>1500){chunks.push(cur);cur=s}else cur=cur?cur+' '+s:s}
-  if(cur)chunks.push(cur);
-  let src='auto',out=[];
-  for(const c of chunks.slice(0,8)){
-    const u='https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(target)+'&dt=t&q='+encodeURIComponent(c);
-    const r=await fetch(u);const d=await r.json();
-    out.push((d[0]||[]).map(seg=>seg[0]).join(''));
-    if(d[2])src=d[2];
-  }
-  return{src,text:out.join(' ')};
-}
-async function translateMessage(id){
-  const m=S.messages.find(x=>x.id===id);if(!m)return;
-  if(m.lang){toast('Already translated — use Show original to flip');return}
-  toast('Translating…');
-  try{
-    const res=await translateText(m.body,myLang());
-    if(!res.text){toast('Translation came back empty');return}
-    if(res.src&&res.src!=='auto'&&res.src===myLang()){toast('Already in '+(LANGS[myLang()]||myLang()));return}
-    m.orig=m.body;m.body=res.text;m.lang=(LANGS[res.src]||res.src||'detected');m.prev=res.text.slice(0,120);
-    save();await audit('msg.translate',(m.subj||m.prev.slice(0,40))+' → '+(LANGS[myLang()]||myLang()));
-    openMail(id);renderMail();
-    toast('Translated from '+m.lang+(cfg().anthropicKey?' · Claude':' · free engine'));
-  }catch(e){toast('Translation failed — check your connection');console.error(e)}
 }
 
 /* ---------------- SUMMARY (per message) ---------------- */
@@ -3769,19 +2918,6 @@ async function summarizeMessage(id){
   if(box){box.remove();}
   const d=$('#mail-detail .md-inner');
   d.insertAdjacentHTML('beforeend','<div id="md-summary" class="as-ai" style="margin-top:14px"><b style="font-family:Fredoka,var(--sans)">Summary</b>\n'+esc(localSummary(m))+'</div>');
-  const key=cfg().anthropicKey;
-  if(key){
-    try{
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
-        headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-        body:JSON.stringify({model:'claude-sonnet-5',max_tokens:400,
-          system:'Summarize this message in 2-3 tight sentences, then a dash list of any actions/deadlines for the reader. Plain text.',
-          messages:[{role:'user',content:'From: '+msgFrom(m)+'\nSubject: '+(m.subj||'')+'\n\n'+(m.orig||m.body).slice(0,6000)}]})});
-      const dd=await r.json();
-      const out=(dd.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
-      if(out)$('#md-summary').innerHTML='<b style="font-family:Fredoka,var(--sans)">Summary · Claude</b>\n'+esc(out);
-    }catch(e){}
-  }
   await audit('msg.summary',m.subj||m.prev.slice(0,40));
 }
 
@@ -3833,59 +2969,20 @@ function runLocalBrief(){
   out.querySelectorAll('.as-item').forEach(el=>el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)});
   audit('assist.brief',`${items.length} items · ${people} people`);
 }
-async function runAIBrief(){
-  const key=cfg().anthropicKey;
-  const out=$('#as-out');
-  if(!key){toast('Add an Anthropic API key in Settings to enable AI briefs');return}
-  out.innerHTML='<div class="empty" style="padding:30px 10px"><b>Thinking…</b>Rata Assist is reading your stream.</div>';
-  try{
-    const recent=S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,25)
-      .map(m=>({from:msgFrom(m),channel:m.ch,subject:m.subj||'',preview:m.body.slice(0,200),unread:!!m.unread,when:rel(m.ts)+' ago'}));
-    const r=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true','content-type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-5',max_tokens:700,
-        system:'You are Rata Assist, the briefing bot inside the Rata unified inbox. Given recent messages, produce a tight daily brief in plain text: 1) one-sentence overview, 2) TO-DOS (dash list, who + what + urgency), 3) AWAITING YOUR REPLY, 4) CAN WAIT. Be concrete and skip anything with no action.',
-        messages:[{role:'user',content:'Recent messages as JSON:\n'+JSON.stringify(recent)}]
-      })
-    });
-    const data=await r.json();
-    if(data.error){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>API error</b>${esc(data.error.message||'Unknown error')}</div>`;return}
-    const text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
-    out.innerHTML=`<div class="as-ai">${esc(text)}</div><div style="font-size:11px;color:var(--faint);margin-top:10px">Generated by Claude via your API key · nothing stored server-side</div>`;
-    await audit('assist.ai_brief','AI briefing generated over '+recent.length+' messages');
-  }catch(e){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>Request failed</b>Check the key and your network, then try again.</div>';console.error(e)}
-}
 function openAssist(){$('#assist-ov').classList.add('open');runLocalBrief()}
 function closeAssist(){$('#assist-ov').classList.remove('open')}
 $('#assist-fab').onclick=openAssist;
 $('#as-close').onclick=closeAssist;
 $('#as-run').onclick=runLocalBrief;
-$('#as-ai').onclick=runAIBrief;
 $('#assist-ov').addEventListener('click',e=>{if(e.target===$('#assist-ov'))closeAssist()});
 
 /* ---------------- WELCOME (post-signup transfer) ---------------- */
 function showWelcome(ob){
   $('#w-title').textContent='Welcome, '+(ob.name||'friend');
   $('#w-sub').textContent=ob.org?('Your '+ob.org+' workspace is ready. Let\u2019s bring your inboxes over.'):'Your workspace is ready. Let\u2019s bring your inboxes over.';
-  const rows=[];
-  if(ob.connect.gmail){
-    if(cfg().googleClientId){
-      rows.push('<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Gmail</b><span>Real inbox — transfers now with one Google sign-in.</span></div><button class="btn primary" id="w-gmail">Transfer inbox</button></div>');
-    }else{
-      rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Gmail</b><span>Requested — GOOGLE_CLIENT_ID must be set in the site\u2019s environment settings to sync.</span></div></div>');
-    }
-  }
-  if(ob.connect.ms)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Microsoft — '+esc(ob.connect.ms)+'</b><span>Linked to your profile. Live Outlook/OneDrive sync arrives with the RATA backend.</span></div></div>');
-  if(ob.connect.slack)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Slack — '+esc(ob.connect.slack)+'</b><span>Linked. Live sync arrives with the RATA backend.</span></div></div>');
-  if(ob.connect.discord)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Discord — '+esc(ob.connect.discord)+'</b><span>Linked. Live sync arrives with the RATA backend.</span></div></div>');
-  if(ob.connect.phone)rows.push('<div class="w-row"><span class="w-dot soon"></span><div class="t"><b>Texts — '+esc(ob.connect.phone)+'</b><span>Linked. SMS bridge arrives with the RATA backend.</span></div></div>');
-  if(!rows.length)rows.push('<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Blank slate, by design</b><span>Connect accounts anytime in Connections, or add your first person in People.</span></div></div>');
+  const rows=['<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Blank slate, by design</b><span>Add your first mailbox in Settings → Linked accounts, with an app password from your provider.</span></div></div>'];
   $('#w-rows').innerHTML=rows.join('');
   $('#welcome-ov').classList.add('open');
-  const g=$('#w-gmail');
-  if(g)g.onclick=()=>{$('#welcome-ov').classList.remove('open');gmailConnect()};
   $('#w-enter').onclick=()=>$('#welcome-ov').classList.remove('open');
 }
 
@@ -3913,29 +3010,12 @@ function showWelcome(ob){
     if(ob&&ob.email===SESSION.email){
       if(ob.name)S.settings.name=ob.name;
       S.settings.org=ob.org||'';
-      if(ob.connect.ms&&validLink('ms',ob.connect.ms))addLinked('ms',ob.connect.ms);
-      if(ob.connect.slack&&validLink('slack',ob.connect.slack))addLinked('slack',ob.connect.slack);
-      if(ob.connect.discord&&validLink('discord',ob.connect.discord))addLinked('discord',ob.connect.discord);
-      if(ob.connect.phone&&validLink('phone',ob.connect.phone))addLinked('phone',ob.connect.phone);
       save();
-      await audit('onboarding.complete',`Profile set — ${ob.name||'unnamed'}${ob.org?' · '+ob.org:''}; linked: ${['gmail','ms','slack','discord','phone'].filter(k=>ob.connect[k]).join(', ')||'none'}`);
+      await audit('onboarding.complete',`Profile set — ${ob.name||'unnamed'}${ob.org?' · '+ob.org:''}`);
       localStorage.removeItem('rata_onboard');
       showWelcome(ob);
     }
   }catch(e){console.warn('onboarding apply failed',e)}
-  // Live-link return from the RATA backend OAuth flow
-  const lk=q.get('linked');
-  if(lk){
-    const ci=lk.indexOf(':');
-    const p=lk.slice(0,ci),label=decodeURIComponent(lk.slice(ci+1));
-    if(p&&label){
-      let l=linkedFind(p,label)||addLinked(p,label);
-      if(l){l.status='live';save();toast(label+' linked — pulling messages…')}
-      history.replaceState(null,'',location.pathname);
-      if(p==='ms'||p==='slack')serverSync(p);
-    }
-  }
-  if(q.get('linkerr')){toast('Linking didn\u2019t complete — '+decodeURIComponent(q.get('linkerr')));history.replaceState(null,'',location.pathname)}
   // Real entitlement (if the Stripe→Supabase webhook from STRIPE-SETUP.md is deployed)
   if(SESSION.mode==='supabase'){
     try{
@@ -3967,9 +3047,8 @@ function showWelcome(ob){
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
   if(!S.audit.length){await audit('workspace.init','Rata standalone workspace created')}
-  renderChSeg();renderMailFilters();renderMail();
+  renderSyncAll();renderMailFilters();renderMail();
   $('#nc-docs').textContent=S.documents.length;
-  $('#nc-plug').textContent=Object.values(S.plugins).filter(Boolean).length;
   save();
 })();
 </script>

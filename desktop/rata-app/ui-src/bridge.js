@@ -42,6 +42,10 @@
          be done to this exact message in the real mailbox. */
       uid: m.uid,
       uidvalidity: m.uidvalidity,
+      /* What a reply needs: the id to thread on, and where the sender asked
+         answers to go when that is not the From address. */
+      messageId: m.message_id || '',
+      replyTo: m.reply_to || '',
     };
   }
 
@@ -191,9 +195,9 @@
       if (!s.licensed) return cannot(s.message);
       return {
         planLabel: s.plan.label,
-        limits: { mail: s.limit === null ? null : s.limit, chat: s.plan.chat },
-        used: { mail: s.used, chat: 0 },
-        remaining: { mail: s.limit === null ? null : Math.max(0, s.limit - s.used), chat: 0 },
+        limits: { mail: s.limit === null ? null : s.limit },
+        used: { mail: s.used },
+        remaining: { mail: s.limit === null ? null : Math.max(0, s.limit - s.used) },
       };
     },
 
@@ -211,12 +215,6 @@
       );
     },
   };
-
-  /* Signing in with Google, Microsoft or Slack needs a server to receive the
-     redirect, and the desktop app is not one. Saying that plainly beats a
-     browser window that opens and goes nowhere. */
-  const NO_OAUTH =
-    'Signing in to Outlook, Slack or Google needs the RATA website. Mailboxes with an app password — which is every IMAP provider, including Gmail and Outlook — link here directly.';
 
   /* Renewal.
 
@@ -332,7 +330,6 @@
   window.__RATA_NATIVE__ = async function (path, opts) {
     const route = ROUTES[path];
     if (route) return route(opts);
-    if (path.startsWith('/api/link/') || path.startsWith('/api/sync/')) return cannot(NO_OAUTH);
     return cannot('This copy of RATA does not have that feature.');
   };
 })();

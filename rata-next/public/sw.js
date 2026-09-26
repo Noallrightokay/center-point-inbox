@@ -1,5 +1,5 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v14';
+const V = 'rata-shell-v15';
 const SHELL = [
   './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
   './fonts/fonts.css',
@@ -76,8 +76,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
 
-  // Never intercept live APIs (Gmail, Google auth, Supabase, Anthropic, CDNs handle themselves)
-  const passthrough = ['googleapis.com', 'accounts.google.com', 'supabase.co', 'anthropic.com', 'translate.googleapis.com'];
+  // Never intercept live APIs (Supabase handles itself)
+  const passthrough = ['supabase.co'];
   if (passthrough.some(h => url.hostname.endsWith(h))) return;
 
   // Never intercept our own backend. These are authenticated, per-user, and
