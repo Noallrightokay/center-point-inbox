@@ -181,11 +181,12 @@ deliberate trade, and `LICENCE_DAYS` is the one place to change it.
 
 ## What is not done yet
 
-- **OAuth providers** (Outlook, Slack, Google sign-in) need a server to receive
-  the redirect. The bridge says so plainly. Every IMAP mailbox, Gmail and
-  Outlook included, links here with an app password.
-- **No installer has been produced.** The app builds and runs on Linux; nothing
-  has been packaged or signed for any platform.
+- **Mail is IMAP with an app password, and nothing else.** There is no OAuth
+  sign-in (it needs a server to receive the redirect), and the interface no
+  longer offers one. Every IMAP mailbox, Gmail and Outlook included, links with
+  an app password.
+- **Installers are not signed.** The release workflow builds all four; Windows
+  and macOS warn on first launch.
 - **No mailbox has been opened for real.** The container this was written in
   blocks 993, 465 and 587, so every network path is tested up to the socket and
   no further. Renewal has not been exercised against a live server either: the

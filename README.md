@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 73 tests, no network required
+cargo test          # 98 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 36 tests
+cargo test          # 39 tests
 ```
 
 On Linux you need the system webview first:
@@ -128,9 +128,15 @@ interface changes in a packaged build.
 **`bridge.js` replaces the browser's `fetch`.**
 The interface was written to call a server. Rather than rewrite it, the bridge
 intercepts `fetch` and routes those calls to Rust instead. It is the single
-most surprising file in the repository and the first one to read. Calls it does
-not implement — anything under `/api/link/` or `/api/sync/` — are refused with a
-message rather than failing silently.
+most surprising file in the repository and the first one to read. A call it
+does not implement is refused with a message rather than failing silently.
+
+**The interface is email only.** Slack, Discord, texts, Google and Microsoft
+sign-in, translation and the AI brief were switches with nothing behind them,
+and translation and the AI brief sent the text of your mail to Google or
+Anthropic. They were removed in v0.1.6, together with the screens that held
+them; a workspace saved by an older build is tidied on load (`tidyV6`). Do not
+bring any of them back as a control that leads nowhere.
 
 **The licence public key is compiled in at build time.**
 The build reads `RATA_LICENCE_PUBLIC_KEY`. A binary built without it cannot
@@ -187,7 +193,8 @@ Be realistic about this before promising anything to a customer.
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
 - Fetching the newest messages from INBOX, several mailboxes at once
-- Sending, correctly threaded as a reply
+- Replying from the message itself, threaded with `In-Reply-To` and sent to
+  the sender's Reply-To address when they gave one
 - A guard that stops a hostile mail server redirecting the app at your own LAN
 
 **Not built yet:**
@@ -199,9 +206,11 @@ Be realistic about this before promising anything to a customer.
   in one `localStorage` blob with a cap of a few MB, so loading older mail
   stops near it. A per-message store is the largest gap.
 - **INBOX only.** No other folders are shown.
-- **Plain text only.** No HTML rendering, no attachments in either direction.
-- The interface still shows controls for Slack, the AI assistant and file
-  browsing. All of them now refuse with a message. They should be removed.
+- **Message bodies are not decoded.** A refresh fetches the first 2 KB of each
+  message's raw body and strips tags from it; there is no MIME parsing and no
+  quoted-printable or base64 decoding. Most real mail is multipart, so the
+  reading pane shows MIME boundaries and encoded text. This is the next gap to
+  close, and HTML rendering and attachments follow from the same work.
 - No auto-update, and no code signing.
 
 ### What has never been tested

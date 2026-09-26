@@ -25,7 +25,7 @@ Download from the latest release:
 The warnings are because the installers are not code-signed yet. That is
 expected for the beta.
 
-**Check your version:** it is in the window's title bar — `RATA 0.1.2 beta`.
+**Check your version:** it is in the window's title bar — `RATA 0.1.6 beta`.
 Put it in every bug report.
 
 ## 2. Licence key
@@ -86,12 +86,18 @@ Don't spend time reporting these — they are known and planned:
   depending on how long they are) and says so; a
   larger store is coming.
 - No other folders yet — only the inbox is shown.
-- Plain text only: no HTML rendering, no attachments.
-- Buttons for Slack, the AI assistant and file browsing lead nowhere.
+- **Opening a message can show raw MIME** — lines like `--000000abc` and
+  `Content-Type: text/plain`, `=20` in place of spaces, or a block of base64 —
+  and only the start of a long message. RATA does not decode message bodies
+  yet; that is the next thing being built. The preview in the list is usually
+  readable; the full message is often not.
+- No HTML rendering, no attachments.
 - No auto-update — new betas are a new download.
 
 What *should* work: adding a mailbox, seeing recent mail from several
-mailboxes, sending (including replies), removing a mailbox, the licence — and,
+mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —
+check that it lands in the same thread at the other end), removing a mailbox,
+the licence — and,
 from v0.1.4, **read, unread, star, delete and archive reach your real
 mailbox**. Delete moves the message to your provider's Trash (never deletes it
 for good); Archive moves it to your Archive folder, or Gmail's All Mail. Please
