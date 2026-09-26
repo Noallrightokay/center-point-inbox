@@ -237,6 +237,7 @@
           subject: b.subject || '',
           body: b.body || '',
           inReplyTo: b.inReplyTo || null,
+          attachments: b.attachments || [],
         });
         return { ok: true, via };
       } catch (e) {

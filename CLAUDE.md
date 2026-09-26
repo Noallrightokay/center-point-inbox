@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments. Standalone, knows nothing about the app. 131 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 43 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments. Standalone, knows nothing about the app. 138 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 44 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -78,7 +78,8 @@ CSP note above) and must not be given to anyone. **v0.1.3 is the beta build
 testers started on**; v0.1.4 adds server-side read/star/delete/archive;
 v0.1.5 adds Load older mail and shipped all five files; v0.1.6 adds Reply and
 removes every control that led nowhere; v0.1.7 decodes message bodies;
-v0.1.8 opens whole messages and saves attachments. An
+v0.1.8 opens whole messages and saves attachments; v0.1.9 sends
+attachments. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -170,8 +171,17 @@ Downloads folder: the page supplies only message and index, and Rust picks the
 folder, cleans the name (`safe_file_name`: no path parts, Windows device
 names, or bidi controls that disguise `.exe` as `.pdf`) and creates the file
 exclusively (`write_new`, `name (2).pdf`). RATA never opens a saved file.
-Also not built: INBOX only; no HTML rendering; no attaching files when
-sending; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**Sending attachments (v0.1.9).** The composer reads picked files only when
+Send is pressed and hands them over as base64 (`send_mail`'s `attachments`);
+`core::send` refuses over `ATTACH_MAX` (18 MB) before dialling, and
+`compose::render` builds `multipart/mixed` with every part base64, so the
+`=_rata_` boundary can never occur inside one. File names are cleaned for
+headers (`compose::file_name`: no path, no control characters, at most 150
+bytes so every header line stays under 998) and sent both as encoded-words in
+`filename=` — what Gmail and Outlook send and read — and as RFC 2231
+`filename*`. SMTP DATA gets a minute plus a second per 64 KiB.
+Also not built: INBOX only; no HTML rendering; forwarding does not carry the
+original's attachments; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

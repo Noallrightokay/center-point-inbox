@@ -110,7 +110,25 @@ pub struct Outgoing {
     pub body: String,
     /// The message being replied to, if any, so mail clients thread it.
     pub in_reply_to: Option<String>,
+    /// Files sent with it. Empty for a plain message.
+    pub attachments: Vec<File>,
 }
+
+/// A file attached to an outgoing message.
+#[derive(Debug, Clone)]
+pub struct File {
+    /// The name as the recipient will see it. Cleaned before it goes into a
+    /// header; see [`file_name`].
+    pub name: String,
+    /// Its type, e.g. `application/pdf`. Anything that is not a well-formed
+    /// `type/subtype` is sent as `application/octet-stream`.
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+/// The most attachment data one message may carry. Most providers refuse
+/// mail over 25 MB, and base64 makes attachments a third larger on the wire.
+pub const ATTACH_MAX: usize = 18 * 1024 * 1024;
 
 /// The full RFC 5322 message, CRLF throughout, ready for DATA.
 ///
@@ -153,6 +171,10 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         }
     }
     out.push_str("MIME-Version: 1.0\r\n");
+    if !msg.attachments.is_empty() {
+        mixed(&mut out, msg, unique);
+        return out;
+    }
     out.push_str("Content-Type: text/plain; charset=utf-8\r\n");
 
     // 7bit where the body allows it, because it stays readable in a raw
@@ -182,6 +204,128 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         }
     }
     out
+}
+
+/// A message with files: `multipart/mixed`, the text first, then each file.
+///
+/// Every part is base64, the text included. That costs a few bytes and buys a
+/// guarantee: the base64 alphabet has no `_`, so a boundary containing one can
+/// never appear inside a part, whatever the customer wrote or attached.
+fn mixed(out: &mut String, msg: &Outgoing, unique: &str) {
+    let boundary = format!("=_rata_{unique}");
+    let _ = write!(
+        out,
+        "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n"
+    );
+    out.push_str("This is a message in MIME format.\r\n");
+
+    let _ = write!(out, "--{boundary}\r\n");
+    out.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    out.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
+    let plain = msg.body.replace("\r\n", "\n").replace('\r', "\n");
+    wrapped(out, plain.as_bytes());
+
+    for file in &msg.attachments {
+        let name = file_name(&file.name);
+        let _ = write!(out, "--{boundary}\r\n");
+        let _ = write!(
+            out,
+            "Content-Type: {}; name=\"{}\"\r\n",
+            mime_type(&file.mime),
+            ascii_name(&name)
+        );
+        let _ = write!(
+            out,
+            "Content-Disposition: attachment;\r\n\tfilename=\"{}\";\r\n\tfilename*=UTF-8''{}\r\n",
+            ascii_name(&name),
+            percent(&name)
+        );
+        out.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
+        wrapped(out, &file.data);
+    }
+    let _ = write!(out, "--{boundary}--\r\n");
+}
+
+/// Base64 in lines of 76, as MIME requires.
+fn wrapped(out: &mut String, data: &[u8]) {
+    let encoded = words::base64_encode(data);
+    for chunk in encoded.as_bytes().chunks(76) {
+        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        out.push_str("\r\n");
+    }
+}
+
+/// A file name fit for a header: the last path component only, no control
+/// characters (a newline would end the header and start another), and short
+/// enough that the header stays under the 998-byte line limit.
+pub fn file_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return "attachment".into();
+    }
+    // Counted in bytes, not characters: the percent-encoded form is up to three
+    // characters per byte, and it has to fit on one header line.
+    if clean.len() <= NAME_BYTES {
+        return clean.to_string();
+    }
+    let ext = clean
+        .rfind('.')
+        .map(|i| &clean[i..])
+        .filter(|e| e.len() <= 12)
+        .unwrap_or("");
+    let mut keep = NAME_BYTES - ext.len();
+    while !clean.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}{ext}", &clean[..keep])
+}
+
+/// The longest file name sent, in UTF-8 bytes: room for any real name, and
+/// short enough that every header carrying it stays under 998 characters.
+const NAME_BYTES: usize = 150;
+
+/// The name for the quoted `name=` and `filename=` parameters. An ASCII name
+/// goes as it is, minus the quote and backslash that would end the quoted
+/// string. Anything else goes as RFC 2047 encoded-words, which is not what the
+/// MIME standard asks for in a parameter but is what Gmail and Outlook send and
+/// what every mail program reads — while some read only this parameter and
+/// never the standard `filename*`, and would show an ASCII stand-in instead.
+fn ascii_name(name: &str) -> String {
+    if name.is_ascii() {
+        return name.chars().filter(|&c| c != '"' && c != '\\').collect();
+    }
+    words::encode_header(name)
+}
+
+/// RFC 2231's encoding for the exact name: UTF-8, percent-escaped except the
+/// characters it allows as they are.
+fn percent(name: &str) -> String {
+    let mut out = String::new();
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            out.push(b as char);
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+/// A `type/subtype` made only of the characters a MIME token allows, or the
+/// generic binary type.
+fn mime_type(raw: &str) -> String {
+    let t = raw.trim().to_ascii_lowercase();
+    let token = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&b))
+    };
+    match t.split_once('/') {
+        Some((a, b)) if token(a) && token(b) => t,
+        _ => "application/octet-stream".into(),
+    }
 }
 
 /// A Message-ID that will not collide with anyone else's.
@@ -220,7 +364,133 @@ mod tests {
             subject: subject.into(),
             body: body.into(),
             in_reply_to: None,
+            attachments: vec![],
         }
+    }
+
+    fn with_file(name: &str, mime: &str, data: &[u8]) -> Outgoing {
+        let mut m = msg("Figures", "Attached.\n.\nThanks");
+        m.attachments.push(File {
+            name: name.into(),
+            mime: mime.into(),
+            data: data.to_vec(),
+        });
+        m
+    }
+
+    #[test]
+    fn a_message_with_a_file_is_multipart_and_reads_back_whole() {
+        let out = render(
+            &with_file("Q3 figures.pdf", "application/pdf", b"%PDF-1.4\n"),
+            "Sat, 26 Sep 2026 12:00:00 +0000",
+            "abc123",
+        );
+        assert!(
+            out.contains("Content-Type: multipart/mixed; boundary=\"=_rata_abc123\""),
+            "{out}"
+        );
+        assert!(out.ends_with("--=_rata_abc123--\r\n"));
+        assert!(out.split("\r\n").all(|l| l.len() <= 998));
+        // What a receiving mail program makes of it.
+        let parsed = crate::body::read_whole(out.as_bytes());
+        assert_eq!(parsed.text, "Attached.\n.\nThanks");
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].name, "Q3 figures.pdf");
+        assert_eq!(parsed.attachments[0].mime, "application/pdf");
+        let (_, bytes) =
+            crate::body::attachment(out.as_bytes(), parsed.attachments[0].index).unwrap();
+        assert_eq!(bytes, b"%PDF-1.4\n");
+    }
+
+    #[test]
+    fn a_file_name_cannot_add_a_header() {
+        let out = render(
+            &with_file(
+                "x.pdf\"\r\nBcc: everyone@example.com\r\n",
+                "application/pdf\r\nBcc: a@b.c",
+                b"x",
+            ),
+            "Sat, 26 Sep 2026 12:00:00 +0000",
+            "abc123",
+        );
+        assert!(!out.contains("\r\nBcc:"), "{out}");
+        assert!(
+            out.contains("Content-Type: application/octet-stream;"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_name_in_any_language_arrives_as_written() {
+        let out = render(
+            &with_file("résumé 履歴書.docx", "application/msword", b"x"),
+            "Sat, 26 Sep 2026 12:00:00 +0000",
+            "abc123",
+        );
+        assert!(
+            out.contains("filename*=UTF-8''r%C3%A9sum%C3%A9%20"),
+            "{out}"
+        );
+        let parsed = crate::body::read_whole(out.as_bytes());
+        assert_eq!(parsed.attachments[0].name, "résumé 履歴書.docx");
+    }
+
+    #[test]
+    fn file_names_are_cleaned_for_headers() {
+        assert_eq!(
+            file_name("C:\\Users\\me\\Desktop\\report.pdf"),
+            "report.pdf"
+        );
+        assert_eq!(file_name("/home/me/a\nb.txt"), "ab.txt");
+        assert_eq!(file_name("   "), "attachment");
+        let long = file_name(&format!("{}.pdf", "a".repeat(300)));
+        assert_eq!(long.len(), 150);
+        assert!(long.ends_with(".pdf"));
+        let cjk = file_name(&format!("{}.xlsx", "履".repeat(200)));
+        assert!(cjk.len() <= 150 && cjk.ends_with(".xlsx"), "{cjk}");
+        assert_eq!(mime_type("IMAGE/PNG"), "image/png");
+        assert_eq!(
+            mime_type("text/html; charset=x"),
+            "application/octet-stream"
+        );
+        assert_eq!(mime_type(""), "application/octet-stream");
+    }
+
+    #[test]
+    fn a_long_name_in_any_script_keeps_every_header_line_legal() {
+        let out = render(
+            &with_file(
+                &format!("{}.xlsx", "履歴書".repeat(80)),
+                "application/vnd.ms-excel",
+                b"x",
+            ),
+            "Sat, 26 Sep 2026 12:00:00 +0000",
+            "abc123",
+        );
+        let longest = out.split("\r\n").map(str::len).max().unwrap();
+        assert!(longest <= 998, "a header line of {longest}");
+        let parsed = crate::body::read_whole(out.as_bytes());
+        assert!(
+            parsed.attachments[0].name.ends_with(".xlsx"),
+            "{}",
+            parsed.attachments[0].name
+        );
+    }
+
+    #[test]
+    fn a_plain_message_is_unchanged_by_all_this() {
+        let out = render(
+            &msg("Hi", "Hello"),
+            "Sat, 26 Sep 2026 12:00:00 +0000",
+            "abc123",
+        );
+        assert!(
+            out.contains(
+                "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 7bit"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("multipart"));
     }
 
     #[test]

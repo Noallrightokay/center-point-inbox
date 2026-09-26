@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, Whole,
-    act, body, fetch_inbox, fetch_older, fetch_uids, fetch_whole, send, verify,
+    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Message, Outgoing, Resolver, Sent,
+    Verify, Whole, act, body, fetch_inbox, fetch_older, fetch_uids, fetch_whole, send, verify,
 };
 use serde::Serialize;
 
@@ -605,8 +605,20 @@ impl Rata {
         subject: &str,
         body: &str,
         in_reply_to: Option<String>,
+        attachments: Vec<File>,
     ) -> Result<String, String> {
         self.licensed()?;
+        // Checked before anything is dialled: a message the provider is going
+        // to refuse for its size should fail here, in words, not after the
+        // upload as a bare 552.
+        let total: usize = attachments.iter().map(|f| f.data.len()).sum();
+        if total > ATTACH_MAX {
+            return Err(format!(
+                "The attachments add up to {} MB. Most providers refuse mail over 25 MB, which is about {} MB of files — send a link to them instead.",
+                total.div_ceil(1024 * 1024),
+                ATTACH_MAX / (1024 * 1024)
+            ));
+        }
         let from_addr = Address::parse(from)
             .ok_or_else(|| "Which account should this come from?".to_string())?;
         let to_list = Address::parse_list(to).ok_or_else(|| {
@@ -642,6 +654,7 @@ impl Rata {
             subject: subject.to_string(),
             body: body.to_string(),
             in_reply_to,
+            attachments,
         };
 
         match send(&self.resolver, &acct, &msg).await {
@@ -1098,6 +1111,31 @@ mod tests {
     }
 
     #[test]
+    fn attachments_too_large_to_send_are_refused_before_dialling() {
+        rt().block_on(async {
+            let app = rata(tmpfile("send-big"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            let big = File {
+                name: "video.mp4".into(),
+                mime: "video/mp4".into(),
+                data: vec![0; ATTACH_MAX + 1],
+            };
+            let e = app
+                .send(
+                    "owner@example.com",
+                    "a@example.org",
+                    "Hi",
+                    "x",
+                    None,
+                    vec![big],
+                )
+                .await
+                .unwrap_err();
+            assert!(e.contains("25 MB"), "{e}");
+        });
+    }
+
+    #[test]
     fn an_attachment_name_cannot_escape_or_disguise_itself() {
         assert_eq!(safe_file_name("../../.bashrc"), "bashrc");
         assert_eq!(safe_file_name("C:\\Windows\\evil.dll"), "evil.dll");
@@ -1205,6 +1243,7 @@ mod tests {
                     "hi",
                     "hello",
                     None,
+                    vec![],
                 )
                 .await
                 .unwrap_err();
@@ -1219,7 +1258,7 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             for bad in ["", "nonsense", "a@b.com\r\nBcc: sneak@example.net"] {
                 let e = app
-                    .send("owner@example.com", bad, "hi", "hello", None)
+                    .send("owner@example.com", bad, "hi", "hello", None, vec![])
                     .await
                     .unwrap_err();
                 assert!(e.contains("valid recipient"), "{bad:?} gave {e}");
@@ -1246,7 +1285,14 @@ mod tests {
             assert!(out.problems.is_empty() && out.skipped.is_empty());
 
             let e = app
-                .send("owner@example.com", "them@elsewhere.org", "hi", "x", None)
+                .send(
+                    "owner@example.com",
+                    "them@elsewhere.org",
+                    "hi",
+                    "x",
+                    None,
+                    vec![],
+                )
                 .await
                 .unwrap_err();
             assert!(e.contains("licence key"), "{e}");

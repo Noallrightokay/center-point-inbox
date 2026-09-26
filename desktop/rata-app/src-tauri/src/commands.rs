@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
 
-use rata_mail::{Action, Message};
+use rata_mail::{Action, File, Message};
 
 use crate::core::{Changed, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing};
 use crate::store::Mailbox;
@@ -76,8 +76,28 @@ pub async fn send_mail(
     subject: String,
     body: String,
     in_reply_to: Option<String>,
+    attachments: Option<Vec<Upload>>,
 ) -> Result<String, String> {
-    app.send(&from, &to, &subject, &body, in_reply_to).await
+    let files = attachments
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| File {
+            name: u.name,
+            mime: u.mime,
+            data: rata_mail::words::base64(u.data.as_bytes()),
+        })
+        .collect();
+    app.send(&from, &to, &subject, &body, in_reply_to, files)
+        .await
+}
+
+/// A file the customer picked to send, as the page hands it over: its bytes as
+/// base64, since the bridge carries text. Size is checked in `core::send`.
+#[derive(serde::Deserialize)]
+pub struct Upload {
+    name: String,
+    mime: String,
+    data: String,
 }
 
 /// Read, unread, star, unstar, trash or archive — on the real mailbox, for

@@ -42,6 +42,14 @@ const COMMAND: Duration = Duration::from_secs(20);
 /// The body can be large and the server may be slow to accept it.
 const DATA: Duration = Duration::from_secs(60);
 
+/// How long a message of `len` bytes may take to upload, and then to be
+/// accepted. A minute for any message, plus a second per 64 KiB: a 24 MB
+/// message with attachments gets over six minutes, enough for a slow hotel
+/// connection, where a flat minute would fail it halfway through every time.
+fn data_timeout(len: usize) -> Duration {
+    DATA + Duration::from_secs((len / (64 * 1024)) as u64)
+}
+
 /// What happened to a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sent {
@@ -299,13 +307,14 @@ async fn attempt(
         Err(sent) => return sent,
     }
 
-    if let Err(e) = timeout(DATA, wire.say(body))
+    let allowed = data_timeout(body.len());
+    if let Err(e) = timeout(allowed, wire.say(body))
         .await
         .unwrap_or(Err("timed out".into()))
     {
         return Sent::Net(format!("{host}: {e}"));
     }
-    let accepted = match timeout(DATA, wire.ask(".")).await {
+    let accepted = match timeout(allowed, wire.ask(".")).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Sent::Net(format!("{host}: {e}")),
         Err(_) => return Sent::Net(format!("{host} did not confirm the message in time.")),
@@ -553,6 +562,7 @@ mod tests {
             subject: "Hello".into(),
             body: "Hi there.".into(),
             in_reply_to: None,
+            attachments: vec![],
         }
     }
 
@@ -841,5 +851,12 @@ mod tests {
         ] {
             assert_eq!(rfc2822(secs), expected, "at {secs}");
         }
+    }
+
+    #[test]
+    fn a_large_message_is_given_time_to_upload() {
+        assert_eq!(data_timeout(2_000), DATA);
+        let big = data_timeout(24 * 1024 * 1024);
+        assert!(big >= Duration::from_secs(400), "{big:?}");
     }
 }
