@@ -59,6 +59,7 @@ async fn main() {
                 subject: "RATA test — please ignore".into(),
                 body: "Sent by the RATA desktop mail layer.\n".into(),
                 in_reply_to: None,
+                attachments: vec![],
             };
             match send(&r, &acct, &msg).await {
                 Sent::Ok { via, id } => println!("SENT    via {via} — {id}"),

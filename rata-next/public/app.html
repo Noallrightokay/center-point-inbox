@@ -424,6 +424,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .dlp-bar b{font-size:11px;font-weight:700;letter-spacing:.04em;display:block;margin-bottom:5px}
 .dlp-finding{display:inline-block;margin:2px 6px 2px 0;padding:2px 9px;background:rgba(255,255,255,.5);border-radius:999px;font-size:11px;font-weight:600}
 @media (prefers-color-scheme:dark){.dlp-finding{background:rgba(0,0,0,.25)}}
+.cmp-files{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px}
+.cmp-files:empty{display:none}
+.cmp-file{display:inline-flex;align-items:center;gap:8px;background:var(--fill-2);border-radius:10px;padding:6px 10px;font-size:12.5px;max-width:100%}
+.cmp-file span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
+.cmp-file .sz{color:var(--faint)}
+.cmp-file button{border:0;background:none;color:var(--faint);cursor:pointer;font:inherit;padding:0 2px}
 .cmp-foot{display:flex;align-items:center;gap:10px;padding:13px 20px calc(13px + env(safe-area-inset-bottom));flex-wrap:wrap}
 .dlp-live{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--faint)}
 .dlp-live.clean{color:var(--green)}
@@ -913,8 +919,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <input type="text" id="cmp-to" placeholder="To">
     <input type="text" id="cmp-subj" placeholder="Subject">
     <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
+    <div class="cmp-files" id="cmp-files"></div>
     <div class="cmp-foot">
       <select class="sel" id="cmp-from"></select>
+      <label class="btn" id="cmp-attach" style="display:none">📎 Attach<input type="file" id="cmp-file" multiple hidden></label>
       <span class="dlp-live" id="dlp-live">DLP idle</span>
       <button class="btn primary" id="cmp-send">Send</button>
     </div>
@@ -2452,8 +2460,30 @@ function fillComposeFrom(){
 /* The message being answered, while the composer holds a reply. Its id goes
    out as In-Reply-To so the answer lands in the same thread at the other end. */
 let REPLYING=null;
+/* Files picked to send with the message being written. Held as the browser's
+   own File objects and read only when Send is pressed. */
+let CMP_FILES=[];
+const ATTACH_MAX=18*1024*1024;
+const kb=n=>n<1024?n+' B':n<1048576?Math.round(n/1024)+' KB':(n/1048576).toFixed(1)+' MB';
+function renderCmpFiles(){
+  const el=$('#cmp-files');if(!el)return;
+  const total=CMP_FILES.reduce((t,f)=>t+f.size,0);
+  el.innerHTML=CMP_FILES.map((f,i)=>`<span class="cmp-file"><span>${esc(f.name)}</span><span class="sz">${kb(f.size)}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
+    +(total>ATTACH_MAX?`<span class="cmp-file" style="color:var(--red,#c33)">${kb(total)} in all — over the ${kb(ATTACH_MAX)} most providers accept</span>`:'');
+  el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);renderCmpFiles()});
+}
+async function fileBase64(f){
+  const u8=new Uint8Array(await f.arrayBuffer());
+  let bin='';
+  for(let i=0;i<u8.length;i+=0x8000)bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+  return btoa(bin);
+}
+$('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.target.files]);e.target.value='';renderCmpFiles()});
 function openCompose(){
   REPLYING=null;
+  CMP_FILES=[];renderCmpFiles();
+  /* Only the app can send, so only the app offers to attach. */
+  const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
   fillComposeFrom();
   ov.classList.add('open');
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
@@ -2531,12 +2561,18 @@ $('#cmp-send').onclick=async()=>{
   const acct=S.linked.find(l=>l.id===acctSel);
   const mAcct=acct&&acct.type==='mail'?acct:null;
   let realSent=false;
+  const files=CMP_FILES.slice();
+  if(files.length&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
+  if(files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX){toast('Those files are too large to send together — most providers refuse mail over 25 MB. Remove some, or send a link instead.');return}
   if(mAcct){
     if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
-    const sb=$('#cmp-send');sb.disabled=true;sb.textContent='Sending…';
+    const sb=$('#cmp-send');sb.disabled=true;sb.textContent=files.length?'Attaching…':'Sending…';
     try{
+      const attachments=[];
+      for(const f of files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
+      sb.textContent='Sending…';
       const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null})});
+        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments})});
       if(!r.ok)throw new Error(r.error||'send failed');
       realSent=true;
     }catch(e){
@@ -2548,7 +2584,8 @@ $('#cmp-send').onclick=async()=>{
     }
     sb.disabled=false;sb.textContent='Send';
   }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,atts:[]});
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
+    atts:realSent?files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)})):[]});
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');

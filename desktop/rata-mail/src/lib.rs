@@ -38,7 +38,7 @@ pub mod resolve;
 pub mod smtp;
 pub mod words;
 
-pub use compose::{Address, Outgoing};
+pub use compose::{ATTACH_MAX, Address, File, Outgoing};
 pub use discover::{
     Candidate, IMAP_PORT, MailHost, MxRule, SMTP_PORTS, Source, conventional, is_auth_failure,
     mx_rule, no_imap, smtp_candidates, table,

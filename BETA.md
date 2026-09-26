@@ -92,7 +92,9 @@ Don't spend time reporting these — they are known and planned:
   Pictures, colours and layout are not shown. From v0.1.8, opening a long
   message loads all of it, and **attachments** are listed on the message —
   click one to save it to your Downloads folder (RATA never opens it for you).
-  You cannot attach files when sending yet. **Please report any message that still shows raw code** — lines
+  From v0.1.9 you can **attach files** when writing, with 📎 Attach — up to
+  18 MB in all, since most providers refuse mail over 25 MB once encoded.
+  **Please report any message that still shows raw code** — lines
   like `--000abc`, `Content-Type:` or `=20` — with its sender (a newsletter
   name is fine); that is a decoding bug.
 - Mail that arrived under an older beta is re-read and cleaned up after the

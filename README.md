@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 131 tests, no network required
+cargo test          # 138 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 43 tests
+cargo test          # 44 tests
 ```
 
 On Linux you need the system webview first:
@@ -211,7 +211,8 @@ Be realistic about this before promising anything to a customer.
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
-  RATA. There is no HTML rendering, and no attaching files when sending.
+  RATA. Files can be attached when sending, up to 18 MB in all. There is no
+  HTML rendering.
 - No auto-update, and no code signing.
 
 ### What has never been tested
