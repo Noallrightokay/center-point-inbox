@@ -290,17 +290,63 @@ export default async function run(state) {
         `and the localStorage entry holds no mail: ${(big.metaBytes / 1000).toFixed(1)} KB, store=${big.store}`);
 
       await p2.reload(); await boot(p2);
-      const back = await p2.evaluate(({ T6, BODY }) => {
+      const back = await p2.evaluate(async ({ T6, BODY }) => {
         const mine = S.messages.filter(m => String(m.id).startsWith('t6-'));
-        return { n: mine.length, intact: mine.every(m => m.body.length === BODY && m.body.startsWith(m.id.slice(3))) };
+        const inMemory = mine.filter(m => 'body' in m).length;
+        const texts = await bodiesOf(mine);
+        return { n: mine.length, inMemory, heldBytes: JSON.stringify(S.messages).length,
+          intact: mine.every(m => (texts.get(m.id) || '').length === BODY && texts.get(m.id).startsWith(m.id.slice(3))) };
       }, { T6, BODY });
-      check(back.n === T6 && back.intact, `after a relaunch all ${back.n} are there, bodies intact`);
+      check(back.n === T6 && back.intact, `after a relaunch all ${back.n} are there, bodies intact on disk`);
+      check(back.inMemory === 0 && back.heldBytes < T6 * 1000,
+        `and their text is not held in memory: ${back.inMemory} with text, ${(back.heldBytes / 1e6).toFixed(2)} MB of messages held for ${(T6 * BODY / 1e6).toFixed(0)} MB of mail`);
+
+      /* The text comes back from disk wherever it is needed. */
+      const uses = await p2.evaluate(async () => {
+        const m = S.messages.find(x => x.id === 't6-12');
+        BODY_CACHE.clear();
+        go('inbox'); openMail('t6-12');
+        const first = $('#md-body') ? $('#md-body').textContent : null;
+        await new Promise(r => setTimeout(r, 300));
+        const opened = $('#md-body') ? $('#md-body').textContent : '';
+        const marker = 'needle-' + Math.random().toString(36).slice(2);
+        BODY_CACHE.clear();
+        const tx = MS.transaction(MS_TEXT, 'readwrite'); tx.objectStore(MS_TEXT).put(JSON.stringify({ body: 'Hello ' + marker + ' there' }), 't6-40');
+        await new Promise(r => { tx.oncomplete = r; });
+        $('#search-input').value = marker; await doSearch();
+        const found = [...document.querySelectorAll('#res-pane .res-row .res-title')].map(e => e.textContent);
+        return { first, opened: opened.length, found, cached: BODY_CACHE.size <= BODY_CACHE_MAX };
+      });
+      check(uses.opened === BODY, `opening a message reads its text from disk (${uses.opened} characters shown)`);
+      check(uses.found.length === 1 && uses.found[0] === 'Stored 40', `a search finds words that are only on disk: ${JSON.stringify(uses.found)}`);
+      check(uses.cached, 'and text read lately is kept only up to a limit');
+
+      /* A message that arrives with its text gives it up at the next save. */
+      const arrive = await p2.evaluate(async () => {
+        S.messages.push({ id: 't6-new', ch: 'email', prov: 'imap', subj: 'Arrived', prev: 'p', body: 'fresh text', ts: 1e12 + 9999, unread: true, starred: false, atts: [] });
+        save(); await msFlush();
+        const m = S.messages.find(x => x.id === 't6-new');
+        const tx = MS.transaction(MS_TEXT, 'readonly'), rq = tx.objectStore(MS_TEXT).get('t6-new');
+        await new Promise(r => { tx.oncomplete = r; });
+        return { inMemory: 'body' in m, onDisk: textOf(rq.result), now: bodyNow(m) };
+      });
+      check(!arrive.inMemory && arrive.onDisk === 'fresh text' && arrive.now === 'fresh text',
+        `new mail's text goes to disk at the next save and leaves memory (${JSON.stringify(arrive)})`);
+
+      /* An export is the whole workspace, text included. */
+      const exp = await p2.evaluate(async () => {
+        let got = null; const dl = brDownload; brDownload = async (blob) => { got = await blob.text(); return true; };
+        try { await $('#btn-export').onclick(); } finally { brDownload = dl; }
+        const w = JSON.parse(got), m = w.messages.find(x => x.id === 't6-new');
+        return { body: m && m.body, still: 'body' in S.messages.find(x => x.id === 't6-new') };
+      });
+      check(exp.body === 'fresh text' && !exp.still, 'an export carries every message\'s text, read back from disk');
 
       /* Starring one message writes one record, not the mailbox. */
       const writes = await p2.evaluate(async () => {
         await msFlush();
         let puts = 0; const put = IDBObjectStore.prototype.put;
-        IDBObjectStore.prototype.put = function (...a) { if (this.name === 'messages') puts++; return put.apply(this, a); };
+        IDBObjectStore.prototype.put = function (...a) { if (this.name === 'meta' || this.name === 'messages') puts++; return put.apply(this, a); };
         S.messages.find(m => m.id === 't6-7').starred = true; save(); await msFlush();
         IDBObjectStore.prototype.put = put;
         return puts;
@@ -337,7 +383,38 @@ export default async function run(state) {
       });
       check(moved.shown && moved.inStore && !moved.entryHasMail,
         `mail saved by an older build moves into IndexedDB and out of localStorage (shown ${moved.shown}, stored ${moved.inStore}, left in entry ${moved.entryHasMail})`);
-      check(!moved.slack && moved.bulk === T6 - 2 + 1, `and joins what was already there (${moved.bulk} held), minus a channel this build dropped`);
+      check(!moved.slack && moved.bulk === T6 - 2 + 2, `and joins what was already there (${moved.bulk} held), minus a channel this build dropped`);
+
+      /* A mailbox kept by 0.1.20 — each message whole, in version 1 of the
+         database — keeps its text where it is; the rest is copied on first launch. */
+      const p4 = await ctx.newPage();
+      p4.on('pageerror', e => errs.push('upgrade page: ' + e.message));
+      await p4.goto(s.url + '/auth.html');
+      const dbName = await p2.evaluate(() => MS_DB);
+      await p4.evaluate(async (name) => {
+        await new Promise(r => { const q = indexedDB.deleteDatabase(name + '-v1test'); q.onsuccess = q.onerror = q.onblocked = r; });
+        const db = await new Promise((res, rej) => { const q = indexedDB.open(name + '-v1test', 1); q.onupgradeneeded = () => q.result.createObjectStore('messages'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+        const tx = db.transaction('messages', 'readwrite');
+        tx.objectStore('messages').put(JSON.stringify({ id: 'v1-a', ch: 'email', subj: 'Kept whole', prev: 'p', body: 'the whole text', ts: 1, atts: [] }), 'v1-a');
+        tx.objectStore('messages').put('not json', 'v1-bad');
+        await new Promise(r => { tx.oncomplete = r; }); db.close();
+      }, dbName);
+      await p4.close();
+      const up = await p2.evaluate(async (name) => {
+        const saved = MS, keep = MS_DB;
+        const db = await new Promise((res, rej) => { const q = indexedDB.open(name + '-v1test', 1); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+        db.close();
+        const d2 = await msOpen(name + '-v1test');
+        const tx = d2.transaction(['messages', 'meta'], 'readonly');
+        const a = tx.objectStore('meta').get('v1-a'), b = tx.objectStore('messages').get('v1-a'), bad = tx.objectStore('meta').get('v1-bad');
+        await new Promise(r => { tx.oncomplete = r; });
+        d2.close();
+        await new Promise(r => { const q = indexedDB.deleteDatabase(name + '-v1test'); q.onsuccess = q.onerror = q.onblocked = r; });
+        return { rest: a.result, body: textOf(b.result), bad: bad.result, same: MS === saved && MS_DB === keep };
+      }, dbName);
+      const rest = JSON.parse(up.rest || '{}');
+      check(up.body === 'the whole text' && !('body' in rest) && rest.subj === 'Kept whole' && up.bad === 'not json',
+        `a 0.1.20 mailbox is upgraded in place: its text left where it was, the rest copied for start-up, an unreadable record carried so it can be removed (${JSON.stringify(up)})`);
 
       /* Where IndexedDB will not open, mail stays in localStorage as before —
          and loading older mail keeps its old limit there. */
@@ -476,10 +553,12 @@ export default async function run(state) {
 
     /* Dropping a message on another inbox opens a forward from that account —
        it must never send by itself. */
-    const moved = await page.evaluate(() => {
+    const moved = await page.evaluate(async () => {
       const target = S.linked.find(l => l.label === 'two@example.net');
       const msg = S.messages.find(m => m.id.startsWith('one@example.com-'));
       transferMessage(msg.id, target.id);
+      /* Straight away when the text is to hand; a read from disk otherwise. */
+      for (let i = 0; i < 40 && !document.querySelector('#compose-ov').classList.contains('open'); i++) await new Promise(r => setTimeout(r, 25));
       return {
         open: document.querySelector('#compose-ov').classList.contains('open'),
         from: document.querySelector('#cmp-from').selectedOptions[0]?.textContent || '',
