@@ -227,11 +227,12 @@ Be realistic about this before promising anything to a customer.
   in a locked-down frame (see *Traps*), with remote images off until asked.
   Links open in the browser — web addresses only, and from formatted mail
   only after a prompt naming where the link really goes (`links.rs`).
-- **The Format Bridge reads .docx, .xlsx, .csv, .md, .txt and .html** and
-  writes real .docx, .xlsx (every sheet), .csv, Markdown and PDF, keeping
-  headings, bold/italic, lists and tables. Not yet: PDF, .doc, .pptx or
-  Apple files as input; pictures; PDFs of text outside Western European
-  letters (refused, with the reason).
+- **The Format Bridge reads .pdf, .docx, .xlsx, .csv, .md, .txt and .html**
+  and writes real .docx, .xlsx (every sheet), .csv, Markdown and PDF, keeping
+  headings, bold/italic, lists and tables (from a PDF: text, headings, lists
+  and simple tables, rebuilt from where the words sit). Not yet: scanned
+  PDFs (no OCR), .doc, .pptx or Apple files as input; pictures; PDFs of text
+  outside Western European letters (refused, with the reason).
 - **AI needs the website deployed.** Summaries, translation and task flags
   go through RATA's relay at `mailrata.org/api/ai` (Haiku, capped at $2 per
   customer a month, nothing stored), which is not live until the site is

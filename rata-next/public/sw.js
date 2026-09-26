@@ -1,5 +1,5 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v21';
+const V = 'rata-shell-v22';
 const SHELL = [
   './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
   './fonts/fonts.css',
@@ -53,7 +53,9 @@ const ENGINES = [
   './vendor/supabase-js-2.112.4.js',
   './vendor/mammoth-1.8.0.browser.min.js',
   './vendor/xlsx-0.20.3.full.min.js',
-  './vendor/jspdf-2.5.1.umd.min.js'
+  './vendor/jspdf-2.5.1.umd.min.js',
+  './vendor/pdf-6.3.289.legacy.min.js',
+  './vendor/pdf.worker-6.3.289.legacy.min.js'
 ];
 
 self.addEventListener('install', e => {
