@@ -38,9 +38,14 @@
        else. The interface already knows sent mail by `sent` and who it went
        to by `toName`. */
     const sent = m.folder === 'sent';
+    /* One of the customer's own folders arrives as {named: <server name>};
+       the interface keeps it as folder 'named' with the name in `box`, and
+       sends {named: box} back whenever it asks about the message. */
+    const named = !!m.folder && typeof m.folder === 'object' && typeof m.folder.named === 'string';
     return {
       id: m.id,
-      folder: m.folder || 'inbox',
+      folder: named ? 'named' : m.folder || 'inbox',
+      ...(named ? { box: m.folder.named } : {}),
       ...(sent ? { sent: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '' } : {}),
       acct: m.acct,
       acctLabel: m.acct_label,
@@ -303,6 +308,27 @@
         return { ok: true, name: got.name, mime: got.mime, data: got.data };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
+    /* The customer's own folders in one mailbox, and the newest mail of one
+       of them — read when the customer opens it, not on every refresh. */
+    async '/api/mail/folders'(opts) {
+      const b = body(opts);
+      try {
+        return { folders: await invoke('list_folders', { email: b.email }) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/mail/folder'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('folder_mail', { email: b.email, folder: b.folder, limit: b.limit ?? null });
+        return { messages: got.map(asMessage) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }
     },
 

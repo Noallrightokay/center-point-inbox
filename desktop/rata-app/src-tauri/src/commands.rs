@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
 
-use rata_mail::{Action, File, Folder, Message};
+use rata_mail::{Action, File, Folder, Message, OwnFolder};
 
 use crate::core::{
     Changed, Delivered, Draft, Forwarded, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing,
@@ -161,6 +161,23 @@ pub async fn older_mail(
         limit.unwrap_or(50),
     )
     .await
+}
+
+/// The customer's own folders in one mailbox.
+#[tauri::command]
+pub async fn list_folders(app: App<'_>, email: String) -> Result<Vec<OwnFolder>, Problem> {
+    app.folders(&email).await
+}
+
+/// The newest messages of one folder of one mailbox.
+#[tauri::command]
+pub async fn folder_mail(
+    app: App<'_>,
+    email: String,
+    folder: Folder,
+    limit: Option<u32>,
+) -> Result<Vec<Message>, Problem> {
+    app.folder_mail(&email, folder, limit.unwrap_or(50)).await
 }
 
 /// Particular messages in one mailbox again, by UID: mail stored before RATA

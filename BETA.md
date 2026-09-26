@@ -94,10 +94,18 @@ Don't spend time reporting these — they are known and planned:
   from your phone or webmail — in the Sent filter and in each person's
   thread in People. From v0.1.25 **Archive** and **Spam** have filters of
   their own (Gmail's archive isn't shown — Gmail keeps it inside "All
-  Mail"); a message in Spam can be marked **Not spam**. Drafts and your own
-  folders aren't shown yet. If real mail turns up in Spam, or a folder is
+  Mail"); a message in Spam can be marked **Not spam**. From v0.1.26 **Folders**
+  (in the row of filters) lists your own folders — Gmail labels too — and
+  opens one, and **Move to** on a message files it into one. Drafts aren't
+  shown yet. If real mail turns up in Spam, or a folder is
   missing, tell us which provider. If something you sent from RATA shows up twice in Sent, tell
   us which provider it was.
+- **With more than one mailbox linked, before v0.1.26 a reply went out from
+  the first one** — not the mailbox the message came to — and each
+  mailbox's own filter and Side by side column showed nothing. If you
+  replied to mail in another mailbox on an earlier version, that reply is
+  in the first mailbox's Sent. Fixed in v0.1.26; tell us if a reply still
+  goes from the wrong address.
 - **Converting files (Files → Format Bridge), rebuilt in v0.1.18:** Word
   output is now a real .docx that Word, Google Docs and Pages open without
   complaint; headings, bold and italic, lists and tables survive; every

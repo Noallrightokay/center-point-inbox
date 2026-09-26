@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Folder, Message, Outgoing,
-    Resolver, Sent, Verify, Whole, act, body, fetch_newest, fetch_older, fetch_uids, fetch_whole,
-    send, verify,
+    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Folder, Listed, Message, Outgoing,
+    OwnFolder, Resolver, Sent, Verify, Whole, act, body, fetch_folder, fetch_newest, fetch_older,
+    fetch_uids, fetch_whole, list_folders, send, verify,
 };
 use serde::Serialize;
 
@@ -500,6 +500,39 @@ impl Rata {
         self.answer(&acct.email, found)
     }
 
+    /// The customer's own folders in one mailbox, for picking one to read or
+    /// to move mail to.
+    pub async fn folders(&self, email: &str) -> Result<Vec<OwnFolder>, Problem> {
+        let acct = self.readable(email)?;
+        let problem = |kind: &str, error: String| Problem {
+            email: acct.email.clone(),
+            kind: kind.into(),
+            error,
+        };
+        match list_folders(&self.resolver, &acct).await {
+            Listed::Folders(f) => Ok(f),
+            Listed::Auth(error) => {
+                self.note_auth_failure(&acct.email);
+                Err(problem("auth", error))
+            }
+            Listed::Host(error) => Err(problem("host", error)),
+            Listed::Net(error) => Err(problem("net", error)),
+        }
+    }
+
+    /// The newest messages of one folder — how one of the customer's own is
+    /// read when they open it. Capped like older mail.
+    pub async fn folder_mail(
+        &self,
+        email: &str,
+        folder: Folder,
+        limit: u32,
+    ) -> Result<Vec<Message>, Problem> {
+        let acct = self.readable(email)?;
+        let found = fetch_folder(&self.resolver, &acct, folder, limit.min(200)).await;
+        self.answer(&acct.email, found)
+    }
+
     /// Particular messages again, by UID — mail stored before RATA could
     /// decode message bodies. Refused on the same terms as older mail.
     pub async fn reread(
@@ -518,7 +551,7 @@ impl Rata {
     /// The attachments of a message being forwarded, fetched from its mailbox.
     async fn forwarded_files(&self, fw: &Forwarded) -> Result<Vec<File>, String> {
         let raw = self
-            .whole(&fw.email, fw.folder, fw.uid, fw.uidvalidity)
+            .whole(&fw.email, fw.folder.clone(), fw.uid, fw.uidvalidity)
             .await
             .map_err(|p| format!("The attachments could not be forwarded: {}", p.error))?;
         fw.indexes
@@ -657,7 +690,7 @@ impl Rata {
             kind: kind.into(),
             error,
         };
-        match fetch_whole(&self.resolver, &acct, folder, uid, uidvalidity).await {
+        match fetch_whole(&self.resolver, &acct, folder.clone(), uid, uidvalidity).await {
             Whole::Raw(raw) => Ok(raw),
             Whole::Gone => Err(problem(
                 "gone",
@@ -668,6 +701,7 @@ impl Rata {
                         Folder::Sent => "Sent",
                         Folder::Archive => "the Archive",
                         Folder::Junk => "Spam",
+                        Folder::Named(_) => "that folder",
                     }
                 ),
             )),
@@ -1282,6 +1316,53 @@ mod tests {
     }
 
     #[test]
+    fn folders_refuse_before_ever_dialling() {
+        rt().block_on(async {
+            let work = || Folder::Named("Work".into());
+            let app = unlicensed(tmpfile("dir-unlic"));
+            assert_eq!(
+                app.folders("owner@example.com").await.unwrap_err().kind,
+                "unlicensed"
+            );
+            assert_eq!(
+                app.folder_mail("owner@example.com", work(), 50)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "unlicensed"
+            );
+
+            let app = rata(tmpfile("dir-unknown"));
+            assert_eq!(
+                app.folders("nobody@example.com").await.unwrap_err().kind,
+                "unknown"
+            );
+            assert_eq!(
+                app.folder_mail("nobody@example.com", work(), 50)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "unknown"
+            );
+
+            let app = rata(tmpfile("dir-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            assert_eq!(
+                app.folders("owner@example.com").await.unwrap_err().kind,
+                "auth"
+            );
+            assert_eq!(
+                app.folder_mail("owner@example.com", work(), 50)
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "auth"
+            );
+        });
+    }
+
+    #[test]
     fn re_reading_mail_refuses_before_ever_dialling() {
         rt().block_on(async {
             let app = unlicensed(tmpfile("reread-unlic"));
@@ -1732,6 +1813,24 @@ mod tests {
             )
             .is_err()
         );
+        // One of the customer's own folders comes as {"named": …}, and a
+        // move names where to.
+        let named: Forwarded = serde_json::from_str(
+            r#"{"email":"a@b.example","folder":{"named":"Work/Clients"},"uid":5,"uidvalidity":8,"indexes":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(named.folder, Folder::Named("Work/Clients".into()));
+        assert_eq!(
+            serde_json::from_str::<Action>(r#"{"move":{"named":"Receipts"}}"#).unwrap(),
+            Action::Move(Folder::Named("Receipts".into()))
+        );
+        assert_eq!(
+            serde_json::from_str::<Action>(r#""archive""#).unwrap(),
+            Action::Archive
+        );
+        assert!(serde_json::from_str::<Action>(r#"{"move":"Trash"}"#).is_err());
+        let m = serde_json::to_value(Folder::Named("Entw&APw-rfe".into())).unwrap();
+        assert_eq!(m, serde_json::json!({"named": "Entw&APw-rfe"}));
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),
             message_id: "abc@b.example".into(),
