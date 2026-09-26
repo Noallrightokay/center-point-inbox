@@ -2497,8 +2497,24 @@ const TIERS={
 };
 const DOMAIN_ADDON_PRICE=1.50;
 const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
-const tier=()=>TIERS[S.settings.plan]||null;
-const tierLabel=()=>tier()?tier().label:'No plan yet';
+/* Which plan this is. On the website, the subscription the site recorded
+   (S.settings.plan). In the desktop app, the licence on this computer — the
+   signed token Rust checks, which is what actually decides what the app
+   will do; the app never reads the website's record, and asking it left
+   every paying tester on "No plan yet" with Side by side locked. LIC is the
+   licence's standing as Rust reports it (licence_status). */
+let LIC=null;
+const planKey=()=>window.__RATA_NATIVE__?(LIC&&LIC.licensed&&LIC.plan?LIC.plan.key:null):S.settings.plan;
+const tier=()=>TIERS[planKey()]||null;
+const tierLabel=()=>tier()?tier().label:window.__RATA_NATIVE__?'No licence yet':'No plan yet';
+function takeStanding(st){
+  LIC=st&&typeof st==='object'&&!st.error?st:null;
+  /* The bridge can answer before the workspace has loaded; boot asks again. */
+  if(!S)return;
+  renderSplitLock();
+  if($('#plan-badge'))renderPlan();
+}
+addEventListener('rata-standing',e=>takeStanding(e.detail));
 const can=f=>!!(tier()&&tier()[f]);
 /* What to say when something is held back, always naming the plan that has
    it and what that costs. */
@@ -2862,13 +2878,17 @@ function renderPlan(){
   const badge=$('#plan-badge'),line=$('#plan-line');
   badge.textContent=tierLabel();
   badge.className='badge '+(t?'work':'personal');
-  line.textContent=t
+  const mailboxes=t=>t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes';
+  if(window.__RATA_NATIVE__)line.textContent=t
+    ? `${LIC.message} ${money(t.price)} a month · ${mailboxes(t)} in one Center Point inbox${t.split?', side by side':''}.`
+    : (LIC&&LIC.message)||'No licence on this computer yet — enter the key from your mailrata.org account.';
+  else line.textContent=t
     ?`${money(t.price)} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
     :`No plan yet. ${TIERS.base.label} is ${money(TIERS.base.price)} a month: up to ${TIERS.base.mail} mailboxes in one Center Point inbox.`;
   /* One button per plan that has a checkout link, and never one for the plan
      they are already on — that is a paid-for confusion. */
   const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};
-  const here=S.settings.plan;
+  const here=planKey();
 
   /* Carry the signed-in address into checkout.
 
@@ -4266,6 +4286,8 @@ function showWelcome(ob){
      whenever a link changes — the Accounts screen states the allowance before
      anyone runs into it. */
   refreshQuota();
+  /* In the app, what the licence allows. */
+  if(window.__RATA_NATIVE__){try{takeStanding(await apiFetch('/api/licence'))}catch(e){}}
   renderSplitLock();
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');

@@ -473,6 +473,9 @@
       if (after) standing = after.licensed ? after : await invoke('licence_status');
     }
     if (!standing.licensed) askForKey(standing);
+    /* The interface asked at start too; a renewal just now may have changed
+       the answer (a plan changed at renewal, say), so it hears the latest. */
+    window.dispatchEvent(new CustomEvent('rata-standing', { detail: standing }));
   }
 
   if (document.readyState === 'loading') {
