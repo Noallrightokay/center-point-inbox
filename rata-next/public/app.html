@@ -272,6 +272,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .md-viewbar .why{font-size:12px;color:var(--faint)}
 .md-html{display:block;width:100%;height:calc(100vh - 290px);min-height:360px;border:0;border-radius:var(--r);background:#fff;box-shadow:var(--shadow)}
 .md-note{margin-top:10px;font-size:12.5px;color:var(--faint);padding:0 4px}
+.md-spam{margin:12px 0 0;padding:10px 14px;border-radius:10px;background:rgba(214,64,46,.12);font-size:13.5px;line-height:1.45}
 .md-content{background:var(--card);padding:26px;font-size:15px;line-height:1.65;white-space:pre-line;overflow-wrap:anywhere;border-top:1px solid var(--hair-2);box-shadow:var(--shadow)}
 .md-content:last-child{border-radius:0 0 var(--r) var(--r)}
 .md-atts{background:var(--card);border-radius:0 0 var(--r) var(--r);border-top:1px solid var(--hair-2);padding:18px 26px;display:flex;gap:10px;flex-wrap:wrap;box-shadow:var(--shadow)}
@@ -1370,13 +1371,18 @@ function mailEmailOf(m){return String((S.linked.find(l=>l.id===m.acct)||{}).labe
 /* Which folder of its mailbox a message is in (0.1.22): the inbox, or Sent.
    A UID only means something inside its folder, so every request about a
    message names it. Mail stored before 0.1.22 is all from the inbox. */
-const folderOf=m=>m&&m.folder==='sent'?'sent':'inbox';
-/* Each folder's history is walked on its own and ends on its own:
-   historyDone for the inbox, sentDone for Sent. */
-const FOLDER_DONE={inbox:'historyDone',sent:'sentDone'};
+/* 0.1.25 adds Archive and Spam ('junk'): received mail that is not in the
+   inbox, with a filter chip each, kept out of the inbox list, its unread
+   count, the briefing and the to-dos. inInbox is what "the inbox" means. */
+const FOLDERS=['inbox','sent','archive','junk'];
+const FOLDER_LABEL={archive:'Archive',junk:'Spam'};
+const folderOf=m=>m&&FOLDERS.includes(m.folder)?m.folder:'inbox';
+const inInbox=m=>!m.sent&&folderOf(m)==='inbox';
+/* Each folder's history is walked on its own and ends on its own. */
+const FOLDER_DONE={inbox:'historyDone',sent:'sentDone',archive:'archiveDone',junk:'junkDone'};
 function olderCandidates(only){
   return S.linked.filter(l=>l.type==='mail'&&(!only||l.label.toLowerCase()===String(only).toLowerCase())
-    &&(!l.historyDone||(!l.sentDone&&oldestRef(l.label,'sent'))));
+    &&FOLDERS.some(f=>!l[FOLDER_DONE[f]]&&(f==='inbox'||oldestRef(l.label,f))));
 }
 function oldestRef(email,folder='inbox'){
   let best=null;const want=String(email).toLowerCase();
@@ -1393,7 +1399,7 @@ async function loadOlder(only,quiet){
     return;
   }
   let added=0,finished=0;const notes=[];
-  for(const l of olderCandidates(only))for(const folder of ['inbox','sent']){
+  for(const l of olderCandidates(only))for(const folder of FOLDERS){
     if(l[FOLDER_DONE[folder]])continue;
     const ref=oldestRef(l.label,folder);if(!ref)continue;
     let r;
@@ -1405,7 +1411,7 @@ async function loadOlder(only,quiet){
     for(const m of got){
       if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
       S.messages.push(mailRecord(m));
-      if(!m.sent)added++;
+      if(inInbox(m))added++;
     }
   }
   save();renderSyncAll();renderMailFilters();renderMail();
@@ -1671,7 +1677,7 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
 });
 function renderDigest(){
   const el=$('#digest');if(!el)return;
-  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&!m.sent);
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
   const unread=pool.filter(m=>m.unread).length;
   if(!unread){el.innerHTML='';return}
   const pr=pool.filter(m=>m.unread&&categorize(m)==='priority');
@@ -1702,7 +1708,7 @@ function renderSyncAll(){renderSources();
 }
 function renderCats(){
   const el=$('#cat-tabs');if(!el)return;
-  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&!m.sent);
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
   const cnt=c=>pool.filter(m=>categorize(m)===c).length;
   const tabs=[['all','All',pool.length],...Object.entries(CATS).map(([c,l])=>[c,l,cnt(c)])].filter(t=>t[0]==='all'||t[2]>0);
   if(!tabs.some(t=>t[0]===catFilter))catFilter='all';
@@ -1713,6 +1719,7 @@ function renderMailFilters(){renderCats();
   let chips=[['all','All'],['unread','Unread'],['starred','Starred']];
   S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
   chips.push(['sent','Sent']);
+  for(const f of ['archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
   if(!chips.some(c=>c[0]===mailFilter))mailFilter='all';
   $('#mail-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${mailFilter===f?'on':''}" data-f="${esc(f)}">${esc(l)}</button>`).join('');
   $$('#mail-filters .pill').forEach(p=>p.onclick=()=>{mailFilter=p.dataset.f;renderMailFilters();renderMail()});
@@ -1738,12 +1745,14 @@ function mailPool(acctId){
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
+  else if(mailFilter==='archive'||mailFilter==='junk')pool=pool.filter(m=>folderOf(m)===mailFilter);
   else if(mailFilter.startsWith('acct:'))pool=pool.filter(m=>m.acct===mailFilter.slice(5));
-  /* Sent is the one view made of sent mail; everywhere else it is left out.
-     The old chain dropped sent mail last and unconditionally, so the Sent chip
-     always showed an empty list. */
-  if(mailFilter!=='sent'){
-    pool=pool.filter(m=>!m.sent);
+  /* Sent, Archive and Spam are each their own view; everywhere else they are
+     left out. The old chain dropped sent mail last and unconditionally, so
+     the Sent chip always showed an empty list. Starred also shows starred
+     archived mail. */
+  if(!['sent','archive','junk'].includes(mailFilter)){
+    pool=pool.filter(m=>inInbox(m)||(mailFilter==='starred'&&!m.sent&&folderOf(m)==='archive'));
     if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
   }
   const s=mailSort;
@@ -1928,7 +1937,7 @@ function renderMail(){
   /* Side by side, the left pane belongs to its own account; on its own it
      follows the filter chips as before. */
   const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
-  $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&!m.sent&&channelEnabled(m.ch)).length;
+  $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&inInbox(m)&&channelEnabled(m.ch)).length;
   if(!pool.length){
     const linked=S.linked.length;
     sc.innerHTML=linked
@@ -2073,7 +2082,7 @@ function renderResting(){
     return;
   }
 
-  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&!m.sent);
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
   const unread=pool.filter(m=>m.unread);
   const need=unread.filter(m=>categorize(m)==='priority');
   const latest=[...pool].sort((a,b)=>b.ts-a.ts).slice(0,5);
@@ -2250,10 +2259,13 @@ function openMail(id){
         ${window.__RATA_NATIVE__&&!m.sent?'<button class="btn" id="md-translate">\u21c4 Translate</button>':''}
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
-        ${m.prov==='imap'&&m.uid&&!m.sent?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${m.prov==='imap'&&m.uid&&inInbox(m)?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${m.prov==='imap'&&m.uid&&folderOf(m)==='archive'?'<button class="btn" id="md-home">Move to inbox</button>':''}
+        ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
         <button class="btn danger" id="md-del">Delete</button>
       </div>
     </div>
+    ${folderOf(m)==='junk'?'<div class="md-spam"><b>This was in your Spam folder.</b> Be careful with its links and attachments \u2014 the sender may not be who they say they are.</div>':''}
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
     ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
       :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body">${linkify(showTr?tr.text:whole?whole.text:(body??''))}</div>
@@ -2296,6 +2308,8 @@ function openMail(id){
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
+  /* Back to the inbox, where the next refresh brings it in as inbox mail. */
+  if($('#md-home'))$('#md-home').onclick=()=>leave('inbox',folderOf(m)==='junk'?'Marked not spam — it appears in your inbox at the next refresh':'Moved to your inbox — it appears there at the next refresh');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
   $$('#md-body a.md-link').forEach(a=>a.onclick=e=>{
@@ -2317,7 +2331,8 @@ function renderPeopleFilters(){
   $('#people-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${peopleFilter===f?'on':''}" data-f="${esc(f)}">${esc(l)}</button>`).join('')+'<button class="pill" data-f="__add">＋ New person</button>';
   $$('#people-filters .pill').forEach(p=>p.onclick=()=>{if(p.dataset.f==='__add'){toggleAddPerson();return}peopleFilter=p.dataset.f;renderPeopleFilters();renderPeople()});
 }
-function personMsgs(cid){return S.messages.filter(m=>channelEnabled(m.ch)&&(m.cid===cid||(m.sent&&m.toId===cid))).sort((a,b)=>a.ts-b.ts)}
+/* A person's thread leaves out Spam: a forger can put anybody's name on it. */
+function personMsgs(cid){return S.messages.filter(m=>channelEnabled(m.ch)&&folderOf(m)!=='junk'&&(m.cid===cid||(m.sent&&m.toId===cid))).sort((a,b)=>a.ts-b.ts)}
 function renderPeople(){
   let pool=S.contacts.filter(c=>c.id!=='c8');
   pool.sort((a,b)=>{const la=personMsgs(a.id).at(-1)?.ts||0,lb=personMsgs(b.id).at(-1)?.ts||0;return lb-la});
@@ -2440,7 +2455,7 @@ async function doSearch(){
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
   const rp=$('#res-pane');
   rp.innerHTML=hits.length?hits.map((h,i)=>h.type==='msg'
-    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}</div></div></div>`
+    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}${FOLDER_LABEL[folderOf(h.ref)]?' · <span class="badge">'+FOLDER_LABEL[folderOf(h.ref)]+'</span>':''}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
     :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk(h.ref.addr||'No email address')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
@@ -3457,7 +3472,8 @@ async function serverSync(p){
 function mailRecord(m){
   const owner=linkedFind('mail',m.acct||'');
   const addr=String((m.sent?m.toAddr:m.fromAddr)||'').toLowerCase();
-  const match=addr?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===addr):null;
+  /* Spam is not linked to a contact: a forged From would put it in their thread. */
+  const match=addr&&m.folder!=='junk'?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===addr):null;
   return Object.assign({cid:m.sent?null:(match?match.id:null),...(m.sent?{toId:match?match.id:null}:{}),acct:owner?owner.id:undefined,real:true,atts:[]},m);
 }
 /* RATA's own record of a message it sent that this copy from Sent is: the
@@ -3504,7 +3520,7 @@ async function absorbMail(res){
     const have=S.messages.find(x=>x.id===m.id);
     if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;continue}
     S.messages.push(mailRecord(m));
-    if(!m.sent)added++;
+    if(inInbox(m))added++;
     newIds.push(m.id);
   }
   save();
@@ -4135,7 +4151,7 @@ const ASSIST_DEADLINE=/\b(by |before |due )(monday|tuesday|wednesday|thursday|fr
 async function extractTodos(){
   const cutoff=Date.now()-14*864e5;
   const items=[];
-  const pool=S.messages.filter(m=>!m.sent&&channelEnabled(m.ch)&&m.ts>=cutoff);
+  const pool=S.messages.filter(m=>inInbox(m)&&channelEnabled(m.ch)&&m.ts>=cutoff);
   const texts=await bodiesOf(pool);
   for(const m of pool){
     const text=(m.subj?m.subj+'. ':'')+(texts.get(m.id)||'');
@@ -4188,7 +4204,7 @@ async function runAIBrief(){
   if(!window.__RATA_NATIVE__||!aiOk()){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
-  const pool=S.messages.filter(m=>!m.sent&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
+  const pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
   if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
   btn.disabled=true;btn.textContent='Reading\u2026';
   const texts=await bodiesOf(pool);
