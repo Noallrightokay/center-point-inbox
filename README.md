@@ -76,7 +76,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 44 tests
+cargo test          # 45 tests
 ```
 
 On Linux you need the system webview first:
