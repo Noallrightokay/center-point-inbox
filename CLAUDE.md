@@ -18,8 +18,8 @@ or a mail password on a server, it is wrong, however convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions. Standalone, knows nothing about the app. 89 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 38 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history. Standalone, knows nothing about the app. 95 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface. 39 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -125,9 +125,13 @@ server's declared `\Trash`; none means refused) and never acts on a UID it
 cannot vouch for (UIDVALIDITY must match; only UIDs still present are touched).
 Deletions are also remembered in `S.gone` so sync does not restore them, and a
 sync takes the server's read/starred for messages it already holds. What is
-missing is scale: each refresh fetches only the newest ~15, with no backfill of
-older mail, and the single blob hits `localStorage`'s few-MB cap after heavy
-use — **the largest gap**, fixed by a per-message store (IndexedDB).
+missing is scale. A refresh fetches the newest ~15; older mail comes 50 at a
+time through **Load older mail** (`loadOlder` → `/api/mail/older` →
+`older_mail` → `rata_mail::imap::fetch_older`), which pages by position below
+the oldest UID RATA holds, and a newly linked mailbox gets one page straight
+away. But the single `localStorage` blob has a few-MB cap, so `loadOlder`
+refuses past `STORE_SOFT_CAP` — **the largest gap**, fixed by a per-message
+store (IndexedDB), after which that cap can go.
 Also not built: INBOX only; plain text only, no HTML or
 attachments; the interface still shows Slack, AI and file
 browsing controls that now refuse; no auto-update; no code signing.

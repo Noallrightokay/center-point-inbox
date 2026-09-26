@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use rata_mail::Action;
+use rata_mail::{Action, Message};
 
-use crate::core::{Changed, Linked, Rata, Refreshed, Standing};
+use crate::core::{Changed, Linked, Problem, Rata, Refreshed, Standing};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -88,4 +88,17 @@ pub async fn change_messages(
     action: Action,
 ) -> Result<Changed, String> {
     Ok(app.change(&email, &uids, uidvalidity, action).await)
+}
+
+/// The page of messages just older than `before_uid` in one mailbox.
+#[tauri::command]
+pub async fn older_mail(
+    app: App<'_>,
+    email: String,
+    before_uid: u32,
+    uidvalidity: u32,
+    limit: Option<u32>,
+) -> Result<Vec<Message>, Problem> {
+    app.older(&email, before_uid, uidvalidity, limit.unwrap_or(50))
+        .await
 }

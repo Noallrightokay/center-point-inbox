@@ -79,9 +79,12 @@ gone too.
 
 Don't spend time reporting these — they are known and planned:
 
-- Each refresh fetches the **newest ~15** inbox messages. RATA keeps what it
-  has fetched between launches, so history builds up from the day you link —
-  but older mail from before that is not pulled in yet.
+- Older mail comes in **50 at a time**: a new mailbox arrives with its newest
+  ~65, and **Load older mail** at the bottom of the list walks further back.
+  RATA stops loading older mail once its storage on your computer is nearly
+  full (a few MB — somewhere between one and three thousand messages,
+  depending on how long they are) and says so; a
+  larger store is coming.
 - No other folders yet — only the inbox is shown.
 - Plain text only: no HTML rendering, no attachments.
 - Buttons for Slack, the AI assistant and file browsing lead nowhere.

@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use rata_mail::{
     Account, Acted, Action, Address, Fetched, Message, Outgoing, Resolver, Sent, Verify, act,
-    fetch_inbox, send, verify,
+    fetch_inbox, fetch_older, send, verify,
 };
 use serde::Serialize;
 
@@ -391,7 +391,72 @@ impl Rata {
             Fetched::Messages(messages) => Ok(messages),
             Fetched::Auth(error) => Err(problem("auth", error)),
             Fetched::Host(error) => Err(problem("host", error)),
+            Fetched::Net(error) | Fetched::Stale(error) => Err(problem("net", error)),
+        }
+    }
+
+    /// Messages older than the oldest one RATA has for one mailbox — the
+    /// "load older mail" page. An empty list means the inbox has no more.
+    pub async fn older(
+        &self,
+        email: &str,
+        before_uid: u32,
+        uidvalidity: u32,
+        limit: u32,
+    ) -> Result<Vec<Message>, Problem> {
+        let problem = |kind: &str, error: String| Problem {
+            email: email.to_string(),
+            kind: kind.into(),
+            error,
+        };
+        if let Err(error) = self.licensed() {
+            return Err(problem("unlicensed", error));
+        }
+        let Some(m) = self.store.lock().ok().and_then(|s| s.find(email).cloned()) else {
+            return Err(problem(
+                "unknown",
+                format!("{email} is not linked in RATA."),
+            ));
+        };
+        if m.auth_failed_at.is_some() {
+            return Err(problem(
+                "auth",
+                format!(
+                    "{} needs relinking — its app password was rejected.",
+                    m.email
+                ),
+            ));
+        }
+        let pass = self.vault.get(&m.email).map_err(|e| match e {
+            Unreadable::Missing(why) => problem("missing", why),
+            Unreadable::Locked(why) => problem("keychain", why),
+        })?;
+        let acct = Account {
+            email: m.email.clone(),
+            pass,
+            host: m.host.clone(),
+            port: m.port,
+            label: m.label.clone(),
+        };
+        // Capped here as well as in the interface: a page is a page, and a
+        // runaway request must not try to pull a whole mailbox at once.
+        match fetch_older(
+            &self.resolver,
+            &acct,
+            before_uid,
+            uidvalidity,
+            limit.min(200),
+        )
+        .await
+        {
+            Fetched::Messages(messages) => Ok(messages),
+            Fetched::Auth(error) => {
+                self.note_auth_failure(&m.email);
+                Err(problem("auth", error))
+            }
+            Fetched::Host(error) => Err(problem("host", error)),
             Fetched::Net(error) => Err(problem("net", error)),
+            Fetched::Stale(error) => Err(problem("stale", error)),
         }
     }
 
@@ -761,6 +826,28 @@ mod tests {
             .unwrap();
             let c = app.change("ghost@example.com", &[1], 7, Action::Read).await;
             assert_eq!(c.kind.as_deref(), Some("missing"), "{c:?}");
+        });
+    }
+
+    #[test]
+    fn loading_older_mail_refuses_before_ever_dialling() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("old-unlic"));
+            let e = app.older("owner@example.com", 40, 7, 50).await.unwrap_err();
+            assert_eq!(e.kind, "unlicensed");
+
+            let app = rata(tmpfile("old-unknown"));
+            let e = app
+                .older("nobody@example.com", 40, 7, 50)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unknown");
+
+            let app = rata(tmpfile("old-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let e = app.older("owner@example.com", 40, 7, 50).await.unwrap_err();
+            assert_eq!(e.kind, "auth");
         });
     }
 
