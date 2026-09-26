@@ -74,6 +74,12 @@ pub enum Folder {
     /// purpose the server declares for it (RFC 6154), or failing that by the
     /// names providers give it.
     Sent,
+    /// Mail archived out of the inbox. Only a folder that is an archive: Gmail
+    /// has none — its "All Mail" holds the inbox and Sent too, and reading it
+    /// would show every message twice — so on Gmail there is no Archive here.
+    Archive,
+    /// Spam, which is where real mail goes missing.
+    Junk,
 }
 
 /// What Sent is called on servers that do not say which folder it is.
@@ -86,6 +92,22 @@ const SENT_NAMES: &[&str] = &[
     "INBOX/Sent",
     "INBOX.Sent Items",
     "INBOX.Sent Messages",
+];
+
+/// What Archive is called on servers that do not say which folder it is.
+const ARCHIVE_NAMES: &[&str] = &["Archive", "Archives", "INBOX.Archive", "INBOX/Archive"];
+
+/// What Spam is called on servers that do not say which folder it is.
+const JUNK_NAMES: &[&str] = &[
+    "Junk",
+    "Spam",
+    "Junk E-mail",
+    "Junk Email",
+    "Bulk Mail",
+    "INBOX.Junk",
+    "INBOX.Spam",
+    "INBOX/Junk",
+    "INBOX/Spam",
 ];
 
 /// One message, flattened to what a combined inbox actually shows.
@@ -522,12 +544,20 @@ pub async fn fetch_newest(resolver: &Resolver, acct: &Account, limit: u32) -> Fe
         Ok(m) => m,
         Err(failed) => return failed,
     };
-    if let Selected::Open(sent) = select(&mut session, Folder::Sent).await
-        && let Ok(mut more) = newest_in(&mut session, acct, Folder::Sent, &sent, limit).await
-    {
-        messages.append(&mut more);
-        messages.sort_by(|a, b| b.ts.cmp(&a.ts));
+    // The other folders are a bonus: any that is missing, will not open or
+    // fails partway is left out, and the inbox still arrives.
+    let found = places(&mut session).await;
+    for folder in [Folder::Sent, Folder::Archive, Folder::Junk] {
+        let Some(name) = found.name(folder) else {
+            continue;
+        };
+        if let Selected::Open(mailbox) = select_name(&mut session, name).await
+            && let Ok(mut more) = newest_in(&mut session, acct, folder, &mailbox, limit).await
+        {
+            messages.append(&mut more);
+        }
     }
+    messages.sort_by(|a, b| b.ts.cmp(&a.ts));
     let _ = timeout(COMMAND, session.logout()).await;
     Fetched::Messages(messages)
 }
@@ -563,50 +593,99 @@ enum Selected {
     Failed,
 }
 
-/// Open `folder` for reading and acting on. Sent is looked for by the purpose
-/// the server declares for it, then by the names providers give it.
+/// Open `folder` for reading and acting on.
 async fn select<T>(session: &mut Session<T>, folder: Folder) -> Selected
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let name = match folder {
-        Folder::Inbox => "INBOX".to_string(),
-        Folder::Sent => match sent_name(session).await {
-            Some(n) => n,
-            None => return Selected::Missing,
-        },
-    };
-    match timeout(COMMAND, session.select(&name)).await {
+    if folder == Folder::Inbox {
+        return select_name(session, "INBOX").await;
+    }
+    match places(session).await.name(folder) {
+        Some(name) => {
+            let name = name.to_string();
+            select_name(session, &name).await
+        }
+        None => Selected::Missing,
+    }
+}
+
+async fn select_name<T>(session: &mut Session<T>, name: &str) -> Selected
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match timeout(COMMAND, session.select(name)).await {
         Ok(Ok(m)) => Selected::Open(m),
         _ => Selected::Failed,
     }
 }
 
-/// The name of this server's Sent folder, if it has one.
-async fn sent_name<T>(session: &mut Session<T>) -> Option<String>
+/// Where this server keeps Sent, Archive and Spam, from one LIST.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Places {
+    sent: Option<String>,
+    archive: Option<String>,
+    junk: Option<String>,
+}
+
+impl Places {
+    fn name(&self, folder: Folder) -> Option<&str> {
+        match folder {
+            Folder::Inbox => Some("INBOX"),
+            Folder::Sent => self.sent.as_deref(),
+            Folder::Archive => self.archive.as_deref(),
+            Folder::Junk => self.junk.as_deref(),
+        }
+    }
+}
+
+/// Each folder by the purpose the server declares for it (RFC 6154), else by
+/// the exact names providers give it — never by a name that merely contains
+/// the word. None is ever the inbox, and no folder is two of them.
+async fn places<T>(session: &mut Session<T>) -> Places
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
     use async_imap::types::NameAttribute as A;
-    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
+    let Some(stream) = timeout(COMMAND, session.list(Some(""), Some("*")))
         .await
-        .ok()?
-        .ok()?;
+        .ok()
+        .and_then(Result::ok)
+    else {
+        return Places::default();
+    };
     let names: Vec<_> = stream.collect().await;
     let usable: Vec<_> = names
         .iter()
         .flatten()
-        .filter(|n| !n.attributes().contains(&A::NoSelect))
+        .filter(|n| {
+            !n.attributes().contains(&A::NoSelect) && !n.name().eq_ignore_ascii_case("INBOX")
+        })
         .collect();
-    if let Some(n) = usable.iter().find(|n| n.attributes().contains(&A::Sent)) {
-        return Some(n.name().to_string());
-    }
-    SENT_NAMES.iter().find_map(|want| {
-        usable
+    let mut taken: Vec<String> = Vec::new();
+    let mut pick = |attr: A, fallback: &[&str]| -> Option<String> {
+        let by_attr = usable
             .iter()
-            .find(|n| n.name().eq_ignore_ascii_case(want))
-            .map(|n| n.name().to_string())
-    })
+            .find(|n| n.attributes().contains(&attr) && !taken.iter().any(|t| t == n.name()));
+        let by_name = || {
+            fallback.iter().find_map(|want| {
+                usable.iter().find(|n| {
+                    n.name().eq_ignore_ascii_case(want) && !taken.iter().any(|t| t == n.name())
+                })
+            })
+        };
+        let found = by_attr.or_else(by_name)?.name().to_string();
+        taken.push(found.clone());
+        Some(found)
+    };
+    let sent = pick(A::Sent, SENT_NAMES);
+    let junk = pick(A::Junk, JUNK_NAMES);
+    let archive = pick(A::Archive, ARCHIVE_NAMES);
+    Places {
+        sent,
+        archive,
+        junk,
+    }
 }
 
 /// The largest message RATA will download when one is opened. Mail providers
@@ -1002,6 +1081,8 @@ pub enum Action {
     /// Moved to the server's Archive (Gmail: "All Mail", which takes it out
     /// of the inbox and keeps it).
     Archive,
+    /// Moved back to the inbox — from Spam ("not spam") or from Archive.
+    Inbox,
 }
 
 /// How acting on messages went.
@@ -1131,7 +1212,7 @@ where
         Action::Unread => Some(flag('-', "\\Seen")),
         Action::Star => Some(flag('+', "\\Flagged")),
         Action::Unstar => Some(flag('-', "\\Flagged")),
-        Action::Trash | Action::Archive => None,
+        Action::Trash | Action::Archive | Action::Inbox => None,
     };
     if let Some(change) = stored {
         return match timeout(COMMAND, store(session, &set, &change)).await {
@@ -1144,6 +1225,12 @@ where
         };
     }
 
+    if action == Action::Inbox && folder == Folder::Inbox {
+        return Acted::Done {
+            done: present,
+            gone,
+        };
+    }
     let Some(dest) = destination(session, action).await else {
         let what = if action == Action::Trash {
             "a Trash folder, so RATA left the messages where they are rather than delete them for good"
@@ -1216,6 +1303,9 @@ where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
     use async_imap::types::NameAttribute as A;
+    if action == Action::Inbox {
+        return Some("INBOX".into());
+    }
     let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
         .await
         .ok()?
@@ -1240,6 +1330,8 @@ fn cannot_open(folder: Folder) -> String {
     match folder {
         Folder::Inbox => "its inbox could not be opened".into(),
         Folder::Sent => "its Sent folder could not be opened".into(),
+        Folder::Archive => "its Archive folder could not be opened".into(),
+        Folder::Junk => "its Spam folder could not be opened".into(),
     }
 }
 
@@ -1367,6 +1459,8 @@ fn build(acct: &Account, f: &async_imap::types::Fetch, folder: Folder, generatio
     let place = match folder {
         Folder::Inbox => "",
         Folder::Sent => "sent_",
+        Folder::Archive => "archive_",
+        Folder::Junk => "junk_",
     };
     Message {
         id: format!("{}_{place}{uid}", mail_key(&acct.email)),
@@ -2483,6 +2577,97 @@ mod tests {
                 apply(&mut s, Folder::Sent, &[2], 7, Action::Trash).await,
                 Acted::Stale(_)
             ));
+            assert!(changed(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    // --------------------------------------------------- archive and spam
+    const OUTLOOK_ALL: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"Sent Items\"\r\n* LIST (\\HasNoChildren \\Archive) \"/\" \"Archive\"\r\n* LIST (\\HasNoChildren \\Junk) \"/\" \"Junk Email\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"Deleted Items\"\r\n";
+    const GMAIL_ALL: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\All \\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n* LIST (\\HasNoChildren \\Junk) \"/\" \"[Gmail]/Spam\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n";
+    /// Nothing declared; the real folders known by name, and decoys that
+    /// only contain the words.
+    const NAMES_ONLY: &str = "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Spam reports\"\r\n* LIST (\\HasNoChildren) \".\" \"Old archive stuff\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Archive\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.spam\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Sent\"\r\n";
+
+    #[test]
+    fn archive_and_spam_are_found_by_what_they_are() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_folders(OUTLOOK_ALL, "x").await;
+            assert_eq!(
+                places(&mut s).await,
+                Places {
+                    sent: Some("Sent Items".into()),
+                    archive: Some("Archive".into()),
+                    junk: Some("Junk Email".into())
+                }
+            );
+            // Gmail's All Mail is every message, inbox and Sent included:
+            // it is not an archive to read, so there is none.
+            let (mut s, _) = scripted_folders(GMAIL_ALL, "x").await;
+            assert_eq!(
+                places(&mut s).await,
+                Places {
+                    sent: Some("[Gmail]/Sent Mail".into()),
+                    archive: None,
+                    junk: Some("[Gmail]/Spam".into())
+                }
+            );
+            let (mut s, _) = scripted_folders(NAMES_ONLY, "x").await;
+            assert_eq!(
+                places(&mut s).await,
+                Places {
+                    sent: Some("INBOX.Sent".into()),
+                    archive: Some("INBOX.Archive".into()),
+                    junk: Some("INBOX.spam".into())
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn spam_has_ids_of_its_own_and_not_spam_moves_it_home() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(OUTLOOK_ALL, "Junk Email").await;
+            let Selected::Open(junk) = select(&mut s, Folder::Junk).await else {
+                panic!("Spam opens");
+            };
+            let got = newest_in(&mut s, &me(), Folder::Junk, &junk, 15)
+                .await
+                .unwrap();
+            let key = mail_key("me@example.com");
+            assert_eq!(got[0].id, format!("{key}_junk_12"));
+            assert_eq!(got[0].folder, Folder::Junk);
+            assert_eq!(
+                apply(&mut s, Folder::Junk, &[11], 8, Action::Inbox).await,
+                Acted::Done {
+                    done: vec![11],
+                    gone: vec![]
+                }
+            );
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter()
+                    .any(|c| c.to_ascii_uppercase().starts_with("UID MOVE 11 INBOX")
+                        || c.to_ascii_uppercase().starts_with("UID MOVE 11 \"INBOX\"")),
+                "{log:?}"
+            );
+            assert_eq!(
+                selected(&log).last().map(String::as_str),
+                Some("Junk Email")
+            );
+        });
+    }
+
+    #[test]
+    fn moving_inbox_mail_to_the_inbox_does_nothing() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(OUTLOOK_ALL, "x").await;
+            assert_eq!(
+                apply(&mut s, Folder::Inbox, &[2], 7, Action::Inbox).await,
+                Acted::Done {
+                    done: vec![2],
+                    gone: vec![]
+                }
+            );
             assert!(changed(&log.lock().unwrap()).is_empty());
         });
     }

@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent folder. Standalone, knows nothing about the app. 150 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders. Standalone, knows nothing about the app. 153 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 57 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -102,7 +102,8 @@ converts an attachment straight from the message; v0.1.21 keeps message
 text on disk until it is needed instead of in memory; v0.1.22 reads the
 Sent folder too; v0.1.23 can update itself (once the owner has added the
 update key — `rata-next/LAUNCH.md` §9); v0.1.24 takes the plan from the
-licence, so Pro opens Side by side in the app. An
+licence, so Pro opens Side by side in the app; v0.1.25 adds Archive and
+Spam. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -454,7 +455,26 @@ bridge.js fires after it settles and renews). Until 0.1.24 the app read the
 website's record, which it never fills, so every paying tester saw "No plan
 yet" and Side by side locked behind Pro. Settings → Current plan now shows the
 licence's own sentence ("Licensed for RATA Pro until …").
-Also not built: folders other than the inbox and Sent; no code signing.
+**Archive and Spam (v0.1.25).** `Folder` gains `Archive` and `Junk`, and
+`places()` finds Sent, Spam and Archive from one LIST — by RFC 6154
+attribute, else by exact name (`SENT_NAMES`, `JUNK_NAMES`, `ARCHIVE_NAMES`);
+never the inbox, never one folder for two purposes, never a name that only
+contains the word ("Spam reports", "Old archive stuff"). **Gmail has no
+Archive here:** it declares only `\All` ("All Mail"), which holds the inbox
+and Sent too, so reading it would show every message twice. A refresh reads
+the newest mail of each folder the mailbox has; any that fails is left out.
+In the interface `inInbox(m)` (received, in the inbox) replaces `!m.sent`
+wherever "the inbox" was meant — the list, Unread, `#nc-inbox`, the digest,
+categories, the briefing and the to-dos — so Archive and Spam only appear
+under their own chips (shown when they hold anything), in Starred (archive
+only) and in search (labelled). Spam is never linked to a contact
+(`mailRecord`): a forged From would put it in their People thread. A spam
+message says it was in Spam and offers **Not spam**, an archived one **Move
+to inbox** — both `Action::Inbox` (a MOVE to INBOX; the message leaves RATA
+and the next refresh brings it back as inbox mail, since a moved message
+gets the newest UID). Older mail pages every folder (`FOLDER_DONE`).
+Also not built: the customer's own folders and Drafts; Gmail's archive; no
+code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

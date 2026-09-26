@@ -92,8 +92,11 @@ Don't spend time reporting these — they are known and planned:
   roughly how many messages.
 - From v0.1.22 RATA shows your **Sent** mail too — including what you sent
   from your phone or webmail — in the Sent filter and in each person's
-  thread in People. Other folders (drafts, archive, spam, your own) aren't
-  shown yet. If something you sent from RATA shows up twice in Sent, tell
+  thread in People. From v0.1.25 **Archive** and **Spam** have filters of
+  their own (Gmail's archive isn't shown — Gmail keeps it inside "All
+  Mail"); a message in Spam can be marked **Not spam**. Drafts and your own
+  folders aren't shown yet. If real mail turns up in Spam, or a folder is
+  missing, tell us which provider. If something you sent from RATA shows up twice in Sent, tell
   us which provider it was.
 - **Converting files (Files → Format Bridge), rebuilt in v0.1.18:** Word
   output is now a real .docx that Word, Google Docs and Pages open without

@@ -60,7 +60,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 150 tests, no network required
+cargo test          # 153 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -223,9 +223,11 @@ it, new versions are a download from the releases page.
   the mailbox: start-up reads every message's details (about 0.75 s at
   10,000), and a search reads through all the text on disk (about half a
   second at 10,000).
-- **The inbox and Sent only.** Drafts, archive, spam and your own folders are
-  not shown. Mail sent from RATA appears in Sent only if the provider files
-  it there (Gmail and Outlook do); RATA does not add it itself.
+- **The inbox, Sent, Archive and Spam only.** Drafts and your own folders are
+  not shown, and neither is Gmail's archive (Gmail keeps archived mail in "All
+  Mail", which also holds everything else). Mail sent from RATA appears in
+  Sent only if the provider files it there (Gmail and Outlook do); RATA does
+  not add it itself.
 - **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
   — MIME, quoted-printable, base64, any charset — and an HTML-only message is
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).

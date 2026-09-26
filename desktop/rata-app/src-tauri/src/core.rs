@@ -661,11 +661,15 @@ impl Rata {
             Whole::Raw(raw) => Ok(raw),
             Whole::Gone => Err(problem(
                 "gone",
-                match folder {
-                    Folder::Inbox => "That message is no longer in the inbox — it was deleted or moved from another device.",
-                    Folder::Sent => "That message is no longer in Sent — it was deleted or moved from another device.",
-                }
-                .into(),
+                format!(
+                    "That message is no longer in {} — it was deleted or moved from another device.",
+                    match folder {
+                        Folder::Inbox => "the inbox",
+                        Folder::Sent => "Sent",
+                        Folder::Archive => "the Archive",
+                        Folder::Junk => "Spam",
+                    }
+                ),
             )),
             Whole::TooLarge(size) => Err(problem(
                 "large",
