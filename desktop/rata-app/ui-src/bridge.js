@@ -221,6 +221,29 @@
       }
     },
 
+    /* Summaries, translation and task flags, from RATA's AI relay. The
+       licence is the credential: the relay only answers a genuine one, and
+       only for what its plan includes. The page sends the text it was asked
+       about; nothing else goes. */
+    async '/api/ai'(opts) {
+      const b = body(opts);
+      let standing = null;
+      try { standing = await invoke('licence_status'); } catch { standing = null; }
+      if (!standing || !standing.token) return { error: 'This copy of RATA has no licence to use AI with.' };
+      try {
+        const r = await fetch(AI, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Object.assign({}, b, { licence: standing.token })),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok && !d.error) return { error: 'RATA\u2019s AI service could not answer (' + r.status + ').' };
+        return d;
+      } catch {
+        return { error: 'RATA could not reach its AI service. Check the connection and try again.', reason: 'offline' };
+      }
+    },
+
     /* A web address the customer chose to open. Rust checks it is one. */
     async '/api/link/open'(opts) {
       const b = body(opts);
@@ -304,6 +327,7 @@
      at all, and the one address it may contact is the one line in the content
      security policy that allows it. */
   const RENEW = 'https://mailrata.org/api/licence/renew';
+  const AI = 'https://mailrata.org/api/ai';
 
   async function renew(current) {
     if (!current) return null;

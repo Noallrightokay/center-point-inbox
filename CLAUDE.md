@@ -8,11 +8,18 @@ not say, and the state of play as of the last session.
 
 RATA is a desktop mail client. Mail is read on the customer's own machine over
 IMAP and SMTP; the password lives in the OS keychain and never reaches a server.
-`mailrata.org` sells licences and does nothing else — it has no credentials, no
+`mailrata.org` sells licences and runs the AI relay — it has no credentials, no
 connection to anyone's mailbox, and no code for one.
 
-Every decision in this repository follows from that. If a change would put mail
-or a mail password on a server, it is wrong, however convenient.
+Every decision in this repository follows from that. The owner's two rules
+(2026-09-26): RATA must never need big servers, and must never hold anything
+a breach could leak. So a mail password never reaches a server, and mail
+never does either, with **one** deliberate exception the owner chose: the AI
+relay (`rata-next/app/api/ai`), which passes the text of a message a customer
+asked to summarize or translate to Anthropic and back, stores and logs none
+of it, and costs RATA at most `AI_MONTHLY_CAP_USD` ($2) per customer a month
+on Haiku. Anything else that would put mail on a server is wrong, however
+convenient.
 
 ## Where things are
 
@@ -20,7 +27,7 @@ or a mail password on a server, it is wrong, however convenient.
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML. Standalone, knows nothing about the app. 145 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 46 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal. Next.js on a Hostinger VPS. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
@@ -87,7 +94,8 @@ the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
 keeps mail in IndexedDB, one record per message, with no storage cap;
 v0.1.14 opens links in the browser, asking first for links in formatted mail;
 v0.1.15 keeps a closed draft whole; v0.1.16 draws only the rows of the
-list that are on screen. An
+list that are on screen; v0.1.17 adds AI summaries, translation and task
+flags through the relay (which needs the website deployed — see below). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -281,6 +289,30 @@ Open passed exactly that URL to `xdg-open`, `javascript:` did nothing,
 `location.href` to example.com was refused). Testing trap: under Xvfb here
 the webview draws at 3/4 width but takes clicks at full width — multiply a
 screenshot's x by 4/3 before clicking with xdotool; y is unchanged.
+**AI (v0.1.17), through RATA's relay.** Summarize, Translate (reading pane)
+and Run briefing (Assist) call `askAI` → bridge `/api/ai` → `POST
+https://mailrata.org/api/ai` with the licence token as the credential
+(`rata-next/app/api/ai/route.js`, rules in `lib/ai.js`): plan-gated
+(`translate` for Base, `ai` for Pro — `lib/plan.js`), Haiku 4.5, text capped
+(12 000 chars; the briefing sends the start, 1 500 chars, of the 25 most
+recent messages from the last 14 days), every prompt fences the email as
+untrusted, the task list is parsed strictly (ids must be ones sent). Each
+request is charged from Anthropic's reported token use into `ai_usage`
+(`database.sql` §5) and refused at the month's cap; nothing is logged but a
+status. The app asks once before the first AI use (`aiOk`, `AI_NOTICE`),
+never sends anything on its own (opening Assist runs the local briefing), and
+falls back to the local summary/briefing with the reason when AI cannot be
+used. Flags are stored as `m.flag` and shown in the list. Translations live
+in `TRANSLATED` for the session. **Two things found on the way:** the live
+mailrata.org is an old deploy (`/api/licence/renew` is 404 there), and even
+the current code never answered the app's cross-origin preflight, so licence
+renewal from the app has never worked — `lib/cors.js` now allows exactly the
+app's origins on `/api/ai` and `/api/licence/renew`. Neither AI nor renewal
+works for testers until the site is redeployed with the variables in
+`rata-next/LAUNCH.md` §4 and `database.sql` §5 has been run. Testing trap:
+this container's Chromium reports `navigator.language` as `en-US@posix`,
+which `Intl.DisplayNames` rejects — `userLang()` takes only the leading
+letters.
 Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
