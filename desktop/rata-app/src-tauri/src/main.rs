@@ -16,14 +16,17 @@
 mod commands;
 mod core;
 mod licence;
+mod links;
 mod store;
 mod vault;
 
 use std::sync::Arc;
 
 use tauri::Manager;
+use tauri::webview::NewWindowResponse;
 
 use crate::core::Rata;
+use crate::links::{Link, Navigation};
 use crate::store::Store;
 use crate::vault::Keychain;
 
@@ -72,6 +75,28 @@ fn fitted(window: (u32, u32), area: (u32, u32)) -> Option<(u32, u32)> {
     if (w, h) == window { None } else { Some((w, h)) }
 }
 
+/// A link clicked in a message. Messages are shown in a sandboxed frame that
+/// can run nothing and go nowhere; the one thing it is allowed is to ask for
+/// a new window, which is how a click on one of its links arrives here. No
+/// window is ever opened. The interface is told what was clicked and asks
+/// the customer — showing where the link really goes — before the browser
+/// is involved; an address to write to opens the composer.
+fn from_mail(handle: &tauri::AppHandle, url: &tauri::Url) {
+    let said = match links::classify(url.as_str()) {
+        Some(Link::Web(u)) => {
+            serde_json::json!({ "kind": "web", "url": u.as_str(), "host": u.host_str() })
+        }
+        Some(Link::Mail { to, subject }) => {
+            serde_json::json!({ "kind": "mail", "to": to, "subject": subject })
+        }
+        None => serde_json::json!({ "kind": "refused" }),
+    };
+    if let Some(window) = handle.get_webview_window("main") {
+        // JSON is a JavaScript literal, so nothing in the link can become code.
+        let _ = window.eval(format!("window.__rataLink&&window.__rataLink({said})"));
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -92,15 +117,32 @@ fn main() {
                 resolver,
                 licence::PUBLIC_KEY,
             )));
-            let planned = app
+            // The window is built here rather than from the config alone
+            // (`"create": false` there) so that it can be told where it may
+            // go: the app's own pages and nowhere else — see `links`.
+            let config = app
                 .config()
                 .app
                 .windows
                 .first()
-                .map(|w| (w.width, w.height));
-            if let (Some(window), Some(planned)) = (app.get_webview_window("main"), planned) {
-                fit_to_screen(&window, planned);
-            }
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("no window configured"))?;
+            let handle = app.handle().clone();
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                .on_navigation(|url| match links::navigation(url) {
+                    Navigation::Stay => true,
+                    Navigation::Browser(u) => {
+                        let _ = links::open_in_browser(&u);
+                        false
+                    }
+                    Navigation::Refuse => false,
+                })
+                .on_new_window(move |url, _| {
+                    from_mail(&handle, &url);
+                    NewWindowResponse::Deny
+                })
+                .build()?;
+            fit_to_screen(&window, (config.width, config.height));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -117,6 +159,7 @@ fn main() {
             commands::reread_mail,
             commands::open_message,
             commands::save_attachment,
+            commands::open_link,
         ])
         .run(tauri::generate_context!())
         .expect("RATA could not start");

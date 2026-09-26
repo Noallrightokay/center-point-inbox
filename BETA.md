@@ -89,8 +89,12 @@ Don't spend time reporting these — they are known and planned:
 - **HTML mail is shown formatted from v0.1.12** — layout, colours, tables and
   the pictures carried inside the message. Pictures from the internet stay off
   until you click **Load images** (loading them tells the sender you opened
-  it). Links in the formatted view do not open; switch to **Text** to see each
-  link's address and copy it. Report any message that looks broken
+  it). **From v0.1.14 links open in your browser.** In a formatted message
+  RATA first asks, showing the site the link really goes to — the words of a
+  link can say anything, so check it is the site you expected. In the
+  **Text** view each address is shown in full and opens straight away. A
+  link to an email address opens RATA's own composer. Report any link that
+  does nothing, or opens the wrong thing. Report any message that looks broken
   formatted — with its sender — as well as any that shows raw code. From v0.1.8, opening a long
   message loads all of it, and **attachments** are listed on the message —
   click one to save it to your Downloads folder (RATA never opens it for you).
