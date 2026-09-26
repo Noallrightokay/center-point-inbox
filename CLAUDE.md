@@ -25,8 +25,8 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML. Standalone, knows nothing about the app. 145 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 46 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent folder. Standalone, knows nothing about the app. 150 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments. 55 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -99,7 +99,8 @@ flags through the relay (which needs the website deployed — see below);
 v0.1.18 rebuilds the Format Bridge (real .docx, structure kept, every sheet)
 and makes its downloads work in the app at all; v0.1.19 reads PDFs; v0.1.20
 converts an attachment straight from the message; v0.1.21 keeps message
-text on disk until it is needed instead of in memory. An
+text on disk until it is needed instead of in memory; v0.1.22 reads the
+Sent folder too. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -393,7 +394,31 @@ base64 instead of writing them, capped at `READ_MAX` (25 MB, kind
 `too-large`). The page asks by message and index only; the bytes go to
 `brIngest` as a `File`, through the same readers as a dropped file, and
 nothing is saved until the customer converts.
-Also not built: INBOX only; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
+**The Sent folder (v0.1.22).** A refresh reads the newest mail of the
+inbox and then of Sent, on the same connection (`fetch_newest`); a mailbox
+without a Sent folder, or whose Sent will not open, still brings its inbox.
+Sent is found by its RFC 6154 `\Sent` attribute, else by name
+(`SENT_NAMES`: "Sent", "Sent Items", "INBOX.Sent"…, exact match only — a
+folder called "Unsent ideas" is not it). `Folder` (Inbox | Sent) is part of
+every request that names a message by UID — open, save, convert, re-read,
+older mail, act, forward — because a UID means nothing outside its folder:
+`select` opens the right one and the UIDVALIDITY check is against *that*
+folder's, so a Sent UID can never touch the inbox message with the same
+number (tested). Sent mail has ids of its own (`<key>_sent_<uid>`),
+`folder:'sent'`, and the first recipient (`to_name`/`to_addr`); the bridge
+marks it `sent:true` with `toName`, which is how the interface already knew
+sent mail — so it lands in the Sent filter, stays out of the inbox and the
+new-mail count, and joins that person's thread in People (`mailRecord`
+sets `toId`). Older mail pages each folder on its own (`historyDone`,
+`sentDone`). Sent mail has Forward and Delete but not Archive. **No
+doubles:** `send` now returns the Message-ID it wrote (`Delivered`), kept on
+RATA's own record of the message; when the provider's copy arrives from
+Sent with the same id it replaces that record (`localTwin`). Mail sent by
+0.1.21 and earlier kept no id and is matched by subject, recipient address
+and a quarter of an hour. RATA does not APPEND to Sent itself: a provider
+that does not file mail sent over SMTP (Gmail and Outlook do; not every
+provider does) shows only RATA's own record, as before.
+Also not built: folders other than the inbox and Sent; no auto-update; no code signing. Settings shows the website's plan ("No plan yet") rather than the
 licence's.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites

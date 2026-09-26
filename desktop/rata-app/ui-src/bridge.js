@@ -34,8 +34,14 @@
   }
 
   function asMessage(m) {
+    /* From the Sent folder: mail the customer sent, from RATA or anywhere
+       else. The interface already knows sent mail by `sent` and who it went
+       to by `toName`. */
+    const sent = m.folder === 'sent';
     return {
       id: m.id,
+      folder: m.folder || 'inbox',
+      ...(sent ? { sent: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '' } : {}),
       acct: m.acct,
       acctLabel: m.acct_label,
       ch: 'email',
@@ -46,7 +52,7 @@
       prev: m.preview,
       body: m.body,
       ts: m.ts,
-      unread: m.unread,
+      unread: sent ? false : m.unread,
       starred: m.starred,
       /* The server's own reference, kept so a delete or a mark-read can later
          be done to this exact message in the real mailbox. */
@@ -164,6 +170,7 @@
       try {
         return await invoke('change_messages', {
           email: b.email,
+          folder: b.folder || 'inbox',
           uids: b.uids,
           uidvalidity: b.uidvalidity,
           action: b.action,
@@ -180,6 +187,7 @@
       try {
         const got = await invoke('older_mail', {
           email: b.email,
+          folder: b.folder || 'inbox',
           beforeUid: b.beforeUid,
           uidvalidity: b.uidvalidity,
           limit: b.limit ?? null,
@@ -193,7 +201,7 @@
     async '/api/mail/open'(opts) {
       const b = body(opts);
       try {
-        const got = await invoke('open_message', { email: b.email, uid: b.uid, uidvalidity: b.uidvalidity });
+        const got = await invoke('open_message', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity });
         return {
           text: got.text,
           truncated: !!got.truncated,
@@ -211,6 +219,7 @@
       try {
         const saved = await invoke('save_attachment', {
           email: b.email,
+          folder: b.folder || 'inbox',
           uid: b.uid,
           uidvalidity: b.uidvalidity,
           index: b.index,
@@ -270,7 +279,7 @@
     async '/api/mail/attachment/read'(opts) {
       const b = body(opts);
       try {
-        const got = await invoke('read_attachment', { email: b.email, uid: b.uid, uidvalidity: b.uidvalidity, index: b.index });
+        const got = await invoke('read_attachment', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity, index: b.index });
         return { ok: true, name: got.name, mime: got.mime, data: got.data };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
@@ -282,6 +291,7 @@
       try {
         const got = await invoke('reread_mail', {
           email: b.email,
+          folder: b.folder || 'inbox',
           uids: b.uids || [],
           uidvalidity: b.uidvalidity,
         });
@@ -294,7 +304,7 @@
     async '/api/send/mail'(opts) {
       const b = body(opts);
       try {
-        const via = await invoke('send_mail', {
+        const sent = await invoke('send_mail', {
           draft: {
             from: b.from,
             to: b.to,
@@ -305,7 +315,9 @@
             forward: b.forward || null,
           },
         });
-        return { ok: true, via };
+        /* The Message-ID it went with, so the copy the provider files in Sent
+           replaces RATA's own record of it rather than doubling it. */
+        return { ok: true, via: sent.via, messageId: sent.messageId || '' };
       } catch (e) {
         return { ok: false, error: String(e) };
       }

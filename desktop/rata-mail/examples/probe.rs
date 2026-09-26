@@ -5,7 +5,7 @@
 //!   cargo run --example probe -- fetch you@example.com 'app password' imap.example.com
 //!   cargo run --example probe -- send  you@example.com 'app password' imap.example.com them@elsewhere.org
 use rata_mail::{
-    Account, Address, Fetched, Outgoing, Resolver, Sent, Verify, fetch_inbox, send, verify,
+    Account, Address, Fetched, Outgoing, Resolver, Sent, Verify, fetch_newest, send, verify,
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -35,7 +35,7 @@ async fn main() {
             Verify::NeedsHost(w) => println!("NEEDS   {w}"),
             Verify::Failed(w) => println!("FAILED  {w}"),
         },
-        "fetch" => match fetch_inbox(&r, &acct, 15).await {
+        "fetch" => match fetch_newest(&r, &acct, 15).await {
             Fetched::Messages(m) => {
                 println!("{} message(s)", m.len());
                 for x in m {
@@ -62,7 +62,11 @@ async fn main() {
                 attachments: vec![],
             };
             match send(&r, &acct, &msg).await {
-                Sent::Ok { via, id } => println!("SENT    via {via} — {id}"),
+                Sent::Ok {
+                    via,
+                    id,
+                    message_id,
+                } => println!("SENT    via {via} — {id} — <{message_id}>"),
                 other => println!("{other:?}"),
             }
         }

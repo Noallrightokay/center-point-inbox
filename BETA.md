@@ -90,7 +90,11 @@ Don't spend time reporting these — they are known and planned:
   Searching a very big mailbox takes a moment (about half a second at ten
   thousand messages) — tell us when anything starts to feel slow, and at
   roughly how many messages.
-- No other folders yet — only the inbox is shown.
+- From v0.1.22 RATA shows your **Sent** mail too — including what you sent
+  from your phone or webmail — in the Sent filter and in each person's
+  thread in People. Other folders (drafts, archive, spam, your own) aren't
+  shown yet. If something you sent from RATA shows up twice in Sent, tell
+  us which provider it was.
 - **Converting files (Files → Format Bridge), rebuilt in v0.1.18:** Word
   output is now a real .docx that Word, Google Docs and Pages open without
   complaint; headings, bold and italic, lists and tables survive; every

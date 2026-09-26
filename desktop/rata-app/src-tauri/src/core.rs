@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Message, Outgoing, Resolver, Sent,
-    Verify, Whole, act, body, fetch_inbox, fetch_older, fetch_uids, fetch_whole, send, verify,
+    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Folder, Message, Outgoing,
+    Resolver, Sent, Verify, Whole, act, body, fetch_newest, fetch_older, fetch_uids, fetch_whole,
+    send, verify,
 };
 use serde::Serialize;
 
@@ -118,6 +119,9 @@ pub struct Draft {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Forwarded {
     pub email: String,
+    /// Forwarding something from Sent is as ordinary as from the inbox.
+    #[serde(default)]
+    pub folder: Folder,
     pub uid: u32,
     pub uidvalidity: u32,
     pub indexes: Vec<u32>,
@@ -135,6 +139,15 @@ pub struct Handed {
     pub name: String,
     pub mime: String,
     pub data: Vec<u8>,
+}
+
+/// A message that went: by whom, and the Message-ID written into it — how
+/// the copy the provider files in Sent is known to be this one.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Delivered {
+    pub via: String,
+    pub message_id: String,
 }
 
 /// Where an attachment was saved.
@@ -454,7 +467,7 @@ impl Rata {
             port: m.port,
             label: m.label.clone(),
         };
-        match fetch_inbox(&self.resolver, &acct, limit).await {
+        match fetch_newest(&self.resolver, &acct, limit).await {
             Fetched::Messages(messages) => Ok(messages),
             Fetched::Auth(error) => Err(problem("auth", error)),
             Fetched::Host(error) => Err(problem("host", error)),
@@ -467,6 +480,7 @@ impl Rata {
     pub async fn older(
         &self,
         email: &str,
+        folder: Folder,
         before_uid: u32,
         uidvalidity: u32,
         limit: u32,
@@ -477,6 +491,7 @@ impl Rata {
         let found = fetch_older(
             &self.resolver,
             &acct,
+            folder,
             before_uid,
             uidvalidity,
             limit.min(200),
@@ -490,19 +505,20 @@ impl Rata {
     pub async fn reread(
         &self,
         email: &str,
+        folder: Folder,
         uids: &[u32],
         uidvalidity: u32,
     ) -> Result<Vec<Message>, Problem> {
         let acct = self.readable(email)?;
         let uids = &uids[..uids.len().min(REREAD_MAX)];
-        let found = fetch_uids(&self.resolver, &acct, uids, uidvalidity).await;
+        let found = fetch_uids(&self.resolver, &acct, folder, uids, uidvalidity).await;
         self.answer(&acct.email, found)
     }
 
     /// The attachments of a message being forwarded, fetched from its mailbox.
     async fn forwarded_files(&self, fw: &Forwarded) -> Result<Vec<File>, String> {
         let raw = self
-            .whole(&fw.email, fw.uid, fw.uidvalidity)
+            .whole(&fw.email, fw.folder, fw.uid, fw.uidvalidity)
             .await
             .map_err(|p| format!("The attachments could not be forwarded: {}", p.error))?;
         fw.indexes
@@ -526,10 +542,11 @@ impl Rata {
     pub async fn open_message(
         &self,
         email: &str,
+        folder: Folder,
         uid: u32,
         uidvalidity: u32,
     ) -> Result<Opened, Problem> {
-        let raw = self.whole(email, uid, uidvalidity).await?;
+        let raw = self.whole(email, folder, uid, uidvalidity).await?;
         let b = body::read_whole(&raw);
         let remote_images = b.html.as_ref().is_some_and(|h| h.remote_images);
         Ok(Opened {
@@ -547,6 +564,7 @@ impl Rata {
     pub async fn save_attachment(
         &self,
         email: &str,
+        folder: Folder,
         uid: u32,
         uidvalidity: u32,
         index: u32,
@@ -557,7 +575,9 @@ impl Rata {
             kind: kind.into(),
             error,
         };
-        let (info, bytes) = self.attachment_of(email, uid, uidvalidity, index).await?;
+        let (info, bytes) = self
+            .attachment_of(email, folder, uid, uidvalidity, index)
+            .await?;
         let name = safe_file_name(&info.name);
         let path = write_new(dir, &name, &bytes).map_err(|e| {
             problem(
@@ -581,11 +601,14 @@ impl Rata {
     pub async fn read_attachment(
         &self,
         email: &str,
+        folder: Folder,
         uid: u32,
         uidvalidity: u32,
         index: u32,
     ) -> Result<Handed, Problem> {
-        let (info, bytes) = self.attachment_of(email, uid, uidvalidity, index).await?;
+        let (info, bytes) = self
+            .attachment_of(email, folder, uid, uidvalidity, index)
+            .await?;
         if bytes.len() > READ_MAX {
             return Err(Problem {
                 email: email.to_string(),
@@ -608,11 +631,12 @@ impl Rata {
     async fn attachment_of(
         &self,
         email: &str,
+        folder: Folder,
         uid: u32,
         uidvalidity: u32,
         index: u32,
     ) -> Result<(body::Attachment, Vec<u8>), Problem> {
-        let raw = self.whole(email, uid, uidvalidity).await?;
+        let raw = self.whole(email, folder, uid, uidvalidity).await?;
         body::attachment(&raw, index).ok_or_else(|| Problem {
             email: email.to_string(),
             kind: "gone".into(),
@@ -620,18 +644,28 @@ impl Rata {
         })
     }
 
-    async fn whole(&self, email: &str, uid: u32, uidvalidity: u32) -> Result<Vec<u8>, Problem> {
+    async fn whole(
+        &self,
+        email: &str,
+        folder: Folder,
+        uid: u32,
+        uidvalidity: u32,
+    ) -> Result<Vec<u8>, Problem> {
         let acct = self.readable(email)?;
         let problem = |kind: &str, error: String| Problem {
             email: email.to_string(),
             kind: kind.into(),
             error,
         };
-        match fetch_whole(&self.resolver, &acct, uid, uidvalidity).await {
+        match fetch_whole(&self.resolver, &acct, folder, uid, uidvalidity).await {
             Whole::Raw(raw) => Ok(raw),
             Whole::Gone => Err(problem(
                 "gone",
-                "That message is no longer in the inbox — it was deleted or moved from another device.".into(),
+                match folder {
+                    Folder::Inbox => "That message is no longer in the inbox — it was deleted or moved from another device.",
+                    Folder::Sent => "That message is no longer in Sent — it was deleted or moved from another device.",
+                }
+                .into(),
             )),
             Whole::TooLarge(size) => Err(problem(
                 "large",
@@ -709,7 +743,7 @@ impl Rata {
     }
 
     /// Send from one of the linked mailboxes.
-    pub async fn send(&self, draft: Draft) -> Result<String, String> {
+    pub async fn send(&self, draft: Draft) -> Result<Delivered, String> {
         let Draft {
             from,
             to,
@@ -774,7 +808,9 @@ impl Rata {
         };
 
         match send(&self.resolver, &acct, &msg).await {
-            Sent::Ok { via, .. } => Ok(via),
+            Sent::Ok {
+                via, message_id, ..
+            } => Ok(Delivered { via, message_id }),
             Sent::Auth(error) => {
                 self.note_auth_failure(&m.email);
                 Err(error)
@@ -804,6 +840,7 @@ impl Rata {
     pub async fn change(
         &self,
         email: &str,
+        folder: Folder,
         uids: &[u32],
         uidvalidity: u32,
         action: Action,
@@ -838,7 +875,7 @@ impl Rata {
             port: m.port,
             label: m.label.clone(),
         };
-        match act(&self.resolver, &acct, uids, uidvalidity, action).await {
+        match act(&self.resolver, &acct, folder, uids, uidvalidity, action).await {
             Acted::Done { done, gone } => Changed {
                 ok: true,
                 done,
@@ -1170,13 +1207,15 @@ mod tests {
         rt().block_on(async {
             // Unlicensed.
             let app = unlicensed(tmpfile("chg-unlic"));
-            let c = app.change("owner@example.com", &[1], 7, Action::Read).await;
+            let c = app
+                .change("owner@example.com", Folder::Inbox, &[1], 7, Action::Read)
+                .await;
             assert_eq!(c.kind.as_deref(), Some("unlicensed"), "{c:?}");
 
             // A mailbox RATA does not have.
             let app = rata(tmpfile("chg-unknown"));
             let c = app
-                .change("nobody@example.com", &[1], 7, Action::Trash)
+                .change("nobody@example.com", Folder::Inbox, &[1], 7, Action::Trash)
                 .await;
             assert_eq!(c.kind.as_deref(), Some("unknown"), "{c:?}");
 
@@ -1185,7 +1224,7 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
             let c = app
-                .change("owner@example.com", &[1], 7, Action::Trash)
+                .change("owner@example.com", Folder::Inbox, &[1], 7, Action::Trash)
                 .await;
             assert_eq!(c.kind.as_deref(), Some("auth"), "{c:?}");
             assert!(!c.ok);
@@ -1203,7 +1242,9 @@ mod tests {
                 auth_failed_at: None,
             })
             .unwrap();
-            let c = app.change("ghost@example.com", &[1], 7, Action::Read).await;
+            let c = app
+                .change("ghost@example.com", Folder::Inbox, &[1], 7, Action::Read)
+                .await;
             assert_eq!(c.kind.as_deref(), Some("missing"), "{c:?}");
         });
     }
@@ -1212,12 +1253,15 @@ mod tests {
     fn loading_older_mail_refuses_before_ever_dialling() {
         rt().block_on(async {
             let app = unlicensed(tmpfile("old-unlic"));
-            let e = app.older("owner@example.com", 40, 7, 50).await.unwrap_err();
+            let e = app
+                .older("owner@example.com", Folder::Inbox, 40, 7, 50)
+                .await
+                .unwrap_err();
             assert_eq!(e.kind, "unlicensed");
 
             let app = rata(tmpfile("old-unknown"));
             let e = app
-                .older("nobody@example.com", 40, 7, 50)
+                .older("nobody@example.com", Folder::Inbox, 40, 7, 50)
                 .await
                 .unwrap_err();
             assert_eq!(e.kind, "unknown");
@@ -1225,7 +1269,10 @@ mod tests {
             let app = rata(tmpfile("old-parked"));
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
-            let e = app.older("owner@example.com", 40, 7, 50).await.unwrap_err();
+            let e = app
+                .older("owner@example.com", Folder::Inbox, 40, 7, 50)
+                .await
+                .unwrap_err();
             assert_eq!(e.kind, "auth");
         });
     }
@@ -1235,19 +1282,25 @@ mod tests {
         rt().block_on(async {
             let app = unlicensed(tmpfile("reread-unlic"));
             let e = app
-                .reread("owner@example.com", &[1, 2], 7)
+                .reread("owner@example.com", Folder::Inbox, &[1, 2], 7)
                 .await
                 .unwrap_err();
             assert_eq!(e.kind, "unlicensed");
 
             let app = rata(tmpfile("reread-unknown"));
-            let e = app.reread("nobody@example.com", &[1], 7).await.unwrap_err();
+            let e = app
+                .reread("nobody@example.com", Folder::Inbox, &[1], 7)
+                .await
+                .unwrap_err();
             assert_eq!(e.kind, "unknown");
 
             let app = rata(tmpfile("reread-parked"));
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
-            let e = app.reread("owner@example.com", &[1], 7).await.unwrap_err();
+            let e = app
+                .reread("owner@example.com", Folder::Inbox, &[1], 7)
+                .await
+                .unwrap_err();
             assert_eq!(e.kind, "auth");
         });
     }
@@ -1285,6 +1338,7 @@ mod tests {
             app.note_auth_failure("owner@example.com");
             let fw = Forwarded {
                 email: "owner@example.com".into(),
+                folder: Folder::Inbox,
                 uid: 5,
                 uidvalidity: 7,
                 indexes: vec![1],
@@ -1366,7 +1420,7 @@ mod tests {
             let dir = std::env::temp_dir();
             let app = unlicensed(tmpfile("open-unlic"));
             assert_eq!(
-                app.open_message("owner@example.com", 1, 7)
+                app.open_message("owner@example.com", Folder::Inbox, 1, 7)
                     .await
                     .unwrap_err()
                     .kind,
@@ -1376,21 +1430,21 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
             assert_eq!(
-                app.open_message("owner@example.com", 1, 7)
+                app.open_message("owner@example.com", Folder::Inbox, 1, 7)
                     .await
                     .unwrap_err()
                     .kind,
                 "auth"
             );
             assert_eq!(
-                app.save_attachment("owner@example.com", 1, 7, 0, &dir)
+                app.save_attachment("owner@example.com", Folder::Inbox, 1, 7, 0, &dir)
                     .await
                     .unwrap_err()
                     .kind,
                 "auth"
             );
             assert_eq!(
-                app.read_attachment("owner@example.com", 1, 7, 0)
+                app.read_attachment("owner@example.com", Folder::Inbox, 1, 7, 0)
                     .await
                     .unwrap_err()
                     .kind,
@@ -1652,5 +1706,33 @@ mod tests {
         );
         assert_eq!(app.mailboxes().len(), 1);
         assert_eq!(app.mailboxes()[0].email, "owner@example.com");
+    }
+
+    #[test]
+    fn the_page_names_folders_and_hears_the_message_id() {
+        // A forward from an older page names no folder: the inbox, as then.
+        let old: Forwarded = serde_json::from_str(
+            r#"{"email":"a@b.example","uid":5,"uidvalidity":7,"indexes":[1]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.folder, Folder::Inbox);
+        let sent: Forwarded = serde_json::from_str(
+            r#"{"email":"a@b.example","folder":"sent","uid":5,"uidvalidity":8,"indexes":[1]}"#,
+        )
+        .unwrap();
+        assert_eq!(sent.folder, Folder::Sent);
+        // Anything else is refused, not guessed at.
+        assert!(
+            serde_json::from_str::<Forwarded>(
+                r#"{"email":"a@b.example","folder":"Trash","uid":5,"uidvalidity":8,"indexes":[]}"#
+            )
+            .is_err()
+        );
+        let d = serde_json::to_value(Delivered {
+            via: "smtp.b.example:465".into(),
+            message_id: "abc@b.example".into(),
+        })
+        .unwrap();
+        assert_eq!(d["messageId"], "abc@b.example");
     }
 }

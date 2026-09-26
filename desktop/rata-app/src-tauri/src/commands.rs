@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
 
-use rata_mail::{Action, File, Message};
+use rata_mail::{Action, File, Folder, Message};
 
 use crate::core::{
-    Changed, Draft, Forwarded, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing,
+    Changed, Delivered, Draft, Forwarded, Linked, Opened, Problem, Rata, Refreshed, Saved, Standing,
 };
 use crate::store::Mailbox;
 
@@ -72,7 +72,7 @@ pub async fn refresh_mail(app: App<'_>, limit: Option<u32>) -> Result<Refreshed,
 
 /// Send one message. Everything the composer has comes as one draft.
 #[tauri::command]
-pub async fn send_mail(app: App<'_>, draft: Outbound) -> Result<String, String> {
+pub async fn send_mail(app: App<'_>, draft: Outbound) -> Result<Delivered, String> {
     let attachments = draft
         .attachments
         .into_iter()
@@ -127,11 +127,20 @@ pub struct Upload {
 pub async fn change_messages(
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     uids: Vec<u32>,
     uidvalidity: u32,
     action: Action,
 ) -> Result<Changed, String> {
-    Ok(app.change(&email, &uids, uidvalidity, action).await)
+    Ok(app
+        .change(
+            &email,
+            folder.unwrap_or_default(),
+            &uids,
+            uidvalidity,
+            action,
+        )
+        .await)
 }
 
 /// The page of messages just older than `before_uid` in one mailbox.
@@ -139,12 +148,19 @@ pub async fn change_messages(
 pub async fn older_mail(
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     before_uid: u32,
     uidvalidity: u32,
     limit: Option<u32>,
 ) -> Result<Vec<Message>, Problem> {
-    app.older(&email, before_uid, uidvalidity, limit.unwrap_or(50))
-        .await
+    app.older(
+        &email,
+        folder.unwrap_or_default(),
+        before_uid,
+        uidvalidity,
+        limit.unwrap_or(50),
+    )
+    .await
 }
 
 /// Particular messages in one mailbox again, by UID: mail stored before RATA
@@ -153,10 +169,12 @@ pub async fn older_mail(
 pub async fn reread_mail(
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     uids: Vec<u32>,
     uidvalidity: u32,
 ) -> Result<Vec<Message>, Problem> {
-    app.reread(&email, &uids, uidvalidity).await
+    app.reread(&email, folder.unwrap_or_default(), &uids, uidvalidity)
+        .await
 }
 
 /// One message in full: all of its text and its attachments.
@@ -164,10 +182,12 @@ pub async fn reread_mail(
 pub async fn open_message(
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     uid: u32,
     uidvalidity: u32,
 ) -> Result<Opened, Problem> {
-    app.open_message(&email, uid, uidvalidity).await
+    app.open_message(&email, folder.unwrap_or_default(), uid, uidvalidity)
+        .await
 }
 
 /// Save one attachment into the Downloads folder.
@@ -176,6 +196,7 @@ pub async fn save_attachment(
     handle: AppHandle,
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     uid: u32,
     uidvalidity: u32,
     index: u32,
@@ -185,8 +206,15 @@ pub async fn save_attachment(
         kind: "disk".into(),
         error: "This computer has no Downloads folder RATA can find.".into(),
     })?;
-    app.save_attachment(&email, uid, uidvalidity, index, &dir)
-        .await
+    app.save_attachment(
+        &email,
+        folder.unwrap_or_default(),
+        uid,
+        uidvalidity,
+        index,
+        &dir,
+    )
+    .await
 }
 
 /// The Downloads folder. On Linux Tauri only finds it through the desktop's
@@ -206,11 +234,14 @@ fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
 pub async fn read_attachment(
     app: App<'_>,
     email: String,
+    folder: Option<Folder>,
     uid: u32,
     uidvalidity: u32,
     index: u32,
 ) -> Result<Handed, Problem> {
-    let got = app.read_attachment(&email, uid, uidvalidity, index).await?;
+    let got = app
+        .read_attachment(&email, folder.unwrap_or_default(), uid, uidvalidity, index)
+        .await?;
     Ok(Handed {
         name: got.name,
         mime: got.mime,
