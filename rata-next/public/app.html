@@ -1400,8 +1400,12 @@ function tidyAccts(){
 /* 0.1.25 adds Archive and Spam ('junk'): received mail that is not in the
    inbox, with a filter chip each, kept out of the inbox list, its unread
    count, the briefing and the to-dos. inInbox is what "the inbox" means. */
-const FOLDERS=['inbox','sent','archive','junk'];
-const FOLDER_LABEL={archive:'Archive',junk:'Spam'};
+/* 0.1.31 adds Drafts ('drafts'): messages begun anywhere and not sent, read
+   on every refresh like the others, shown under their own chip and finished
+   with Continue. They are not received mail, so never in the inbox, unread,
+   People or the notifications. */
+const FOLDERS=['inbox','sent','archive','junk','drafts'];
+const FOLDER_LABEL={archive:'Archive',junk:'Spam',drafts:'Drafts'};
 /* 0.1.26: the customer's own folders (Gmail labels among them) are folder
    'named', with the server's name for the folder in `box`. Unlike the four
    above they are not read on a refresh: a folder is read when the customer
@@ -1423,7 +1427,7 @@ function unDup(list){
 }
 const inInbox=m=>!m.sent&&folderOf(m)==='inbox';
 /* Each folder's history is walked on its own and ends on its own. */
-const FOLDER_DONE={inbox:'historyDone',sent:'sentDone',archive:'archiveDone',junk:'junkDone'};
+const FOLDER_DONE={inbox:'historyDone',sent:'sentDone',archive:'archiveDone',junk:'junkDone',drafts:'draftsDone'};
 function olderCandidates(only){
   return S.linked.filter(l=>l.type==='mail'&&(!only||l.label.toLowerCase()===String(only).toLowerCase())
     &&FOLDERS.some(f=>!l[FOLDER_DONE[f]]&&(f==='inbox'||oldestRef(l.label,f))));
@@ -1648,7 +1652,7 @@ async function serverAct(msgs,action){
   return problems;
 }
 const contact=id=>S.contacts.find(c=>c.id===id);
-const msgFrom=m=>m.sent?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
+const msgFrom=m=>m.sent||m.draft?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
 
 /* ---------------- AUDIT CHAIN ---------------- */
 async function sha256(str){
@@ -1742,7 +1746,7 @@ $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#s
    toast says how many moved. */
 const canArchive=m=>m.prov==='imap'&&m.uid&&inInbox(m);
 const canGoHome=m=>m.prov==='imap'&&m.uid&&['archive','junk','named'].includes(folderOf(m));
-const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&folderOf(m)!=='sent';
+const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&!['sent','drafts'].includes(folderOf(m));
 async function bulkLeave(list,action,tag,verb){
   const n=SEL.size;
   if(!list.length){toast(verb+' \u2014 none of the '+n+' selected can be');return}
@@ -1857,7 +1861,7 @@ function renderMailFilters(){renderCats();
   let chips=[['all','All'],['unread','Unread'],['starred','Starred']];
   S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
   chips.push(['sent','Sent']);
-  for(const f of ['archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
+  for(const f of ['drafts','archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
   if(BOX&&!boxMailbox(BOX.email))BOX=null;
   if(BOX)chips.push(['box',boxLabel(BOX.email,BOX.name)]);
   if(window.__RATA_NATIVE__&&boxAccts().length)chips.push(['folders',boxPanel?'Folders \u25b4':'Folders \u25be']);
@@ -1975,14 +1979,14 @@ function mailPool(acctId){
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
-  else if(mailFilter==='archive'||mailFilter==='junk')pool=pool.filter(m=>folderOf(m)===mailFilter);
+  else if(['archive','junk','drafts'].includes(mailFilter))pool=pool.filter(m=>folderOf(m)===mailFilter);
   else if(mailFilter==='box')pool=BOX?pool.filter(m=>folderOf(m)==='named'&&m.box===BOX.name&&mailEmailOf(m)===BOX.email):[];
   else if(mailFilter.startsWith('acct:'))pool=pool.filter(m=>m.acct===mailFilter.slice(5));
   /* Sent, Archive and Spam are each their own view; everywhere else they are
      left out. The old chain dropped sent mail last and unconditionally, so
      the Sent chip always showed an empty list. Starred also shows starred
      archived mail. */
-  if(!['sent','archive','junk','box'].includes(mailFilter)){
+  if(!['sent','archive','junk','drafts','box'].includes(mailFilter)){
     pool=pool.filter(m=>inInbox(m)||(mailFilter==='starred'&&!m.sent&&folderOf(m)==='archive'));
     if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
   }
@@ -2143,7 +2147,7 @@ function setSplit(on){
 function mailRowHTML(m){
   const nm=msgFrom(m);
   /* Sent mail is listed by who it went to, not by "you". */
-  const shown=m.sent?'To: '+(contact(m.toId)?.name||m.toName||'(no recipient)'):nm;
+  const shown=m.draft?'Draft'+(m.toName?' to '+m.toName:''):m.sent?'To: '+(contact(m.toId)?.name||m.toName||'(no recipient)'):nm;
   return `
     <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
       <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
@@ -2155,7 +2159,7 @@ function mailRowHTML(m){
         <div class="m-meta">
           <span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
-          ${!m.sent&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
+          ${!m.sent&&!m.draft&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
           ${m.flag?`<span class="badge flag${m.flag.important?' hot':''}" title="${esc(m.flag.task+(m.flag.due?' \u2014 by '+m.flag.due:''))}">\u2691 ${esc(m.flag.task)}</span>`:''}
           ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
           ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
@@ -2484,9 +2488,12 @@ function openMail(id){
       <h2>${esc(m.subj||chan(m.ch).label+' message')}</h2>
       <div class="md-fromline">
         <div class="avatar" style="background:${avColor(nm)}">${initials(nm)}</div>
-        <div class="md-fromtext"><b>${esc(nm)}</b><span>${m.sent?'To '+esc(m.toAddr||m.toName||''):esc((m.fromAddr||(c&&c.addr)||''))} · <span class="badge ${m.prov||'email'}">${esc(m.prov||'email')}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
+        <div class="md-fromtext"><b>${esc(nm)}</b><span>${m.sent||m.draft?'To '+esc(m.draft?draftTo(m).join(', ')||'nobody yet':m.toAddr||m.toName||''):esc((m.fromAddr||(c&&c.addr)||''))} · <span class="badge ${m.prov||'email'}">${esc(m.prov||'email')}</span> · ${new Date(m.ts).toLocaleString()}</span></div>
       </div>
-      <div class="md-actions">
+      <div class="md-actions">${m.draft?`
+        ${native?'<button class="btn primary" id="md-continue">Continue</button>':''}
+        ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
+        <button class="btn danger" id="md-del">Delete</button>`:`
         ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
         ${!m.sent||folderOf(m)==='sent'?'<button class="btn" id="md-forward">Forward</button>':''}
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
@@ -2500,9 +2507,10 @@ function openMail(id){
         ${m.prov==='imap'&&m.uid&&['archive','named'].includes(folderOf(m))?'<button class="btn" id="md-home">Move to inbox</button>':''}
         ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
         ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
-        <button class="btn danger" id="md-del">Delete</button>
+        <button class="btn danger" id="md-del">Delete</button>`}
       </div>
     </div>
+    ${m.draft?`<div class="md-note">A draft — not sent.${native?' <b>Continue</b> opens it in the composer; once it is sent, RATA moves this copy to your Trash.':''}</div>`:''}
     ${folderOf(m)==='junk'?'<div class="md-spam"><b>This was in your Spam folder.</b> Be careful with its links and attachments \u2014 the sender may not be who they say they are.</div>':''}
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
     ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
@@ -2515,7 +2523,8 @@ function openMail(id){
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
   $('#md-person')&&($('#md-person').onclick=()=>{go('people');openPerson(c.id)});
-  $('#md-move').onclick=e=>{e.stopPropagation();$('#md-sortmenu').classList.toggle('open')};
+  if($('#md-continue'))$('#md-continue').onclick=()=>continueDraft(m);
+  if($('#md-move'))$('#md-move').onclick=e=>{e.stopPropagation();$('#md-sortmenu').classList.toggle('open')};
   $$('#md-sortmenu [data-mv]').forEach(b=>b.onclick=async()=>{
     const cat=b.dataset.mv;
     m.catOverride=cat;
@@ -2530,11 +2539,11 @@ function openMail(id){
   });
   if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
   if($('#md-forward'))$('#md-forward').onclick=()=>forwardMessage(m);
-  $('#md-sum').onclick=()=>summarizeMessage(m.id);
+  if($('#md-sum'))$('#md-sum').onclick=()=>summarizeMessage(m.id);
   if($('#md-translate'))$('#md-translate').onclick=()=>translateMessage(m.id);
   if($('#md-trtoggle'))$('#md-trtoggle').onclick=()=>{tr.hidden=!tr.hidden;openMail(id)};
-  $('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
-  $('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
+  if($('#md-star'))$('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
+  if($('#md-unread'))$('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
   /* Delete and Archive take the message off the screen at once, then tell the
      mailbox. If the mailbox cannot be told, say so — "gone from RATA but still
      in your inbox" is worth knowing, and the next attempt will work. */
@@ -3354,6 +3363,41 @@ let CMP_FWD=null;
    whoever it answers), 'forward' or 'new'. A reopened draft says so, since
    what it carries — a thread, a forward's files — is otherwise unseen. */
 let DRAFT={kind:'new'};
+/* The draft in the mailbox's Drafts folder that the composer is finishing
+   (0.1.31), kept whole so that once it is sent the copy left in Drafts can go
+   to the Trash. */
+let CMP_DRAFT=null;
+/* Everyone a draft is for. RATA's composer has one address line, so Cc
+   joins To. */
+function draftTo(m){
+  const all=[...(m.toAll||[]),...(m.cc||[])].map(a=>String(a).toLowerCase()).filter(Boolean);
+  if(!all.length&&m.toAddr)all.push(String(m.toAddr).toLowerCase());
+  return [...new Set(all)];
+}
+/* Finish a draft begun anywhere: who it is for, its subject, its words, its
+   attachments (fetched from the mailbox at send time, like a forward's) and
+   the thread it answers. */
+async function continueDraft(m){
+  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&m.uid&&m.uidvalidity;
+  if(!native){toast('Drafts are finished in the RATA app');return}
+  if(!OPENED.get(m.id)&&(m.truncated||(m.atts||[]).length)){toast('Fetching the whole draft\u2026');await openWhole(m)}
+  const whole=OPENED.get(m.id);
+  const text=whole&&!whole.error?whole.text:String(bodyNow(m)??await bodyOf(m)??'');
+  newDraft();openCompose();
+  const from=$('#cmp-from');
+  if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
+  $('#cmp-to').value=draftTo(m).join(', ');
+  $('#cmp-subj').value=m.subj&&m.subj!=='(no subject)'?m.subj:'';
+  $('#cmp-body').value=text;
+  const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
+  if(atts.length)CMP_FWD={email:mailEmailOf(m),folder:'drafts',uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
+  if(m.inReplyTo)REPLYING={id:null,messageId:m.inReplyTo};
+  CMP_DRAFT=Object.assign({},m);
+  DRAFT={kind:'draft'};renderDraftHead();
+  renderCmpFiles();liveScan();
+  if((m.cc||[]).length)toast('Everyone it was copied to is in To \u2014 RATA has no separate Cc yet');
+  const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
+}
 async function forwardMessage(m,targetAcctId){
   const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&m.uid&&m.uidvalidity;
   /* A forward should carry the whole message. If what is stored may be only
@@ -3401,7 +3445,7 @@ $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.ta
    "Forwarded message" without the files, a reply without its thread, and a
    message to someone new with the last draft's subject and text. */
 function newDraft(){
-  REPLYING=null;CMP_FILES=[];CMP_FWD=null;DRAFT={kind:'new'};
+  REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;DRAFT={kind:'new'};
   ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
   $('#cmp-from').value='';
   renderCmpFiles();
@@ -3416,16 +3460,17 @@ function openCompose(){
 }
 function closeCompose(){ov.classList.remove('open')}
 function draftHasAnything(){
-  return !!(REPLYING||CMP_FWD||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
+  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
 }
 function renderDraftHead(){
-  $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':'New message';
+  $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':DRAFT.kind==='draft'?(REPLYING?'Draft reply':'Draft'):'New message';
   $('#cmp-discard').hidden=!draftHasAnything();
 }
 /* Throws the draft away — its words, files and what it answers or forwards —
    and leaves a blank message. */
 $('#cmp-discard').onclick=()=>{
-  if(!confirm('Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
+  if(!confirm(CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
+    :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
   newDraft();openCompose();
 };
 /* Reply from the mailbox the message arrived in, to whoever the sender asked
@@ -3529,11 +3574,21 @@ $('#cmp-send').onclick=async()=>{
   }
   S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
     atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
+  /* The draft this finished is sent: its copy in Drafts goes to the Trash,
+     as every mail app does, rather than waiting there to be sent twice. */
+  const finished=realSent&&CMP_DRAFT&&CMP_DRAFT.uid?CMP_DRAFT:null;
+  if(finished)dropMessages([finished.id]);
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   newDraft();
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
+  if(finished){
+    if(selMail===finished.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
+    renderMailFilters();renderMail();
+    const problems=await serverAct([finished],'trash');
+    if(problems.length)toast('Sent from '+mAcct.label+', but the draft is still in your Drafts folder \u2014 '+problems[0]);
+  }
 };
 
 /* ---------------- CLOUD SYNC (Supabase) ---------------- */
@@ -3799,7 +3854,8 @@ function startAutoSync(){
    sides of a conversation land in that person's thread in People. */
 function mailRecord(m){
   const owner=linkedFind('mail',m.acct||'');
-  const addr=String((m.sent?m.toAddr:m.fromAddr)||'').toLowerCase();
+  /* A draft is not linked to anyone either: it was never sent. */
+  const addr=m.draft?'':String((m.sent?m.toAddr:m.fromAddr)||'').toLowerCase();
   /* Spam is not linked to a contact: a forged From would put it in their thread. */
   const match=addr&&m.folder!=='junk'?S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===addr):null;
   return Object.assign({cid:m.sent?null:(match?match.id:null),...(m.sent?{toId:match?match.id:null}:{}),real:true,atts:[]},m,
@@ -3814,6 +3870,18 @@ function localTwin(m){
     (m.messageId&&x.messageId)?x.messageId===m.messageId
       :(!x.messageId&&(x.subj||'')===(m.subj||'')&&Math.abs((x.ts||0)-(m.ts||0))<15*60e3&&!!to&&String(x.toName||'').toLowerCase().includes(to))
   ))||null;
+}
+/* Each refresh lists every draft a mailbox has. A draft RATA holds that is
+   not there any more was sent, deleted, or saved again under a new number
+   on another device (which arrives as a new draft), so it goes. Not through
+   S.gone: nothing was deleted here. */
+function dropVanishedDrafts(list){
+  for(const d of (list||[])){
+    if(!d||!d.email||!Array.isArray(d.ids))continue;
+    const email=String(d.email).toLowerCase(),keep=new Set(d.ids);
+    S.messages=S.messages.filter(m=>!(folderOf(m)==='drafts'&&mailEmailOf(m)===email&&!keep.has(m.id)));
+  }
+  if(selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
 }
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
@@ -3839,6 +3907,7 @@ async function absorbMail(res,quiet){
   }
   tidyAccts();
   addGaps(res.gaps);
+  dropVanishedDrafts(res.drafts);
   /* Read and starred for mail RATA already has, from the server — another
      device may have changed them. */
   if((res.flags||[]).length){

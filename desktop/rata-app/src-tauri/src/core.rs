@@ -76,6 +76,10 @@ pub struct Refreshed {
     /// Mail a refresh left for later because too much had arrived, per
     /// mailbox; the interface fetches it a page at a time.
     pub gaps: Vec<MailGap>,
+    /// Every draft in each mailbox's Drafts folder now, by id — for the
+    /// mailboxes whose Drafts were read. A draft RATA holds that is not
+    /// listed was sent, deleted or saved again elsewhere.
+    pub drafts: Vec<MailDrafts>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
     pub problems: Vec<Problem>,
@@ -110,6 +114,13 @@ pub struct MailGap {
     pub email: String,
     #[serde(flatten)]
     pub gap: Gap,
+}
+
+/// Every draft of one mailbox, by id.
+#[derive(Debug, Serialize)]
+pub struct MailDrafts {
+    pub email: String,
+    pub ids: Vec<String>,
 }
 
 /// What the interface already holds of one folder of one mailbox: the newest
@@ -476,6 +487,9 @@ impl Rata {
                             email: email.clone(),
                             gap,
                         }));
+                        if let Some(ids) = found.drafts {
+                            out.drafts.push(MailDrafts { email, ids });
+                        }
                     }
                     Err(p) => {
                         if p.kind == "auth" {
@@ -747,6 +761,7 @@ impl Rata {
                         Folder::Sent => "Sent",
                         Folder::Archive => "the Archive",
                         Folder::Junk => "Spam",
+                        Folder::Drafts => "Drafts",
                         Folder::Named(_) => "that folder",
                     }
                 ),
@@ -1912,6 +1927,24 @@ mod tests {
         assert_eq!(
             g,
             serde_json::json!({"email": "a@b.example", "folder": "inbox", "uidvalidity": 7, "top": 301, "floor": 50})
+        );
+        // Drafts: a folder like the others on the wire, and the list of every
+        // draft a mailbox has, which is how a draft sent elsewhere leaves.
+        assert_eq!(
+            serde_json::from_str::<Folder>(r#""drafts""#).unwrap(),
+            Folder::Drafts
+        );
+        let r = serde_json::to_value(Refreshed {
+            drafts: vec![MailDrafts {
+                email: "a@b.example".into(),
+                ids: vec!["k_drafts_4".into()],
+            }],
+            ..Refreshed::default()
+        })
+        .unwrap();
+        assert_eq!(
+            r["drafts"],
+            serde_json::json!([{"email": "a@b.example", "ids": ["k_drafts_4"]}])
         );
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),

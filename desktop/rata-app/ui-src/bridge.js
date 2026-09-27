@@ -38,6 +38,9 @@
        else. The interface already knows sent mail by `sent` and who it went
        to by `toName`. */
     const sent = m.folder === 'sent';
+    /* From Drafts (0.1.31): begun somewhere and not sent. Who it is for, and
+       what it answers, are what finishing it here starts from. */
+    const draft = m.folder === 'drafts';
     /* One of the customer's own folders arrives as {named: <server name>};
        the interface keeps it as folder 'named' with the name in `box`, and
        sends {named: box} back whenever it asks about the message. */
@@ -47,6 +50,9 @@
       folder: named ? 'named' : m.folder || 'inbox',
       ...(named ? { box: m.folder.named } : {}),
       ...(sent ? { sent: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '' } : {}),
+      ...(draft
+        ? { draft: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '', toAll: m.to_all || [], cc: m.cc || [], inReplyTo: m.in_reply_to || '' }
+        : {}),
       acct: m.acct,
       acctLabel: m.acct_label,
       ch: 'email',
@@ -57,7 +63,7 @@
       prev: m.preview,
       body: m.body,
       ts: m.ts,
-      unread: sent ? false : m.unread,
+      unread: sent || draft ? false : m.unread,
       starred: m.starred,
       /* The server's own reference, kept so a delete or a mark-read can later
          be done to this exact message in the real mailbox. */
@@ -168,6 +174,7 @@
         messages: res.messages.map(asMessage),
         flags: res.flags || [],
         gaps: res.gaps || [],
+        drafts: res.drafts || [],
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };

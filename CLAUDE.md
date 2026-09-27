@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders and the customer's own, refreshing only what is new. Standalone, knows nothing about the app. 162 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new. Standalone, knows nothing about the app. 167 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications. 60 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -108,7 +108,8 @@ synced mail under its mailbox (replies had gone from the first one);
 v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
 fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
-and files several messages at once. An
+and files several messages at once; v0.1.31 shows Drafts and finishes one
+begun elsewhere. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -555,7 +556,30 @@ once, sends it through `serverAct` — one connection per mailbox, folder and
 UIDVALIDITY — and says how many could not be moved (sent mail, mail with no
 server reference). Before 0.1.30 only read, unread, star and delete worked on
 a selection.
-Also not built: Drafts; Gmail's archive; no code signing.
+**Drafts (v0.1.31).** `Folder::Drafts` (serde `"drafts"`), found like the
+others (`\Drafts`, else `DRAFTS_NAMES`) and read on every refresh; ids
+`<key>_drafts_<uid>`. `Message` now carries every To (`to_all`), `cc` and
+`in_reply_to` (the first id of it, through `thread_id`), and an empty draft
+keeps an empty body rather than the "no text RATA can show" sentence. A
+draft changes UID each time another device saves it and goes when it is
+sent, so a refresh that reads Drafts also returns every id there
+(`Newest.drafts`, `UID SEARCH ALL`, capped at `DRAFTS_MAX`; the app wraps it
+per mailbox as `MailDrafts`), and the page drops held drafts not listed
+(`dropVanishedDrafts` — not through `S.gone`, since nothing was deleted
+here); a refresh that could not read Drafts sends nothing and removes
+nothing. In the page a draft is `draft:true` (not `sent`), never unread,
+never linked to a contact, under its own chip; its pane offers only
+**Continue** and Delete. `continueDraft` fills the composer: To from
+`draftTo` (To and Cc together — the composer has one address line; a toast
+says so), subject (never "(no subject)"), the whole text, attachments as
+`CMP_FWD` with folder `drafts` (fetched from the mailbox at send time, like
+a forward's), `REPLYING` from `inReplyTo`, and `CMP_DRAFT`, the draft
+itself. After a real send `CMP_DRAFT` leaves the list and goes to the Trash
+(`serverAct` trash in folder Drafts); Discard leaves it in Drafts. RATA
+does not APPEND its own drafts to the server yet, and a formatted draft
+continues as plain text.
+Also not built: saving RATA's drafts to the server; Cc; Gmail's archive; no
+code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

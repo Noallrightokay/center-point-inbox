@@ -83,6 +83,9 @@ pub enum Folder {
     Archive,
     /// Spam, which is where real mail goes missing.
     Junk,
+    /// Messages begun and not sent — on the phone, in webmail, anywhere —
+    /// so they can be finished here.
+    Drafts,
     /// One of the customer's own folders — a Gmail label is one too — by the
     /// name the server lists it under, exactly as LIST gave it (modified
     /// UTF-7 and all), since that is what SELECT needs. Only ever opened if
@@ -125,6 +128,13 @@ const SENT_NAMES: &[&str] = &[
 /// What Archive is called on servers that do not say which folder it is.
 const ARCHIVE_NAMES: &[&str] = &["Archive", "Archives", "INBOX.Archive", "INBOX/Archive"];
 
+/// What Drafts is called on servers that do not say which folder it is.
+const DRAFTS_NAMES: &[&str] = &["Drafts", "Draft", "INBOX.Drafts", "INBOX/Drafts"];
+
+/// The most drafts a refresh lists by number. Nobody keeps more; a folder
+/// past it is not a drafts folder anyone uses.
+const DRAFTS_MAX: usize = 5000;
+
 /// What Spam is called on servers that do not say which folder it is.
 const JUNK_NAMES: &[&str] = &[
     "Junk",
@@ -154,6 +164,12 @@ pub struct Message {
     /// The first recipient — who a sent message went to.
     pub to_name: String,
     pub to_addr: String,
+    /// Every address in To, and in Cc: what finishing a draft starts from.
+    pub to_all: Vec<String>,
+    pub cc: Vec<String>,
+    /// The `Message-ID` this one answers, checked like `message_id`, so a
+    /// draft of a reply stays in its thread when it is finished here.
+    pub in_reply_to: String,
     pub subject: String,
     pub preview: String,
     pub body: String,
@@ -571,6 +587,10 @@ pub struct Newest {
     pub messages: Vec<Message>,
     pub flags: Vec<Flags>,
     pub gaps: Vec<Gap>,
+    /// Every draft in the Drafts folder now, by id, when it was read. A draft
+    /// changes number each time it is saved elsewhere and goes when it is
+    /// sent, so without this the drafts RATA holds only ever grow.
+    pub drafts: Option<Vec<String>>,
 }
 
 /// The most new messages one refresh downloads from one folder. A laptop
@@ -578,8 +598,8 @@ pub struct Newest {
 /// Load older mail instead of in one enormous refresh.
 pub const NEW_MAX: u32 = 200;
 
-/// The newest mail of the inbox, Sent, Archive and Spam, newest first, on one
-/// connection.
+/// The newest mail of the inbox, Sent, Archive, Spam and Drafts, newest
+/// first, on one connection.
 ///
 /// For a folder RATA has read before (`known`), only messages newer than the
 /// newest one it holds are downloaded, and the read and starred state of the
@@ -649,7 +669,7 @@ where
     // The other folders are a bonus: any that is missing, will not open or
     // fails partway is left out, and the inbox still arrives.
     let places = places(session).await;
-    for folder in [Folder::Sent, Folder::Archive, Folder::Junk] {
+    for folder in [Folder::Sent, Folder::Archive, Folder::Junk, Folder::Drafts] {
         let Some(name) = places.name(&folder) else {
             continue;
         };
@@ -660,10 +680,39 @@ where
             found.messages.append(&mut more.messages);
             found.flags.append(&mut more.flags);
             found.gaps.append(&mut more.gaps);
+            if folder == Folder::Drafts {
+                found.drafts = all_ids(session, acct, &folder).await;
+            }
         }
     }
     found.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
     Ok(found)
+}
+
+/// Every message of the folder just selected, by id — or nothing if the
+/// server would not say, which must never read as "there are none".
+async fn all_ids<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: &Folder,
+) -> Option<Vec<String>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let uids = timeout(COMMAND, session.uid_search("ALL"))
+        .await
+        .ok()?
+        .ok()?;
+    let mut uids: Vec<u32> = uids.into_iter().filter(|u| *u != 0).collect();
+    if uids.len() > DRAFTS_MAX {
+        return None;
+    }
+    uids.sort_unstable();
+    Some(
+        uids.into_iter()
+            .map(|u| message_key(acct, folder, u))
+            .collect(),
+    )
 }
 
 /// One folder of a refresh, just selected: see [`fetch_newest`].
@@ -762,6 +811,7 @@ where
         messages,
         flags,
         gaps,
+        drafts: None,
     })
 }
 
@@ -842,12 +892,13 @@ where
     }
 }
 
-/// Where this server keeps Sent, Archive and Spam, from one LIST.
+/// Where this server keeps Sent, Archive, Spam and Drafts, from one LIST.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Places {
     sent: Option<String>,
     archive: Option<String>,
     junk: Option<String>,
+    drafts: Option<String>,
 }
 
 impl Places {
@@ -857,12 +908,13 @@ impl Places {
             Folder::Sent => self.sent.as_deref(),
             Folder::Archive => self.archive.as_deref(),
             Folder::Junk => self.junk.as_deref(),
+            Folder::Drafts => self.drafts.as_deref(),
             Folder::Named(_) => None,
         }
     }
 
     fn holds(&self, name: &str) -> bool {
-        [&self.sent, &self.archive, &self.junk]
+        [&self.sent, &self.archive, &self.junk, &self.drafts]
             .iter()
             .any(|p| p.as_deref() == Some(name))
     }
@@ -929,10 +981,12 @@ fn places_in(listed: &[async_imap::types::Name]) -> Places {
     let sent = pick(A::Sent, SENT_NAMES);
     let junk = pick(A::Junk, JUNK_NAMES);
     let archive = pick(A::Archive, ARCHIVE_NAMES);
+    let drafts = pick(A::Drafts, DRAFTS_NAMES);
     Places {
         sent,
         archive,
         junk,
+        drafts,
     }
 }
 
@@ -1838,6 +1892,7 @@ fn cannot_open(folder: &Folder) -> String {
         Folder::Sent => "its Sent folder could not be opened".into(),
         Folder::Archive => "its Archive folder could not be opened".into(),
         Folder::Junk => "its Spam folder could not be opened".into(),
+        Folder::Drafts => "its Drafts folder could not be opened".into(),
         Folder::Named(name) => format!(
             "its folder \u{201c}{}\u{201d} could not be opened",
             utf7_imap(name)
@@ -1905,6 +1960,7 @@ fn message_key(acct: &Account, folder: &Folder, uid: u32) -> String {
         Folder::Sent => "sent_".into(),
         Folder::Archive => "archive_".into(),
         Folder::Junk => "junk_".into(),
+        Folder::Drafts => "drafts_".into(),
         Folder::Named(name) => format!("f{}_", named_tag(name)),
     };
     format!("{}_{place}{uid}", mail_key(&acct.email))
@@ -1964,6 +2020,24 @@ fn build(
         });
 
     let to_addr = recipient.map(address).unwrap_or_default();
+    let every = |list: Option<&Vec<async_imap::imap_proto::types::Address>>| -> Vec<String> {
+        list.into_iter()
+            .flatten()
+            .map(address)
+            .filter(|a| !a.is_empty())
+            .take(100)
+            .collect()
+    };
+    let to_all = every(env.and_then(|e| e.to.as_ref()));
+    let cc = every(env.and_then(|e| e.cc.as_ref()));
+    // Only the first: some clients list the whole chain here.
+    let in_reply_to = env
+        .and_then(|e| e.in_reply_to.as_deref())
+        .map(|r| {
+            let r = String::from_utf8_lossy(r);
+            thread_id(r.split_whitespace().next().unwrap_or_default().as_bytes())
+        })
+        .unwrap_or_default();
     let to_name = recipient
         .and_then(|a| a.name.as_deref())
         .map(words::decode)
@@ -2010,8 +2084,13 @@ fn build(
         from_addr,
         to_name,
         to_addr,
+        to_all,
+        cc,
+        in_reply_to,
         subject,
-        body: if text.text.is_empty() {
+        // A draft with no words yet is empty, not a message RATA cannot
+        // read: finishing it must not start from that sentence.
+        body: if text.text.is_empty() && *folder != Folder::Drafts {
             "(This message has no text RATA can show. Open it in your provider's own app to see it.)"
                 .to_string()
         } else {
@@ -2955,7 +3034,7 @@ mod tests {
                     "From: Me <me@example.com>\r\nTo: Bo Li <bo@example.org>\r\nSubject: Sent {uid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nWhat I wrote in {uid}\r\n"
                 );
                 format!(
-                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Sent {uid}\" ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Bo Li\" NIL \"bo\" \"example.org\")) NIL NIL NIL \"<s{uid}@example.com>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Sent {uid}\" ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Bo Li\" NIL \"bo\" \"example.org\")(NIL NIL \"Cy\" \"Example.org\")) ((\"Dee\" NIL \"dee\" \"example.org\")) NIL \"<orig@example.org> <older@example.org>\" \"<s{uid}@example.com>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
                     uid,
                     body.len()
                 )
@@ -2990,6 +3069,12 @@ mod tests {
                         .enumerate()
                         .map(|(i, u)| format!("* {} FETCH (UID {u})\r\n", i + 1))
                         .collect()
+                } else if up.starts_with("UID SEARCH") {
+                    if in_sent {
+                        "* SEARCH 11 12\r\n".to_string()
+                    } else {
+                        "* SEARCH 1 2 3\r\n".to_string()
+                    }
                 } else if up.starts_with("CAPABILITY") {
                     "* CAPABILITY IMAP4rev1 MOVE\r\n".to_string()
                 } else {
@@ -3098,6 +3183,129 @@ mod tests {
         });
     }
 
+    // --------------------------------------------------------- drafts tests
+
+    const GMAIL_DRAFTS: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\HasNoChildren \\Drafts) \"/\" \"[Gmail]/Drafts\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n";
+    /// Drafts only by name, beside a decoy that merely contains the word.
+    const DRAFTS_BY_NAME: &str = "* LIST (\\HasNoChildren) \".\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Drafts\"\r\n* LIST (\\HasNoChildren) \".\" \"INBOX.Old drafts\"\r\n* LIST (\\HasNoChildren \\Trash) \".\" \"INBOX.Trash\"\r\n";
+
+    #[test]
+    fn drafts_are_found_by_what_the_server_says_or_by_name() {
+        rt_act().block_on(async {
+            for (list, name) in [
+                (GMAIL_DRAFTS, "[Gmail]/Drafts"),
+                (DRAFTS_BY_NAME, "INBOX.Drafts"),
+            ] {
+                let (mut s, log) = scripted_folders(list, name).await;
+                assert!(
+                    matches!(select(&mut s, &Folder::Drafts).await, Selected::Open(m) if m.uid_validity == Some(8)),
+                    "{name}"
+                );
+                assert_eq!(selected(&log.lock().unwrap()), vec![name.to_string()]);
+            }
+            // Where there is none, nothing is opened — not "Old drafts".
+            let (mut s, log) = scripted_folders(NO_SENT, "Drafts").await;
+            assert!(matches!(
+                select(&mut s, &Folder::Drafts).await,
+                Selected::Missing
+            ));
+            assert!(selected(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    #[test]
+    fn a_draft_carries_everyone_it_is_for_and_the_thread() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_folders(GMAIL_DRAFTS, "[Gmail]/Drafts").await;
+            let Selected::Open(drafts) = select(&mut s, &Folder::Drafts).await else {
+                panic!("Drafts opens");
+            };
+            let got = newest_in(&mut s, &me(), &Folder::Drafts, &drafts, 15)
+                .await
+                .unwrap();
+            let key = mail_key("me@example.com");
+            assert_eq!(got[0].id, format!("{key}_drafts_12"));
+            assert_eq!(got[0].folder, Folder::Drafts);
+            assert_eq!(got[0].to_all, vec!["bo@example.org", "cy@example.org"]);
+            assert_eq!(got[0].cc, vec!["dee@example.org"]);
+            // The first of a chain, checked like any id a stranger wrote.
+            assert_eq!(got[0].in_reply_to, "orig@example.org");
+            // Still the first recipient for showing.
+            assert_eq!(got[0].to_addr, "bo@example.org");
+        });
+    }
+
+    #[test]
+    fn a_refresh_reads_drafts_and_lists_every_one_by_id() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(GMAIL_DRAFTS, "[Gmail]/Drafts").await;
+            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            let key = mail_key("me@example.com");
+            assert_eq!(
+                found.drafts,
+                Some(vec![format!("{key}_drafts_11"), format!("{key}_drafts_12")])
+            );
+            assert_eq!(
+                found
+                    .messages
+                    .iter()
+                    .filter(|m| m.folder == Folder::Drafts)
+                    .count(),
+                2
+            );
+            assert_eq!(
+                selected(&log.lock().unwrap()),
+                vec!["INBOX".to_string(), "[Gmail]/Drafts".to_string()]
+            );
+            // A mailbox without Drafts says nothing about drafts, rather than
+            // "there are none".
+            let (mut s, _) = scripted_folders(OUTLOOK, "Sent Items").await;
+            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            assert_eq!(found.drafts, None);
+        });
+    }
+
+    #[test]
+    fn drafts_are_not_among_the_customers_own_folders() {
+        rt_act().block_on(async {
+            for list in [GMAIL_DRAFTS, DRAFTS_BY_NAME] {
+                let (mut s, _) = scripted_folders(list, "none").await;
+                let listed = listing(&mut s).await.unwrap();
+                let own: Vec<String> = own_folders(&listed, &places_in(&listed))
+                    .into_iter()
+                    .map(|f| f.name)
+                    .collect();
+                assert!(
+                    own.iter()
+                        .all(|n| !n.ends_with("/Drafts") && n != "INBOX.Drafts"),
+                    "{own:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_finished_draft_goes_to_trash_from_drafts() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_folders(GMAIL_DRAFTS, "[Gmail]/Drafts").await;
+            assert_eq!(
+                apply(&mut s, &Folder::Drafts, &[12], 8, &Action::Trash).await,
+                Acted::Done {
+                    done: vec![12],
+                    gone: vec![]
+                }
+            );
+            let log = log.lock().unwrap();
+            assert_eq!(selected(&log), vec!["[Gmail]/Drafts".to_string()]);
+            assert!(
+                log.iter().any(|c| c
+                    .to_ascii_uppercase()
+                    .starts_with("UID MOVE 12 \"[GMAIL]/TRASH\"")),
+                "{log:?}"
+            );
+        });
+    }
+
     #[test]
     fn acting_on_sent_mail_happens_in_sent() {
         rt_act().block_on(async {
@@ -3150,7 +3358,8 @@ mod tests {
                 Places {
                     sent: Some("Sent Items".into()),
                     archive: Some("Archive".into()),
-                    junk: Some("Junk Email".into())
+                    junk: Some("Junk Email".into()),
+                    drafts: None
                 }
             );
             // Gmail's All Mail is every message, inbox and Sent included:
@@ -3161,7 +3370,8 @@ mod tests {
                 Places {
                     sent: Some("[Gmail]/Sent Mail".into()),
                     archive: None,
-                    junk: Some("[Gmail]/Spam".into())
+                    junk: Some("[Gmail]/Spam".into()),
+                    drafts: None
                 }
             );
             let (mut s, _) = scripted_folders(NAMES_ONLY, "x").await;
@@ -3170,7 +3380,8 @@ mod tests {
                 Places {
                     sent: Some("INBOX.Sent".into()),
                     archive: Some("INBOX.Archive".into()),
-                    junk: Some("INBOX.spam".into())
+                    junk: Some("INBOX.spam".into()),
+                    drafts: None
                 }
             );
         });
