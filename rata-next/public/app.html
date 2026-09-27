@@ -3048,7 +3048,8 @@ function renderLinked(){
     const live=l.status==='live';
     return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'NOT SYNCED YET')}</span></b><span>${esc((l.provLabel||'Email')+(l.host?' · '+l.host:''))} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
-  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>serverSync('mail'));
+  /* A mailbox's own Sync now reads that mailbox (0.1.35), not all of them. */
+  el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);serverSync('mail',false,l?[String(l.label).toLowerCase()]:null)});
   /* Relink opens the same form with the address already in it: the thing that
      needs replacing is the password, and making someone retype the address
      they can see on the row is the kind of friction that ends in a support
@@ -3835,16 +3836,21 @@ function notifyNew(ids){
 /* One refresh at a time: a second request while one is running waits for
    that one rather than signing in to every mailbox again. `quiet` is the
    automatic refresh, which speaks only when there is new mail. */
-let SYNCING=null,lastSync=0,MAIL_WAKE=null,MAIL_AGAIN=false;
-function serverSync(p,quiet){
+let SYNCING=null,lastSync=0,lastFull=0,MAIL_WAKE=null,MAIL_AGAIN=false;
+/* When each mailbox was last asked (0.1.35), so the timer can ask each one
+   only when it is due. `only`: the addresses to read; none is all. */
+const LAST_TRY=new Map();
+const mailAddrs=()=>S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase());
+function serverSync(p,quiet,only){
   if(p!=='mail')return Promise.resolve();
   if(SYNCING)return SYNCING;
   SYNCING=(async()=>{
-    lastSync=Date.now();
+    lastSync=Date.now();if(!(only&&only.length))lastFull=lastSync;
+    for(const e of (only&&only.length?only:mailAddrs()))LAST_TRY.set(String(e).toLowerCase(),lastSync);
     try{
       /* In the app, what RATA already holds of each folder goes with the
          request, so only new mail is downloaded. */
-      const res=await apiFetch('/api/sync/mail',window.__RATA_NATIVE__?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({known:heldKnown()})}:undefined);
+      const res=await apiFetch('/api/sync/mail',window.__RATA_NATIVE__?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({known:heldKnown(),...(only&&only.length?{only}:{})})}:undefined);
       if(res.error){if(!quiet)toast(res.error);return}
       await absorbMail(res,quiet);
     }catch(e){
@@ -3872,9 +3878,9 @@ function heldKnown(){
    nothing costs a sign-in and a few hundred bytes per mailbox. A mailbox
    that refused its password is not tried again until it is relinked. */
 const AUTO_EVERY=5*60e3,AUTO_BACK=60e3;let autoOn=false;
-async function autoSync(){
+async function autoSync(only){
   if(!window.__RATA_NATIVE__||!(LIC&&LIC.licensed)||SYNCING)return;
-  await serverSync('mail',true);
+  await serverSync('mail',true,only);
   if((S.gaps||[]).length&&!SYNCING)await fillGaps();
 }
 /* New mail as it arrives (0.1.34): the app keeps one connection per mailbox
@@ -3883,17 +3889,41 @@ async function autoSync(){
    showing and notifying stay in one place. Mail that lands in a burst makes
    one refresh, and mail that lands while one is running gets another after
    it — that refresh may have asked the server just before it arrived. */
-window.__rataMail=function(){
+/* 0.1.35: only the mailbox that woke is read, not every one — a sign-in per
+   mailbox per wake would undo what waiting saves. */
+const WOKE=new Set();
+window.__rataMail=function(d){
   if(!window.__RATA_NATIVE__)return;
+  if(d&&d.email)WOKE.add(String(d.email).toLowerCase());
   clearTimeout(MAIL_WAKE);
-  MAIL_WAKE=setTimeout(()=>{if(SYNCING){MAIL_AGAIN=true;return}autoSync()},1200);
+  MAIL_WAKE=setTimeout(()=>{
+    if(SYNCING){MAIL_AGAIN=true;return}
+    const only=[...WOKE];WOKE.clear();
+    autoSync(only.length?only:null);
+  },1200);
 };
+/* The timer (0.1.35): each mailbox when it is due — every five minutes, or
+   every half hour while its connection is waiting live, since that one says
+   when mail comes and the timer is only there in case the connection died
+   without noticing. Coming back to the window still reads every mailbox: a
+   laptop's sleep kills connections quietly. */
+const AUTO_WATCHED=30*60e3;
+async function watchingNow(){
+  try{const r=await apiFetch('/api/mail/watching');return (r&&r.emails||[]).map(e=>String(e).toLowerCase())}catch(e){return []}
+}
+async function autoTick(){
+  if(!window.__RATA_NATIVE__||!(LIC&&LIC.licensed)||SYNCING)return;
+  const live=new Set(await watchingNow()),now=Date.now(),all=mailAddrs();
+  const due=all.filter(e=>now-(LAST_TRY.get(e)||0)>=(live.has(e)?AUTO_WATCHED:AUTO_EVERY)-5e3);
+  if(!due.length)return;
+  await autoSync(due.length===all.length?null:due);
+}
 function startAutoSync(){
   if(autoOn||!window.__RATA_NATIVE__)return;
   autoOn=true;
   setTimeout(autoSync,800);
-  setInterval(()=>{if(Date.now()-lastSync>=AUTO_EVERY-5e3)autoSync()},30e3);
-  const back=()=>{if(document.visibilityState!=='hidden'&&Date.now()-lastSync>=AUTO_BACK)autoSync()};
+  setInterval(autoTick,30e3);
+  const back=()=>{if(document.visibilityState!=='hidden'&&Date.now()-lastFull>=AUTO_BACK)autoSync()};
   addEventListener('focus',back);
   document.addEventListener('visibilitychange',back);
 }

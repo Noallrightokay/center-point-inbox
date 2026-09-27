@@ -156,7 +156,9 @@ fn main() {
                 })
                 .build()?;
             fit_to_screen(&window, (config.width, config.height));
-            watch::start(app.handle().clone());
+            let live = watch::Watching::default();
+            app.manage(live.clone());
+            watch::start(app.handle().clone(), live);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -174,6 +176,7 @@ fn main() {
             commands::list_folders,
             commands::folder_mail,
             commands::notify_mail,
+            commands::watching,
             commands::open_message,
             commands::save_attachment,
             commands::open_link,

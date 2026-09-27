@@ -27,11 +27,58 @@ const LOOK_AGAIN: Duration = Duration::from_secs(60);
 const PAUSE_FIRST: Duration = Duration::from_secs(30);
 const PAUSE_MOST: Duration = Duration::from_secs(15 * 60);
 
-pub fn start<R: Runtime>(app: AppHandle<R>) {
-    tauri::async_runtime::spawn(supervise(app));
+/// Which mailboxes have a live connection waiting right now (0.1.35). The
+/// page checks those every half hour instead of every five minutes: they say
+/// when mail comes, so the timer is only there in case a connection died
+/// without noticing.
+#[derive(Clone, Default)]
+pub struct Watching(Arc<Mutex<HashSet<String>>>);
+
+impl Watching {
+    pub fn now(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .0
+            .lock()
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
 }
 
-async fn supervise<R: Runtime>(app: AppHandle<R>) {
+/// A mailbox counted as live for as long as this is held. Dropped when the
+/// connection ends, fails, or its task is stopped, so the count can never
+/// outlive the connection.
+struct Live {
+    set: Watching,
+    email: String,
+}
+
+impl Live {
+    fn new(set: &Watching, email: &str) -> Self {
+        if let Ok(mut s) = set.0.lock() {
+            s.insert(email.to_string());
+        }
+        Live {
+            set: set.clone(),
+            email: email.to_string(),
+        }
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        if let Ok(mut s) = self.set.0.lock() {
+            s.remove(&self.email);
+        }
+    }
+}
+
+pub fn start<R: Runtime>(app: AppHandle<R>, live: Watching) {
+    tauri::async_runtime::spawn(supervise(app, live));
+}
+
+async fn supervise<R: Runtime>(app: AppHandle<R>, live: Watching) {
     let rata = app.state::<Arc<Rata>>().inner().clone();
     // Servers without IDLE, until RATA restarts: asking again every minute
     // would be a sign-in a minute for nothing.
@@ -59,6 +106,7 @@ async fn supervise<R: Runtime>(app: AppHandle<R>) {
                     rata.clone(),
                     email,
                     unsupported.clone(),
+                    live.clone(),
                 )));
             }
         }
@@ -71,12 +119,14 @@ async fn watch_one<R: Runtime>(
     rata: Arc<Rata>,
     email: String,
     unsupported: Arc<Mutex<HashSet<String>>>,
+    live: Watching,
 ) {
     let mut pause = PAUSE_FIRST;
     loop {
         match rata.watch(&email).await {
             Ok(mut watch) => {
                 pause = PAUSE_FIRST;
+                let _live = Live::new(&live, &email);
                 loop {
                     match watch.wait(IDLE_FOR).await {
                         Watched::Arrived => tell(&app, &email),
@@ -107,5 +157,22 @@ fn tell<R: Runtime>(app: &AppHandle<R>, email: &str) {
         // code.
         let said = serde_json::json!({ "email": email });
         let _ = window.eval(format!("window.__rataMail&&window.__rataMail({said})"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mailbox_is_live_exactly_while_its_connection_is() {
+        let set = Watching::default();
+        {
+            let _a = Live::new(&set, "a@example.com");
+            let _b = Live::new(&set, "b@example.com");
+            assert_eq!(set.now(), ["a@example.com", "b@example.com"]);
+        }
+        // Gone with the connection — a failure, or the task being stopped.
+        assert!(set.now().is_empty());
     }
 }
