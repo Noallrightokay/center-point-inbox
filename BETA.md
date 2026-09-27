@@ -162,7 +162,10 @@ Don't spend time reporting these — they are known and planned:
   that, mail only arrived when you pressed Sync. If RATA was closed while a
   lot arrived — more than 200 in a folder — it brings the newest first and
   the rest over the next refreshes (or at once with **Load older mail**);
-  before v0.1.28 the ones in between never came. If your provider starts
+  before v0.1.28 the ones in between never came. From v0.1.29 new mail that
+  arrives while RATA is in the background shows a **desktop notification**;
+  Settings → New-mail notifications can hide the sender and subject, or turn
+  them off. Tell us if none ever appears — say which system you are on. If your provider starts
   refusing RATA with messages about too many sign-ins, tell us which
   provider — every five minutes is a sign-in every five minutes.
 

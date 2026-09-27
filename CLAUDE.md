@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive and Spam folders and the customer's own, refreshing only what is new. Standalone, knows nothing about the app. 162 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself. 58 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications. 60 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -106,7 +106,8 @@ licence, so Pro opens Side by side in the app; v0.1.25 adds Archive and
 Spam; v0.1.26 adds the customer's own folders and Move to, and files
 synced mail under its mailbox (replies had gone from the first one);
 v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
-fetches the mail a refresh had to leave out after a long absence. An
+fetches the mail a refresh had to leave out after a long absence; v0.1.29
+shows a desktop notification for new mail. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -189,7 +190,20 @@ mail, whose button also shows while a gap is open — until a page reaches
 `floor` (closed), comes back empty (closed) or stale (dropped; the next
 refresh reads the folder afresh). Offline, a gap is kept. Before 0.1.28 the
 messages in between were never fetched at all, since Load older mail pages
-below the *oldest* message held.
+below the *oldest* message held. **Notifications (v0.1.29).**
+`tauri-plugin-notification`, called from Rust only (`notify_mail`, no JS
+plugin permissions): after an automatic refresh brings unread inbox mail
+while the window is hidden or unfocused, `notifyNew` asks for one
+notification — sender and subject for one message, "N new messages / From
+…" for several, or only "1 new message" if Settings → New-mail notifications
+says so (`S.settings.notify`: full | count | off). Spam, filed and sent mail
+never notify, and nor does a refresh the customer asked for. The words are a
+stranger's, so `notify.rs` makes them one plain line: no control or
+bidi-control characters, 80/200-character caps, and on Linux the body's
+`& < >` escaped, since notification servers read markup there (seen on the
+D-Bus wire with `dbus-monitor`). Not seen on a real desktop: Windows needs the
+installed app's identifier as its AppUserModelID (the plugin sets it outside
+`target/`), macOS may ask permission the first time.
 Before 0.1.27 every refresh re-downloaded up to 64 KB of each of the newest
 15 in four folders. Older mail comes 50 at a
 time through **Load older mail** (`loadOlder` → `/api/mail/older` →
