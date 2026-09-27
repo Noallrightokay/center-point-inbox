@@ -1,5 +1,5 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v39';
+const V = 'rata-shell-v40';
 const SHELL = [
   './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
   './fonts/fonts.css',
@@ -24,29 +24,13 @@ const SHELL = [
    requested by any one reader — making the shell install atomic over all of
    them would risk the whole offline shell for bytes nobody was going to use. */
 const FONTS = [
-  './fonts/fredoka-500-hebrew.woff2',
-  './fonts/fredoka-500-latin-ext.woff2',
-  './fonts/fredoka-500-latin.woff2',
   './fonts/fredoka-600-hebrew.woff2',
   './fonts/fredoka-600-latin-ext.woff2',
   './fonts/fredoka-600-latin.woff2',
-  './fonts/fredoka-700-hebrew.woff2',
-  './fonts/fredoka-700-latin-ext.woff2',
-  './fonts/fredoka-700-latin.woff2',
-  './fonts/instrument-sans-400-latin-ext.woff2',
-  './fonts/instrument-sans-400-latin.woff2',
-  './fonts/instrument-sans-500-latin-ext.woff2',
-  './fonts/instrument-sans-500-latin.woff2',
-  './fonts/instrument-sans-600-latin-ext.woff2',
-  './fonts/instrument-sans-600-latin.woff2',
-  './fonts/instrument-sans-700-latin-ext.woff2',
-  './fonts/instrument-sans-700-latin.woff2',
-  './fonts/sora-400-latin-ext.woff2',
-  './fonts/sora-400-latin.woff2',
-  './fonts/sora-600-latin-ext.woff2',
-  './fonts/sora-600-latin.woff2',
-  './fonts/sora-700-latin-ext.woff2',
-  './fonts/sora-700-latin.woff2'
+  './fonts/geist-latin-ext.woff2',
+  './fonts/geist-latin.woff2',
+  './fonts/geist-mono-latin-ext.woff2',
+  './fonts/geist-mono-latin.woff2'
 ];
 
 const ENGINES = [

@@ -3,266 +3,324 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#0A0E1A">
+<meta name="theme-color" content="#F5F6F8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1014" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icons/favicon-64.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="RATA">
 
-<meta name="description" content="Rata — texts, email, Slack, and Discord, translated automatically and unified into one inbox. Compliance built in.">
-<title>RATA — Every message. Every language. One inbox.</title>
+<meta name="description" content="RATA is a desktop mail client for Windows, macOS and Linux that connects to your mailbox directly. Your password and your mail stay on your computer.">
+<meta property="og:title" content="RATA · Your mail, on your machine">
+<meta property="og:description" content="A desktop mail client that connects to your mailbox directly. Your password and your mail stay on your computer.">
+<meta property="og:image" content="https://mailrata.org/icons/icon-512.png">
+<title>RATA · Your mail, on your machine</title>
 <link rel="stylesheet" href="fonts/fonts.css">
+<link rel="preload" as="image" href="shots/app-light.webp" media="(prefers-color-scheme: light)">
+<link rel="preload" as="image" href="shots/app-dark.webp" media="(prefers-color-scheme: dark)">
 <style>
+/* DESIGN.md: the app's tokens, a website's measure. */
 :root{
-  --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --tint-mid:#5C7FFF; --glacier:#8FAAFF; --wash:#D9E2FF;
-  --slate:#5C6B85; --faint:#93A0B8; --card:#FFFFFF;
-  --hair:rgba(10,14,26,.08);
-  --green:#12B76A; --amber:#F59E0B;
-  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,sans-serif;
-  --disp:'Sora',var(--sans);
+  --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
+  --ink:#15171C; --slate:#51565F; --faint:#6B717B;
+  --hair:rgba(21,23,28,.10);
+  --tint:#2B4FC7; --tint-btn:#2B4FC7; --tint-btn-hover:#233FA3; --tint-soft:rgba(43,79,199,.09); --on-tint:#FCFCFD;
+  --shadow-lg:0 24px 60px -20px rgba(21,23,28,.30),0 2px 8px rgba(21,23,28,.06);
+  --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'Geist Mono',ui-monospace,Menlo,Consolas,monospace;
+  --gutter:24px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0E1014; --card:#15181D; --fill:#1F232A; --fill-2:#1A1D23;
+    --ink:#E7E9EE; --slate:#A4AAB5; --faint:#838A96;
+    --hair:rgba(231,233,238,.11);
+    --tint:#8FA6F2; --tint-btn:#3E5FD6; --tint-btn-hover:#4A6BE0; --tint-soft:rgba(143,166,242,.13);
+    --shadow-lg:0 24px 60px -20px rgba(0,0,0,.7),0 0 0 1px rgba(231,233,238,.08);
+  }
 }
 *{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased}
-a{text-decoration:none;color:inherit}
-.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:12px;font-weight:600;font-size:14.5px;transition:all .15s;border:none;cursor:pointer;font-family:var(--sans)}
-.btn.primary{background:var(--tint);color:#fff;box-shadow:0 4px 18px rgba(46,92,255,.35)}
-.btn.primary:hover{filter:brightness(1.07);transform:translateY(-1px)}
-.btn.ghost{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.25)}
-.btn.ghost:hover{border-color:rgba(255,255,255,.6)}
-.btn.light{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(10,14,26,.1)}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition-duration:.01ms!important}}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--tint);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 var(--gutter)}
+.skip{position:absolute;left:-9999px;top:8px;background:var(--card);padding:8px 12px;border-radius:8px;z-index:60}
+.skip:focus{left:8px}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:8px 18px;border-radius:8px;font:600 15px/1.2 var(--sans);transition:background-color .12s ease,color .12s ease;border:0;cursor:pointer;white-space:nowrap}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--tint-btn);color:var(--on-tint)}
+.btn.primary:hover{background:var(--tint-btn-hover)}
+.btn.quiet{background:var(--card);color:var(--ink);box-shadow:inset 0 0 0 1px var(--hair)}
+.btn.quiet:hover{background:var(--fill-2)}
+.link{color:var(--tint);font-weight:500}
+.link:hover{text-decoration:underline;text-underline-offset:3px}
 
 /* nav */
-nav{position:sticky;top:0;z-index:50;background:rgba(10,14,26,.8);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px)}
-.nav-in{display:flex;align-items:center;gap:12px;height:64px}
-.logo{display:flex;align-items:center;gap:10px;color:#fff}
-.logo b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:21px;letter-spacing:.04em}
-.nav-links{margin-left:auto;display:flex;gap:8px;align-items:center}
-.nav-links a.plain{color:rgba(255,255,255,.75);font-size:14px;font-weight:500;padding:8px 12px}
-.nav-links a.plain:hover{color:#fff}
+nav{position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--hair)}
+.nav-in{display:flex;align-items:center;gap:8px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo b{font-family:'Fredoka',var(--sans);font-weight:600;font-size:21px;letter-spacing:.04em}
+.mk{border-radius:50%;background:#F5F6F8;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+nav a.plain{color:var(--slate);font-size:14.5px;font-weight:500;padding:8px 10px;border-radius:8px}
+nav a.plain:hover{color:var(--ink);background:var(--fill-2)}
+nav .btn{min-height:36px;padding:7px 14px;font-size:14px;margin-left:6px}
 
-/* hero */
-.hero{background:var(--ink);color:#fff;padding:88px 0 110px;position:relative;overflow:hidden}
-.hero::before{content:'';position:absolute;top:-320px;right:-260px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.28),transparent 62%)}
-.hero-in{position:relative;display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:center}
-.eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--glacier);font-weight:600;margin-bottom:18px}
-h1{font-family:'Fredoka',var(--disp);font-weight:600;font-size:clamp(30px,4.2vw,48px);line-height:1.16;letter-spacing:.02em;text-transform:uppercase}
-h1 .u{color:var(--tint-mid)}
-.hero p.sub{margin:22px 0 32px;font-size:17px;color:rgba(255,255,255,.68);max-width:480px}
-.hero-ctas{display:flex;gap:12px;flex-wrap:wrap}
-.hero-note{margin-top:16px;font-size:12.5px;color:rgba(255,255,255,.45)}
+/* hero: text left, the real app bleeding off the right edge */
+.hero{padding:72px 0 88px;overflow:hidden}
+.hero-in{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:56px;align-items:center}
+h1{font-size:clamp(38px,5vw,58px);line-height:1.04;letter-spacing:-.035em;font-weight:600;text-wrap:balance}
+.lede{margin-top:20px;font-size:18px;line-height:1.55;color:var(--slate);max-width:34ch;text-wrap:pretty}
+.ctas{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:32px}
+.shot{margin-right:calc(-1 * max(var(--gutter), (100vw - 1160px) / 2 + var(--gutter)))}
+.shot img{display:block;width:100%;max-width:1040px;height:auto;border-radius:12px 0 0 12px;box-shadow:var(--shadow-lg);border:1px solid var(--hair);border-right:0}
 
-/* hero mock */
-.mock{background:#121829;border:1px solid rgba(255,255,255,.08);border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden}
-.mock-bar{display:flex;gap:6px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.06)}
-.mock-bar span{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.14)}
-.mock-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.06)}
-.mock-head b{font-family:var(--disp);font-size:14px}
-.mock-head .pill{margin-left:auto;background:var(--tint);color:#fff;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px}
-.mrow{display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.05);align-items:flex-start}
-.mav{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;font-weight:700;font-size:12px;color:#fff}
-.mrow .t{min-width:0}
-.mrow b{font-size:13px;display:block}
-.mrow span{font-size:12px;color:rgba(255,255,255,.5);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-top:5px;margin-right:4px}
-.tag.b{background:rgba(92,127,255,.2);color:#8FAAFF}
-.tag.w{background:rgba(217,226,255,.16);color:#D9E2FF}
-.mrow .when{margin-left:auto;font-size:10.5px;color:rgba(255,255,255,.35);flex-shrink:0}
+section{padding:96px 0}
+h2{font-size:clamp(28px,3.2vw,38px);line-height:1.12;letter-spacing:-.025em;font-weight:600;text-wrap:balance}
+.sub{margin-top:14px;color:var(--slate);font-size:17px;max-width:60ch;text-wrap:pretty}
 
-/* sections */
-section.feat{padding:84px 0}
-.kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tint);font-weight:600;margin-bottom:12px}
-h2{font-family:'Fredoka',var(--disp);font-weight:600;font-size:clamp(23px,2.9vw,32px);letter-spacing:.02em;line-height:1.25;text-transform:uppercase}
-.feat-sub{color:var(--slate);margin-top:12px;max-width:560px;font-size:15.5px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:40px}
-.card{background:var(--card);border-radius:16px;padding:26px;box-shadow:0 1px 2px rgba(10,14,26,.05),0 8px 28px rgba(10,14,26,.06)}
-.card .ic{width:44px;height:44px;border-radius:12px;background:var(--wash);display:grid;place-items:center;margin-bottom:16px}
-.card b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:16.5px;display:block;margin-bottom:8px;letter-spacing:.02em}
-.card p{font-size:13.5px;color:var(--slate)}
-.card .mini{margin-top:14px;display:flex;gap:6px;flex-wrap:wrap}
-.chip{font-size:10.5px;font-weight:600;background:var(--wash);color:var(--tint);padding:3px 9px;border-radius:999px}
+/* where things live: two plain columns */
+.where{border-top:1px solid var(--hair)}
+.where-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:48px;margin-top:48px}
+.where-col h3{font-size:15px;font-weight:600;padding-bottom:12px;border-bottom:1px solid var(--hair)}
+.where-col.here h3{color:var(--tint)}
+.where-col ul{list-style:none}
+.where-col li{padding:16px 0 0;color:var(--slate);font-size:15.5px;max-width:48ch}
+.where-col li b{display:block;color:var(--ink);font-weight:600;font-size:16px}
+.where-note{margin-top:40px;font-size:14.5px;color:var(--faint)}
 
-/* cta band */
-.band{background:var(--ink);color:#fff;border-radius:22px;padding:56px 48px;margin:20px 0 90px;display:flex;align-items:center;gap:32px;flex-wrap:wrap;position:relative;overflow:hidden}
-.band::after{content:'';position:absolute;right:-140px;bottom:-180px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.35),transparent 65%)}
-.band h2{color:#fff}
-.band p{color:rgba(255,255,255,.6);margin-top:8px;font-size:14.5px}
-.band .btn{position:relative;z-index:1}
-.band>div:first-child{flex:1;min-width:260px}
+/* features: six cells, two of them wide */
+.feat{background:var(--card);border-top:1px solid var(--hair);border-bottom:1px solid var(--hair)}
+.bento{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:48px}
+.cell{border-radius:12px;padding:28px;background:var(--bg);border:1px solid var(--hair);display:flex;flex-direction:column;gap:10px;min-height:220px}
+.cell.wide{grid-column:span 2}
+.cell h3{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.cell p{color:var(--slate);font-size:15px;max-width:52ch}
+.cell.pic{padding:0;overflow:hidden;flex-direction:row;align-items:stretch}
+.cell.pic .txt{padding:28px;display:flex;flex-direction:column;gap:10px;flex:1 1 44%}
+.cell.pic .crop{flex:1 1 56%;min-height:260px;background-repeat:no-repeat;background-size:330% auto;border-left:1px solid var(--hair)}
+.crop.list{background-image:url(shots/app-light.webp);background-position:26% 74%}
+.crop.pane{background-image:url(shots/app-light.webp);background-position:75% 16%}
+@media (prefers-color-scheme:dark){.crop.list,.crop.pane{background-image:url(shots/app-dark.webp)}}
+.cell.tone{background:var(--tint-soft);border-color:transparent}
+.plan-tag{font:500 12px/1 var(--mono);color:var(--faint);margin-top:auto}
 
-footer{border-top:1px solid var(--hair);padding:28px 0 40px;color:var(--faint);font-size:13px;display:flex}
-footer .wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;width:100%}
-footer .sp{flex:1}
+/* pricing */
+.plans{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:48px;max-width:880px}
+.plan{border-radius:12px;padding:32px;background:var(--card);border:1px solid var(--hair);display:flex;flex-direction:column}
+.plan.pro{border:2px solid var(--tint)}
+.plan h3{font-size:17px;font-weight:600}
+.plan .for{color:var(--slate);font-size:15px;margin-top:4px}
+.price{margin:22px 0 4px;font-size:44px;font-weight:600;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.price small{font-size:15px;font-weight:400;color:var(--slate);letter-spacing:0}
+.plan ul{list-style:none;margin:20px 0 28px;display:grid;gap:10px}
+.plan li{display:flex;gap:10px;font-size:15px}
+.plan li::before{content:'';flex:none;width:14px;height:8px;margin-top:7px;border-left:2px solid var(--tint);border-bottom:2px solid var(--tint);transform:rotate(-45deg) translate(1px,-2px)}
+.plan .btn{margin-top:auto;align-self:flex-start}
+.fine{margin-top:20px;font-size:14px;color:var(--faint);max-width:70ch}
 
-@media (max-width:860px){
-  .hero-in{grid-template-columns:1fr}
-  .hero{padding:64px 0 80px}
-  .band{padding:40px 28px}
+/* download */
+.dl{border-top:1px solid var(--hair)}
+.dl-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:56px;margin-top:48px;align-items:start}
+.platforms{border-radius:12px;background:var(--card);border:1px solid var(--hair);overflow:hidden}
+.platform{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;padding:16px 20px;border-top:1px solid var(--hair);transition:background-color .12s ease}
+.platform:first-child{border-top:0}
+.platform:hover{background:var(--fill-2)}
+.platform b{font-weight:600;display:block}
+.platform span{font:400 13px/1.4 var(--mono);color:var(--faint)}
+.platform .go{font-size:14px;color:var(--tint);font-weight:500}
+.steps{list-style:none;counter-reset:s;display:grid;gap:22px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px}
+.steps li::before{content:counter(s);font:500 13px/32px var(--mono);text-align:center;width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--slate)}
+.steps b{display:block;font-weight:600}
+.steps span{color:var(--slate);font-size:15px}
+.beta{margin-top:28px;padding:14px 16px;border-radius:8px;background:var(--fill-2);font-size:14px;color:var(--slate)}
+
+footer{border-top:1px solid var(--hair);padding:32px 0 48px;font-size:14px;color:var(--faint)}
+footer .wrap{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap}
+footer .brand{display:flex;align-items:center;gap:8px;color:var(--ink);margin-right:auto}
+footer .brand b{font-family:'Fredoka',var(--sans);font-weight:600;letter-spacing:.04em}
+footer a:hover{color:var(--ink)}
+
+@media (max-width:900px){
+  .hero{padding:48px 0 64px}
+  .hero-in{grid-template-columns:1fr;gap:40px}
+  .shot{margin-right:calc(-1 * var(--gutter))}
+  section{padding:72px 0}
+  .bento{grid-template-columns:1fr}
+  .cell.wide{grid-column:auto}
+  .cell.pic{flex-direction:column}
+  .cell.pic .crop{border-left:0;border-top:1px solid var(--hair);min-height:220px}
+  .where-grid,.plans,.dl-grid{grid-template-columns:1fr;gap:32px}
 }
-.mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+@media (max-width:640px){
+  :root{--gutter:16px}
+  nav a.plain.opt{display:none}
+  h1{font-size:36px}
+  .lede{font-size:17px}
+  .plan{padding:24px}
+}
 </style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 
-<nav><div class="wrap nav-in">
-  <a class="logo" href="#">
+<nav aria-label="Main"><div class="wrap nav-in">
+  <a class="logo" href="#" aria-label="RATA home">
     <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
     <b>RATA</b>
   </a>
-  <div class="nav-links">
-    <a class="plain" href="#features">Features</a>
-    <a class="plain" href="#download">Download</a>
-    <a class="plain" href="account.html">Licence</a>
-    <a class="plain" href="#pricing">Pricing</a>
-    <a class="plain" href="auth.html?mode=login">Log in</a>
-    <a class="btn primary" href="auth.html?mode=signup" style="padding:9px 18px">Create account</a>
-  </div>
+  <a class="plain opt" href="#features">Features</a>
+  <a class="plain opt" href="#pricing">Pricing</a>
+  <a class="plain opt" id="nav-licence" href="account.html">Licence</a>
+  <a class="plain" id="nav-login" href="auth.html?mode=login">Log in</a>
+  <a class="btn primary" href="#download">Download</a>
 </div></nav>
 
+<main id="main">
 <header class="hero"><div class="wrap hero-in">
   <div>
-    <div class="eyebrow">Self-hosted · Compliance-first</div>
-    <h1>Every message.<br>Every language.<br><span class="u">One inbox.</span></h1>
-    <p class="sub">Texts, email, Slack, and Discord — translated automatically and unified into a single stream, for teams that can't afford to miss a thing.</p>
-    <div class="hero-ctas">
-      <a class="btn primary" href="auth.html?mode=signup">Create your account</a>
-      <a class="btn ghost" href="#pricing">See plans — from $12.99/mo</a>
-      <a class="btn light" href="#download">⬇ Download the app</a>
+    <h1>Your mail, on your machine.</h1>
+    <p class="lede">A desktop mail client that connects to your mailbox directly. Your password never leaves your computer.</p>
+    <div class="ctas">
+      <a class="btn primary" href="#download">Download</a>
+      <a class="link" href="#pricing">Plans from $12.99 a month</a>
     </div>
-    <div class="hero-note">Free to run · your data stays in your own storage · DLP and audit built in</div>
   </div>
-  <div class="mock" aria-hidden="true">
-    <div class="mock-bar"><span></span><span></span><span></span></div>
-    <div class="mock-head">
-      <img class="mk" src="icons/mark-256.png" alt="" width="20" height="20">
-      <b>Messages</b><span style="font-size:11px;color:rgba(255,255,255,.45)">3 new · 1 translated from Spanish</span>
-      <span class="pill">3</span>
-    </div>
-    <div class="mrow"><div class="mav" style="background:linear-gradient(140deg,#2E5CFF,#5C7FFF)">LF</div><div class="t"><b>Lucía Ferrer</b><span>Is the money still available? I can send the documents…</span><div><span class="tag b">Text</span><span class="tag w">⇄ Spanish</span></div></div><div class="when">1h</div></div>
-    <div class="mrow"><div class="mav" style="background:linear-gradient(140deg,#1E46D9,#2E5CFF)">EM</div><div class="t"><b>Dr. Elena Marsh</b><span>Referral packet — imaging attached for the Tuesday review</span><div><span class="tag b">Email</span><span class="tag w">Work</span></div></div><div class="when">42m</div></div>
-    <div class="mrow" style="border:none"><div class="mav" style="background:linear-gradient(140deg,#5C7FFF,#8FAAFF)">PN</div><div class="t"><b>Priya Natarajan</b><span>BAA is countersigned — sending the executed copy now 👍</span><div><span class="tag b">Slack</span></div></div><div class="when">3h</div></div>
+  <div class="shot">
+    <picture>
+      <source srcset="shots/app-dark.webp" media="(prefers-color-scheme: dark)">
+      <img src="shots/app-light.webp" width="1600" height="975" alt="The RATA window: an inbox on the left, and a message about revised floor plans open on the right with its PDF attached.">
+    </picture>
   </div>
 </div></header>
 
-<section class="feat" id="features"><div class="wrap">
-  <div class="kicker">Why Rata</div>
-  <h2>The whole conversation, wherever it happens</h2>
-  <p class="feat-sub">People don't stay in one app — a deal starts in email, moves to text, closes in Slack. Rata threads it all by person, not by platform.</p>
-  <div class="cards">
-    <div class="card">
-      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></div>
-      <b>One unified stream</b>
-      <p>Email, texts, Slack, and Discord in a single inbox with a one-tap channel splitter. Open any person to see every conversation you've ever had with them — across every system.</p>
-      <div class="mini"><span class="chip">Email</span><span class="chip">Text</span><span class="chip">Slack</span><span class="chip">Discord</span></div>
+<section class="where" aria-labelledby="where-h"><div class="wrap">
+  <h2 id="where-h">What stays on your computer</h2>
+  <p class="sub">RATA reads and sends your mail itself, over IMAP and SMTP. There is no RATA server between you and your mailbox, so there is nothing of yours on one to steal.</p>
+  <div class="where-grid">
+    <div class="where-col here">
+      <h3>On your computer</h3>
+      <ul>
+        <li><b>Your mail password</b>In the system keychain: Keychain on a Mac, Credential Manager on Windows, Secret Service on Linux.</li>
+        <li><b>Your mail</b>Downloaded from your mailbox and kept on disk, so it opens and searches without a connection.</li>
+        <li><b>Your signatures</b>Names, phone numbers and addresses are never copied to your online account.</li>
+      </ul>
     </div>
-    <div class="card">
-      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg></div>
-      <b>Every language, automatic</b>
-      <p>Messages arrive translated with the original one tap away. A claimant writes in Spanish, you read it in English, nothing gets lost — and search matches both.</p>
-      <div class="mini"><span class="chip">⇄ Auto-translate</span><span class="chip">Show original</span></div>
-    </div>
-    <div class="card">
-      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
-      <b>Compliance you can prove</b>
-      <p>Live DLP on every outbound message and file — HIPAA, SOC 2, GDPR profiles — plus a SHA-256 hash-chained audit log you can verify in one click.</p>
-      <div class="mini"><span class="chip">HIPAA · 17 rules</span><span class="chip">Tamper-evident</span></div>
-    </div>
-    <div class="card">
-      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></div>
-      <b>Create anywhere, deliver right</b>
-      <p>An app bridge opens Docs, Word, Sheets, Excel, or Pages in place — and Format Autopilot converts every file to whatever ecosystem the recipient actually uses.</p>
-      <div class="mini"><span class="chip">.gdoc → .docx</span><span class="chip">Autopilot</span></div>
-    </div>
-    <div class="card">
-      <div class="ic"><img class="mk" src="icons/mark-256.png" alt="" width="24" height="24"></div>
-      <b>Rata Assist</b>
-      <p>A briefing bot that reads your whole stream and surfaces the to-dos, open requests, and deadlines buried inside it — with optional AI-powered daily briefs.</p>
-      <div class="mini"><span class="chip">To-dos</span><span class="chip">Deadlines</span><span class="chip">AI brief ✦</span></div>
-    </div>
-    <div class="card">
-      <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2E5CFF" stroke-width="1.8" stroke-linecap="round"><path d="M9 12a4 4 0 014-4h5a4 4 0 010 8h-2"/><path d="M15 12a4 4 0 01-4 4H6a4 4 0 010-8h2"/></svg></div>
-      <b>Yours, end to end</b>
-      <p>Self-hosted on your own domain, files in your own Drive, OneDrive, and Dropbox, accounts under your control. No middleman between you and your messages.</p>
-      <div class="mini"><span class="chip">Self-hosted</span><span class="chip">Your storage</span></div>
+    <div class="where-col">
+      <h3>On mailrata.org</h3>
+      <ul>
+        <li><b>Your account and licence</b>Your email address, your plan, and the key that unlocks the app.</li>
+        <li><b>Billing</b>Handled by Stripe. RATA never sees your card.</li>
+        <li><b>Summaries and translations, only when you ask</b>The text of that one message passes through to be summarized or translated, and is not stored or logged.</li>
+      </ul>
     </div>
   </div>
+  <p class="where-note">The licence is checked on your computer, so RATA opens and reads your mail even when you are offline.</p>
 </div></section>
 
-<section class="feat" id="pricing" style="padding-top:0"><div class="wrap">
-  <div class="kicker">Pricing</div>
-  <h2>Two plans. Start at $12.99.</h2>
-  <p class="feat-sub">Every plan includes the thing RATA is for: every mailbox arriving in one Center Point inbox, translated as it lands, with any file converted to whatever the other person opens.</p>
-  <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr))">
-
-    <div class="card">
-      <b>RATA Base</b>
-      <div style="font-family:'Fredoka',var(--disp);font-size:34px;font-weight:600;margin:6px 0 2px">$12.99<span style="font-size:15px;color:var(--slate)"> /month</span></div>
-      <p style="margin-bottom:4px">Up to two mailboxes. One Center Point inbox.</p>
-      <p>Both accounts arriving in a single stream — which is the whole idea — with auto-translation as mail lands, the Format Bridge that converts any document and keeps the original beside it, DLP and the audit chain, and the app on every device.</p>
-      <div class="mini" style="margin-top:6px;gap:8px">
-        <a class="btn primary" id="buy-base" href="auth.html?mode=signup" style="padding:10px 18px">Get Base — $12.99</a>
+<section class="feat" id="features" aria-labelledby="feat-h"><div class="wrap">
+  <h2 id="feat-h">A mail client, done properly</h2>
+  <p class="sub">The things you reach for every day, working with any mailbox that speaks IMAP: Gmail, Outlook, iCloud, Fastmail or your own domain.</p>
+  <div class="bento">
+    <div class="cell wide pic">
+      <div class="txt">
+        <h3>Every mailbox in one inbox</h3>
+        <p>Link your mailboxes and read them in one list, with Sent, Drafts, Archive, Spam and your own folders alongside. On Pro, put them side by side when that is easier.</p>
       </div>
+      <div class="crop list" role="img" aria-label="The RATA message list"></div>
     </div>
-
-    <div class="card" style="border:2px solid var(--tint)">
-      <div class="mini" style="margin-bottom:6px"><span class="chip" style="background:rgba(46,92,255,.12);color:#2E5CFF">Most people want this</span></div>
-      <b>RATA Pro</b>
-      <div style="font-family:'Fredoka',var(--disp);font-size:34px;font-weight:600;margin:6px 0 2px">$23.99<span style="font-size:15px;color:var(--slate)"> /month</span></div>
-      <p style="margin-bottom:4px">More than two mailboxes, and the option to pull them apart.</p>
-      <p>Connect as many accounts as you have — they still arrive in one Center Point inbox — and when it helps, put two or three of them side by side to work at once and move a file between them. AI summaries of what arrived while you were away, folders for your documents, Slack and Discord.</p>
-      <div class="mini" style="margin-top:6px;gap:8px">
-        <a class="btn primary" id="buy-pro" href="auth.html?mode=signup" style="padding:10px 18px">Get Pro — $23.99</a>
+    <div class="cell">
+      <h3>New mail as it arrives</h3>
+      <p>RATA keeps a connection open to each inbox and shows a notification when something lands: the sender and subject, or only a count if you prefer.</p>
+    </div>
+    <div class="cell tone">
+      <h3>Formatted mail, handled carefully</h3>
+      <p>HTML mail is cleaned before it is shown, pictures from the web load only when you ask, and a link tells you where it goes before it opens.</p>
+    </div>
+    <div class="cell wide pic">
+      <div class="txt">
+        <h3>Writing the way you expect</h3>
+        <p>Reply all, Cc and Bcc, a signature for each address, attachments both ways, and drafts you started on your phone, ready to finish.</p>
       </div>
+      <div class="crop pane" role="img" aria-label="A message open in RATA with its attachment"></div>
     </div>
-
-    <!-- RATA Enterprise ($72 — CRM, texts, automations) is not on sale: those
-         three features are not built. The card returns when they are; see
-         `sellable` in rata-next/lib/plan.js.
-    <div class="card">
-      <b>RATA Enterprise</b>
-      <div style="font-family:'Fredoka',var(- -disp);font-size:34px;font-weight:600;margin:6px 0 2px">$72<span style="font-size:15px;color:var(- -slate)"> /month</span></div>
-      <p style="margin-bottom:4px">Everything in Pro, for a team.</p>
-      <p>The CRM built on the people you already thread, with every conversation attached · texts alongside mail and chat · automations that file, route and reply by rule · a shared view so the team can see what is in hand.</p>
-      <div class="mini" style="margin-top:16px"><span class="chip">CRM</span><span class="chip">SMS</span><span class="chip">Automations</span></div>
-    -->
+    <div class="cell">
+      <h3>Files in the format people need</h3>
+      <p>Turn an attachment or any document into Word, PDF, Markdown, Excel or CSV, on your computer, without uploading it anywhere.</p>
     </div>
-
+    <div class="cell wide">
+      <h3>Summaries and translation, when you ask</h3>
+      <p>Summarize a long message or translate one in a click. RATA asks before the first time, and never sends anything on its own.</p>
+      <span class="plan-tag">Translation on Base and Pro. Summaries on Pro.</span>
+    </div>
   </div>
-  <div style="margin-top:14px;font-size:12.5px;color:var(--faint)">Payments processed securely by Stripe. Cancel anytime from your billing portal.</div>
 </div></section>
 
-<section class="feat" id="download" style="padding-top:0"><div class="wrap">
-  <div class="kicker">Get the app</div>
-  <h2>One install. Every device.</h2>
-  <p class="feat-sub">Rata installs straight from this site as a full app — icon, offline support, its own window. No app store required.</p>
-  <div class="cards">
-    <div class="card"><b>Windows &amp; desktop</b><p>Open this site in Chrome or Edge and hit install — Rata lands in your Start menu and taskbar like any desktop app.</p><div class="mini" style="margin-top:16px"><button class="btn primary js-install" style="display:none;padding:10px 18px">⬇ Install for desktop</button><span class="chip">Chrome</span><span class="chip">Edge</span></div></div>
-    <div class="card"><b>Android</b><p>In Chrome, tap Install when prompted (or menu → Install app). Rata installs as a real app with its own icon and splash screen.</p><div class="mini" style="margin-top:16px"><button class="btn primary js-install" style="display:none;padding:10px 18px">⬇ Install on Android</button><span class="chip">Chrome</span></div></div>
-    <div class="card"><b>iPhone &amp; iPad</b><p>Open in <b>Safari</b>, tap the Share button, then <b>Add to Home Screen</b>. Rata runs full-screen like a native app.</p><div class="mini" style="margin-top:16px"><span class="chip">Safari</span><span class="chip">Share → Add to Home Screen</span></div></div>
+<section id="pricing" aria-labelledby="price-h"><div class="wrap">
+  <h2 id="price-h">Two plans, billed monthly</h2>
+  <p class="sub">Both include every new version for as long as you subscribe.</p>
+  <div class="plans">
+    <div class="plan">
+      <h3>RATA Base</h3>
+      <p class="for">For one or two mailboxes.</p>
+      <div class="price">$12.99<small> a month</small></div>
+      <ul>
+        <li>Up to two mailboxes, in one inbox</li>
+        <li>Translation of any message</li>
+        <li>Document and attachment conversion</li>
+        <li>Windows, macOS and Linux</li>
+      </ul>
+      <a class="btn quiet" id="buy-base" href="auth.html?mode=signup">Buy Base</a>
+    </div>
+    <div class="plan pro">
+      <h3>RATA Pro</h3>
+      <p class="for">For more mailboxes, and more help reading them.</p>
+      <div class="price">$23.99<small> a month</small></div>
+      <ul>
+        <li>Everything in Base</li>
+        <li>As many mailboxes as you have</li>
+        <li>Mailboxes side by side</li>
+        <li>Summaries and a briefing of what needs you</li>
+      </ul>
+      <a class="btn primary" id="buy-pro" href="auth.html?mode=signup">Buy Pro</a>
+    </div>
   </div>
-  <div id="ios-hint" style="display:none;margin-top:18px;background:var(--wash);color:var(--tint);border-radius:14px;padding:16px 20px;font-size:14px;font-weight:500">On iPhone/iPad: open this page in <b>Safari</b> → tap <b>Share</b> (square with arrow) → <b>Add to Home Screen</b> → <b>Add</b>. Done — Rata is on your home screen.</div>
+  <p class="fine">Payments go through Stripe. Cancel any time from your account. Your licence key is on your licence page as soon as the payment clears.</p>
 </div></section>
 
-<div class="wrap">
-  <div class="band">
+<section class="dl" id="download" aria-labelledby="dl-h"><div class="wrap">
+  <h2 id="dl-h">Download RATA</h2>
+  <p class="sub">Pick the installer for your computer. Every release is published on GitHub, with its version in the name.</p>
+  <div class="dl-grid">
+    <div class="platforms">
+      <a class="platform" href="https://github.com/Noallrightokay/center-point-inbox/releases"><div><b>Windows 10 and 11</b><span>RATA_&lt;version&gt;_x64-setup.exe</span></div><span class="go">Releases</span></a>
+      <a class="platform" href="https://github.com/Noallrightokay/center-point-inbox/releases"><div><b>macOS, Apple silicon</b><span>RATA_&lt;version&gt;_aarch64.dmg</span></div><span class="go">Releases</span></a>
+      <a class="platform" href="https://github.com/Noallrightokay/center-point-inbox/releases"><div><b>macOS, Intel</b><span>RATA_&lt;version&gt;_x64.dmg</span></div><span class="go">Releases</span></a>
+      <a class="platform" href="https://github.com/Noallrightokay/center-point-inbox/releases"><div><b>Linux, Debian and Ubuntu</b><span>RATA_&lt;version&gt;_amd64.deb</span></div><span class="go">Releases</span></a>
+      <a class="platform" href="https://github.com/Noallrightokay/center-point-inbox/releases"><div><b>Linux, other</b><span>RATA_&lt;version&gt;_amd64.AppImage</span></div><span class="go">Releases</span></a>
+    </div>
     <div>
-      <h2>Stop losing threads.</h2>
-      <p>Create an account, connect your inbox, and let Assist find what needs you.</p>
+      <ol class="steps">
+        <li><div><b>Buy a plan</b><span>Base or Pro, above.</span></div></li>
+        <li><div><b>Copy your licence key</b><span>From your <a class="link" href="account.html">licence page</a>.</span></div></li>
+        <li><div><b>Install and paste it</b><span>RATA asks for the key the first time it opens.</span></div></li>
+        <li><div><b>Add a mailbox</b><span>Your address and an app password from your provider. RATA finds the server itself.</span></div></li>
+      </ol>
+      <p class="beta">RATA is in beta. The installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it.</p>
     </div>
-    <a class="btn primary" href="auth.html?mode=signup">Create your account</a>
-    <a class="btn ghost" href="#pricing">See plans</a>
   </div>
-</div>
+</div></section>
+</main>
 
 <footer><div class="wrap">
-  <img class="mk" src="icons/mark-256.png" alt="" width="22" height="22">
-  <span><b style="font-family:'Fredoka',var(--disp);letter-spacing:.04em">RATA</b> · Every message. Every language. One inbox.</span>
-  <span class="sp"></span>
-  <span>© 2026 Rata</span>
+  <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
+  <a href="account.html">Licence</a>
+  <a href="https://github.com/Noallrightokay/center-point-inbox/blob/main/BETA.md">Beta guide</a>
+  <a href="https://github.com/Noallrightokay/center-point-inbox/releases">Releases</a>
+  <span>© 2026 RATA</span>
 </div></footer>
 
 <script src="config.js"></script>
@@ -276,28 +334,15 @@ const RC=window.RATA_CONFIG||{};
 const LINKS={base:RC.stripeBase||'',pro:RC.stripePro||''};
 if(LINKS.base)document.getElementById('buy-base').href=LINKS.base;
 if(LINKS.pro)document.getElementById('buy-pro').href=LINKS.pro;
-// If already signed in, upgrade CTAs to "Open console"
+/* Signed in already: Log in becomes the way to the licence. */
 try{
   if(localStorage.getItem('centra_session')){
-    const nav=document.querySelector('nav a.btn.primary');
-    if(nav){nav.href='app.html';nav.textContent='Open console'}
+    const a=document.getElementById('nav-login');
+    a.href='account.html';a.textContent='Your licence';
+    document.getElementById('nav-licence').hidden=true;
   }
 }catch(e){}
-</script>
-<script>
 if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
-let __dp=null;
-const __isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
-const __standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
-addEventListener('beforeinstallprompt',e=>{e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
-if(__isIOS&&!__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
-if(__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
-function installApp(){
-  if(__dp){__dp.prompt();__dp.userChoice.then(()=>{__dp=null});return}
-  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
-  else if(typeof toast==='function')toast('In Chrome or Edge: menu → Install Rata');else alert('In Chrome or Edge: browser menu → "Install Rata".');
-}
-document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.onclick=installApp));
 </script>
 </body>
 </html>

@@ -193,6 +193,11 @@ Don't spend time reporting these — they are known and planned:
   replies and forwards unless you turn that off; changing From swaps it.
   Signatures stay on your computer — they are not part of what RATA keeps
   in your online account.
+- v0.1.37 **looks different**: calmer colours, one accent, a new typeface
+  (Geist), flatter buttons, and a mail list with badges on the sender's line
+  so more of it fits. Nothing moved or was taken away. If something is now
+  hard to read, too faint, or cut off, send a screenshot with the window
+  size, and say whether your computer is in light or dark mode.
 
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —

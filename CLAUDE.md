@@ -29,6 +29,7 @@ convenient.
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 63 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
+| `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
 deleted in `064674b`. Any reference to `centerpoint-inbox.com`, an API gateway
@@ -110,7 +111,8 @@ fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
 begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
-as it arrives (IMAP IDLE); v0.1.35 signs in far less often; v0.1.36 adds signatures. An
+as it arrives (IMAP IDLE); v0.1.35 signs in far less often; v0.1.36 adds signatures; v0.1.37 is the
+redesign to `DESIGN.md`. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -656,6 +658,26 @@ unless Settings → "In replies and forwards too" is off
 `CMP_SIG` is the block RATA put in: changing From swaps it for that
 mailbox's (or removes it) only while it is still there unchanged, and a
 message holding only the signature still counts as empty for Discard.
+**The redesign (v0.1.37).** `DESIGN.md` is the design system, written after
+auditing the old interface against Taste Skill's redesign audit and Vercel's
+Web Interface Guidelines: one cobalt accent (`--tint`, `--tint-btn` for
+filled buttons, which differs in dark mode so white text keeps 5.4:1), one
+cool neutral family, Geist and Geist Mono (Fredoka stays for the wordmark
+only), controls 8 px and containers 12 px, flat surfaces with hairline
+borders, no gradients, glows or overshoot. The old token names (`--grad-*`,
+`--sheen*`, `--glow*`, `--r-bubble`) still exist but resolve to flat values,
+so a rule nobody touched cannot bring the old look back; `app.test.mjs`
+checks the accent fill, 8 px controls, Geist, and that nothing on screen has
+a gradient. Behaviour changed in three places only: a mail row's badges sit on
+the sender's line (rows are three lines, so none is cut when the list sizes
+every row from one it drew), the provider badge ("Imap") is gone from rows,
+and "via mailbox" is text in the sender line rather than a dead button. The
+account button shows initials from the start. The website was rewritten to
+say only what the app does (it still sold texts, Slack, Discord, DLP and a
+browser install, all gone since 0.1.6), with screenshots of the real
+interface in `public/shots` (retake them after a visible change) and no em
+dashes in visible copy. `vendor-fonts.mjs` now keeps a variable font once
+instead of once per weight (460 KB → 167 KB).
 Also not built: saving RATA's drafts to the server; Gmail's archive; no
 code signing.
 

@@ -1,4 +1,4 @@
-/* Re-download RATA's three typefaces from Google and rebuild public/fonts.
+/* Re-download RATA's typefaces from Google and rebuild public/fonts.
 
    Run this when a family, a weight or a subset changes — not on every build.
    The files are committed, because a build that reaches out to Google to
@@ -26,15 +26,16 @@ const DEST = join(HERE, '..', 'public', 'fonts');
    has downloaded gets synthesised by the browser and looks wrong in a way
    nobody can quite name. */
 const FAMILIES = [
-  'Fredoka:wght@500;600;700',
-  'Instrument+Sans:wght@400;500;600;700',
-  'Sora:wght@400;600;700',
+  // The RATA wordmark only. Everything else is Geist (DESIGN.md, Type).
+  'Fredoka:wght@600',
+  'Geist:wght@400;500;600;700',
+  'Geist+Mono:wght@400;500',
 ];
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-const OFL = { fredoka: 'fredoka', 'instrument-sans': 'instrumentsans', sora: 'sora' };
+const OFL = { fredoka: 'fredoka', geist: 'geist', 'geist-mono': 'geistmono' };
 
-const HEADER = `/* RATA's three typefaces, served from this site rather than from Google.
+const HEADER = `/* RATA's typefaces, served from this site rather than from Google.
 
    Vendored for one reason above the others: a request to fonts.googleapis.com
    tells Google every time somebody opens their mail. On a product whose whole
@@ -50,7 +51,7 @@ const HEADER = `/* RATA's three typefaces, served from this site rather than fro
    declarations are kept exactly as Google wrote them, so a browser still
    downloads only the subsets a page actually uses.
 
-   All three families are SIL Open Font License 1.1; the licences are beside
+   Every family is SIL Open Font License 1.1; the licences are beside
    the files, in fonts/OFL-*.txt. */
 
 `;
@@ -72,6 +73,7 @@ const blocks = [...css.matchAll(/\/\* ([a-z0-9-]+) \*\/\s*(@font-face \{[\s\S]*?
 if (!blocks.length) throw new Error('Google returned CSS in a shape this script does not understand');
 
 const written = new Map();
+const byUrl = new Map();
 const out = [];
 
 for (const [, subset, block] of blocks) {
@@ -79,12 +81,19 @@ for (const [, subset, block] of blocks) {
   const weight = /font-weight: (\d+)/.exec(block)[1];
   const url = /url\((https:\/\/[^)]+)\)/.exec(block)[1];
   const slug = family.toLowerCase().replaceAll(' ', '-');
-  const name = `${slug}-${weight}-${subset}.woff2`;
+  let name = `${slug}-${weight}-${subset}.woff2`;
 
-  if (!written.has(name)) {
+  /* A variable family (Geist) comes back as the same file for every weight.
+     Keep it once: four names for one file is four downloads for one font. */
+  const shared = byUrl.get(url);
+  if (shared) name = shared;
+  else if (!written.has(name)) {
     const bytes = await get(url, true);
+    const variable = /font-weight: \d+ \d+/.test(block) || [...blocks].filter(([, s2, b2]) => s2 === subset && b2.includes(url)).length > 1;
+    if (variable) name = `${slug}-${subset}.woff2`;
     await writeFile(join(DEST, name), bytes);
     written.set(name, bytes.length);
+    byUrl.set(url, name);
   }
   out.push(block.replace(/url\(https:\/\/[^)]+\)/, `url(${name})`));
 }

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0A0E1A">
-<title>RATA — Sign in</title>
+<title>Sign in to RATA</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icons/favicon-64.png">
@@ -14,66 +14,85 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="RATA">
 <style>
+/* DESIGN.md tokens, the same as the app's. */
 :root{
-  --ink:#0A0E1A; --paper:#F7F8FA; --tint:#2E5CFF; --tint-mid:#5C7FFF; --glacier:#8FAAFF; --wash:#D9E2FF;
-  --slate:#5C6B85; --faint:#93A0B8; --card:#FFFFFF; --fill:#E8ECF4;
-  --red:#E5484D; --green:#12B76A;
-  --sans:'Instrument Sans',-apple-system,BlinkMacSystemFont,sans-serif;
-  --disp:'Sora',var(--sans);
+  --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
+  --ink:#15171C; --slate:#51565F; --faint:#6B717B;
+  --hair:rgba(21,23,28,.10);
+  --tint:#2B4FC7; --tint-btn:#2B4FC7; --tint-btn-hover:#233FA3; --tint-soft:rgba(43,79,199,.09); --on-tint:#FCFCFD;
+  --red:#B4262D; --red-soft:rgba(180,38,45,.08); --green:#17744A; --green-soft:rgba(23,116,74,.10);
+  --shadow-lg:0 12px 32px -8px rgba(21,23,28,.22),0 2px 6px rgba(21,23,28,.08);
+  --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  /* Old names some inline styles below still use. */
+  --paper:var(--card); --wash:var(--tint-soft); --disp:var(--sans);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0E1014; --card:#15181D; --fill:#1F232A; --fill-2:#1A1D23;
+    --ink:#E7E9EE; --slate:#A4AAB5; --faint:#838A96;
+    --hair:rgba(231,233,238,.11);
+    --tint:#8FA6F2; --tint-btn:#3E5FD6; --tint-btn-hover:#4A6BE0; --tint-soft:rgba(143,166,242,.13);
+    --red:#F07A7F; --red-soft:rgba(240,122,127,.12); --green:#4CC38A; --green-soft:rgba(76,195,138,.12);
+    --shadow-lg:0 16px 40px -8px rgba(0,0,0,.6),0 0 0 1px rgba(231,233,238,.08);
+  }
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:var(--sans);background:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;position:relative;overflow-x:hidden}
-body::before{content:'';position:fixed;top:-300px;left:-220px;width:700px;height:700px;border-radius:50%;background:radial-gradient(circle,rgba(46,92,255,.25),transparent 62%)}
-body::after{content:'';position:fixed;bottom:-340px;right:-240px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(143,170,255,.14),transparent 62%)}
-.card{position:relative;z-index:1;width:min(460px,100%);background:var(--paper);border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.55);padding:34px 34px 28px}
-.logo{display:flex;align-items:center;gap:11px;margin-bottom:8px}
-.logo b{font-family:'Fredoka',var(--disp);font-weight:600;font-size:23px;letter-spacing:.04em;color:var(--ink)}
-.mk{border-radius:50%;background:#F7F8FA;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
-.tag{font-size:12.5px;color:var(--faint);margin-bottom:22px}
-.mode-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 11px;border-radius:999px;margin-bottom:16px}
-.mode-badge.cloud{background:rgba(18,183,106,.12);color:var(--green)}
-.mode-badge.local{background:var(--wash);color:var(--tint)}
-.tabs{display:flex;background:var(--fill);border-radius:11px;padding:3px;gap:2px;margin-bottom:20px}
-.tabs button{flex:1;padding:9px;border-radius:9px;border:none;background:none;font-family:var(--sans);font-weight:600;font-size:13.5px;color:var(--slate);cursor:pointer}
-.tabs button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 4px rgba(10,14,26,.12)}
-label{display:block;font-size:12.5px;font-weight:600;color:var(--slate);margin:13px 0 6px}
-input[type=email],input[type=password],input[type=text],input[type=tel]{width:100%;border:none;background:var(--fill);border-radius:11px;padding:12px 14px;font-family:var(--sans);font-size:15px;outline:none;transition:box-shadow .15s;color:var(--ink)}
-input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
-.err{display:none;background:rgba(229,72,77,.1);color:var(--red);font-size:13px;font-weight:500;padding:10px 14px;border-radius:10px;margin-top:14px}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px 16px;-webkit-font-smoothing:antialiased}
+:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+.card{width:min(420px,100%);background:var(--card);border-radius:12px;box-shadow:var(--shadow-lg);padding:30px 30px 24px}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.logo b{font-family:'Fredoka',var(--sans);font-weight:600;font-size:22px;letter-spacing:.04em;color:var(--ink)}
+.mk{border-radius:50%;background:#F5F6F8;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+.tag{font-size:13px;color:var(--faint);margin-bottom:18px}
+.mode-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 8px;border-radius:5px;margin-bottom:16px}
+.mode-badge.cloud{background:var(--green-soft);color:var(--green)}
+.mode-badge.local{background:var(--fill);color:var(--slate)}
+.tabs{display:flex;background:var(--fill);border-radius:8px;padding:2px;gap:2px;margin-bottom:18px}
+.tabs button{flex:1;padding:7px;border-radius:6px;border:none;background:none;font-family:var(--sans);font-weight:500;font-size:13.5px;color:var(--slate);cursor:pointer}
+.tabs button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(21,23,28,.08)}
+label{display:block;font-size:13px;font-weight:500;color:var(--ink);margin:14px 0 6px}
+input[type=email],input[type=password],input[type=text],input[type=tel]{width:100%;border:none;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair);border-radius:8px;padding:10px 12px;font-family:var(--sans);font-size:15px;outline:none;transition:box-shadow .12s;color:var(--ink)}
+input::placeholder{color:var(--faint)}
+input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.err{display:none;background:var(--red-soft);color:var(--red);font-size:13px;font-weight:500;padding:9px 12px;border-radius:8px;margin-top:14px}
 .err.show{display:block}
-.ok{display:none;background:rgba(18,183,106,.12);color:var(--green);font-size:13px;font-weight:500;padding:10px 14px;border-radius:10px;margin-top:14px}
+.ok{display:none;background:var(--green-soft);color:var(--green);font-size:13px;font-weight:500;padding:9px 12px;border-radius:8px;margin-top:14px}
 .ok.show{display:block}
-.go{padding:13px 20px;border:none;border-radius:12px;background:var(--tint);color:#fff;font-family:var(--sans);font-weight:600;font-size:15px;cursor:pointer;box-shadow:0 4px 16px rgba(46,92,255,.35);transition:filter .15s}
-.go:hover{filter:brightness(1.06)}
+.go{padding:11px 18px;border:none;border-radius:8px;background:var(--tint-btn);color:var(--on-tint);font-family:var(--sans);font-weight:600;font-size:15px;cursor:pointer;transition:background .12s}
+.go:hover{background:var(--tint-btn-hover)}
+.go:active{transform:translateY(1px)}
 .go:disabled{opacity:.6;cursor:wait}
-.ghostbtn{padding:13px 18px;border:none;border-radius:12px;background:var(--fill);color:var(--ink);font-family:var(--sans);font-weight:600;font-size:14px;cursor:pointer}
-.navrow{display:flex;gap:10px;margin-top:22px}
+.ghostbtn{padding:11px 16px;border:none;border-radius:8px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair);color:var(--ink);font-family:var(--sans);font-weight:500;font-size:14px;cursor:pointer}
+.ghostbtn:hover{background:var(--fill-2)}
+.navrow{display:flex;gap:10px;margin-top:20px}
 .navrow .go{flex:1}
 .steps{display:flex;align-items:center;gap:8px;margin:2px 0 6px}
-.dot{width:26px;height:26px;border-radius:50%;background:var(--fill);color:var(--slate);display:grid;place-items:center;font-size:12px;font-weight:700;font-family:'Fredoka',var(--sans)}
-.dot.on{background:var(--tint);color:#fff}
-.dot.done{background:var(--wash);color:var(--tint)}
+.dot{width:24px;height:24px;border-radius:30%;background:var(--fill);color:var(--slate);display:grid;place-items:center;font-size:12px;font-weight:600}
+.dot.on{background:var(--tint-btn);color:var(--on-tint)}
+.dot.done{background:var(--tint-soft);color:var(--tint)}
 .bar{flex:1;height:2px;background:var(--fill);border-radius:2px}
 .bar.done{background:var(--tint)}
-.step-title{font-family:'Fredoka',var(--disp);font-weight:600;font-size:17px;letter-spacing:.02em;margin-top:14px}
-.step-sub{font-size:12.5px;color:var(--faint);margin-top:2px}
+.step-title{font-weight:600;font-size:17px;letter-spacing:-.01em;margin-top:14px}
+.step-sub{font-size:13px;color:var(--slate);margin-top:2px}
 .step{display:none}
 .step.on{display:block}
-.conn-row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:12px;padding:12px 14px;margin-top:10px;box-shadow:0 1px 3px rgba(10,14,26,.07)}
+.conn-row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:8px;padding:12px 14px;margin-top:10px;box-shadow:inset 0 0 0 1px var(--hair)}
 .conn-ic{width:34px;height:34px;flex-shrink:0}
 .conn-ic svg{width:100%;height:100%;display:block}
 .conn-row .t{flex:1;min-width:0}
 .conn-row .t b{font-size:13.5px;display:block}
-.conn-row .t span{font-size:11.5px;color:var(--faint)}
-.conn-row input{margin-top:6px;padding:9px 12px;font-size:13.5px}
-.switch{width:46px;height:28px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0;border:none;cursor:pointer}
-.switch::after{content:'';position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);transition:transform .2s cubic-bezier(.32,.72,.35,1)}
-.switch.on{background:var(--green)}
-.switch.on::after{transform:translateX(18px)}
-.livechip{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;background:rgba(18,183,106,.12);color:var(--green)}
-.soonchip{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;background:var(--fill);color:var(--faint)}
-.foot{margin-top:20px;padding-top:15px;border-top:1px solid rgba(10,14,26,.07);font-size:11.5px;color:var(--faint);line-height:1.55}
-.foot a{color:var(--tint);text-decoration:none;font-weight:600}
+.conn-row .t span{font-size:12px;color:var(--faint)}
+.conn-row input{margin-top:6px;padding:8px 11px;font-size:13.5px}
+.switch{width:40px;height:24px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0;border:none;cursor:pointer}
+.switch::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#FCFCFD;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .16s ease}
+.switch.on{background:var(--tint-btn)}
+.switch.on::after{transform:translateX(16px)}
+.livechip{font-size:11px;font-weight:500;padding:1px 7px;border-radius:5px;background:var(--green-soft);color:var(--green)}
+.soonchip{font-size:11px;font-weight:500;padding:1px 7px;border-radius:5px;background:var(--fill);color:var(--faint)}
+.foot{margin-top:20px;padding-top:15px;border-top:1px solid var(--hair);font-size:12.5px;color:var(--faint);line-height:1.55}
+.foot a{color:var(--tint);text-decoration:none;font-weight:500}
+.foot a:hover{text-decoration:underline}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
@@ -82,7 +101,7 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
     <img class="mk" src="icons/mark-256.png" alt="" width="36" height="36">
     <b>RATA</b>
   </div>
-  <div class="tag">Every message. Every language. One inbox.</div>
+  <div class="tag">Your mail, on your machine.</div>
   <span class="mode-badge local" id="mode-badge">● Saved on this device only</span>
 
   <div class="tabs">
@@ -137,7 +156,7 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
 
     <div class="step" id="step2">
       <div class="step-title">Who are you here?</div>
-      <div class="step-sub">Your display name is what you choose it to be — it's how you appear on every message you send.</div>
+      <div class="step-sub">Your display name is how you appear on every message you send.</div>
       <label for="s-org">Company or team <span style="font-weight:400;color:var(--faint)">(optional)</span></label>
       <input type="text" id="s-org" autocomplete="organization" placeholder="e.g. The Sherwood Group">
     </div>
@@ -186,8 +205,8 @@ input:focus{box-shadow:0 0 0 3px rgba(46,92,255,.2)}
   </div>
 
   <div class="foot" id="foot">
-    Your account is stored securely and you can sign in from your phone, laptop or tablet with the same email and password. RATA never sees your mailbox password — you connect each inbox separately, and you can disconnect any of them at any time.
-    <a href="index.html">← Back to site</a>
+    RATA never sees your mailbox password. You enter it in the app when you add a mailbox, and it stays in your computer's keychain.
+    <a href="index.html">Back to mailrata.org</a>
   </div>
 </div>
 
@@ -270,7 +289,7 @@ $('#login-form').addEventListener('submit',async e=>{
       if(h!==a.hash){err('#l-err','Incorrect password.');return}
       session({uid:'local_'+b64(enc(email)).replace(/[^a-zA-Z0-9]/g,''),email,mode:'local'});
     }
-  }catch(ex){err('#l-err','Something went wrong — '+(ex.message||'try again.'))}
+  }catch(ex){err('#l-err','Something went wrong: '+(ex.message||'try again.'))}
   finally{go.disabled=false}
 });
 
@@ -293,7 +312,7 @@ function validateStep(){
   if(!/.+@.+\..+/.test(email)){err('#s-err','Please enter a valid email address.');return false}
   if(pw.length<8){err('#s-err','Your password needs to be at least 8 characters.');return false}
   if(!$('#s-name').value.trim()){err('#s-err','What should we call you?');return false}
-  if(!CLOUD&&accounts()[email]){err('#s-err','You already have an account with that email on this device — log in instead.');return false}
+  if(!CLOUD&&accounts()[email]){err('#s-err','You already have an account with that email on this device. Log in instead.');return false}
   return true;
 }
 $('#s-back').onclick=()=>{if(step>1){step--;renderStep()}};
@@ -337,7 +356,7 @@ $('#s-next').onclick=async()=>{
       localStorage.setItem('centra_accounts',JSON.stringify(acc));
       session({uid:'local_'+b64(enc(email)).replace(/[^a-zA-Z0-9]/g,''),email,mode:'local'});
     }
-  }catch(ex){err('#s-err','Something went wrong — '+(ex.message||'try again.'))}
+  }catch(ex){err('#s-err','Something went wrong: '+(ex.message||'try again.'))}
   finally{go.disabled=false}
 };
 
@@ -350,9 +369,9 @@ $('#forgot').onclick=async()=>{
     const sb=await supa();
     const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});
     if(error){err('#l-err',error.message);return}
-    $('#l-ok').textContent='Recovery link sent — check your email. The link brings you back here to set a new password.';
+    $('#l-ok').textContent='Recovery link sent. Check your email: the link brings you back here to set a new password.';
     $('#l-ok').classList.add('show');
-  }catch(ex){err('#l-err','Could not send the recovery email — '+(ex.message||'try again.'))}
+  }catch(ex){err('#l-err','Could not send the recovery email: '+(ex.message||'try again.'))}
 };
 
 /* Recovery landing: Supabase redirects here with a recovery session */
@@ -372,7 +391,7 @@ $('#forgot').onclick=async()=>{
     if(pw!==$('#r-pw2').value){err('#r-err','Passwords do not match.');return}
     const {data,error}=await sb.auth.updateUser({password:pw});
     if(error){err('#r-err',error.message);return}
-    $('#r-ok').textContent='Password updated — signing you in…';$('#r-ok').classList.add('show');
+    $('#r-ok').textContent='Password updated. Signing you in…';$('#r-ok').classList.add('show');
     const {data:{session:s}}=await sb.auth.getSession();
     if(s)setTimeout(()=>session({uid:s.user.id,email:(s.user.email||'').toLowerCase(),mode:'supabase'}),700);
   };

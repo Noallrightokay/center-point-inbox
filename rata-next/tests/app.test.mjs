@@ -719,29 +719,37 @@ export default async function run(state) {
     }
 
     /* ---- bytes are real and in IndexedDB, not in the synced workspace ---- */
-    /* ---- depth is part of the design, not decoration to be lost ---- */
-    console.log('\n— the interface has weight —');
-    const depth = await page.evaluate(() => {
+    /* ---- the design system holds (DESIGN.md) ---- */
+    console.log('\n— the interface follows DESIGN.md —');
+    const look = await page.evaluate(() => {
       const cs = el => el ? getComputedStyle(el) : null;
       const compose = cs(document.querySelector('#compose-btn'));
       const pillOn = cs(document.querySelector('#mail-filters .pill.on'));
-      const reduce = getComputedStyle(document.documentElement).getPropertyValue('--pop').trim();
+      const root = getComputedStyle(document.documentElement);
+      /* Every element on screen: none may carry a gradient. */
+      const gradients = [...document.querySelectorAll('body *')].filter(e => /gradient/.test(getComputedStyle(e).backgroundImage)).map(e => e.id || e.className).slice(0, 5);
       return {
         composeGradient: /gradient/.test(compose.backgroundImage),
-        composeGlow: compose.boxShadow,
+        composeFill: compose.backgroundColor,
+        accent: root.getPropertyValue('--tint-btn').trim(),
+        composeShadow: compose.boxShadow,
         composeRound: parseFloat(compose.borderRadius),
         pillGradient: pillOn ? /gradient/.test(pillOn.backgroundImage) : null,
         pillRound: pillOn ? parseFloat(pillOn.borderRadius) : null,
-        springy: reduce,
+        font: getComputedStyle(document.body).fontFamily,
+        pop: root.getPropertyValue('--pop').trim(),
+        gradients,
       };
     });
-    check(depth.composeGradient, 'the primary action is a gradient, not a flat fill');
-    check(/rgb/.test(depth.composeGlow) && !/^rgba?\(0, 0, 0/.test(depth.composeGlow),
-      `and glows in its own colour rather than grey: ${depth.composeGlow.split(') ')[0]})`);
-    check(depth.composeRound >= 20, `bubble-round: ${depth.composeRound}px`);
-    check(depth.pillGradient === true && depth.pillRound >= 20,
-      `selected filters are bubbles too: ${depth.pillRound}px, gradient ${depth.pillGradient}`);
-    check(/cubic-bezier/.test(depth.springy), `with an overshoot curve for the lift: ${depth.springy}`);
+    const hex = h => { const n = parseInt(h.replace('#', ''), 16); return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`; };
+    check(!look.composeGradient && look.composeFill === hex(look.accent),
+      `the primary action is a flat fill of the one accent: ${look.composeFill} (accent ${look.accent})`);
+    check(look.composeShadow === 'none', `and nothing glows: box-shadow ${look.composeShadow}`);
+    check(look.composeRound === 8 && look.pillRound === 8 && look.pillGradient === false,
+      `controls are 8px and flat: Compose ${look.composeRound}px, a selected filter ${look.pillRound}px`);
+    check(/^"?Geist"?,/.test(look.font), `the type is Geist: ${look.font}`);
+    check(!/cubic-bezier/.test(look.pop), `motion without overshoot: ${look.pop}`);
+    check(look.gradients.length === 0, `no gradient anywhere on screen: ${JSON.stringify(look.gradients)}`);
 
     await page.evaluate(() => go('docs'));
 
