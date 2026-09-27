@@ -109,7 +109,7 @@ v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
 fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
-begun elsewhere. An
+begun elsewhere; v0.1.32 adds Cc and Reply all. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -577,9 +577,25 @@ a forward's), `REPLYING` from `inReplyTo`, and `CMP_DRAFT`, the draft
 itself. After a real send `CMP_DRAFT` leaves the list and goes to the Trash
 (`serverAct` trash in folder Drafts); Discard leaves it in Drafts. RATA
 does not APPEND its own drafts to the server yet, and a formatted draft
-continues as plain text.
-Also not built: saving RATA's drafts to the server; Cc; Gmail's archive; no
-code signing.
+continues as plain text. (Until 0.1.32 Cc was folded into To here.)
+**Cc and Reply all (v0.1.32).** `Outgoing.cc`; `compose::render` writes To
+and Cc through `addresses`, which folds between addresses so no header line
+passes 998 bytes however many there are (a list of 120 was one illegal line
+before). `smtp::recipients` still reads the envelope back out of the
+rendered headers — one list, never a second that could drift — now joining
+folded lines, reading To and Cc, and naming each address once. `core::send`
+takes `Draft.cc` (as typed; empty is none), refuses a bad Cc address by
+name, and refuses more than `RECIPIENTS_MAX` (100) people before dialling.
+Every message now carries `toAll`/`cc` to the page (the bridge passes
+them for all mail). The composer has a Cc line, hidden until **Cc** is
+pressed or something fills it (`showCc`). **Reply all** (`replyAllOf`)
+puts the sender, or their Reply-To, in To and everyone else in Cc — the
+original sender too when a list asked replies to go to it — never the
+customer's own linked addresses; it is offered only when there is someone
+else, and not for mail stored before 0.1.31, which does not know. A draft
+continued now keeps its Cc as Cc. No Bcc.
+Also not built: saving RATA's drafts to the server; Bcc; Gmail's archive;
+no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

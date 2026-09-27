@@ -100,11 +100,14 @@ Don't spend time reporting these — they are known and planned:
   **Select** several messages to **Archive**, **Move to inbox** or **Move
   to** a folder in one go. From v0.1.31 **Drafts** has a filter too: a
   draft begun on your phone or in webmail opens with **Continue**, which
-  puts it in RATA's composer — everyone it was for (anyone copied joins To,
-  as RATA has no separate Cc yet), the subject, the words, its attachments
+  puts it in RATA's composer — everyone it was for, the subject, the words, its attachments
   and the thread it answers — and once you send it, the copy left in Drafts
   goes to your Trash. RATA does not save its own drafts to the server yet,
-  and a formatted draft continues as plain text. If real mail turns up in Spam, or a folder is
+  and a formatted draft continues as plain text. From v0.1.32 the composer
+  has a **Cc** line, and a message that went to several people offers
+  **Reply all** (not for mail RATA fetched before v0.1.31). If a reply to
+  everyone goes to someone it should not, tell us who, and how they were
+  on the original. If real mail turns up in Spam, or a folder is
   missing, tell us which provider. If something you sent from RATA shows up twice in Sent, tell
   us which provider it was.
 - **With more than one mailbox linked, before v0.1.26 a reply went out from

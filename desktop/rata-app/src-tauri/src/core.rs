@@ -138,6 +138,8 @@ pub struct Held {
 pub struct Draft {
     pub from: String,
     pub to: String,
+    /// Copied, as typed: addresses separated by commas, or nothing.
+    pub cc: String,
     pub subject: String,
     pub body: String,
     /// The Message-ID being replied to, so the answer threads.
@@ -161,6 +163,11 @@ pub struct Forwarded {
     pub uidvalidity: u32,
     pub indexes: Vec<u32>,
 }
+
+/// The most people one message goes to, To and Cc together. Gmail allows
+/// 100 a message from a mail app and Outlook.com about the same; past it the
+/// provider refuses the whole message partway through, after the upload.
+pub const RECIPIENTS_MAX: usize = 100;
 
 /// The most an attachment handed to the interface for converting may be.
 /// Bigger than nearly every document anyone mails; a file past it can still
@@ -846,6 +853,7 @@ impl Rata {
         let Draft {
             from,
             to,
+            cc,
             subject,
             body,
             in_reply_to,
@@ -874,6 +882,19 @@ impl Rata {
             "Enter a valid recipient address — one address, or several separated by commas."
                 .to_string()
         })?;
+        let cc_list = if cc.trim().is_empty() {
+            vec![]
+        } else {
+            Address::parse_list(&cc).ok_or_else(|| {
+                "One of the addresses in Cc is not valid — check them, separated by commas."
+                    .to_string()
+            })?
+        };
+        if to_list.len() + cc_list.len() > RECIPIENTS_MAX {
+            return Err(format!(
+                "That is more than {RECIPIENTS_MAX} people. Most providers refuse a message sent to so many — send it in smaller groups."
+            ));
+        }
 
         let m = self
             .store
@@ -900,6 +921,7 @@ impl Rata {
             from: from_addr,
             from_name: None,
             to: to_list,
+            cc: cc_list,
             subject: subject.to_string(),
             body: body.to_string(),
             in_reply_to,
@@ -1473,6 +1495,32 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(e.contains("25 MB"), "{e}");
+            // A bad address in Cc is refused by name, before anything is dialled.
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "a@example.org".into(),
+                    cc: "b@example.org, not an address".into(),
+                    subject: "Hi".into(),
+                    body: "x".into(),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(e.contains("Cc"), "{e}");
+            let many: Vec<String> = (0..60).map(|i| format!("p{i}@example.org")).collect();
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: many[..30].join(", "),
+                    cc: many[30..].join(", ") + ", " + &many[..45].join(", "),
+                    subject: "Hi".into(),
+                    body: "x".into(),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(e.contains("more than 100"), "{e}");
         });
     }
 

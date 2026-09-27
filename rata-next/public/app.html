@@ -442,6 +442,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .cmp-close{margin-left:auto;color:var(--slate);width:28px;height:28px;display:grid;place-items:center;background:var(--fill);border-radius:50%;font-size:13px}
 #compose input,#compose textarea{border:none;outline:none;padding:13px 20px;border-bottom:1px solid var(--hair-2);background:transparent;width:100%;font-size:15px}
 #compose textarea{flex:1;min-height:170px;resize:none;line-height:1.6}
+.cmp-to-row{display:flex;align-items:center;border-bottom:1px solid var(--hair-2)}
+#compose .cmp-to-row input{border-bottom:none;flex:1;min-width:0}
+.cmp-cc-btn{margin-right:16px;font-size:12.5px;font-weight:600;color:var(--slate);padding:4px 11px;border-radius:999px;background:var(--fill)}
+#compose #cmp-cc[hidden],.cmp-cc-btn[hidden]{display:none}
 .dlp-bar{display:none;padding:12px 20px;font-size:13px;border-bottom:1px solid var(--hair-2)}
 .dlp-bar.warn{display:block;background:var(--amber-soft);color:var(--amber)}
 .dlp-bar.block{display:block;background:var(--red-soft);color:var(--red)}
@@ -978,7 +982,8 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <div class="grabber"></div>
     <div class="cmp-head"><b id="cmp-title">New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-discard" id="cmp-discard" hidden>Discard</button><button class="cmp-close" id="cmp-close" aria-label="Close, keeping the draft">✕</button></div>
     <div class="dlp-bar" id="dlp-bar"></div>
-    <input type="text" id="cmp-to" placeholder="To">
+    <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button></div>
+    <input type="text" id="cmp-cc" placeholder="Cc" hidden>
     <input type="text" id="cmp-subj" placeholder="Subject">
     <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-files" id="cmp-files"></div>
@@ -2495,6 +2500,7 @@ function openMail(id){
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
         <button class="btn danger" id="md-del">Delete</button>`:`
         ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
+        ${replyAllOf(m)?'<button class="btn" id="md-replyall">Reply all</button>':''}
         ${!m.sent||folderOf(m)==='sent'?'<button class="btn" id="md-forward">Forward</button>':''}
         ${m.acct?`<span class="btn" style="pointer-events:none;opacity:.75">via ${esc((S.linked.find(x=>x.id===m.acct)||{}).label||'linked account')}</span>`:''}
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
@@ -2538,6 +2544,7 @@ function openMail(id){
     save();$('#md-sortmenu').classList.remove('open');renderCats();renderMail();
   });
   if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
+  if($('#md-replyall'))$('#md-replyall').onclick=()=>replyTo(m,true);
   if($('#md-forward'))$('#md-forward').onclick=()=>forwardMessage(m);
   if($('#md-sum'))$('#md-sum').onclick=()=>summarizeMessage(m.id);
   if($('#md-translate'))$('#md-translate').onclick=()=>translateMessage(m.id);
@@ -3367,8 +3374,7 @@ let DRAFT={kind:'new'};
    (0.1.31), kept whole so that once it is sent the copy left in Drafts can go
    to the Trash. */
 let CMP_DRAFT=null;
-/* Everyone a draft is for. RATA's composer has one address line, so Cc
-   joins To. */
+/* Everyone a draft is for, To and Cc together, for showing. */
 function draftTo(m){
   const all=[...(m.toAll||[]),...(m.cc||[])].map(a=>String(a).toLowerCase()).filter(Boolean);
   if(!all.length&&m.toAddr)all.push(String(m.toAddr).toLowerCase());
@@ -3386,7 +3392,11 @@ async function continueDraft(m){
   newDraft();openCompose();
   const from=$('#cmp-from');
   if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
-  $('#cmp-to').value=draftTo(m).join(', ');
+  const to=[...new Set((m.toAll||[]).map(a=>String(a).toLowerCase()).filter(Boolean))];
+  if(!to.length&&m.toAddr)to.push(String(m.toAddr).toLowerCase());
+  const cc=[...new Set((m.cc||[]).map(a=>String(a).toLowerCase()))].filter(a=>a&&!to.includes(a));
+  $('#cmp-to').value=to.join(', ');
+  $('#cmp-cc').value=cc.join(', ');showCc(cc.length>0);
   $('#cmp-subj').value=m.subj&&m.subj!=='(no subject)'?m.subj:'';
   $('#cmp-body').value=text;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
@@ -3395,7 +3405,6 @@ async function continueDraft(m){
   CMP_DRAFT=Object.assign({},m);
   DRAFT={kind:'draft'};renderDraftHead();
   renderCmpFiles();liveScan();
-  if((m.cc||[]).length)toast('Everyone it was copied to is in To \u2014 RATA has no separate Cc yet');
   const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
 }
 async function forwardMessage(m,targetAcctId){
@@ -3446,7 +3455,7 @@ $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.ta
    message to someone new with the last draft's subject and text. */
 function newDraft(){
   REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;DRAFT={kind:'new'};
-  ['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');
+  ['cmp-to','cmp-cc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');showCc(false);
   $('#cmp-from').value='';
   renderCmpFiles();
 }
@@ -3460,7 +3469,7 @@ function openCompose(){
 }
 function closeCompose(){ov.classList.remove('open')}
 function draftHasAnything(){
-  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
+  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
 }
 function renderDraftHead(){
   $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':DRAFT.kind==='draft'?(REPLYING?'Draft reply':'Draft'):'New message';
@@ -3473,9 +3482,24 @@ $('#cmp-discard').onclick=()=>{
     :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
   newDraft();openCompose();
 };
+/* Who a reply to everyone goes to (0.1.32): the sender (or where they asked
+   replies to go) in To, and everyone else the message went to in Cc — but
+   never the customer's own addresses, which would send them a copy of their
+   own reply. Null when there is nobody else, and for mail stored before
+   0.1.32, which does not know who else it went to. */
+function replyAllOf(m){
+  if(!m||m.sent||m.draft||!Array.isArray(m.toAll))return null;
+  const to=String(m.replyTo||m.fromAddr||'').toLowerCase();if(!to)return null;
+  const mine=new Set(S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase()));
+  mine.add(mailEmailOf(m));
+  const others=[...(m.replyTo&&m.fromAddr?[m.fromAddr]:[]),...m.toAll,...(m.cc||[])].map(a=>String(a).toLowerCase());
+  const cc=[...new Set(others)].filter(a=>a&&a!==to&&!mine.has(a));
+  return cc.length?{to,cc}:null;
+}
 /* Reply from the mailbox the message arrived in, to whoever the sender asked
-   replies to go to, quoting what RATA has of the original. */
-async function replyTo(m){
+   replies to go to, quoting what RATA has of the original — and with `all`,
+   copied to everyone else it went to. */
+async function replyTo(m,all){
   const stored=bodyNow(m)??await bodyOf(m);
   newDraft();openCompose();
   const from=$('#cmp-from');
@@ -3485,8 +3509,10 @@ async function replyTo(m){
   $('#cmp-subj').value=(/^re:/i.test(subj)?'':'Re: ')+subj;
   const orig=String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
   $('#cmp-body').value=`\n\nOn ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
+  const everyone=all?replyAllOf(m):null;
+  if(everyone){$('#cmp-to').value=everyone.to;$('#cmp-cc').value=everyone.cc.join(', ');showCc(true)}
   REPLYING={id:m.id,messageId:m.messageId||''};
-  DRAFT={kind:'reply',to:msgFrom(m)};renderDraftHead();
+  DRAFT={kind:'reply',to:msgFrom(m)+(everyone?' and '+everyone.cc.length+' more':'')};renderDraftHead();
   liveScan();
   const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
 }
@@ -3528,9 +3554,13 @@ function liveScan(){
   }
 }
 ['cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{clearTimeout(dlpTimer);dlpTimer=setTimeout(liveScan,220)}));
-['cmp-to','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
+['cmp-to','cmp-cc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
+/* Cc (0.1.32): a line of its own, shown when asked for or when a reply to
+   everyone, or a draft, fills it. */
+function showCc(on){$('#cmp-cc').hidden=!on;$('#cmp-cc-btn').hidden=!!on}
+$('#cmp-cc-btn').onclick=()=>{showCc(true);$('#cmp-cc').focus()};
 $('#cmp-send').onclick=async()=>{
-  const to=$('#cmp-to').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
+  const to=$('#cmp-to').value.trim(),cc=$('#cmp-cc').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
   if(!to||!subj){toast('Recipient and subject required');return}
   liveScan();
   S.counters.scans++;
@@ -3559,7 +3589,7 @@ $('#cmp-send').onclick=async()=>{
       for(const f of files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
       sb.textContent='Sending…';
       const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({from:mAcct.label,to,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
+        body:JSON.stringify({from:mAcct.label,to,cc,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
           forward:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
       if(!r.ok)throw new Error(r.error||'send failed');
       realSent=true;sentId=r.messageId||'';
@@ -3579,7 +3609,7 @@ $('#cmp-send').onclick=async()=>{
   const finished=realSent&&CMP_DRAFT&&CMP_DRAFT.uid?CMP_DRAFT:null;
   if(finished)dropMessages([finished.id]);
   save();
-  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
+  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   newDraft();
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');

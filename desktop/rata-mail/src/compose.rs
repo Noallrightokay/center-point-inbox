@@ -106,6 +106,8 @@ pub struct Outgoing {
     /// stands on its own, which is correct, just plainer.
     pub from_name: Option<String>,
     pub to: Vec<Address>,
+    /// Copied: seen by everyone, like To. Empty for none.
+    pub cc: Vec<Address>,
     pub subject: String,
     pub body: String,
     /// The message being replied to, if any, so mail clients thread it.
@@ -149,15 +151,11 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         _ => format!("<{}>", msg.from.as_str()),
     };
 
-    let to = msg
-        .to
-        .iter()
-        .map(|a| format!("<{}>", a.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let _ = write!(out, "From: {from}\r\n");
-    let _ = write!(out, "To: {to}\r\n");
+    addresses(&mut out, "To", &msg.to);
+    if !msg.cc.is_empty() {
+        addresses(&mut out, "Cc", &msg.cc);
+    }
     let _ = write!(out, "Subject: {}\r\n", words::encode_header(&msg.subject));
     let _ = write!(out, "Date: {now_rfc2822}\r\n");
     let _ = write!(out, "Message-ID: <{unique}@{}>\r\n", msg.from.domain());
@@ -204,6 +202,29 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         }
     }
     out
+}
+
+/// An address header, folded between addresses so that no line passes the
+/// 998-byte limit however many there are. An address has no whitespace or
+/// comma in it (see [`Address::parse`]), so a fold never splits one.
+fn addresses(out: &mut String, name: &str, list: &[Address]) {
+    let mut line = name.len() + 1;
+    let _ = write!(out, "{name}:");
+    for (i, a) in list.iter().enumerate() {
+        let piece = format!("<{}>", a.as_str());
+        if i > 0 {
+            out.push(',');
+            line += 1;
+        }
+        if i > 0 && line + 1 + piece.len() > 76 {
+            out.push_str("\r\n");
+            line = 0;
+        }
+        out.push(' ');
+        out.push_str(&piece);
+        line += 1 + piece.len();
+    }
+    out.push_str("\r\n");
 }
 
 /// A message with files: `multipart/mixed`, the text first, then each file.
@@ -361,6 +382,7 @@ mod tests {
             from: addr("owner@example.com"),
             from_name: None,
             to: vec![addr("someone@elsewhere.org")],
+            cc: vec![],
             subject: subject.into(),
             body: body.into(),
             in_reply_to: None,
@@ -580,6 +602,39 @@ mod tests {
         assert!(m.ends_with("Hello there.\r\nThanks.\r\n"), "{m:?}");
         // Not one bare newline anywhere.
         assert!(!m.replace("\r\n", "").contains('\n'), "{m:?}");
+    }
+
+    #[test]
+    fn copied_addresses_are_in_a_cc_header_of_their_own() {
+        let mut m = msg("Plan", "Hi");
+        m.cc = vec![addr("dee@example.org"), addr("eli@example.net")];
+        let out = render(&m, "d", "i");
+        assert!(
+            out.contains(
+                "To: <someone@elsewhere.org>\r\nCc: <dee@example.org>, <eli@example.net>\r\n"
+            ),
+            "{out}"
+        );
+        // And none at all when nobody is copied.
+        assert!(!render(&msg("Plan", "Hi"), "d", "i").contains("Cc:"));
+    }
+
+    #[test]
+    fn a_long_list_of_recipients_is_folded_into_legal_lines() {
+        let mut m = msg("All hands", "Hi");
+        m.to = (0..120)
+            .map(|i| addr(&format!("person.number.{i}@department.example.org")))
+            .collect();
+        let out = render(&m, "d", "i");
+        let head = out.split("\r\n\r\n").next().unwrap();
+        assert!(head.split("\r\n").all(|l| l.len() <= 78), "{head}");
+        // Every address is there, whole, once.
+        for i in 0..120 {
+            let want = format!("<person.number.{i}@department.example.org>");
+            assert_eq!(head.matches(&want).count(), 1, "{want}");
+        }
+        // Continuation lines start with a space, which is what makes them one header.
+        assert!(head.contains(",\r\n <person.number."), "{head}");
     }
 
     #[test]

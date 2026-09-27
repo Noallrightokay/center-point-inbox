@@ -469,19 +469,28 @@ fn ehlo_name(email: &str) -> String {
     if d.is_empty() { "localhost".into() } else { d }
 }
 
-/// The recipients, read back out of the rendered message.
+/// The recipients, read back out of the rendered message: To and Cc, each
+/// address once. Folded lines are joined back to their header first.
 fn recipients(rendered: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in rendered.split("\r\n") {
-        if line.is_empty() {
-            break; // end of headers
+    let head = rendered.split("\r\n\r\n").next().unwrap_or_default();
+    let mut headers: Vec<String> = Vec::new();
+    for line in head.split("\r\n") {
+        match headers.last_mut() {
+            Some(last) if line.starts_with(' ') || line.starts_with('\t') => last.push_str(line),
+            _ => headers.push(line.to_string()),
         }
-        let Some(rest) = line.strip_prefix("To: ") else {
+    }
+    let mut out: Vec<String> = Vec::new();
+    for header in &headers {
+        let Some(rest) = header
+            .strip_prefix("To:")
+            .or_else(|| header.strip_prefix("Cc:"))
+        else {
             continue;
         };
         for piece in rest.split(',') {
             let addr = piece.trim().trim_start_matches('<').trim_end_matches('>');
-            if !addr.is_empty() {
+            if !addr.is_empty() && !out.iter().any(|a| a == addr) {
                 out.push(addr.to_string());
             }
         }
@@ -576,6 +585,7 @@ mod tests {
             from: Address::parse("owner@example.com").unwrap(),
             from_name: None,
             to: vec![Address::parse("someone@elsewhere.org").unwrap()],
+            cc: vec![],
             subject: "Hello".into(),
             body: "Hi there.".into(),
             in_reply_to: None,
@@ -633,9 +643,36 @@ mod tests {
         let rendered = render(&m, "d", "i");
         assert_eq!(recipients(&rendered), ["a@example.com", "b@example.org"]);
         // Nothing from the body is ever read as a recipient.
-        m.body = "\r\nTo: <sneaky@example.net>\r\n".into();
+        m.body = "\r\nTo: <sneaky@example.net>\r\nCc: <sneaky@example.net>\r\n".into();
         let rendered = render(&m, "d", "i");
         assert_eq!(recipients(&rendered), ["a@example.com", "b@example.org"]);
+        // Nor from a file's headers.
+        m.attachments.push(crate::compose::File {
+            name: "x.txt".into(),
+            mime: "text/plain".into(),
+            data: b"To: <sneaky@example.net>\r\n".to_vec(),
+        });
+        assert_eq!(
+            recipients(&render(&m, "d", "i")),
+            ["a@example.com", "b@example.org"]
+        );
+    }
+
+    #[test]
+    fn copied_and_folded_recipients_are_all_in_the_envelope_once() {
+        let mut m = msg();
+        m.to = (0..40)
+            .map(|i| Address::parse(&format!("p{i}@example.org")).unwrap())
+            .collect();
+        m.cc = vec![
+            Address::parse("dee@example.org").unwrap(),
+            Address::parse("p3@example.org").unwrap(),
+        ];
+        let got = recipients(&render(&m, "d", "i"));
+        assert_eq!(got.len(), 41, "{got:?}");
+        assert_eq!(got[0], "p0@example.org");
+        assert_eq!(got[39], "p39@example.org");
+        assert_eq!(got[40], "dee@example.org");
     }
 
     #[test]
