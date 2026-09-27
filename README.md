@@ -203,7 +203,7 @@ Be realistic about this before promising anything to a customer.
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
 - Fetching new mail by itself — at start, every five minutes and when you come
-  back to the window — from the inbox, Sent, Archive and Spam of several
+  back to the window — from the inbox, Sent, Archive, Spam and Drafts of several
   mailboxes at once, downloading only what is new
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
@@ -224,9 +224,13 @@ it, new versions are a download from the releases page.
   the mailbox: start-up reads every message's details (about 0.75 s at
   10,000), and a search reads through all the text on disk (about half a
   second at 10,000).
-- **Drafts are not shown**, and neither is Gmail's archive (Gmail keeps
-  archived mail in "All Mail", which also holds everything else). The inbox,
-  Sent, Archive and Spam are read on every refresh; your own folders (Gmail
+- **Drafts are shown, but RATA's own are not saved to the server.** A draft
+  begun on a phone or in webmail is under **Drafts** and opens with
+  **Continue**; once sent from RATA, its copy goes to the Trash. What you
+  write in RATA stays in RATA until it is sent, and there is no separate Cc
+  line yet. Gmail's archive is not shown (Gmail keeps archived mail in "All
+  Mail", which also holds everything else). The inbox, Sent, Archive, Spam
+  and Drafts are read on every refresh; your own folders (Gmail
   labels included) are listed under **Folders** and read when you open one,
   and **Move to** files a message into one. Mail sent from RATA appears in
   Sent only if the provider files it there (Gmail and Outlook do); RATA does

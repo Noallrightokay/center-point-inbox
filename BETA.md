@@ -98,7 +98,13 @@ Don't spend time reporting these — they are known and planned:
   (in the row of filters) lists your own folders — Gmail labels too — and
   opens one, and **Move to** on a message files it into one. From v0.1.30
   **Select** several messages to **Archive**, **Move to inbox** or **Move
-  to** a folder in one go. Drafts aren't shown yet. If real mail turns up in Spam, or a folder is
+  to** a folder in one go. From v0.1.31 **Drafts** has a filter too: a
+  draft begun on your phone or in webmail opens with **Continue**, which
+  puts it in RATA's composer — everyone it was for (anyone copied joins To,
+  as RATA has no separate Cc yet), the subject, the words, its attachments
+  and the thread it answers — and once you send it, the copy left in Drafts
+  goes to your Trash. RATA does not save its own drafts to the server yet,
+  and a formatted draft continues as plain text. If real mail turns up in Spam, or a folder is
   missing, tell us which provider. If something you sent from RATA shows up twice in Sent, tell
   us which provider it was.
 - **With more than one mailbox linked, before v0.1.26 a reply went out from
