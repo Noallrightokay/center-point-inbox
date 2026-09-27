@@ -398,6 +398,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .set-row span{font-size:12.5px;color:var(--faint)}
 .set-row input[type=text]{border:none;padding:9px 13px;background:var(--fill);outline:none;min-width:230px;border-radius:10px;transition:box-shadow .15s}
 .set-row input[type=text]:focus{box-shadow:0 0 0 3px var(--tint-soft)}
+.sig-row{align-items:flex-start}
+.sig-row .grow{min-width:0}
+.sig-row textarea{display:block;width:100%;margin-top:8px;min-height:74px;resize:vertical;border:none;padding:9px 13px;background:var(--fill);outline:none;border-radius:10px;font:inherit;font-size:13.5px;line-height:1.5;color:inherit;transition:box-shadow .15s}
+.sig-row textarea:focus{box-shadow:0 0 0 3px var(--tint-soft)}
 
 /* ---------- search ---------- */
 #view-search{flex-direction:column}
@@ -881,6 +885,11 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
           <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
+        </div>
+        <div class="comp-sec" id="sig-sec" style="display:none">
+          <div class="sec-label">Signatures</div>
+          <div id="sig-list"></div>
+          <div class="set-row"><div class="grow"><b>In replies and forwards too</b><span>Otherwise only new messages get a signature</span></div><input type="checkbox" id="set-sigreplies"></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Data</div>
@@ -3034,12 +3043,33 @@ async function installUpdate(){
 function renderSettings(){
   $('#set-name').value=S.settings.name;
   if($('#notify-row')){$('#notify-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-notify').value=notifyMode()}
+  renderSigs();
   renderPlan();
   renderLinked();
   renderUpdateRow();if($('#upd-check'))$('#upd-check').onclick=()=>checkUpdate(true);
   $('#about-line').textContent=`${S.messages.length} messages · ${S.contacts.length} people · ${S.documents.length} files · ${S.audit.length} audit entries · profile ${S.settings.profile}`;
 }
 $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim()||'User';save();toast('Name saved')});
+/* Signatures (0.1.36): one per mailbox, kept on this computer only — they
+   are stripped from what travels to the online account (CLOUD_STRIP), as a
+   phone number or an address is exactly what a breach would leak. Only the
+   app sends mail, so only the app shows them. */
+const SIG_MAX=2000;
+function renderSigs(){
+  const sec=$('#sig-sec'),el=$('#sig-list');if(!sec||!el)return;
+  sec.style.display=window.__RATA_NATIVE__?'':'none';
+  const boxes=S.linked.filter(l=>l.type==='mail');
+  const sigs=S.settings.sigs||{};
+  el.innerHTML=boxes.length?boxes.map(l=>{const e=String(l.label).toLowerCase();return `<div class="set-row sig-row"><div class="grow"><b>${esc(l.label)}</b><span>Added below what you write from this address</span><textarea data-sig="${esc(e)}" maxlength="${SIG_MAX}" placeholder="Your name, role, phone — whatever should end your messages">${esc(sigs[e]||'')}</textarea></div></div>`}).join('')
+    :'<div class="set-row"><div class="grow"><span>Link a mailbox to give it a signature.</span></div></div>';
+  let t=null;
+  el.querySelectorAll('[data-sig]').forEach(a=>a.addEventListener('input',()=>{
+    clearTimeout(t);
+    t=setTimeout(()=>{S.settings.sigs=Object.assign({},S.settings.sigs,{[a.dataset.sig]:a.value.slice(0,SIG_MAX)});if(!S.settings.sigs[a.dataset.sig].trim())delete S.settings.sigs[a.dataset.sig];save()},400);
+  }));
+  $('#set-sigreplies').checked=S.settings.sigReplies!==false;
+}
+$('#set-sigreplies').addEventListener('change',e=>{S.settings.sigReplies=e.target.checked;save();toast(e.target.checked?'Replies and forwards get your signature':'Only new messages get your signature')});
 $('#set-notify').addEventListener('change',e=>{S.settings.notify=e.target.value;save();toast(e.target.value==='off'?'New-mail notifications are off':'New-mail notifications are on')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
@@ -3377,6 +3407,19 @@ let DRAFT={kind:'new'};
    (0.1.31), kept whole so that once it is sent the copy left in Drafts can go
    to the Trash. */
 let CMP_DRAFT=null;
+/* The signature block now in the composer's text, so changing From can swap
+   it for that mailbox's, and so a message holding only a signature still
+   counts as empty. */
+let CMP_SIG=null;
+/* A mailbox's signature as a block ("-- " line first, the standard mark
+   mail apps use to tell a signature from the message), or ''. */
+function sigOf(acctId){
+  if(!window.__RATA_NATIVE__)return '';
+  const l=S.linked.find(x=>x.id===acctId);if(!l||l.type!=='mail')return '';
+  const t=String((S.settings.sigs||{})[String(l.label).toLowerCase()]||'').replace(/\s+$/,'');
+  return t?'-- \n'+t:'';
+}
+const sigForReply=acctId=>S.settings.sigReplies===false?'':sigOf(acctId);
 /* Everyone a draft is for, To and Cc together, for showing. */
 function draftTo(m){
   const all=[...(m.toAll||[]),...(m.cc||[])].map(a=>String(a).toLowerCase()).filter(Boolean);
@@ -3403,7 +3446,7 @@ async function continueDraft(m){
   const bcc=[...new Set((m.bcc||[]).map(a=>String(a).toLowerCase()))].filter(a=>a&&!to.includes(a)&&!cc.includes(a));
   $('#cmp-bcc').value=bcc.join(', ');showBcc(bcc.length>0);
   $('#cmp-subj').value=m.subj&&m.subj!=='(no subject)'?m.subj:'';
-  $('#cmp-body').value=text;
+  $('#cmp-body').value=text;CMP_SIG=null;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
   if(atts.length)CMP_FWD={email:mailEmailOf(m),folder:'drafts',uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
   if(m.inReplyTo)REPLYING={id:null,messageId:m.inReplyTo};
@@ -3423,7 +3466,8 @@ async function forwardMessage(m,targetAcctId){
   if(want&&[...from.options].some(o=>o.value===want))from.value=want;
   $('#cmp-subj').value=(/^fwd:/i.test(m.subj||'')?'':'Fwd: ')+(m.subj||'(no subject)');
   const text=whole&&!whole.error?whole.text:String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
-  $('#cmp-body').value=`\n\n---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
+  const sig=sigForReply(from.value);CMP_SIG=sig||null;
+  $('#cmp-body').value='\n\n'+(sig?sig+'\n\n':'')+`---------- Forwarded message ----------\nFrom: ${msgFrom(m)}${m.fromAddr?' <'+m.fromAddr+'>':''}\nDate: ${new Date(m.ts).toLocaleString()}\nSubject: ${m.subj||''}\n\n${text}`;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
   if(native&&atts.length)CMP_FWD={email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
   DRAFT={kind:'forward'};renderDraftHead();
@@ -3459,7 +3503,7 @@ $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.ta
    "Forwarded message" without the files, a reply without its thread, and a
    message to someone new with the last draft's subject and text. */
 function newDraft(){
-  REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;DRAFT={kind:'new'};
+  REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;CMP_SIG=null;DRAFT={kind:'new'};
   ['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');showCc(false);showBcc(false);
   $('#cmp-from').value='';
   renderCmpFiles();
@@ -3467,14 +3511,20 @@ function newDraft(){
 function openCompose(){
   /* Only the app can send, so only the app offers to attach. */
   const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
-  fillComposeFrom();renderCmpFiles();liveScan();renderDraftHead();
+  fillComposeFrom();
+  /* A new, empty message starts with the signature, and the cursor above it. */
+  const b=$('#cmp-body'),sig=!CMP_SIG&&DRAFT.kind==='new'&&!b.value?sigOf($('#cmp-from').value):'';
+  if(sig){b.value='\n\n'+sig;CMP_SIG=sig}
+  renderCmpFiles();liveScan();renderDraftHead();
   ov.classList.add('open');
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
   $($('#cmp-to').value?'#cmp-body':'#cmp-to').focus();
+  if(sig)b.setSelectionRange(0,0);
 }
 function closeCompose(){ov.classList.remove('open')}
+const withoutSig=v=>CMP_SIG?String(v).replace(CMP_SIG,''):String(v);
 function draftHasAnything(){
-  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
+  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-bcc','cmp-subj'].some(id=>$('#'+id).value.trim())||!!withoutSig($('#cmp-body').value).trim());
 }
 function renderDraftHead(){
   $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':DRAFT.kind==='draft'?(REPLYING?'Draft reply':'Draft'):'New message';
@@ -3513,7 +3563,8 @@ async function replyTo(m,all){
   const subj=m.subj&&m.subj!=='(no subject)'?m.subj:'';
   $('#cmp-subj').value=(/^re:/i.test(subj)?'':'Re: ')+subj;
   const orig=String(stored||m.prev||'').replace(/\n\n— Synced from [^\n]*$/,'');
-  $('#cmp-body').value=`\n\nOn ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
+  const sig=sigForReply(from.value);CMP_SIG=sig||null;
+  $('#cmp-body').value='\n\n'+(sig?sig+'\n\n':'')+`On ${new Date(m.ts).toLocaleString()}, ${msgFrom(m)} wrote:\n`+orig.split('\n').map(l=>'> '+l).join('\n');
   const everyone=all?replyAllOf(m):null;
   if(everyone){$('#cmp-to').value=everyone.to;$('#cmp-cc').value=everyone.cc.join(', ');showCc(true)}
   REPLYING={id:m.id,messageId:m.messageId||''};
@@ -3560,6 +3611,17 @@ function liveScan(){
 }
 ['cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{clearTimeout(dlpTimer);dlpTimer=setTimeout(liveScan,220)}));
 ['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
+/* Changing From changes the signature to that mailbox's — only while the
+   one RATA put there is still there as it was; words the customer changed
+   are theirs. A draft being finished keeps its own. */
+$('#cmp-from').addEventListener('change',()=>{
+  if(DRAFT.kind==='draft')return;
+  const b=$('#cmp-body'),acct=$('#cmp-from').value;
+  const next=DRAFT.kind==='new'?sigOf(acct):sigForReply(acct);
+  if(CMP_SIG&&b.value.includes('\n\n'+CMP_SIG)){b.value=b.value.replace('\n\n'+CMP_SIG,next?'\n\n'+next:'');CMP_SIG=next||null}
+  else if(!CMP_SIG&&next&&DRAFT.kind==='new'&&!b.value.trim()){b.value='\n\n'+next;CMP_SIG=next}
+  liveScan();renderDraftHead();
+});
 /* Cc (0.1.32): a line of its own, shown when asked for or when a reply to
    everyone, or a draft, fills it. */
 function showCc(on){$('#cmp-cc').hidden=!on;$('#cmp-cc-btn').hidden=!!on}
@@ -3661,7 +3723,7 @@ const CLOUD_FIELDS=['settings','folders','rules','linked'];
 /* Per-device facts, even inside a field that does travel. An API key belongs
    to the browser that holds it; when a mailbox last synced is true of one
    machine and not another. */
-const CLOUD_STRIP={settings:['api'],linked:['lastSync','lastError','status','needsRelink']};
+const CLOUD_STRIP={settings:['api','sigs'],linked:['lastSync','lastError','status','needsRelink']};
 
 function forCloud(st){
   const out={v:st.v};

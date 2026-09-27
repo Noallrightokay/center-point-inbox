@@ -110,7 +110,7 @@ fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
 begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
-as it arrives (IMAP IDLE); v0.1.35 signs in far less often. An
+as it arrives (IMAP IDLE); v0.1.35 signs in far less often; v0.1.36 adds signatures. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -643,6 +643,19 @@ the connection (failure, lapse or abort alike) and read through the
 every mailbox (`lastFull`, not `lastSync`, so a one-mailbox wake does not
 suppress it): a laptop's sleep kills connections without either side
 noticing for minutes. At start RATA reads everything, as before.
+**Signatures (v0.1.36).** One per mailbox, in Settings → Signatures (app
+only — only the app sends), kept as `S.settings.sigs` keyed by address and
+**stripped from what syncs to the online account** (`CLOUD_STRIP.settings`
+has `sigs`; `applyCloud` merges, so the local ones survive a sync): a
+name, phone and address are what a breach would leak. `sigOf(acctId)`
+gives the block, "-- " line first (the standard mark mail apps use to fold
+a signature away). `openCompose` puts it under an empty new message with
+the cursor above; Reply, Reply all and Forward put it above the quote
+unless Settings → "In replies and forwards too" is off
+(`S.settings.sigReplies`); a draft being finished keeps its own text.
+`CMP_SIG` is the block RATA put in: changing From swaps it for that
+mailbox's (or removes it) only while it is still there unchanged, and a
+message holding only the signature still counts as empty for Discard.
 Also not built: saving RATA's drafts to the server; Gmail's archive; no
 code signing.
 

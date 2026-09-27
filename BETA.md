@@ -188,6 +188,11 @@ Don't spend time reporting these — they are known and planned:
   hour (it says when mail comes), and new mail in one mailbox no longer
   makes RATA sign in to all of them. Coming back to RATA still checks
   everything.
+- From v0.1.36 each mailbox can have a **signature** (Settings →
+  Signatures). It goes under new messages, and above the quoted text of
+  replies and forwards unless you turn that off; changing From swaps it.
+  Signatures stay on your computer — they are not part of what RATA keeps
+  in your online account.
 
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —
