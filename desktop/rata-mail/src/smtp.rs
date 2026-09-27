@@ -198,6 +198,7 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
     let unique = message_id(msg, nanos);
     let written = format!("{unique}@{}", msg.from.domain());
     let body = render(msg, &now_rfc2822(), &unique);
+    let to = envelope(&body, &msg.bcc);
 
     let hosts = smtp_candidates(&acct.host, &acct.email);
     let mut blocked: Option<String> = None;
@@ -205,7 +206,7 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
 
     for host in &hosts {
         for (port, implicit) in SMTP_PORTS {
-            match attempt(resolver, acct, host, port, implicit, &body).await {
+            match attempt(resolver, acct, host, port, implicit, &body, &to).await {
                 Sent::Ok { via, id, .. } => {
                     return Sent::Ok {
                         via,
@@ -249,6 +250,7 @@ async fn attempt(
     port: u16,
     implicit: bool,
     body: &str,
+    to: &[String],
 ) -> Sent {
     let (name, addrs) = match crate::resolve::resolve_public(resolver, host).await {
         Ok(found) => found,
@@ -306,10 +308,8 @@ async fn attempt(
     if let Err(sent) = step(&mut wire, &envelope_from, host).await {
         return sent;
     }
-    // Recipients are read back out of the rendered message so there is exactly
-    // one list: an envelope that disagrees with the To: header is how mail goes
-    // to somebody the customer cannot see.
-    for rcpt in recipients(body) {
+    // See `envelope`: the headers' own list, and Bcc.
+    for rcpt in to {
         if let Err(sent) = step(&mut wire, &format!("RCPT TO:<{rcpt}>"), host).await {
             return sent;
         }
@@ -498,6 +498,22 @@ fn recipients(rendered: &str) -> Vec<String> {
     out
 }
 
+/// Who the message is handed over for. Everyone in the headers is read back
+/// out of the rendered message so there is exactly one visible list — an
+/// envelope that disagrees with To: and Cc: is how mail goes to somebody the
+/// customer cannot see. Bcc is the one deliberate exception, and so the only
+/// addition: it is never in the headers (that is what makes it blind), and it
+/// comes only from the customer's own Bcc line.
+fn envelope(rendered: &str, bcc: &[crate::compose::Address]) -> Vec<String> {
+    let mut out = recipients(rendered);
+    for a in bcc {
+        if !out.iter().any(|x| x == a.as_str()) {
+            out.push(a.as_str().to_string());
+        }
+    }
+    out
+}
+
 /// `Date:` as RFC 5322 wants it, in UTC.
 ///
 /// Always `+0000`, and that is a choice rather than laziness: a local offset in
@@ -586,6 +602,7 @@ mod tests {
             from_name: None,
             to: vec![Address::parse("someone@elsewhere.org").unwrap()],
             cc: vec![],
+            bcc: vec![],
             subject: "Hello".into(),
             body: "Hi there.".into(),
             in_reply_to: None,
@@ -655,6 +672,27 @@ mod tests {
         assert_eq!(
             recipients(&render(&m, "d", "i")),
             ["a@example.com", "b@example.org"]
+        );
+    }
+
+    #[test]
+    fn blind_copies_are_in_the_envelope_and_nowhere_in_the_message() {
+        let mut m = msg();
+        m.cc = vec![Address::parse("dee@example.org").unwrap()];
+        m.bcc = vec![
+            Address::parse("boss@example.net").unwrap(),
+            Address::parse("dee@example.org").unwrap(),
+        ];
+        let rendered = render(&m, "d", "i");
+        assert!(!rendered.contains("boss@example.net"), "{rendered}");
+        assert!(!rendered.to_ascii_lowercase().contains("bcc"), "{rendered}");
+        assert_eq!(
+            envelope(&rendered, &m.bcc),
+            [
+                "someone@elsewhere.org",
+                "dee@example.org",
+                "boss@example.net"
+            ]
         );
     }
 

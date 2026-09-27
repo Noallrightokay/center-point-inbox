@@ -51,7 +51,7 @@
       ...(named ? { box: m.folder.named } : {}),
       ...(sent ? { sent: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '' } : {}),
       ...(draft
-        ? { draft: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '', inReplyTo: m.in_reply_to || '' }
+        ? { draft: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '', inReplyTo: m.in_reply_to || '', bcc: m.bcc || [] }
         : {}),
       /* Everyone it went to, which Reply all needs (0.1.32) and finishing a
          draft starts from. */
@@ -383,6 +383,7 @@
             from: b.from,
             to: b.to,
             cc: b.cc || '',
+            bcc: b.bcc || '',
             subject: b.subject || '',
             body: b.body || '',
             inReplyTo: b.inReplyTo || null,

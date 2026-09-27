@@ -140,6 +140,8 @@ pub struct Draft {
     pub to: String,
     /// Copied, as typed: addresses separated by commas, or nothing.
     pub cc: String,
+    /// Copied blind, the same way. Never written into the message.
+    pub bcc: String,
     pub subject: String,
     pub body: String,
     /// The Message-ID being replied to, so the answer threads.
@@ -164,7 +166,7 @@ pub struct Forwarded {
     pub indexes: Vec<u32>,
 }
 
-/// The most people one message goes to, To and Cc together. Gmail allows
+/// The most people one message goes to, To, Cc and Bcc together. Gmail allows
 /// 100 a message from a mail app and Outlook.com about the same; past it the
 /// provider refuses the whole message partway through, after the upload.
 pub const RECIPIENTS_MAX: usize = 100;
@@ -854,6 +856,7 @@ impl Rata {
             from,
             to,
             cc,
+            bcc,
             subject,
             body,
             in_reply_to,
@@ -882,15 +885,18 @@ impl Rata {
             "Enter a valid recipient address — one address, or several separated by commas."
                 .to_string()
         })?;
-        let cc_list = if cc.trim().is_empty() {
-            vec![]
-        } else {
-            Address::parse_list(&cc).ok_or_else(|| {
-                "One of the addresses in Cc is not valid — check them, separated by commas."
-                    .to_string()
-            })?
+        let copied = |line: &str, raw: &str| {
+            if raw.trim().is_empty() {
+                Ok(vec![])
+            } else {
+                Address::parse_list(raw).ok_or_else(|| {
+                    format!("One of the addresses in {line} is not valid — check them, separated by commas.")
+                })
+            }
         };
-        if to_list.len() + cc_list.len() > RECIPIENTS_MAX {
+        let cc_list = copied("Cc", &cc)?;
+        let bcc_list = copied("Bcc", &bcc)?;
+        if to_list.len() + cc_list.len() + bcc_list.len() > RECIPIENTS_MAX {
             return Err(format!(
                 "That is more than {RECIPIENTS_MAX} people. Most providers refuse a message sent to so many — send it in smaller groups."
             ));
@@ -922,6 +928,7 @@ impl Rata {
             from_name: None,
             to: to_list,
             cc: cc_list,
+            bcc: bcc_list,
             subject: subject.to_string(),
             body: body.to_string(),
             in_reply_to,
@@ -1508,6 +1515,18 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(e.contains("Cc"), "{e}");
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "a@example.org".into(),
+                    bcc: "boss@".into(),
+                    subject: "Hi".into(),
+                    body: "x".into(),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(e.contains("Bcc"), "{e}");
             let many: Vec<String> = (0..60).map(|i| format!("p{i}@example.org")).collect();
             let e = app
                 .send(Draft {

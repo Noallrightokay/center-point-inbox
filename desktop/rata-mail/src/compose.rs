@@ -108,6 +108,9 @@ pub struct Outgoing {
     pub to: Vec<Address>,
     /// Copied: seen by everyone, like To. Empty for none.
     pub cc: Vec<Address>,
+    /// Copied blind: handed to the server for delivery and never written
+    /// into the message, so nobody else sees them. Empty for none.
+    pub bcc: Vec<Address>,
     pub subject: String,
     pub body: String,
     /// The message being replied to, if any, so mail clients thread it.
@@ -383,6 +386,7 @@ mod tests {
             from_name: None,
             to: vec![addr("someone@elsewhere.org")],
             cc: vec![],
+            bcc: vec![],
             subject: subject.into(),
             body: body.into(),
             in_reply_to: None,
@@ -617,6 +621,13 @@ mod tests {
         );
         // And none at all when nobody is copied.
         assert!(!render(&msg("Plan", "Hi"), "d", "i").contains("Cc:"));
+        // A blind copy is never written into the message at all.
+        m.bcc = vec![addr("boss@example.net")];
+        let out = render(&m, "d", "i");
+        assert!(
+            !out.contains("boss@example.net") && !out.contains("Bcc"),
+            "{out}"
+        );
     }
 
     #[test]
