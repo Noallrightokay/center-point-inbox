@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use rata_mail::{
     ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Flags, Folder, Gap, Known, Listed,
-    Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Whole, act, body, fetch_folder,
-    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, send, verify,
+    Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Watch, Watched, Whole, act, body,
+    fetch_folder, fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, send, verify,
 };
 use serde::Serialize;
 
@@ -59,6 +59,18 @@ pub enum Linked {
     Failed {
         error: String,
     },
+}
+
+/// Why a mailbox is not being watched for new mail.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unwatched {
+    /// Its server has no IDLE; the regular refresh is all there is.
+    Unsupported,
+    /// Not now: unlicensed, not linked, parked for its password, or the
+    /// keychain would not give the password. Asked again later.
+    NotNow,
+    /// The connection failed. Tried again after a pause.
+    Failed(String),
 }
 
 /// What one refresh brought back.
@@ -955,6 +967,37 @@ impl Rata {
             .map_err(|e| format!("The mailbox list could not be saved: {e}"))
     }
 
+    /// The mailboxes to watch for new mail: every linked one not parked for
+    /// a rejected password — and none at all without a licence, so a lapse
+    /// closes every watching connection too.
+    pub fn watchable(&self) -> Vec<String> {
+        if self.licensed().is_err() {
+            return vec![];
+        }
+        self.mailboxes()
+            .into_iter()
+            .filter(|m| m.auth_failed_at.is_none())
+            .map(|m| m.email)
+            .collect()
+    }
+
+    /// Sign in to one mailbox and open its inbox to be told of new mail. The
+    /// same checks as a refresh come first, and a rejected password parks the
+    /// mailbox the same way, so watching never sends a wrong one twice.
+    pub async fn watch(&self, email: &str) -> Result<Watch, Unwatched> {
+        let acct = self.readable(email).map_err(|_| Unwatched::NotNow)?;
+        match rata_mail::watch(&self.resolver, &acct).await {
+            Ok(w) => Ok(w),
+            Err(Watched::Unsupported) => Err(Unwatched::Unsupported),
+            Err(Watched::Auth(_)) => {
+                self.note_auth_failure(email);
+                Err(Unwatched::NotNow)
+            }
+            Err(Watched::Host(why) | Watched::Net(why)) => Err(Unwatched::Failed(why)),
+            Err(Watched::Arrived | Watched::Quiet) => Err(Unwatched::Failed(String::new())),
+        }
+    }
+
     fn note_auth_failure(&self, email: &str) {
         if let Ok(mut store) = self.store.lock() {
             store.mark_auth(email, Some(now()));
@@ -1448,6 +1491,38 @@ mod tests {
                     .unwrap_err()
                     .kind,
                 "auth"
+            );
+        });
+    }
+
+    #[test]
+    fn only_licensed_mailboxes_with_a_good_password_are_watched() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("watch-unlic"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            // Without a licence nothing is watched, and nothing dials.
+            assert!(app.watchable().is_empty());
+            assert_eq!(
+                app.watch("owner@example.com").await.err(),
+                Some(Unwatched::NotNow)
+            );
+
+            let app = rata(tmpfile("watch-lic"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            linked(&app, "second@example.com", "imap.example.com");
+            let mut want = app.watchable();
+            want.sort();
+            assert_eq!(want, ["owner@example.com", "second@example.com"]);
+            // A mailbox parked for its password is left alone until relinked.
+            app.note_auth_failure("second@example.com");
+            assert_eq!(app.watchable(), ["owner@example.com"]);
+            assert_eq!(
+                app.watch("second@example.com").await.err(),
+                Some(Unwatched::NotNow)
+            );
+            assert_eq!(
+                app.watch("nobody@example.com").await.err(),
+                Some(Unwatched::NotNow)
             );
         });
     }

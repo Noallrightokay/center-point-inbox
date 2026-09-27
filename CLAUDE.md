@@ -25,8 +25,8 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new, Cc and Bcc. Standalone, knows nothing about the app. 171 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications. 60 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE). Standalone, knows nothing about the app. 175 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 61 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -109,7 +109,8 @@ v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
 fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
-begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc. An
+begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
+as it arrives (IMAP IDLE). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -605,6 +606,29 @@ counts it in `RECIPIENTS_MAX`. `Message.bcc` is filled for Drafts only
 under Cc, hidden until **Bcc** is pressed (`showBcc`). RATA's own record of
 what it sent does not show Bcc, and the provider's Sent copy (which
 replaces it) usually does not either.
+**New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
+linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
+`Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an
+accelerator only: the five-minute refresh carries on, so a server without
+IDLE, a connection a laptop's sleep killed, or any failure here costs speed,
+never mail. `idle_until` wakes only when the inbox grows past what it held
+(`exists` follows EXPUNGE down and EXISTS up); a flag changing — RATA
+marking a message read on its other connection — starts a fresh IDLE rather
+than waking, or every read would cause a refresh. The watch reads nothing
+and keeps no password. The supervisor (`watch::supervise`) re-checks every
+minute: `Rata::watchable` is every linked mailbox not parked for its
+password, and none without a licence, so a lapse or an unlink closes the
+connection; `Rata::watch` runs the refresh's own checks (`readable`) and
+parks a mailbox whose password is refused, so a wrong one is never sent
+twice. A failed connection is retried after 30 s, doubling to 15 minutes;
+a server without IDLE is not asked again until RATA restarts. On new mail
+Rust evals `window.__rataMail({email})` (a JSON literal, as with links);
+the page waits 1.2 s so a burst is one refresh, then runs `autoSync` — the
+same quiet refresh as the timer, so fetching, showing and notifying stay in
+one place — and a wake during a refresh (`MAIL_AGAIN`) gets one more after
+it. Not seen against a real server: the guard refuses a private address, so
+no local IMAP server can stand in; the IDLE exchange is covered by a
+scripted server in the engine's tests.
 Also not built: saving RATA's drafts to the server; Gmail's archive; no
 code signing.
 

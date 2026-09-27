@@ -21,6 +21,7 @@ mod notify;
 mod store;
 mod update;
 mod vault;
+mod watch;
 
 use std::sync::Arc;
 
@@ -155,6 +156,7 @@ fn main() {
                 })
                 .build()?;
             fit_to_screen(&window, (config.width, config.height));
+            watch::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
