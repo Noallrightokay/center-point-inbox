@@ -782,7 +782,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
         <div class="chip-row" id="mail-filters"></div>
         <div class="box-panel" id="box-panel" hidden></div>
         <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button></div>
-        <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
+        <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn native-only" data-bulk="archive">Archive</button><button class="btn native-only" data-bulk="inbox">Move to inbox</button><span class="md-sortwrap native-only"><button class="btn" data-bulk="file">Move to ▾</button><div class="md-sortmenu md-filemenu" id="bulk-filemenu"></div></span><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
       <div class="extra-panes" id="extra-panes"></div>
@@ -1734,10 +1734,62 @@ function openAddMailbox(){go('set');openMailForm();setTimeout(()=>$('#linkform')
 let mailFilter='all',selMail=null;
 $('#mail-sort').onchange=e=>{mailSort=e.target.value;renderMail()};
 $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#sel-mode').textContent=selecting?'✕ Cancel':'☑ Select';renderMail()};
-$$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async()=>{
+/* Several messages at once, on the server too (0.1.30): Archive takes the
+   inbox mail of a selection to Archive; Move to inbox brings archived,
+   spam and filed mail home; Move to files a selection from one mailbox
+   into one of its folders. Messages a choice does not apply to — sent
+   mail, mail RATA has no server reference for — stay as they are, and the
+   toast says how many moved. */
+const canArchive=m=>m.prov==='imap'&&m.uid&&inInbox(m);
+const canGoHome=m=>m.prov==='imap'&&m.uid&&['archive','junk','named'].includes(folderOf(m));
+const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&folderOf(m)!=='sent';
+async function bulkLeave(list,action,tag,verb){
+  const n=SEL.size;
+  if(!list.length){toast(verb+' \u2014 none of the '+n+' selected can be');return}
+  const picked=list.map(m=>Object.assign({},m));
+  dropMessages(picked.map(m=>m.id));SEL.clear();save();
+  await audit('mail.bulk',tag+' \u00d7 '+picked.length);
+  renderSyncAll();renderMailFilters();renderMail();
+  const skipped=n-picked.length;
+  const done=verb+' \u2014 '+picked.length+(skipped?' ('+skipped+' could not be)':'');
+  const problems=await serverAct(picked,action);
+  toast(problems.length?done+' in RATA, but your mailbox was not updated \u2014 '+problems[0]:done);
+}
+function bulkFileMenu(){
+  const el=$('#bulk-filemenu');
+  const list=S.messages.filter(m=>SEL.has(m.id)&&canFile(m));
+  const emails=[...new Set(list.map(mailEmailOf))];
+  if(!list.length){el.innerHTML='<span class="box-note">None of these can be moved to a folder.</span>';return}
+  if(emails.length>1){el.innerHTML='<span class="box-note">Pick messages from one mailbox to move them to one of its folders.</span>';return}
+  const l=boxMailbox(emails[0]);if(!l){el.innerHTML='';return}
+  const boxes=[...new Set(list.map(m=>folderOf(m)==='named'?m.box:''))];
+  el.innerHTML=boxButtons(l,boxes.length===1&&boxes[0]?boxes[0]:null,'data-to');
+  el.querySelectorAll('[data-to]').forEach(b=>b.onclick=()=>{
+    const name=b.dataset.to;el.classList.remove('open');
+    bulkLeave(list.filter(m=>!(folderOf(m)==='named'&&m.box===name)),{move:{named:name}},'move','Moved to '+boxLabel(emails[0],name));
+  });
+  return l;
+}
+$$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async e=>{
   const act=b.dataset.bulk;
   if(act==='clear'){selecting=false;SEL.clear();$('#sel-mode').textContent='☑ Select';renderMail();return}
   if(!SEL.size){toast('Select some messages first');return}
+  const chosen=()=>S.messages.filter(m=>SEL.has(m.id));
+  if(act==='archive')return bulkLeave(chosen().filter(canArchive),'archive','archive','Archived');
+  if(act==='inbox')return bulkLeave(chosen().filter(canGoHome),'inbox','inbox','Moved to your inbox \u2014 it appears there at the next refresh');
+  if(act==='file'){
+    e.stopPropagation();
+    const el=$('#bulk-filemenu');el.classList.toggle('open');
+    if(!el.classList.contains('open'))return;
+    const l=bulkFileMenu();
+    if(!l||BOX_LOADING.has(l.id))return;
+    BOX_LOADING.add(l.id);if(!((S.boxes||{})[boxEmail(l)]||{}).list)bulkFileMenu();
+    const err=await fetchBoxes(l);
+    BOX_LOADING.delete(l.id);
+    if(err)BOX_ERR[l.id]=err;else delete BOX_ERR[l.id];
+    if(el.classList.contains('open'))bulkFileMenu();
+    return;
+  }
   const n=SEL.size;
   if(act==='del'&&!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
   const picked=S.messages.filter(m=>SEL.has(m.id)).map(m=>Object.assign({},m));
@@ -1945,6 +1997,7 @@ function mailPool(acctId){
 }
 function bulkRefresh(){
   $('#bulk-n').textContent=SEL.size+' selected';
+  $$('#bulk-bar .native-only').forEach(e=>e.style.display=window.__RATA_NATIVE__?'':'none');
   $('#bulk-bar').classList.toggle('on',selecting);
   $('#view-inbox').classList.toggle('selecting',selecting);
 }

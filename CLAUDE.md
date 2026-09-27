@@ -107,7 +107,8 @@ Spam; v0.1.26 adds the customer's own folders and Move to, and files
 synced mail under its mailbox (replies had gone from the first one);
 v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
 fetches the mail a refresh had to leave out after a long absence; v0.1.29
-shows a desktop notification for new mail. An
+shows a desktop notification for new mail; v0.1.30 archives, moves home
+and files several messages at once. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -545,8 +546,16 @@ drag-to-forward's "already in this inbox" — found none; a reply to mail in a
 second mailbox went from the first. Mail is now filed under the id with the
 address kept as `mailbox`; `tidyAccts` refiles stored mail on load and on
 every sync (also after a mailbox is removed and linked again).
-Also not built: Drafts; Gmail's archive; moving several messages at once to a
-folder; no code signing.
+**Several at once (v0.1.30).** The selection bar (Select) gains, in the app
+only, **Archive** (the selection's inbox mail, `canArchive`), **Move to inbox**
+(archived, spam and filed mail, `canGoHome`) and **Move to ▾** (one of the
+mailbox's folders, `bulkFileMenu`; a selection spanning two mailboxes is
+asked to pick one). `bulkLeave` takes what a choice applies to off the list at
+once, sends it through `serverAct` — one connection per mailbox, folder and
+UIDVALIDITY — and says how many could not be moved (sent mail, mail with no
+server reference). Before 0.1.30 only read, unread, star and delete worked on
+a selection.
+Also not built: Drafts; Gmail's archive; no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the
