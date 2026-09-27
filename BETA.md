@@ -178,7 +178,12 @@ Don't spend time reporting these — they are known and planned:
   Settings → New-mail notifications can hide the sender and subject, or turn
   them off. Tell us if none ever appears — say which system you are on. If your provider starts
   refusing RATA with messages about too many sign-ins, tell us which
-  provider — every five minutes is a sign-in every five minutes.
+  provider — every five minutes is a sign-in every five minutes. From
+  v0.1.34 new mail should appear **within a few seconds** of arriving: RATA
+  keeps one connection per mailbox open and your provider tells it when mail
+  lands (the five-minute check still runs underneath). If mail still only
+  turns up every few minutes, tell us which provider — it may not offer
+  this, and that is worth knowing.
 
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —

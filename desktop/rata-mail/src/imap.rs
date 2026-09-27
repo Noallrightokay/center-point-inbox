@@ -1611,6 +1611,166 @@ where
     Ok(messages)
 }
 
+// --------------------------------------------------------------------- watch
+
+/// How long one IDLE lasts before RATA ends it and starts another. Servers
+/// may drop an IDLE after 30 minutes (RFC 2177 asks for a new one within
+/// 29); a shorter one also finds out sooner that a sleeping laptop has lost
+/// the connection.
+pub const IDLE_FOR: Duration = Duration::from_secs(9 * 60);
+
+/// What watching the inbox came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Watched {
+    /// New mail is in the inbox. Nothing about it: a refresh fetches it.
+    Arrived,
+    /// The wait ended with nothing new; the connection is still good.
+    Quiet,
+    /// The server has no IDLE. Checking every few minutes is all there is.
+    Unsupported,
+    Auth(String),
+    Host(String),
+    /// The connection went; try again later.
+    Net(String),
+}
+
+/// A signed-in connection with the inbox open, waiting to be told of new
+/// mail (IMAP IDLE). It reads nothing from any message — a refresh does
+/// that — and it keeps no password: that was needed only to sign in.
+pub struct Watch {
+    session: Option<Session<Tls>>,
+    /// How many messages the inbox holds, as far as this connection knows.
+    exists: u32,
+}
+
+/// Sign in to `acct` and open its inbox for [`Watch::wait`].
+pub async fn watch(resolver: &Resolver, acct: &Account) -> Result<Watch, Watched> {
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Err(Watched::Host(why)),
+        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            return Err(Watched::Net(unreachable_msg(acct, &why)));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Err(Watched::Auth(revoked_msg(acct, &why))),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Err(Watched::Net(unreachable_msg(acct, &why)));
+        }
+    };
+    match ready(&mut session).await {
+        Ok(exists) => Ok(Watch {
+            session: Some(session),
+            exists,
+        }),
+        Err(why) => {
+            let _ = timeout(COMMAND, session.logout()).await;
+            Err(why)
+        }
+    }
+}
+
+impl Watch {
+    /// Wait up to `dur` for new mail. [`Watched::Arrived`] and
+    /// [`Watched::Quiet`] leave the connection ready for the next wait;
+    /// anything else means it is gone and a new [`watch`] is needed.
+    pub async fn wait(&mut self, dur: Duration) -> Watched {
+        let Some(session) = self.session.take() else {
+            return Watched::Net("the connection was already closed".into());
+        };
+        let (session, said) = idle_until(session, &mut self.exists, dur).await;
+        self.session = session;
+        said
+    }
+
+    /// Say goodbye politely.
+    pub async fn close(mut self) {
+        if let Some(mut s) = self.session.take() {
+            let _ = timeout(COMMAND, s.logout()).await;
+        }
+    }
+}
+
+/// Whether this server can be watched, and the inbox open for it: how many
+/// messages it holds now.
+async fn ready<T>(session: &mut Session<T>) -> Result<u32, Watched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let caps = match timeout(COMMAND, session.capabilities()).await {
+        Ok(Ok(c)) => c,
+        _ => {
+            return Err(Watched::Net(
+                "the server did not say what it supports".into(),
+            ));
+        }
+    };
+    if !caps.has_str("IDLE") {
+        return Err(Watched::Unsupported);
+    }
+    match timeout(COMMAND, session.select("INBOX")).await {
+        Ok(Ok(m)) => Ok(m.exists),
+        _ => Err(Watched::Net("the inbox could not be opened".into())),
+    }
+}
+
+/// IDLE until new mail arrives or `dur` is up, starting a fresh IDLE after
+/// anything that is not new mail (a flag changed, a message went), so that
+/// RATA marking a message read does not wake it. New mail is the inbox
+/// growing past what it held: `exists` follows EXPUNGE down and EXISTS up.
+async fn idle_until<T>(
+    session: Session<T>,
+    exists: &mut u32,
+    dur: Duration,
+) -> (Option<Session<T>>, Watched)
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::extensions::idle::IdleResponse;
+    use async_imap::imap_proto::types::{MailboxDatum, Response};
+
+    let lost = |what: &str| Watched::Net(format!("the connection was lost while {what}"));
+    let end = tokio::time::Instant::now() + dur;
+    let mut session = session;
+    loop {
+        let left = end.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return (Some(session), Watched::Quiet);
+        }
+        let mut handle = session.idle();
+        if !matches!(timeout(COMMAND, handle.init()).await, Ok(Ok(()))) {
+            return (None, lost("starting to wait"));
+        }
+        let mut arrived = false;
+        {
+            let (wait, _stop) = handle.wait_with_timeout(left);
+            // The library's timeout starts again at every keepalive a server
+            // sends; this one does not.
+            match timeout(left + COMMAND, wait).await {
+                Ok(Ok(IdleResponse::NewData(data))) => match data.parsed() {
+                    Response::MailboxData(MailboxDatum::Exists(n)) => {
+                        arrived = *n > *exists;
+                        *exists = *n;
+                    }
+                    Response::Expunge(_) => *exists = exists.saturating_sub(1),
+                    _ => {}
+                },
+                Ok(Ok(IdleResponse::Timeout | IdleResponse::ManualInterrupt)) | Err(_) => {}
+                Ok(Err(_)) => return (None, lost("waiting")),
+            }
+        }
+        session = match timeout(COMMAND, handle.done()).await {
+            Ok(Ok(s)) => s,
+            _ => return (None, lost("ending the wait")),
+        };
+        if arrived {
+            return (Some(session), Watched::Arrived);
+        }
+    }
+}
+
 // ----------------------------------------------------------------------- act
 
 /// Something the customer did to a message in RATA, done to the real mailbox.
@@ -2196,6 +2356,150 @@ mod tests {
             .map_err(|(e, _)| e)
             .unwrap();
         (session, seen)
+    }
+
+    // --------------------------------------------------------- watch tests
+    //
+    // A scripted server that answers IDLE: "+ idling", then round n's lines,
+    // then nothing until DONE. What is under test is which of those wake RATA.
+
+    async fn scripted_idle(
+        caps: &'static str,
+        rounds: Vec<Vec<&'static str>>,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            let mut idle_tag: Option<String> = None;
+            let mut round = 0;
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line == "DONE" {
+                    log.lock().unwrap().push("DONE".into());
+                    let tag = idle_tag.take().unwrap_or_default();
+                    if w.write_all(format!("{tag} OK IDLE done\r\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                log.lock().unwrap().push(cmd.to_string());
+                let up = cmd.to_ascii_uppercase();
+                if up == "IDLE" {
+                    idle_tag = Some(tag.to_string());
+                    let mut out = String::from("+ idling\r\n");
+                    for l in rounds.get(round).cloned().unwrap_or_default() {
+                        out.push_str(l);
+                        out.push_str("\r\n");
+                    }
+                    round += 1;
+                    if w.write_all(out.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                let body = if up.starts_with("SELECT") {
+                    "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n".to_string()
+                } else if up.starts_with("CAPABILITY") {
+                    format!("* CAPABILITY IMAP4rev1 {caps}\r\n")
+                } else {
+                    String::new()
+                };
+                if w.write_all(format!("{body}{tag} OK done\r\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        let session = client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap();
+        (session, seen)
+    }
+
+    fn idles(log: &[String]) -> usize {
+        log.iter()
+            .filter(|c| c.eq_ignore_ascii_case("IDLE"))
+            .count()
+    }
+
+    #[test]
+    fn new_mail_wakes_the_watch() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_idle("IDLE", vec![vec!["* 4 EXISTS"]]).await;
+            let mut exists = ready(&mut s).await.unwrap();
+            assert_eq!(exists, 3);
+            let (s, said) = idle_until(s, &mut exists, Duration::from_secs(5)).await;
+            assert_eq!(said, Watched::Arrived);
+            assert_eq!(exists, 4);
+            assert!(s.is_some(), "the connection is kept for the next wait");
+            let log = log.lock().unwrap();
+            assert_eq!(idles(&log), 1);
+            assert!(log.iter().any(|c| c == "DONE"), "{log:?}");
+        });
+    }
+
+    #[test]
+    fn a_flag_changing_does_not_wake_it_but_the_wait_goes_on() {
+        rt_act().block_on(async {
+            // RATA marking a message read, seen from this connection.
+            let (mut s, log) = scripted_idle(
+                "IDLE",
+                vec![vec!["* 2 FETCH (FLAGS (\\Seen))"], vec![], vec![]],
+            )
+            .await;
+            let mut exists = ready(&mut s).await.unwrap();
+            let (s, said) = idle_until(s, &mut exists, Duration::from_millis(400)).await;
+            assert_eq!(said, Watched::Quiet);
+            assert!(s.is_some());
+            assert_eq!(exists, 3);
+            // It started a fresh IDLE after the flag change rather than stopping.
+            assert_eq!(idles(&log.lock().unwrap()), 2);
+        });
+    }
+
+    #[test]
+    fn a_message_going_and_another_coming_is_new_mail() {
+        rt_act().block_on(async {
+            // One deleted elsewhere: not new mail. Then one arrives, back at 3.
+            let (mut s, _) =
+                scripted_idle("IDLE", vec![vec!["* 2 EXPUNGE"], vec!["* 3 EXISTS"]]).await;
+            let mut exists = ready(&mut s).await.unwrap();
+            let (_, said) = idle_until(s, &mut exists, Duration::from_secs(5)).await;
+            assert_eq!(said, Watched::Arrived);
+            assert_eq!(exists, 3);
+        });
+    }
+
+    #[test]
+    fn a_server_without_idle_is_not_watched() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_idle("MOVE", vec![]).await;
+            assert_eq!(ready(&mut s).await, Err(Watched::Unsupported));
+            // Nothing opened on a server that cannot be watched.
+            assert!(
+                !log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().starts_with("SELECT"))
+            );
+        });
     }
 
     fn rt_act() -> tokio::runtime::Runtime {

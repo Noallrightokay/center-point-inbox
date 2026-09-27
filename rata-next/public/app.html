@@ -3835,7 +3835,7 @@ function notifyNew(ids){
 /* One refresh at a time: a second request while one is running waits for
    that one rather than signing in to every mailbox again. `quiet` is the
    automatic refresh, which speaks only when there is new mail. */
-let SYNCING=null,lastSync=0;
+let SYNCING=null,lastSync=0,MAIL_WAKE=null,MAIL_AGAIN=false;
 function serverSync(p,quiet){
   if(p!=='mail')return Promise.resolve();
   if(SYNCING)return SYNCING;
@@ -3849,7 +3849,7 @@ function serverSync(p,quiet){
       await absorbMail(res,quiet);
     }catch(e){
       if(!quiet)toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
-    }finally{SYNCING=null}
+    }finally{SYNCING=null;if(MAIL_AGAIN){MAIL_AGAIN=false;window.__rataMail()}}
   })();
   return SYNCING;
 }
@@ -3877,6 +3877,17 @@ async function autoSync(){
   await serverSync('mail',true);
   if((S.gaps||[]).length&&!SYNCING)await fillGaps();
 }
+/* New mail as it arrives (0.1.34): the app keeps one connection per mailbox
+   waiting on its inbox (IMAP IDLE) and calls this when the server says new
+   mail is there. It runs the same quiet refresh as the timer, so fetching,
+   showing and notifying stay in one place. Mail that lands in a burst makes
+   one refresh, and mail that lands while one is running gets another after
+   it — that refresh may have asked the server just before it arrived. */
+window.__rataMail=function(){
+  if(!window.__RATA_NATIVE__)return;
+  clearTimeout(MAIL_WAKE);
+  MAIL_WAKE=setTimeout(()=>{if(SYNCING){MAIL_AGAIN=true;return}autoSync()},1200);
+};
 function startAutoSync(){
   if(autoOn||!window.__RATA_NATIVE__)return;
   autoOn=true;

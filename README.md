@@ -202,7 +202,8 @@ Be realistic about this before promising anything to a customer.
 - Adding a mailbox by address and app password
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
-- Fetching new mail by itself — at start, every five minutes and when you come
+- New mail within seconds on servers that offer IMAP IDLE (nearly all do),
+  and by itself on every server — at start, every five minutes and when you come
   back to the window — from the inbox, Sent, Archive, Spam and Drafts of several
   mailboxes at once, downloading only what is new
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
