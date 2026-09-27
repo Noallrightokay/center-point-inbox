@@ -875,6 +875,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
+          <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Data</div>
@@ -2961,12 +2962,14 @@ async function installUpdate(){
 }
 function renderSettings(){
   $('#set-name').value=S.settings.name;
+  if($('#notify-row')){$('#notify-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-notify').value=notifyMode()}
   renderPlan();
   renderLinked();
   renderUpdateRow();if($('#upd-check'))$('#upd-check').onclick=()=>checkUpdate(true);
   $('#about-line').textContent=`${S.messages.length} messages · ${S.contacts.length} people · ${S.documents.length} files · ${S.audit.length} audit entries · profile ${S.settings.profile}`;
 }
 $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim()||'User';save();toast('Name saved')});
+$('#set-notify').addEventListener('change',e=>{S.settings.notify=e.target.value;save();toast(e.target.value==='off'?'New-mail notifications are off':'New-mail notifications are on')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
   if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
@@ -3663,6 +3666,26 @@ async function apiFetch(path,opts){
 }
 /* Every mailbox syncs together: /api/sync/mail answers for all of them at once,
    and each message carries the address it came from. */
+/* A system notification for new inbox mail that arrived by itself while
+   RATA was in the background (0.1.29). Settings chooses how much it says:
+   the sender and subject, only that mail arrived — for a screen others can
+   see — or nothing. Spam, filed and sent mail never notify. */
+const notifyMode=()=>['full','count','off'].includes(S.settings.notify)?S.settings.notify:'full';
+function notifyNew(ids){
+  if(!window.__RATA_NATIVE__||notifyMode()==='off')return;
+  if(document.visibilityState==='visible'&&document.hasFocus())return;
+  const want=new Set(ids),fresh=S.messages.filter(m=>want.has(m.id)&&inInbox(m)&&m.unread).sort((a,b)=>b.ts-a.ts);
+  if(!fresh.length)return;
+  let title,body;
+  if(notifyMode()==='count'){title='RATA';body=fresh.length===1?'1 new message':fresh.length+' new messages'}
+  else if(fresh.length===1){title=msgFrom(fresh[0]);body=fresh[0].subj||'(no subject)'}
+  else{
+    const who=[...new Set(fresh.map(msgFrom))];
+    title=fresh.length+' new messages';
+    body='From '+who.slice(0,3).join(', ')+(who.length>3?' and '+(who.length-3)+' more':'');
+  }
+  apiFetch('/api/notify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,body})}).catch(()=>{});
+}
 /* One refresh at a time: a second request while one is running waits for
    that one rather than signing in to every mailbox again. `quiet` is the
    automatic refresh, which speaks only when there is new mail. */
@@ -3792,7 +3815,7 @@ async function absorbMail(res,quiet){
      audit log every five minutes. */
   if(!quiet||added)await audit('mail.sync',`${(res.accounts||[]).length} mailbox(es) — ${added} new message${added===1?'':'s'}`);
   renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();
-  if(quiet){if(added)toast(`${added} new message${added===1?'':'s'}`);return}
+  if(quiet){if(added){toast(`${added} new message${added===1?'':'s'}`);notifyNew(newIds)}return}
   const later=(res.deferred||[]).length;
   toast(stuck.length
     ? `${stuck.join(', ')} needs its app password again — relink it in Settings`

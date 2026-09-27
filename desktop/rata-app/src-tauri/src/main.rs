@@ -17,6 +17,7 @@ mod commands;
 mod core;
 mod licence;
 mod links;
+mod notify;
 mod store;
 mod update;
 mod vault;
@@ -109,6 +110,7 @@ fn main() {
         builder
     };
     builder
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // The app's own directory, per the platform's conventions —
             // Application Support on macOS, AppData on Windows, .local/share on
@@ -169,6 +171,7 @@ fn main() {
             commands::reread_mail,
             commands::list_folders,
             commands::folder_mail,
+            commands::notify_mail,
             commands::open_message,
             commands::save_attachment,
             commands::open_link,

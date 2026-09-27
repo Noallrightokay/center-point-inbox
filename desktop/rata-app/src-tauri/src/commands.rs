@@ -170,6 +170,21 @@ pub async fn older_mail(
     .await
 }
 
+/// A system notification that new mail has arrived. The page chooses what
+/// to say; it is made plain here first (`notify`).
+#[tauri::command]
+pub fn notify_mail(handle: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    let (title, body) = crate::notify::prepare(&title, &body);
+    handle
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| format!("The notification could not be shown: {e}"))
+}
+
 /// The customer's own folders in one mailbox.
 #[tauri::command]
 pub async fn list_folders(app: App<'_>, email: String) -> Result<Vec<OwnFolder>, Problem> {

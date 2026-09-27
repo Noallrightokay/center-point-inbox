@@ -275,6 +275,18 @@
     },
 
     /* Is there a newer RATA (update.rs)? Nothing is downloaded. */
+    /* A system notification that new mail arrived. Rust makes the words
+       plain before showing them (notify.rs). */
+    async '/api/notify'(opts) {
+      const b = body(opts);
+      try {
+        await invoke('notify_mail', { title: String(b.title || ''), body: String(b.body || '') });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    },
+
     async '/api/update/check'() {
       try {
         return await invoke('check_update');
