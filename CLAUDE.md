@@ -105,7 +105,8 @@ update key — `rata-next/LAUNCH.md` §9); v0.1.24 takes the plan from the
 licence, so Pro opens Side by side in the app; v0.1.25 adds Archive and
 Spam; v0.1.26 adds the customer's own folders and Move to, and files
 synced mail under its mailbox (replies had gone from the first one);
-v0.1.27 fetches new mail by itself and downloads only what is new. An
+v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
+fetches the mail a refresh had to leave out after a long absence. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -178,10 +179,17 @@ since+1:* (UID)` and downloads only those (at most `NEW_MAX`, 200), and sends
 read/starred for the newest `limit` as `flags` (`FETCH n:* (UID FLAGS)`, no
 text), which `absorbMail` applies; an unknown folder or a changed
 UIDVALIDITY gets the newest `limit` whole, as before. So a refresh with
-nothing new is a sign-in and a few hundred bytes a folder. Not handled: more
-than 200 new in one folder between refreshes leaves the ones in between
-unfetched, since Load older mail pages below the *oldest* message held (the
-same gap began at 15 before 0.1.27).
+nothing new is a sign-in and a few hundred bytes a folder. **Gaps (v0.1.28).**
+When more than 200 arrived in one folder, the engine returns a `Gap`
+(folder, UIDVALIDITY, `top` = oldest UID downloaded now, `floor` = newest
+held before); the app adds the mailbox (`MailGap`), the page keeps it in
+`S.gaps` (`addGaps`), and `fillGaps` pages it with `fetch_older` from `top`
+down — one page a gap after each automatic refresh, and first in Load older
+mail, whose button also shows while a gap is open — until a page reaches
+`floor` (closed), comes back empty (closed) or stale (dropped; the next
+refresh reads the folder afresh). Offline, a gap is kept. Before 0.1.28 the
+messages in between were never fetched at all, since Load older mail pages
+below the *oldest* message held.
 Before 0.1.27 every refresh re-downloaded up to 64 KB of each of the newest
 15 in four folders. Older mail comes 50 at a
 time through **Load older mail** (`loadOlder` → `/api/mail/older` →

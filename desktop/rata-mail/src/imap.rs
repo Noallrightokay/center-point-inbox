@@ -551,12 +551,26 @@ pub struct Flags {
     pub starred: bool,
 }
 
-/// What a refresh found: messages new to RATA, whole, and read/starred for
-/// recent ones it already has.
+/// Messages a refresh left out: more arrived in a folder than one refresh
+/// downloads ([`NEW_MAX`]), so those with UIDs above `floor` (the newest RATA
+/// had) and below `top` (the oldest it downloaded now) are still to come —
+/// by [`fetch_older`] from `top` down, page by page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Gap {
+    pub folder: Folder,
+    pub uidvalidity: u32,
+    pub top: u32,
+    pub floor: u32,
+}
+
+/// What a refresh found: messages new to RATA, whole, read/starred for
+/// recent ones it already has, and any it had to leave for later.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Newest {
     pub messages: Vec<Message>,
     pub flags: Vec<Flags>,
+    pub gaps: Vec<Gap>,
 }
 
 /// The most new messages one refresh downloads from one folder. A laptop
@@ -645,6 +659,7 @@ where
         {
             found.messages.append(&mut more.messages);
             found.flags.append(&mut more.flags);
+            found.gaps.append(&mut more.gaps);
         }
     }
     found.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
@@ -671,7 +686,7 @@ where
         let messages = newest_in(session, acct, folder, mailbox, limit).await?;
         return Ok(Newest {
             messages,
-            flags: vec![],
+            ..Newest::default()
         });
     };
     if mailbox.exists == 0 || limit == 0 {
@@ -716,11 +731,22 @@ where
         .collect();
     fresh.sort_unstable();
     fresh.dedup();
-    let fresh = &fresh[fresh.len().saturating_sub(NEW_MAX as usize)..];
+    let arrived = fresh.len();
+    let fresh = &fresh[arrived.saturating_sub(NEW_MAX as usize)..];
+    let gaps = if arrived > fresh.len() {
+        vec![Gap {
+            folder: folder.clone(),
+            uidvalidity: generation,
+            top: fresh[0],
+            floor: since,
+        }]
+    } else {
+        vec![]
+    };
     if fresh.is_empty() {
         return Ok(Newest {
-            messages: vec![],
             flags,
+            ..Newest::default()
         });
     }
     let stream = match timeout(COMMAND, session.uid_fetch(join(fresh), items())).await {
@@ -732,7 +758,11 @@ where
         .into_iter()
         .filter(|m| fresh.contains(&m.uid))
         .collect();
-    Ok(Newest { messages, flags })
+    Ok(Newest {
+        messages,
+        flags,
+        gaps,
+    })
 }
 
 /// The newest `limit` messages of a folder just selected.
@@ -3440,6 +3470,7 @@ mod tests {
             let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 17))
                 .await
                 .unwrap();
+            assert!(got.gaps.is_empty(), "three new messages leave nothing out");
             assert_eq!(sorted_uids(&got.messages), vec![18, 19, 20]);
             assert!(got.messages.iter().all(|m| m.body.contains("Body of")));
             // Flags only for what RATA already had.
@@ -3480,11 +3511,27 @@ mod tests {
             let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 50))
                 .await
                 .unwrap();
-            // The newest of them; the rest are older mail.
+            // The newest of them, and where the rest are: above 50, below
+            // the oldest one downloaded now.
             assert_eq!(
                 sorted_uids(&got.messages),
                 (300 - NEW_MAX + 1..=300).collect::<Vec<_>>()
             );
+            assert_eq!(
+                got.gaps,
+                vec![Gap {
+                    folder: Folder::Inbox,
+                    uidvalidity: 7,
+                    top: 300 - NEW_MAX + 1,
+                    floor: 50
+                }]
+            );
+            // Paging down from the top of the gap brings the next of them.
+            let Fetched::Messages(next) = older_in(&mut s, &me(), &Folder::Inbox, 101, 7, 50).await
+            else {
+                panic!("older mail")
+            };
+            assert_eq!(sorted_uids(&next), (51..=100).collect::<Vec<_>>());
         });
     }
 }

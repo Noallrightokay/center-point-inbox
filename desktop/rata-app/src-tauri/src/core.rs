@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::{
-    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Flags, Folder, Known, Listed,
+    ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Flags, Folder, Gap, Known, Listed,
     Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Whole, act, body, fetch_folder,
     fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, send, verify,
 };
@@ -73,6 +73,9 @@ pub struct Refreshed {
     /// Read and starred, as the server has them now, for recent messages the
     /// interface already holds — which a refresh no longer downloads again.
     pub flags: Vec<Flags>,
+    /// Mail a refresh left for later because too much had arrived, per
+    /// mailbox; the interface fetches it a page at a time.
+    pub gaps: Vec<MailGap>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
     pub problems: Vec<Problem>,
@@ -99,6 +102,14 @@ pub struct Opened {
     /// Whether that HTML asks for pictures from the internet, which are not
     /// loaded unless the customer says so.
     pub remote_images: bool,
+}
+
+/// A [`Gap`] in one mailbox.
+#[derive(Debug, Serialize)]
+pub struct MailGap {
+    pub email: String,
+    #[serde(flatten)]
+    pub gap: Gap,
 }
 
 /// What the interface already holds of one folder of one mailbox: the newest
@@ -450,13 +461,21 @@ impl Rata {
                         since: k.since,
                     })
                     .collect();
-                running.push(async move { self.read_one(m, limit, &mine).await });
+                running.push(async move {
+                    self.read_one(m, limit, &mine)
+                        .await
+                        .map(|found| (m.email.clone(), found))
+                });
             }
             for done in futures::future::join_all(running).await {
                 match done {
-                    Ok(mut found) => {
+                    Ok((email, mut found)) => {
                         out.messages.append(&mut found.messages);
                         out.flags.append(&mut found.flags);
+                        out.gaps.extend(found.gaps.into_iter().map(|gap| MailGap {
+                            email: email.clone(),
+                            gap,
+                        }));
                     }
                     Err(p) => {
                         if p.kind == "auth" {
@@ -1879,6 +1898,20 @@ mod tests {
         assert_eq!(
             r["flags"],
             serde_json::json!([{"id": "k_7", "unread": false, "starred": true}])
+        );
+        let g = serde_json::to_value(MailGap {
+            email: "a@b.example".into(),
+            gap: Gap {
+                folder: Folder::Inbox,
+                uidvalidity: 7,
+                top: 301,
+                floor: 50,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            g,
+            serde_json::json!({"email": "a@b.example", "folder": "inbox", "uidvalidity": 7, "top": 301, "floor": 50})
         );
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),

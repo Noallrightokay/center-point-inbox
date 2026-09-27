@@ -159,7 +159,10 @@ Don't spend time reporting these — they are known and planned:
 
 - **New mail comes in by itself from v0.1.27** — a moment after RATA starts,
   every five minutes while it is open, and when you come back to it. Before
-  that, mail only arrived when you pressed Sync. If your provider starts
+  that, mail only arrived when you pressed Sync. If RATA was closed while a
+  lot arrived — more than 200 in a folder — it brings the newest first and
+  the rest over the next refreshes (or at once with **Load older mail**);
+  before v0.1.28 the ones in between never came. If your provider starts
   refusing RATA with messages about too many sign-ins, tell us which
   provider — every five minutes is a sign-in every five minutes.
 

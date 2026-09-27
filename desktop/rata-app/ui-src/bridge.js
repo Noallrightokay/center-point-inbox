@@ -167,6 +167,7 @@
       return {
         messages: res.messages.map(asMessage),
         flags: res.flags || [],
+        gaps: res.gaps || [],
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };
