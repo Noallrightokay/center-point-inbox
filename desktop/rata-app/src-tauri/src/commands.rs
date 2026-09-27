@@ -71,10 +71,22 @@ pub async fn refresh_mail(
     app: App<'_>,
     limit: Option<u32>,
     known: Option<Vec<Held>>,
+    only: Option<Vec<String>>,
 ) -> Result<Refreshed, String> {
     Ok(app
-        .refresh(limit.unwrap_or(15), &known.unwrap_or_default())
+        .refresh(
+            limit.unwrap_or(15),
+            &known.unwrap_or_default(),
+            &only.unwrap_or_default(),
+        )
         .await)
+}
+
+/// The mailboxes with a live connection waiting for new mail right now; the
+/// page checks these less often, since they say when mail comes.
+#[tauri::command]
+pub fn watching(live: tauri::State<'_, crate::watch::Watching>) -> Vec<String> {
+    live.now()
 }
 
 /// Send one message. Everything the composer has comes as one draft.

@@ -456,7 +456,9 @@ impl Rata {
 
     /// Read every linked mailbox. `known` is what the interface already holds
     /// of each folder, so only what is new is downloaded.
-    pub async fn refresh(&self, limit: u32, known: &[Held]) -> Refreshed {
+    /// `only`: the mailboxes to read, by address — the one whose inbox just
+    /// said it has new mail, or the ones the timer finds due. Empty is all.
+    pub async fn refresh(&self, limit: u32, known: &[Held], only: &[String]) -> Refreshed {
         let mut out = Refreshed::default();
         if let Err(error) = self.licensed() {
             out.unlicensed = Some(error);
@@ -465,6 +467,9 @@ impl Rata {
         let mut work: Vec<Mailbox> = Vec::new();
 
         for m in self.mailboxes() {
+            if !only.is_empty() && !only.iter().any(|o| o.eq_ignore_ascii_case(&m.email)) {
+                continue;
+            }
             if m.auth_failed_at.is_some() {
                 // Skipped on purpose, and reported so it is visible rather than
                 // a mailbox that has quietly stopped updating.
@@ -1300,7 +1305,7 @@ mod tests {
             linked(&app, "owner@example.com", "imap.example.com");
             app.note_auth_failure("owner@example.com");
 
-            let out = app.refresh(15, &[]).await;
+            let out = app.refresh(15, &[], &[]).await;
             assert!(
                 out.problems.is_empty(),
                 "it should not have been tried at all"
@@ -1314,7 +1319,27 @@ mod tests {
 
             // And it comes back once the password is replaced.
             app.clear_auth_failure("owner@example.com");
-            assert!(app.refresh(15, &[]).await.skipped.is_empty());
+            assert!(app.refresh(15, &[], &[]).await.skipped.is_empty());
+        });
+    }
+
+    #[test]
+    fn a_refresh_can_be_asked_for_one_mailbox() {
+        rt().block_on(async {
+            let app = rata(tmpfile("only"));
+            // Private hosts: refused by the guard, so nothing is dialled.
+            linked(&app, "a@example.com", "127.0.0.1");
+            linked(&app, "b@example.com", "127.0.0.1");
+            linked(&app, "c@example.com", "127.0.0.1");
+            app.note_auth_failure("c@example.com");
+            let out = app.refresh(15, &[], &["B@example.com".into()]).await;
+            let tried: Vec<&str> = out.problems.iter().map(|p| p.email.as_str()).collect();
+            assert_eq!(tried, ["b@example.com"]);
+            assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+            // Empty is every mailbox, as before.
+            let out = app.refresh(15, &[], &[]).await;
+            assert_eq!(out.problems.len(), 2);
+            assert_eq!(out.skipped.len(), 1);
         });
     }
 
@@ -1327,7 +1352,7 @@ mod tests {
             // A private host: refused by the guard rather than by the network.
             linked(&app, "b@example.com", "127.0.0.1");
 
-            let out = app.refresh(15, &[]).await;
+            let out = app.refresh(15, &[], &[]).await;
             assert_eq!(out.problems.len(), 2, "{:?}", out.problems);
             let kinds: Vec<&str> = out.problems.iter().map(|p| p.kind.as_str()).collect();
             assert!(kinds.contains(&"net"), "{kinds:?}");
@@ -1359,7 +1384,7 @@ mod tests {
             })
             .unwrap();
 
-            let out = app.refresh(15, &[]).await;
+            let out = app.refresh(15, &[], &[]).await;
             assert_eq!(out.problems.len(), 1);
             assert_eq!(out.problems[0].kind, "missing");
             assert!(
@@ -1763,13 +1788,13 @@ mod tests {
             })
             .unwrap();
 
-            let out = app.refresh(15, &[]).await;
+            let out = app.refresh(15, &[], &[]).await;
             assert_eq!(out.problems.len(), 1);
             assert_eq!(out.problems[0].kind, "keychain", "{:?}", out.problems[0]);
             // The whole point: a keychain that was not ready at login must not
             // leave the mailbox demanding a relink once it is.
             assert!(app.mailboxes().iter().all(|m| m.auth_failed_at.is_none()));
-            assert!(app.refresh(15, &[]).await.skipped.is_empty());
+            assert!(app.refresh(15, &[], &[]).await.skipped.is_empty());
         });
     }
 
@@ -1822,7 +1847,7 @@ mod tests {
                 Linked::Failed { error } => assert!(error.contains("licence key"), "{error}"),
                 other => panic!("linking without a licence: {other:?}"),
             }
-            let out = app.refresh(15, &[]).await;
+            let out = app.refresh(15, &[], &[]).await;
             assert!(out.unlicensed.is_some(), "refreshing without a licence");
             assert!(out.messages.is_empty());
             // Not recorded as a mailbox problem: no mailbox is broken, and

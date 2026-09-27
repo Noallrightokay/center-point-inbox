@@ -144,7 +144,10 @@
        what is new is downloaded; `flags` comes back for the rest. */
     async '/api/sync/mail'(opts) {
       const b = body(opts);
-      const res = await invoke('refresh_mail', { limit: 15, known: Array.isArray(b.known) ? b.known : null });
+      /* `only` (0.1.35): the mailboxes to read — the one that said it has new
+         mail, or the ones the timer finds due. Absent is all of them. */
+      const only = Array.isArray(b.only) && b.only.length ? b.only.map(String) : null;
+      const res = await invoke('refresh_mail', { limit: 15, known: Array.isArray(b.known) ? b.known : null, only });
       /* Nothing was read, because this copy is not licensed. Said as an error
          so the interface leaves what it has alone — building an answer from
          the empty lists below would report every mailbox as live and freshly
@@ -165,6 +168,9 @@
       for (const m of res.messages) counts[m.acct] = (counts[m.acct] || 0) + 1;
       for (const box of await invoke('list_mailboxes')) {
         if (accounts.some((a) => a.email === box.email)) continue;
+        /* A mailbox that was not asked about was not synced, and must not be
+           stamped as though it had been. */
+        if (only && !only.some((o) => o.toLowerCase() === box.email.toLowerCase())) continue;
         accounts.push({ email: box.email, label: box.label, count: counts[box.email] || 0, error: null, needsRelink: false, deferred: false });
       }
       const failures = accounts.filter((a) => a.error).map((a) => ({ email: a.email, error: a.error, needsRelink: a.needsRelink }));
@@ -182,6 +188,15 @@
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };
+    },
+
+    /* The mailboxes with a live connection waiting for new mail (0.1.35). */
+    async '/api/mail/watching'() {
+      try {
+        return { emails: await invoke('watching') };
+      } catch {
+        return { emails: [] };
+      }
     },
 
     /* Do to the real mailbox what was done in RATA. One call per mailbox and

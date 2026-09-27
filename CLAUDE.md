@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE). Standalone, knows nothing about the app. 175 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 61 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 63 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 
@@ -110,7 +110,7 @@ fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
 begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
-as it arrives (IMAP IDLE). An
+as it arrives (IMAP IDLE); v0.1.35 signs in far less often. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -629,6 +629,20 @@ one place — and a wake during a refresh (`MAIL_AGAIN`) gets one more after
 it. Not seen against a real server: the guard refuses a private address, so
 no local IMAP server can stand in; the IDLE exchange is covered by a
 scripted server in the engine's tests.
+**Fewer sign-ins (v0.1.35).** Every refresh used to sign in to every
+mailbox — 288 a day each, and providers throttle that. `refresh_mail`
+takes `only` (addresses; none is all), `Rata::refresh` reads just those,
+and the bridge stamps only the mailboxes it was asked about. A wake reads
+only the mailbox that woke (`WOKE`); a mailbox's own **Sync now** reads that
+mailbox. The timer (`autoTick`, every 30 s) reads each mailbox when it is
+due, by `LAST_TRY`: every five minutes, or every half hour
+(`AUTO_WATCHED`) while its connection is live — `watch::Watching`, the
+set of mailboxes in IDLE right now, held by a `Live` guard that drops with
+the connection (failure, lapse or abort alike) and read through the
+`watching` command. Coming back to the window after a minute still reads
+every mailbox (`lastFull`, not `lastSync`, so a one-mailbox wake does not
+suppress it): a laptop's sleep kills connections without either side
+noticing for minutes. At start RATA reads everything, as before.
 Also not built: saving RATA's drafts to the server; Gmail's archive; no
 code signing.
 

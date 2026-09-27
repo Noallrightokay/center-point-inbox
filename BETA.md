@@ -183,7 +183,11 @@ Don't spend time reporting these — they are known and planned:
   keeps one connection per mailbox open and your provider tells it when mail
   lands (the five-minute check still runs underneath). If mail still only
   turns up every few minutes, tell us which provider — it may not offer
-  this, and that is worth knowing.
+  this, and that is worth knowing. From v0.1.35 RATA signs in far less
+  often: a mailbox with that live connection is only checked every half
+  hour (it says when mail comes), and new mail in one mailbox no longer
+  makes RATA sign in to all of them. Coming back to RATA still checks
+  everything.
 
 What *should* work: adding a mailbox, seeing recent mail from several
 mailboxes, sending, **replying** (the Reply button on a message, from v0.1.6 —
