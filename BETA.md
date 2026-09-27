@@ -104,7 +104,8 @@ Don't spend time reporting these — they are known and planned:
   and the thread it answers — and once you send it, the copy left in Drafts
   goes to your Trash. RATA does not save its own drafts to the server yet,
   and a formatted draft continues as plain text. From v0.1.32 the composer
-  has a **Cc** line, and a message that went to several people offers
+  has a **Cc** line (and from v0.1.33 **Bcc**, which the other recipients
+  don't see), and a message that went to several people offers
   **Reply all** (not for mail RATA fetched before v0.1.31). If a reply to
   everyone goes to someone it should not, tell us who, and how they were
   on the original. If real mail turns up in Spam, or a folder is

@@ -167,6 +167,9 @@ pub struct Message {
     /// Every address in To, and in Cc: what finishing a draft starts from.
     pub to_all: Vec<String>,
     pub cc: Vec<String>,
+    /// Blind copies — only ever for a draft, whose Bcc is the customer's own
+    /// and has to survive finishing it here. Empty for everything else.
+    pub bcc: Vec<String>,
     /// The `Message-ID` this one answers, checked like `message_id`, so a
     /// draft of a reply stays in its thread when it is finished here.
     pub in_reply_to: String,
@@ -2030,6 +2033,11 @@ fn build(
     };
     let to_all = every(env.and_then(|e| e.to.as_ref()));
     let cc = every(env.and_then(|e| e.cc.as_ref()));
+    let bcc = if *folder == Folder::Drafts {
+        every(env.and_then(|e| e.bcc.as_ref()))
+    } else {
+        vec![]
+    };
     // Only the first: some clients list the whole chain here.
     let in_reply_to = env
         .and_then(|e| e.in_reply_to.as_deref())
@@ -2086,6 +2094,7 @@ fn build(
         to_addr,
         to_all,
         cc,
+        bcc,
         in_reply_to,
         subject,
         // A draft with no words yet is empty, not a message RATA cannot
@@ -3034,7 +3043,7 @@ mod tests {
                     "From: Me <me@example.com>\r\nTo: Bo Li <bo@example.org>\r\nSubject: Sent {uid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nWhat I wrote in {uid}\r\n"
                 );
                 format!(
-                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Sent {uid}\" ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Bo Li\" NIL \"bo\" \"example.org\")(NIL NIL \"Cy\" \"Example.org\")) ((\"Dee\" NIL \"dee\" \"example.org\")) NIL \"<orig@example.org> <older@example.org>\" \"<s{uid}@example.com>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Sent {uid}\" ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Me\" NIL \"me\" \"example.com\")) ((\"Bo Li\" NIL \"bo\" \"example.org\")(NIL NIL \"Cy\" \"Example.org\")) ((\"Dee\" NIL \"dee\" \"example.org\")) ((NIL NIL \"boss\" \"example.net\")) \"<orig@example.org> <older@example.org>\" \"<s{uid}@example.com>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
                     uid,
                     body.len()
                 )
@@ -3179,6 +3188,8 @@ mod tests {
             );
             assert_eq!(m.uidvalidity, 8);
             assert_eq!(m.message_id, "s12@example.com");
+            // Only a draft keeps its blind copies.
+            assert!(m.bcc.is_empty());
             assert!(m.body.contains("What I wrote in 12"));
         });
     }
@@ -3228,6 +3239,7 @@ mod tests {
             assert_eq!(got[0].folder, Folder::Drafts);
             assert_eq!(got[0].to_all, vec!["bo@example.org", "cy@example.org"]);
             assert_eq!(got[0].cc, vec!["dee@example.org"]);
+            assert_eq!(got[0].bcc, vec!["boss@example.net"]);
             // The first of a chain, checked like any id a stranger wrote.
             assert_eq!(got[0].in_reply_to, "orig@example.org");
             // Still the first recipient for showing.

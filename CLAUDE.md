@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new. Standalone, knows nothing about the app. 167 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new, Cc and Bcc. Standalone, knows nothing about the app. 171 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications. 60 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -109,7 +109,7 @@ v0.1.27 fetches new mail by itself and downloads only what is new; v0.1.28
 fetches the mail a refresh had to leave out after a long absence; v0.1.29
 shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
-begun elsewhere; v0.1.32 adds Cc and Reply all. An
+begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -593,9 +593,20 @@ puts the sender, or their Reply-To, in To and everyone else in Cc — the
 original sender too when a list asked replies to go to it — never the
 customer's own linked addresses; it is offered only when there is someone
 else, and not for mail stored before 0.1.31, which does not know. A draft
-continued now keeps its Cc as Cc. No Bcc.
-Also not built: saving RATA's drafts to the server; Bcc; Gmail's archive;
-no code signing.
+continued now keeps its Cc as Cc.
+**Bcc (v0.1.33).** `Outgoing.bcc` is never rendered — no `Bcc:` header,
+which is what makes it blind — and is the one deliberate addition to the
+envelope: `smtp::envelope` is `recipients(rendered)` (To and Cc, read back
+from the headers) plus Bcc, each address once, and `attempt` takes that
+list. `core::send` takes `Draft.bcc`, refuses a bad address naming Bcc, and
+counts it in `RECIPIENTS_MAX`. `Message.bcc` is filled for Drafts only
+(the customer's own blind copies, which finishing a draft must keep);
+`continueDraft` fills the Bcc line from it. The composer's Bcc line sits
+under Cc, hidden until **Bcc** is pressed (`showBcc`). RATA's own record of
+what it sent does not show Bcc, and the provider's Sent copy (which
+replaces it) usually does not either.
+Also not built: saving RATA's drafts to the server; Gmail's archive; no
+code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

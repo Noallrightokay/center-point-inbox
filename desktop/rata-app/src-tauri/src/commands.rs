@@ -93,6 +93,7 @@ pub async fn send_mail(app: App<'_>, draft: Outbound) -> Result<Delivered, Strin
         from: draft.from,
         to: draft.to,
         cc: draft.cc,
+        bcc: draft.bcc,
         subject: draft.subject,
         body: draft.body,
         in_reply_to: draft.in_reply_to,
@@ -110,6 +111,8 @@ pub struct Outbound {
     to: String,
     #[serde(default)]
     cc: String,
+    #[serde(default)]
+    bcc: String,
     #[serde(default)]
     subject: String,
     #[serde(default)]

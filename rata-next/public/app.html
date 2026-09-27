@@ -445,7 +445,8 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .cmp-to-row{display:flex;align-items:center;border-bottom:1px solid var(--hair-2)}
 #compose .cmp-to-row input{border-bottom:none;flex:1;min-width:0}
 .cmp-cc-btn{margin-right:16px;font-size:12.5px;font-weight:600;color:var(--slate);padding:4px 11px;border-radius:999px;background:var(--fill)}
-#compose #cmp-cc[hidden],.cmp-cc-btn[hidden]{display:none}
+#compose #cmp-cc[hidden],#compose #cmp-bcc[hidden],.cmp-cc-btn[hidden]{display:none}
+.cmp-cc-btn+.cmp-cc-btn{margin-left:-10px}
 .dlp-bar{display:none;padding:12px 20px;font-size:13px;border-bottom:1px solid var(--hair-2)}
 .dlp-bar.warn{display:block;background:var(--amber-soft);color:var(--amber)}
 .dlp-bar.block{display:block;background:var(--red-soft);color:var(--red)}
@@ -982,8 +983,9 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <div class="grabber"></div>
     <div class="cmp-head"><b id="cmp-title">New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-discard" id="cmp-discard" hidden>Discard</button><button class="cmp-close" id="cmp-close" aria-label="Close, keeping the draft">✕</button></div>
     <div class="dlp-bar" id="dlp-bar"></div>
-    <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button></div>
+    <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button><button type="button" class="cmp-cc-btn" id="cmp-bcc-btn" aria-label="Add people to copy without the others seeing">Bcc</button></div>
     <input type="text" id="cmp-cc" placeholder="Cc" hidden>
+    <input type="text" id="cmp-bcc" placeholder="Bcc — the others will not see these" hidden>
     <input type="text" id="cmp-subj" placeholder="Subject">
     <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-files" id="cmp-files"></div>
@@ -3397,6 +3399,8 @@ async function continueDraft(m){
   const cc=[...new Set((m.cc||[]).map(a=>String(a).toLowerCase()))].filter(a=>a&&!to.includes(a));
   $('#cmp-to').value=to.join(', ');
   $('#cmp-cc').value=cc.join(', ');showCc(cc.length>0);
+  const bcc=[...new Set((m.bcc||[]).map(a=>String(a).toLowerCase()))].filter(a=>a&&!to.includes(a)&&!cc.includes(a));
+  $('#cmp-bcc').value=bcc.join(', ');showBcc(bcc.length>0);
   $('#cmp-subj').value=m.subj&&m.subj!=='(no subject)'?m.subj:'';
   $('#cmp-body').value=text;
   const atts=((whole&&whole.atts)||m.atts||[]).filter(a=>a.i!==undefined);
@@ -3455,7 +3459,7 @@ $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.ta
    message to someone new with the last draft's subject and text. */
 function newDraft(){
   REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;DRAFT={kind:'new'};
-  ['cmp-to','cmp-cc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');showCc(false);
+  ['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');showCc(false);showBcc(false);
   $('#cmp-from').value='';
   renderCmpFiles();
 }
@@ -3469,7 +3473,7 @@ function openCompose(){
 }
 function closeCompose(){ov.classList.remove('open')}
 function draftHasAnything(){
-  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
+  return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].some(id=>$('#'+id).value.trim()));
 }
 function renderDraftHead(){
   $('#cmp-title').textContent=DRAFT.kind==='reply'?'Reply'+(DRAFT.to?' to '+DRAFT.to:''):DRAFT.kind==='forward'?'Forward':DRAFT.kind==='draft'?(REPLYING?'Draft reply':'Draft'):'New message';
@@ -3554,13 +3558,17 @@ function liveScan(){
   }
 }
 ['cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{clearTimeout(dlpTimer);dlpTimer=setTimeout(liveScan,220)}));
-['cmp-to','cmp-cc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
+['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
 /* Cc (0.1.32): a line of its own, shown when asked for or when a reply to
    everyone, or a draft, fills it. */
 function showCc(on){$('#cmp-cc').hidden=!on;$('#cmp-cc-btn').hidden=!!on}
+/* Bcc (0.1.33): handed to the server for delivery, never written into the
+   message, so the people in To and Cc do not see them. */
+function showBcc(on){$('#cmp-bcc').hidden=!on;$('#cmp-bcc-btn').hidden=!!on}
 $('#cmp-cc-btn').onclick=()=>{showCc(true);$('#cmp-cc').focus()};
+$('#cmp-bcc-btn').onclick=()=>{showBcc(true);$('#cmp-bcc').focus()};
 $('#cmp-send').onclick=async()=>{
-  const to=$('#cmp-to').value.trim(),cc=$('#cmp-cc').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
+  const to=$('#cmp-to').value.trim(),cc=$('#cmp-cc').value.trim(),bcc=$('#cmp-bcc').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
   if(!to||!subj){toast('Recipient and subject required');return}
   liveScan();
   S.counters.scans++;
@@ -3589,7 +3597,7 @@ $('#cmp-send').onclick=async()=>{
       for(const f of files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
       sb.textContent='Sending…';
       const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({from:mAcct.label,to,cc,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
+        body:JSON.stringify({from:mAcct.label,to,cc,bcc,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
           forward:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
       if(!r.ok)throw new Error(r.error||'send failed');
       realSent=true;sentId=r.messageId||'';
@@ -3609,7 +3617,7 @@ $('#cmp-send').onclick=async()=>{
   const finished=realSent&&CMP_DRAFT&&CMP_DRAFT.uid?CMP_DRAFT:null;
   if(finished)dropMessages([finished.id]);
   save();
-  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
+  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''}${bcc?' (+'+bcc.split(',').filter(x=>x.trim()).length+' Bcc)':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   newDraft();
   liveScan();closeCompose();renderMail();
   toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
