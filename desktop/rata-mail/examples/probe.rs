@@ -54,6 +54,7 @@ async fn main() {
                 from: Address::parse(&email).expect("from address"),
                 from_name: None,
                 to: Address::parse_list(&to).expect("recipient"),
+                cc: vec![],
                 subject: "RATA test — please ignore".into(),
                 body: "Sent by the RATA desktop mail layer.\n".into(),
                 in_reply_to: None,
