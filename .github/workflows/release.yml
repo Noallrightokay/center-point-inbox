@@ -491,6 +491,10 @@ jobs:
           # installer had been built — with "GITHUB_TOKEN is required".
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
+          # Microsoft sign-in's OAuth client id: public, so a repository
+          # variable rather than a secret. Unset is an empty string, which the
+          # app reads as "Microsoft sign-in is not configured".
+          RATA_MS_CLIENT_ID: ${{ vars.RATA_MS_CLIENT_ID }}
           # The Apple, update and Azure signing variables arrive from the
           # steps above, and only when they are real. Do not add them here.
         with:
@@ -563,6 +567,59 @@ jobs:
           Write-Output "Every Windows binary checked is signed, trusted and timestamped ($($check.Count) files, $env:MODE)."
           exit 0
 
+      # Each installer is installed on its own runner the way a customer would
+      # install it, and started with no licence and no mailbox (it shows the
+      # licence box). It must stay up 15 s and show "RATA <version> beta" as
+      # its window title, which is how testers report their build, so a title
+      # left behind at the last version fails here. The window is built in
+      # setup (main.rs) and a failed setup ends the process, so staying up
+      # also means the window was made; a panic in the log fails as well.
+      # After the signature check, so a signed build is tested as signed; the
+      # smoke itself is the same either way. Before the installers are kept
+      # and before the signing material goes. The scripts are in
+      # desktop/rata-app/harness/, and each says what it can and cannot see.
+      #
+      # Linux: apt installs the .deb, then /usr/bin/rata-app runs under Xvfb
+      # on a 1366x768 screen (so fit_to_screen has to shrink the window, and
+      # that is checked too), with a fresh HOME: a first launch, no app data
+      # directory yet, and no user-dirs.dirs. The AppImage is run the same
+      # way, extracted, since the runner has no FUSE. xdotool reads the title.
+      # macOS: the .dmg is mounted and RATA.app copied out, and the program
+      # inside it is run (the Intel build through Rosetta). A hosted runner
+      # may refuse System Events the Accessibility permission it needs to
+      # read another app's window title; then the title is not asserted, a
+      # warning says so, and what is asserted is that the app stays up with
+      # a clean log.
+      - name: Install and launch the app
+        id: smoke
+        timeout-minutes: 10
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: desktop/rata-app
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          EXPECT_TITLE: ${{ needs.plan.outputs.prerelease == 'true' && format('RATA {0} beta', needs.plan.outputs.version) || format('RATA {0}', needs.plan.outputs.version) }}
+        run: |
+          if [ "${RUNNER_OS}" = Linux ]; then
+            sudo apt-get install -y --no-install-recommends xvfb xdotool
+          fi
+          ./harness/smoke-installed.sh
+
+      # Windows: the NSIS installer runs silently (/S, the per-user install
+      # a customer gets), the installed rata-app.exe is found where the
+      # installer registered it, started, and its main window title read
+      # with Get-Process.
+      - name: Install and launch the app (Windows)
+        id: winsmoke
+        timeout-minutes: 10
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop/rata-app
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          EXPECT_TITLE: ${{ needs.plan.outputs.prerelease == 'true' && format('RATA {0} beta', needs.plan.outputs.version) || format('RATA {0}', needs.plan.outputs.version) }}
+        run: ./harness/smoke-installed.ps1 -Version $env:VERSION -Expect $env:EXPECT_TITLE
+
       # The installer reached the draft release before the check above could
       # run, and the publish job below publishes whatever is attached. A
       # Windows installer whose signature failed must not be what ships, so it
@@ -582,6 +639,37 @@ jobs:
               if (!/-setup\.exe(\.sig)?$/.test(a.name)) continue;
               await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: a.id });
               core.info(`Removed ${a.name} from the draft ${r.tag_name}.`);
+            }
+
+      # The same for an installer that installed but did not start, or
+      # started under the wrong title: this platform's files come off the
+      # draft (update bundles and signatures with them) and stay on the run
+      # as an artifact. The other platforms still ship. The two macOS builds
+      # share a release, so each takes off only its own architecture's.
+      - name: Keep an installer that does not start off the release
+        if: >-
+          failure() && needs.create-release.outputs.id != '' &&
+          (steps.smoke.outcome == 'failure' || steps.winsmoke.outcome == 'failure')
+        uses: actions/github-script@v7
+        env:
+          ID: ${{ needs.create-release.outputs.id }}
+          SLUG: ${{ matrix.slug }}
+        with:
+          script: |
+            const mine = {
+              'linux': /_amd64\.(deb|AppImage)(\.sig)?$/,
+              'macos-apple-silicon': /_aarch64\.(dmg|app\.tar\.gz|app\.tar\.gz\.sig)$/,
+              'macos-intel': /_(x64|x86_64)\.(dmg|app\.tar\.gz|app\.tar\.gz\.sig)$/,
+              'windows': /-setup\.exe(\.sig)?$/,
+            }[process.env.SLUG];
+            if (!mine) { core.setFailed(`No asset pattern for ${process.env.SLUG}.`); return; }
+            const release_id = Number(process.env.ID);
+            const { data: r } = await github.rest.repos.getRelease({ ...context.repo, release_id });
+            if (!r.draft) { core.warning(`${r.tag_name} is already published; its ${process.env.SLUG} installer was left in place. Replace it by hand.`); return; }
+            for (const a of r.assets) {
+              if (!mine.test(a.name)) continue;
+              await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: a.id });
+              core.info(`Removed ${a.name} from the draft ${r.tag_name}: it did not pass the launch check.`);
             }
 
       # `always()` because the installers are worth keeping precisely when
@@ -657,6 +745,7 @@ jobs:
               core.setFailed(`No installers were attached to ${r.tag_name}, so it was left as a draft.`);
               return;
             }
+            if (!names.some((n) => n.endsWith('.deb'))) core.warning('No Linux installer on this release.');
             if (!names.some((n) => n.endsWith('-setup.exe'))) core.warning('No Windows installer on this release.');
             if (!names.some((n) => n.endsWith('.dmg'))) core.warning('No macOS installer on this release.');
             if (!r.draft) {
