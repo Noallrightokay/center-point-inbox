@@ -1,5 +1,12 @@
 # RATA — Production Deploy Guide
 
+> **Out of date in most places.** `LAUNCH.md` is the current runbook. This guide
+> still describes the browser version's account linking and inbox sync
+> (`/api/link/*`, `/api/sync/*`, PWA installs), none of which exists now: the
+> server's routes are `account`, `ai`, `config`, `health`, `licence` and
+> `stripe` under `app/api/`, and mail is read only in the desktop app. The
+> "What's real" table below is correct as of 2026-09-28.
+
 RATA ships as a blank-slate product: no demo data, no guest door. Visitors land on
 the landing page, create a real account, and arrive in an empty inbox that fills
 only when they connect their own accounts. Installs as an app on Windows, Android,
@@ -76,7 +83,6 @@ first deploy that needs them**, and redeploy after any change:
 
 | Variable | Value | Needed for | Public? |
 |---|---|---|---|
-| `APP_URL` | `https://yourdomain.com` (no trailing slash) | linking | server |
 | `SUPABASE_URL` | Supabase → Settings → API → Project URL | accounts, linking | **shipped to browser** |
 | `SUPABASE_ANON_KEY` | Settings → API → **anon** key | accounts | **shipped to browser** |
 | `SUPABASE_SERVICE_ROLE_KEY` | Settings → API → **service_role** (SECRET) | linking | server only |
@@ -145,12 +151,12 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
 ## What's real vs. pending backend
 | Feature | Status |
 |---|---|
-| Accounts registered to your database, cross-device workspaces | **Real** (Supabase) |
+| Accounts registered to your database; settings, folders, rules and the list of linked mailboxes follow the account between devices | **Real** (Supabase). Mail, people and files stay on the device that read them |
 | Blank-slate inboxes, People, Documents, DLP, audit chain, Assist | **Real**, in-app |
-| Any mailbox — IMAP, Gmail, Outlook, iCloud | **Real**, in the desktop app. The website no longer fetches anybody's mail |
-| Gmail feed | **Real** with a Google client ID — browser-side, no server needed |
-| Stripe checkout, portal, entitlements | **Ready** — activates when links added |
-| Discord / SMS live feeds | Pending. Discord's API does not permit reading user DMs via OAuth; SMS needs a telephony provider. UI and threading are built and waiting. |
+| Mailboxes that sign in with an app password over IMAP and SMTP (Gmail, iCloud, most others) | **Real**, in the desktop app only. The website fetches nobody's mail |
+| Outlook.com, Hotmail, Live and Microsoft 365 mailboxes | **Not available.** Microsoft accepts only its own sign-in page (OAuth) for other apps, and the app refuses these addresses with that reason |
+| Gmail in the browser, Discord, SMS | **Removed** in 0.1.6. `/api/config` still publishes `GOOGLE_CLIENT_ID`, but no page reads it |
+| Stripe checkout, portal, entitlements | **Ready**, activates when links are added (see STRIPE-SETUP.md) |
 
 ## The Format Bridge — two files, not one
 

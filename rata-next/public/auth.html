@@ -76,19 +76,6 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .step-sub{font-size:13px;color:var(--slate);margin-top:2px}
 .step{display:none}
 .step.on{display:block}
-.conn-row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:8px;padding:12px 14px;margin-top:10px;box-shadow:inset 0 0 0 1px var(--hair)}
-.conn-ic{width:34px;height:34px;flex-shrink:0}
-.conn-ic svg{width:100%;height:100%;display:block}
-.conn-row .t{flex:1;min-width:0}
-.conn-row .t b{font-size:13.5px;display:block}
-.conn-row .t span{font-size:12px;color:var(--faint)}
-.conn-row input{margin-top:6px;padding:8px 11px;font-size:13.5px}
-.switch{width:40px;height:24px;border-radius:999px;background:var(--fill);position:relative;transition:background .2s;flex-shrink:0;border:none;cursor:pointer}
-.switch::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#FCFCFD;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .16s ease}
-.switch.on{background:var(--tint-btn)}
-.switch.on::after{transform:translateX(16px)}
-.livechip{font-size:11px;font-weight:500;padding:1px 7px;border-radius:5px;background:var(--green-soft);color:var(--green)}
-.soonchip{font-size:11px;font-weight:500;padding:1px 7px;border-radius:5px;background:var(--fill);color:var(--faint)}
 .foot{margin-top:20px;padding-top:15px;border-top:1px solid var(--hair);font-size:12.5px;color:var(--faint);line-height:1.55}
 .foot a{color:var(--tint);text-decoration:none;font-weight:500}
 .foot a:hover{text-decoration:underline}
@@ -138,8 +125,7 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
   <div id="signup">
     <div class="steps" style="display:none">
       <span class="dot on" id="d1">1</span><span class="bar" id="b1"></span>
-      <span class="dot" id="d2">2</span><span class="bar" id="b2"></span>
-      <span class="dot" id="d3">3</span>
+      <span class="dot" id="d2">2</span>
     </div>
 
     <div class="step on" id="step1">
@@ -159,41 +145,6 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
       <div class="step-sub">Your display name is how you appear on every message you send.</div>
       <label for="s-org">Company or team <span style="font-weight:400;color:var(--faint)">(optional)</span></label>
       <input type="text" id="s-org" autocomplete="organization" placeholder="e.g. The Sherwood Group">
-    </div>
-
-    <div class="step" id="step3">
-      <div class="step-title">Link your accounts</div>
-      <div class="step-sub">Connect the places your messages live. Your real inboxes transfer over right after you finish.</div>
-
-      <div class="conn-row">
-        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#fff" stroke="rgba(10,14,26,.1)"/><path transform="translate(8 8)" d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 010 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z" fill="#EA4335"/></svg></span>
-        <div class="t"><b>Google — Gmail <span class="livechip">LIVE</span></b><span>One-tap Google sign-in after signup pulls your real inbox in.</span></div>
-        <button type="button" class="switch" id="c-gmail" role="switch" aria-checked="false" aria-label="Connect Gmail"></button>
-      </div>
-
-      <div class="conn-row">
-        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#0F6CBD"/><text x="20" y="27" text-anchor="middle" fill="#fff" font-size="19" font-weight="700" font-family="Sora,sans-serif">M</text></svg></span>
-        <div class="t"><b>Microsoft — Outlook &amp; OneDrive <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>We'll thread this address; live sync arrives with the RATA backend.</span>
-          <input type="email" id="c-ms" placeholder="you@outlook.com"></div>
-      </div>
-
-      <div class="conn-row">
-        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#fff" stroke="rgba(10,14,26,.1)"/><g transform="translate(8 8) scale(0.1954)"><path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9z" fill="#E01E5A"/><path d="M32.3 77.6c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/><path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2z" fill="#36C5F0"/><path d="M45.2 32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/><path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2z" fill="#2EB67D"/><path d="M90.5 45.2c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/><path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9z" fill="#ECB22C"/><path d="M77.6 90.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22C"/></g></svg></span>
-        <div class="t"><b>Slack <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>Your workspace handle, threaded into People from day one.</span>
-          <input type="text" id="c-slack" placeholder="@yourhandle"></div>
-      </div>
-
-      <div class="conn-row">
-        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="9" fill="#5865F2"/><path transform="translate(8 8)" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" fill="#fff"/></svg></span>
-        <div class="t"><b>Discord <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>DMs thread by person once the bridge goes live.</span>
-          <input type="text" id="c-discord" placeholder="@yourhandle"></div>
-      </div>
-
-      <div class="conn-row">
-        <span class="conn-ic"><svg viewBox="0 0 40 40" fill="none"><defs><linearGradient id="smsg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5AF575"/><stop offset="1" stop-color="#13BD2C"/></linearGradient></defs><rect width="40" height="40" rx="9" fill="url(#smsg2)"/><path d="M20 10.5c-5.8 0-10.5 3.9-10.5 8.7 0 2.8 1.6 5.2 4 6.8-.2 1.2-.9 2.4-1.9 3.3-.25.23 0 .62.32.56 2-.36 3.68-1.06 4.98-2.06 1 .25 2.03.37 3.1.37 5.8 0 10.5-3.9 10.5-8.7s-4.7-8.9-10.5-8.9z" fill="#fff"/></svg></span>
-        <div class="t"><b>Texts <span class="soonchip">LINKS NOW · SYNC SOON</span></b><span>Your number, ready for the SMS bridge.</span>
-          <input type="tel" id="c-phone" placeholder="+1 555 555 5555"></div>
-      </div>
     </div>
 
     <div class="err" id="s-err"></div>
@@ -302,7 +253,6 @@ function renderStep(){
   step=1;
   $('#step1').classList.add('on');
   $('#step2').classList.remove('on');
-  $('#step3').classList.remove('on');
   $('#s-back').style.display='none';
   $('#s-next').textContent='Create my account';
   hideMsgs();
@@ -316,20 +266,12 @@ function validateStep(){
   return true;
 }
 $('#s-back').onclick=()=>{if(step>1){step--;renderStep()}};
-$('#c-gmail').onclick=()=>{const s=$('#c-gmail');s.classList.toggle('on');s.setAttribute('aria-checked',String(s.classList.contains('on')))};
 
 function stashOnboarding(email){
   const payload={
     email,
     name:$('#s-name').value.trim(),
     org:$('#s-org').value.trim(),
-    connect:{
-      gmail:$('#c-gmail').classList.contains('on'),
-      ms:$('#c-ms').value.trim(),
-      slack:$('#c-slack').value.trim(),
-      discord:$('#c-discord').value.trim(),
-      phone:$('#c-phone').value.trim()
-    },
     ts:Date.now()
   };
   localStorage.setItem('rata_onboard',JSON.stringify(payload));

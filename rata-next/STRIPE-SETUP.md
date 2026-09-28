@@ -13,28 +13,26 @@ About 30 minutes end to end. Test mode first — the last section covers that.
 
 ---
 
-## 1. The three products
+## 1. The two products
 
 Stripe Dashboard → **Product catalogue** → add a product for each plan, each
 with a **recurring monthly** price:
 
 | Product | Price | What it is |
 |---|---|---|
-| RATA Base | $12.99 / month | Up to two mailboxes in one Center Point inbox |
+| RATA Base | $12.99 / month | Up to two mailboxes in one Center Point inbox (the app's name for its unified view) |
 | RATA Pro | $23.99 / month | More than two mailboxes, side by side, summaries |
 | ~~RATA Enterprise~~ | ~~$72 / month~~ | **Not on sale.** The CRM, texts and automations are not built, so there is no product to charge for yet. Create this one when they are. |
 
-And one add-on, which is not a plan:
+**Do not create the "Your own domain" add-on.** `lib/plan.js` still prices it
+($1.50 a month, "host mail on your own domain"), but RATA does not host
+mail: it is read on the customer's own machine, and
+`mailrata.org` has no connection to anyone's mailbox (see `CLAUDE.md`, *The
+one-line version*, and
+[`docs/MVP-PLAN.md` Part 3](../docs/MVP-PLAN.md#part-3-integrations-plug-ins-what-connects-to-what):
+*RATA-hosted mail does not exist*). Selling it would be charging for nothing.
 
-| Product | Price | What it is |
-|---|---|---|
-| Your own domain | $1.50 / month | Mail hosted on a domain the customer owns. Pro includes none and buys these; Enterprise includes them all and never needs this line. |
-
-Create the add-on price with **"Customers can adjust the quantity"** enabled —
-somebody with three domains pays for three, carried as a quantity on the same
-subscription rather than as three subscriptions.
-
-Open each price and copy its **price ID** (`price_…`). You need Base, Pro and the add-on — three. Enterprise waits until its features exist; `sellable` in `lib/plan.js` is what turns it back on.
+Open each price and copy its **price ID** (`price_…`). You need Base and Pro, two. Enterprise waits until its features exist; `sellable` in `lib/plan.js` is what turns it back on.
 
 ## 2. A payment link for each
 
@@ -64,7 +62,7 @@ paid. The page reads that parameter, treats "no subscription" as *not yet*, and
 waits up to twenty seconds for the webhook before it says anything
 discouraging. Change the redirect and you lose that.
 
-Copy the three `https://buy.stripe.com/…` URLs.
+Copy the two `https://buy.stripe.com/…` URLs.
 
 ## 3. The webhook
 
@@ -94,7 +92,7 @@ is fine — payment links are meant to be shared):
 |---|---|
 | `STRIPE_BASE` | the Base payment link |
 | `STRIPE_PRO` | the Pro payment link |
-| `STRIPE_ENTERPRISE` | the Enterprise payment link |
+| `STRIPE_ENTERPRISE` | leave unset: Enterprise is not on sale |
 | `STRIPE_PORTAL` | the customer portal link (section 5) |
 
 Server-only. These must never appear in the browser:
@@ -104,11 +102,11 @@ Server-only. These must never appear in the browser:
 | `STRIPE_WEBHOOK_SECRET` | the `whsec_…` from step 3 |
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
-| `STRIPE_PRICE_ENTERPRISE` | the Enterprise `price_…` |
-| `STRIPE_PRICE_DOMAIN` | the custom-domain add-on `price_…` |
+| `STRIPE_PRICE_ENTERPRISE` | leave unset: Enterprise is not on sale |
+| `STRIPE_PRICE_DOMAIN` | **leave unset**: the domain add-on must not be sold (section 1) |
 
-Leaving `STRIPE_PRICE_DOMAIN` unset is safe: no domain is ever granted by
-accident, the add-on simply cannot be sold until it is set.
+With `STRIPE_PRICE_DOMAIN` unset no domain is ever granted, by accident or
+otherwise: the webhook counts no add-on line at all.
 
 Redeploy.
 
@@ -126,7 +124,8 @@ have to build any of it.
 1. Someone clicks a plan in Settings and pays on Stripe's page.
 2. Stripe POSTs `checkout.session.completed` to the webhook, signed.
 3. The webhook verifies the signature, finds the plan line among the
-   subscription's lines, counts any custom-domain add-on quantity, and writes
+   subscription's lines, counts any custom-domain add-on quantity (always
+   zero, since `STRIPE_PRICE_DOMAIN` stays unset), and writes
    `subscriptions`: email, plan, status `active`, the Stripe customer id and
    `domain_addons`.
 

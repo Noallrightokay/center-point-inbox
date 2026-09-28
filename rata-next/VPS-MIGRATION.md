@@ -41,8 +41,8 @@ apt-get install -y nodejs git
 node -v            # expect v20.x
 ```
 
-RATA needs Node 20.9 or newer — Next 16 sets that floor, and `imapflow` and the
-Supabase SDK want 20+ anyway. The managed deployment builds on Node 22; match it
+RATA needs Node 20.9 or newer — Next 16 sets that floor, and the Supabase SDK
+wants 20+ anyway. The managed deployment builds on Node 22; match it
 here unless you have a reason not to.
 
 ## 2. Get the code onto the box
@@ -63,7 +63,6 @@ Create `/srv/center-point-inbox/rata-next/.env.production` — note that RATA
 reads these at request time, so they are not baked into the build:
 
 ```
-APP_URL=https://mailrata.org
 SUPABASE_URL=https://db.mailrata.org
 SUPABASE_ANON_KEY=<the anon key>
 SUPABASE_SERVICE_ROLE_KEY=<the service_role key>
@@ -71,11 +70,11 @@ NEXT_TELEMETRY_DISABLED=1
 ```
 
 `chmod 600` it. The service_role key bypasses row-level security and can read
-every user's stored mail credentials.
+and write every row in every table.
 
-Optional, when you have them: `GOOGLE_CLIENT_ID`, `MS_CLIENT_ID`,
-`MS_CLIENT_SECRET`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
-`STRIPE_MONTHLY`, `STRIPE_ANNUAL`, `STRIPE_PORTAL`.
+Add the rest from `LAUNCH.md` §4 (the licence keys, `HEALTH_TOKEN`,
+`ANTHROPIC_API_KEY`, the Stripe values), with the same values the managed
+deployment has.
 
 ## 4. Build and run under systemd
 
@@ -107,7 +106,7 @@ WantedBy=multi-user.target
 chown -R www-data:www-data /srv/center-point-inbox
 systemctl daemon-reload && systemctl enable --now rata
 systemctl status rata --no-pager
-curl -s localhost:3000/api/sync/ms      # expect JSON, not HTML
+curl -s localhost:3000/api/health       # expect JSON, not HTML
 ```
 
 `Restart=always` plus `enable` is what makes it survive a crash and a reboot —
