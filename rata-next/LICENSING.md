@@ -22,12 +22,21 @@ something goes wrong.
 
 ## 1. Generate the key pair
 
-Once, on your own machine. Never in a browser, never through chat.
+**RATA already has its pair.** The private half is on the VPS at
+`/etc/rata/licence.key`, and the public half is compiled into every installer
+since v0.1.3. For the website, use that key (LAUNCH.md §2); a new one would
+make every licence the site issues fail in every copy of the app already
+installed. The command below is for a deliberate rotation only, which also
+means shipping a new app build with the new public half.
+
+Once, on your own machine, from the repository root. Never in a browser,
+never through chat. `lib/licence.js` is an ES module, so it is imported, not
+`require()`d (that fails with `ERR_REQUIRE_ESM` before Node 22.12):
 
 ```bash
-node -e "const{generateKeys}=require('./rata-next/lib/licence.js');const k=generateKeys();
-console.log('--- PRIVATE (server only) ---\n'+k.privateKey);
-console.log('--- PUBLIC (ships in the app) ---\n'+k.publicKey)"
+node --input-type=module -e "import { generateKeys } from './rata-next/lib/licence.js'; const k = generateKeys();
+console.log('--- PRIVATE (server only) ---\n' + k.privateKey);
+console.log('--- PUBLIC (ships in the app) ---\n' + k.publicKey)"
 ```
 
 | Half | Where it goes | If it leaks |

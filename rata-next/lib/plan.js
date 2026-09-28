@@ -191,7 +191,7 @@ export function refusal(plan, bucket, used) {
   const many = bucket === 'mail' ? 'mailboxes' : 'chat workspaces';
 
   if (!PLANS[plan]) {
-    return `Choose a plan to connect a ${one}. RATA Base is ${money(PLANS.base.price)} a month and includes up to ${PLANS.base.mail} ${many} in one Center Point inbox.`;
+    return `Choose a plan to connect a ${one}. RATA Base is ${money(PLANS.base.price)} a month and includes up to ${PLANS.base.mail} ${many} in one RATA inbox.`;
   }
 
   const up = nextFor(plan, bucket);
