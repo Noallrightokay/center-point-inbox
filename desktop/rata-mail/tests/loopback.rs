@@ -29,9 +29,10 @@ use async_imap::types::Flag;
 use futures::StreamExt;
 use mail_parser::MimeHeaders;
 use rata_mail::{
-    Account, Acted, Action, Address, Fetched, File, Folder, HostVerdict, Known, Listed, Outgoing,
-    Resolver, Sent, Source, Verify, Watched, act, check_literal, check_resolved, fetch_newest,
-    fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders, send, verify, watch,
+    Account, Acted, Action, Address, Credential, Fetched, File, Folder, HostVerdict, Known, Listed,
+    Outgoing, Resolver, Sent, Source, Verify, Watched, act, check_literal, check_resolved,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders, send, verify,
+    watch,
 };
 use tokio::net::TcpStream;
 
@@ -61,7 +62,7 @@ fn user(tag: &str) -> String {
 fn account(email: &str) -> Account {
     Account {
         email: email.into(),
-        credential: rata_mail::Credential::Password(PASS.into()),
+        credential: Credential::Password(PASS.into()),
         host: HOST.into(),
         port: 993,
         label: "Loopback".into(),
@@ -228,6 +229,60 @@ async fn link_by_explicit_host() {
         Verify::Refused(why) => assert!(why.contains("rejected the sign-in"), "{why}"),
         other => panic!("a wrong password was not read as one: {other:?}"),
     }
+}
+
+/// Set in the child process [`a_typed_server_address_keeps_the_reason_it_failed`]
+/// starts.
+const UNTRUSTING: &str = "RATA_LOOPBACK_UNTRUSTING";
+
+/// Linking by a typed server address whose certificate this machine does not
+/// trust says so, as a refresh does, rather than "Could not reach".
+///
+/// The engine reads the trust store once per process, and this one trusts the
+/// test CA. So the test runs itself again in a process whose `SSL_CERT_FILE`
+/// is the system's own bundle, which does not have it, and does the check
+/// there.
+#[test]
+fn a_typed_server_address_keeps_the_reason_it_failed() {
+    if std::env::var_os(UNTRUSTING).is_none() {
+        let bundle = "/etc/ssl/certs/ca-certificates.crt";
+        assert!(
+            std::path::Path::new(bundle).exists(),
+            "{bundle} is needed as a trust store without the test CA"
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "a_typed_server_address_keeps_the_reason_it_failed",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(UNTRUSTING, "1")
+            .env("SSL_CERT_FILE", bundle)
+            .output()
+            .expect("the test binary runs");
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "{said}");
+        assert!(said.contains("1 passed"), "the check did not run: {said}");
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        match verify(&resolver(), &user("untrusted"), PASS, Some(HOST)).await {
+            Verify::Failed(why) => {
+                assert!(why.contains("could not be trusted"), "{why}");
+                assert!(why.contains("UnknownIssuer"), "{why}");
+                assert!(why.contains(HOST), "{why}");
+            }
+            other => panic!("expected a refusal that says why: {other:?}"),
+        }
+    });
 }
 
 // --------------------------------------------------------------- first sync
@@ -720,4 +775,104 @@ async fn a_rebuilt_folder_is_read_afresh_and_its_old_uids_are_refused() {
         messages(fetch_uids(&r, &acct, Folder::Junk, &now, new).await).len(),
         1
     );
+}
+
+// ---------------------------------------------------------------- GreenMail
+//
+// A server unlike Dovecot in the two ways that found bugs: it declares no
+// special-use folders, so Archive is known only by its name, and it answers a
+// partial fetch as `BODY[]<0>{n}`, which the parser RATA uses cannot read.
+
+/// GreenMail's IMAP over TLS, for the engine.
+const GREENMAIL_TLS: u16 = 3993;
+
+fn greenmail(email: &str) -> Account {
+    Account {
+        port: GREENMAIL_TLS,
+        ..account(email)
+    }
+}
+
+#[tokio::test]
+async fn greenmail_a_refresh_lists_every_message_it_cannot_read_and_says_so() {
+    let r = resolver();
+    let me = user("gm-read");
+    let mut s = session(SINK_PORT, &me).await;
+    put(&mut s, &me, "INBOX", 3, None).await;
+    s.logout().await.unwrap();
+
+    // Every reply with text in it is one RATA cannot read here. The refresh
+    // still succeeds, lists all three, and says each has not been read.
+    let got = fetch_newest(&r, &greenmail(&me), 50, &[])
+        .await
+        .unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+    assert_eq!(
+        in_folder(&got.messages, &Folder::Inbox),
+        ["INBOX 0", "INBOX 1", "INBOX 2"]
+    );
+    for m in &got.messages {
+        assert!(m.uid > 0 && m.uidvalidity > 0, "can be found again: {m:?}");
+        assert!(m.truncated, "opening it fetches it whole: {m:?}");
+        assert!(m.body.contains("RATA"), "says why: {}", m.body);
+        assert!(!m.body.contains("The text of"), "{}", m.body);
+    }
+    eprintln!(
+        "marked: {:?}",
+        got.messages.iter().map(|m| &m.body).collect::<Vec<_>>()
+    );
+
+    // Opening one asks for it whole, which GreenMail sends in a form that
+    // can be read.
+    let m = &got.messages[0];
+    match fetch_whole(&r, &greenmail(&me), Folder::Inbox, m.uid, m.uidvalidity).await {
+        Whole::Raw(raw) => {
+            let text = String::from_utf8_lossy(&raw);
+            let want = format!("The text of {}.", m.subject);
+            assert!(text.contains(&want), "{text}");
+        }
+        other => panic!("opening it failed: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn greenmail_archive_by_name_is_read_and_archived_to() {
+    let r = resolver();
+    let me = user("gm-archive");
+    let acct = greenmail(&me);
+    let mut s = session(SINK_PORT, &me).await;
+    s.create("Archive").await.unwrap();
+    put(&mut s, &me, "INBOX", 2, None).await;
+    let (uv, inbox) = uids(&mut s, "INBOX").await;
+    assert_eq!(inbox.len(), 2);
+
+    // Delete still wants a folder the server declares as Trash, and there
+    // is none: refused, nothing touched.
+    assert!(matches!(
+        act(&r, &acct, Folder::Inbox, &inbox, uv, Action::Trash).await,
+        Acted::NoPlace(_)
+    ));
+    assert_eq!(uids(&mut s, "INBOX").await.1, inbox);
+
+    // Archive, on a server that declares no \Archive, only a folder named so.
+    match act(&r, &acct, Folder::Inbox, &inbox, uv, Action::Archive).await {
+        Acted::Done { done, gone } => {
+            assert_eq!(done, inbox);
+            assert!(gone.is_empty());
+        }
+        other => panic!("archiving was refused: {other:?}"),
+    }
+    let (_, archived) = uids(&mut s, "Archive").await;
+    assert_eq!(archived.len(), 2, "both are in Archive now");
+    s.logout().await.unwrap();
+
+    // A refresh reads that folder as the archive, so the mail is shown where
+    // it was put, and not in the inbox.
+    let got = fetch_newest(&r, &acct, 50, &[])
+        .await
+        .unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+    assert_eq!(
+        in_folder(&got.messages, &Folder::Archive),
+        ["INBOX 0", "INBOX 1"]
+    );
+    assert!(in_folder(&got.messages, &Folder::Inbox).is_empty());
 }

@@ -9,11 +9,17 @@ on:
     branches: [main, develop]
     paths:
       - "desktop/**"
+      # Named although desktop/** covers it, so the harness stays a trigger if
+      # that line is ever narrowed.
+      - "desktop/rata-app/harness/**"
+      # The interface the harness drives, and the shell's web assets.
+      - "rata-next/public/**"
       - ".github/workflows/desktop-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "desktop/**"
+      - "desktop/rata-app/harness/**"
       # The shell build assembles its web assets from rata-next/public, so a
       # change there can break this build without touching desktop/ at all.
       - "rata-next/public/**"
@@ -188,3 +194,56 @@ jobs:
       - name: Tests
         run: cargo test --all-targets
         working-directory: desktop/rata-app/src-tauri
+
+  # The interface, driven. ui-harness.mjs opens ui/ exactly as sync-ui.sh
+  # assembles it, under the app's own CSP from tauri.conf.json, with a fake
+  # Tauri backend, and clicks through what the bridge promises. Until this job
+  # it ran only when someone remembered to, so an app.html change that broke
+  # the desktop app's behaviour could merge green. No Rust here: the harness
+  # needs the assembled pages, Node and a browser, nothing compiled.
+  harness:
+    name: Desktop interface, driven
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: rata-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: rata-next
+
+      # The harness imports Playwright from rata-next/node_modules, so the
+      # browser is installed by that same pinned copy (run from rata-next): the
+      # revision it downloads is the one the harness launches. Neither step
+      # sets PLAYWRIGHT_BROWSERS_PATH, so both use the default cache.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: rata-next
+
+      # Server and harness in one step, so the server is certainly up for the
+      # whole run and certainly gone after it.
+      - name: Drive the interface
+        run: |
+          python3 -m http.server 3181 --bind 127.0.0.1 --directory desktop/rata-app/ui \
+            > "$RUNNER_TEMP/http.log" 2>&1 &
+          # Quiet while it waits; the check after the loop says what went wrong.
+          for _ in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:3181/app.html && break
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:3181/app.html || {
+            cat "$RUNNER_TEMP/http.log"
+            echo "::error::the interface server did not start"
+            exit 1
+          }
+          node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181

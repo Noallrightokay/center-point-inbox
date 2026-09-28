@@ -24,7 +24,7 @@
    Regenerate after any UI change:  npm run preview
 */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -89,7 +89,9 @@ const demo = {
     { id: BILLING, type: 'mail', label: 'billing@reyesandco.com', status: 'live', addedAt: now - 86400000 * 9, lastSync: hrs(3), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
     { id: LEGAL, type: 'mail', label: 'contracts@reyesandco.com', status: 'live', addedAt: now - 86400000 * 9, lastSync: hrs(4), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
     { id: SUPPORT, type: 'mail', label: 'hello@reyesandco.com', status: 'live', addedAt: now - 86400000 * 7, lastSync: hrs(2), host: 'imap.reyesandco.com', provLabel: 'reyesandco.com' },
-    { id: OLD, type: 'mail', label: 's.reyes@outlook.com', status: 'live', addedAt: now - 86400000 * 30, lastSync: hrs(20), host: 'outlook.office365.com', provLabel: 'Outlook' },
+    /* Not a Microsoft address: RATA cannot link those yet (Microsoft accepts
+       only its own OAuth sign-in), so the preview must not show one working. */
+    { id: OLD, type: 'mail', label: 's.reyes@icloud.com', status: 'live', addedAt: now - 86400000 * 30, lastSync: hrs(20), host: 'imap.mail.me.com', provLabel: 'iCloud' },
   ],
   rules: [],
   plugins: { split: false, jobs: false, slack: false, sms: false, discord: false, autopilot: false },
@@ -282,6 +284,8 @@ html = insertBeforeLast(html, '</html>', engines + '\n' + harness);
 /* The tab name should say what this is. */
 html = html.replace(/<title>[\s\S]*?<\/title>/, '<title>RATA Preview</title>');
 
+/* preview/ is gitignored, so a fresh checkout does not have it. */
+mkdirSync(join(here, '..', 'preview'), { recursive: true });
 const out = join(here, '..', 'preview', 'rata-preview.html');
 writeFileSync(out, html);
 console.log(`wrote ${out}  (${(html.length / 1048576).toFixed(2)} MB)`);

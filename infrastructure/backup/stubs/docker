@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Stands in for `docker compose exec -T db pg_dump ...` in selftest.sh.
+#
+# Shaped like what pg_dump writes for RATA's database with the flags backup.sh
+# passes: --quote-all-identifiers COPY blocks for auth.users,
+# public.workspaces, public.subscriptions and public.ai_usage, the \restrict
+# lines pg_dump 16.10+ writes, and the closing line every complete dump ends
+# with. Knobs, to break it on purpose:
+#   TINY=1         exit 0 having written nothing useful
+#   TRUNCATE=1     stop in the middle of a table, exit 0 (the sneaky one)
+#   FAIL_DUMP=1    write half a dump, then exit 1, as a dropped connection does
+#   NO_AI_USAGE=1  a database that database.sql section 5 was never run on
+#   ROWS=n         rows per table (default 50)
+# Every call's arguments are appended to $STUB_ARGS when it is set.
+# shellcheck disable=SC2016,SC2028  # the $ and \ in the printed lines are data
+[ -n "${STUB_ARGS:-}" ] && echo "$*" >> "$STUB_ARGS"
+shift 4   # compose exec -T <service>
+[ "$1" = pg_dump ] || { echo "stub docker: unexpected command $1" >&2; exit 2; }
+if [ -n "${TINY:-}" ]; then echo "-- nothing came back"; exit 0; fi
+
+N=${ROWS:-50}
+top() { echo "--"; echo "-- PostgreSQL database dump"; echo "--"; echo; echo '\restrict Xstubstubstub'; }
+end() { echo; echo "--"; echo "-- PostgreSQL database dump complete"; echo "--"; echo; echo '\unrestrict Xstubstubstub'; }
+
+case " $* " in
+  *" --schema-only "*)
+    top
+    echo 'CREATE TABLE "public"."subscriptions" ("email" "text" NOT NULL);'
+    echo 'CREATE TABLE "public"."workspaces" ("id" "uuid" NOT NULL, "data" "jsonb");'
+    end; exit 0 ;;
+esac
+
+top
+echo 'COPY "auth"."users" ("id", "email", "encrypted_password") FROM stdin;'
+for i in $(seq 1 "$N"); do
+  printf '0000-%s\tuser%s@example.com\t$2a$10$K8mQ2vN9xJpL4wR7tY3uEeH1sA6dF0gB5cX2zV8nM4qW7jT9kP3rO\n' "$i" "$i"
+done
+echo '\.'
+if [ -n "${FAIL_DUMP:-}" ]; then
+  echo 'pg_dump: error: Dumping the contents of table "workspaces" failed: server closed the connection unexpectedly' >&2
+  exit 1
+fi
+echo 'COPY "public"."workspaces" ("id", "data", "updated_at") FROM stdin;'
+for i in $(seq 1 "$N"); do
+  printf '0000-%s\t{"v": 6, "rules": [{"if": "from", "is": "billing@", "then": "Finance"}], "linked": [{"id": "lk-a", "label": "user%s@example.com", "host": "imap.gmail.com"}], "folders": ["Clients", "Invoices"], "settings": {"notify": "full"}}\t2026-09-28 03:00:00+00\n' "$i" "$i"
+  if [ -n "${TRUNCATE:-}" ] && [ "$i" -ge $((N / 2)) ]; then exit 0; fi
+done
+echo '\.'
+echo 'COPY "public"."subscriptions" ("email", "plan", "status", "stripe_customer", "domain_addons", "event_at", "updated_at") FROM stdin;'
+for i in $(seq 1 "$N"); do
+  printf 'user%s@example.com\tpro\tactive\tcus_TEST%s\t0\t2026-09-01 00:00:00+00\t2026-09-01 00:00:00+00\n' "$i" "$i"
+done
+echo '\.'
+if [ -z "${NO_AI_USAGE:-}" ]; then
+  echo 'COPY "public"."ai_usage" ("email", "month", "micro_usd", "requests", "updated_at") FROM stdin;'
+  printf 'user1@example.com\t2026-09\t1234\t3\t2026-09-28 00:00:00+00\n'
+  echo '\.'
+fi
+echo "-- CANARY-ROW-THAT-MUST-SURVIVE-THE-ROUND-TRIP"
+end

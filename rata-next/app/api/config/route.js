@@ -9,8 +9,8 @@ export const dynamic = 'force-dynamic';
    variables instead of a hand-edited file.
 
    Everything here ships to every visitor's browser. Only publishable values
-   belong in it: the Supabase URL and anon key (which RLS is designed to expose),
-   the Google OAuth client ID, and Stripe payment links. SUPABASE_SERVICE_ROLE_KEY
+   belong in it: the Supabase URL and anon key (which RLS is designed to expose)
+   and Stripe payment links. SUPABASE_SERVICE_ROLE_KEY
    is deliberately not read anywhere in this file — it bypasses row-level
    security and is server-only.
 
@@ -21,7 +21,9 @@ export const dynamic = 'force-dynamic';
 const PUBLIC_CONFIG = [
   ['supabaseUrl',    'SUPABASE_URL'],
   ['supabaseKey',    'SUPABASE_ANON_KEY'],
-  ['googleClientId', 'GOOGLE_CLIENT_ID'],
+  /* No Google client ID: nothing has read one since 0.1.6 removed Gmail in
+     the browser, and a value no page uses is still one more thing published
+     to every visitor. */
   /* One checkout link per plan. These are Stripe Payment Links — public URLs
      by design, which is why they belong here and the signing secret does not. */
   ['stripeBase',       'STRIPE_BASE'],

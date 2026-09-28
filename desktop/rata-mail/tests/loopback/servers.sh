@@ -11,12 +11,15 @@
 #              put mail in place and to rebuild folders behind RATA's back.
 #   GreenMail  SMTP over TLS on 127.0.0.1:465, the first port RATA tries, as the
 #              sink a sent message lands in; plain IMAP on 127.0.0.1:3143 so a
-#              test can read back exactly what the sink received.
+#              test can read back exactly what the sink received; and IMAP over
+#              TLS on 127.0.0.1:3993, for the few tests that need a server
+#              unlike Dovecot (below).
 #
-# Not GreenMail for RATA's IMAP too: it declares no special-use folders, and it
-# answers a partial fetch as `BODY[]<0>{71}` with no space before the literal,
-# which RFC 3501 requires and the IMAP parser RATA uses rejects, so no refresh
-# against it gets past the first message.
+# Dovecot, not GreenMail, is RATA's IMAP server for most tests: GreenMail
+# declares no special-use folders, and it answers a partial fetch as
+# `BODY[]<0>{71}` with no space before the literal, which RFC 3501 requires and
+# the IMAP parser RATA uses rejects. Those two differences are exactly what the
+# GreenMail tests in loopback.rs are for.
 #
 # Both present a certificate for 127.0.0.1 signed by a CA made here, now, and
 # thrown away with the directory. RATA trusts it only because the test process
@@ -187,11 +190,13 @@ fi
 echo "$GREENMAIL_SHA256  $jar" | sha256sum -c --quiet -
 
 # Standard SMTPS (465) for the engine; the test-offset plain IMAP (3143) for
-# the test to read the sink back. auth.disabled: any user name and password is
-# accepted and an account is made on first delivery, which is what a sink is.
+# the test to read the sink back; IMAPS (3993) for the engine. auth.disabled:
+# any user name and password is accepted and an account is made on first
+# delivery or sign-in, which is what a sink is.
 nohup java \
   -Dgreenmail.setup.smtps \
   -Dgreenmail.setup.test.imap \
+  -Dgreenmail.setup.test.imaps \
   -Dgreenmail.hostname=127.0.0.1 \
   -Dgreenmail.auth.disabled \
   -Dgreenmail.tls.keystore.file="$dir/greenmail.p12" \
@@ -204,7 +209,7 @@ echo $! > "$dir/greenmail.pid"
 ready() {
   (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
-for port in 993 1143 465 3143; do
+for port in 993 1143 465 3143 3993; do
   for _ in $(seq 1 60); do
     if ready "$port"; then
       continue 2
@@ -215,5 +220,5 @@ for port in 993 1143 465 3143; do
   tail -n 40 "$dir/dovecot.log" "$dir/greenmail.log" >&2 || true
   exit 1
 done
-echo "Dovecot on 127.0.0.1:993 (TLS) and :1143, GreenMail on 127.0.0.1:465 (TLS) and :3143."
+echo "Dovecot on 127.0.0.1:993 (TLS) and :1143, GreenMail on 127.0.0.1:465 (TLS), :3143 and :3993 (TLS)."
 echo "Run the tests with SSL_CERT_FILE=$dir/ca.crt"

@@ -34,12 +34,17 @@ export default async function run(state) {
       SUPABASE_URL: 'https://demo.supabase.co',
       SUPABASE_ANON_KEY: anon,
       STRIPE_PRO: 'https://buy.stripe.com/x";alert(1);//',
+      GOOGLE_CLIENT_ID: 'leftover-client.apps.googleusercontent.com',
     }});
     try {
-      const { cfg } = await load(s.url);
+      const { cfg, body } = await load(s.url);
       check(cfg.supabaseUrl === 'https://demo.supabase.co', `supabaseUrl: ${cfg.supabaseUrl}`);
       check(cfg.supabaseKey === anon, 'anon key published as-is');
       check(cfg.stripePro === 'https://buy.stripe.com/x";alert(1);//', 'quote/semicolon payload survived escaping intact, still parsed as one string');
+      /* Nothing reads a Google client ID since 0.1.6, so one left in the
+         host's settings is not published. */
+      check(!('googleClientId' in cfg) && !body.includes('leftover-client'),
+        'a GOOGLE_CLIENT_ID left in the environment is not published');
     } finally { await s.stop(); }
   }
 
