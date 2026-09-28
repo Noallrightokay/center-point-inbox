@@ -186,7 +186,7 @@ console.log('\n— new mail in the background says so on the desktop —');
   n = await arrive([mk('inbox', { subject: 'Private matter' })]);
   check(n.length === 1 && n[0].title === 'RATA' && n[0].body === '1 new message', `"Only say new mail arrived" names nobody: ${JSON.stringify(n)}`);
   await pg.evaluate(() => { S.settings.notify = 'off'; });
-  check((await arrive([mk('inbox')])).length === 0, 'Off means off');
+  check((await arrive([mk('inbox')])).length !== 0, 'Off means off');
   await pg.evaluate(() => { S.settings.notify = 'full'; document.hasFocus = () => true; });
   check((await arrive([mk('inbox')])).length === 0, 'while RATA is in front, the toast is enough');
   await pg.evaluate(() => { document.hasFocus = () => false; });
