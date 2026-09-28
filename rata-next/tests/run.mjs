@@ -3,6 +3,7 @@
 const SUITES = [
   ['config route',       './config-route.test.mjs'],
   ['Stripe webhook',     './stripe.test.mjs'],
+  ['plans',              './plan.test.mjs'],
   ['account deletion',   './account-delete.test.mjs'],
   ['domain redirect',    './redirect.test.mjs'],
   ['health endpoint',    './health.test.mjs'],

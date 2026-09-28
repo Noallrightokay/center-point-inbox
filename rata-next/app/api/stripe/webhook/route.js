@@ -11,11 +11,13 @@ export const dynamic = 'force-dynamic';
    client read a plan from, so nothing else in RATA needs to know Stripe
    exists.
 
-   Two rules shape the replies. Anything Stripe does not get a 200 for is
-   retried, so an event we do not act on still gets a 200 — "understood,
-   nothing to do" — rather than an error that brings it back every few minutes
-   for days. And a failure on our side gets a 500 on purpose, because that
-   retry is exactly what we want. */
+   Two rules shape the replies. Stripe retries anything it does not get a 2xx
+   for, whatever the status — in live mode for up to three days with
+   exponential back-off, in a sandbox three times over a few hours — so an
+   event we do not act on still gets a 200 ("understood, nothing to do")
+   rather than an error that brings it back again and again. And a failure on
+   our side gets a 500 on purpose, because that retry is exactly what we
+   want. */
 export async function POST(req) {
   /* The raw body, before any parsing: the signature covers the exact bytes
      Stripe sent, so re-serialising parsed JSON would never match. */
@@ -23,8 +25,12 @@ export async function POST(req) {
 
   const sig = verifySignature(raw, req.headers.get('stripe-signature'), process.env.STRIPE_WEBHOOK_SECRET);
   if (!sig.ok) {
-    /* 400, not 500: a bad signature is not something a retry will fix, and
-       Stripe stops rather than hammering an endpoint that rejects it. */
+    /* 400: the request is refused, and nothing is written. A 4xx does not
+       stop Stripe retrying; it retries this like any other failure, and signs
+       each retry afresh. That is harmless for a forgery, which never came from
+       Stripe, and useful for a real event refused because
+       STRIPE_WEBHOOK_SECRET was wrong or unset: once it is corrected, the
+       next retry within the three days verifies and lands. */
     return NextResponse.json({ error: sig.error }, { status: 400 });
   }
 

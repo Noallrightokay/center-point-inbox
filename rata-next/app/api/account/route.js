@@ -7,9 +7,11 @@ export const dynamic = 'force-dynamic';
 /* Deleting an account, and meaning it.
 
    Everything RATA holds for a person comes out: the preferences, the
-   subscription record, and the login itself. Both tables cascade from
-   auth.users anyway, but they are deleted explicitly so the reply can say what
-   went and so this keeps working if the schema's cascades ever change.
+   subscription record, what the AI relay charged them, and the login itself.
+   Only workspaces cascades from auth.users (database.sql §1); subscriptions
+   and ai_usage are keyed by email with no link to the login, so without these
+   deletes they would outlive it. Each is deleted explicitly so the reply can
+   say what went.
 
    There is much less to delete than there was, and that is the point of the
    move to the device: the mailbox passwords RATA used to hold are in the
@@ -20,6 +22,13 @@ export const dynamic = 'force-dynamic';
    the mail, which never left the customer's provider; anything the app holds
    on their own machine; and Stripe's billing records, which Stripe is required
    to keep. */
+
+/* PostgREST's answer for a table that is not there: PGRST205 ("Could not find
+   the table … in the schema cache") from current versions, and Postgres's own
+   42P01 (undefined_table) from older ones. Anything else is a real failure. */
+function tableMissing(e) {
+  return e?.code === 'PGRST205' || e?.code === '42P01';
+}
 
 export async function DELETE(req) {
   const { user, sb, error } = await userFromRequest(req);
@@ -41,8 +50,9 @@ export async function DELETE(req) {
   if (blocked) return NextResponse.json({ error: blocked, subscription: sub?.status }, { status: 409 });
 
   const removed = {};
-  const wipe = async (table, column, value) => {
+  const wipe = async (table, column, value, { mayBeMissing = false } = {}) => {
     const { data, error: e } = await sb.from(table).delete().eq(column, value).select(column);
+    if (e && mayBeMissing && tableMissing(e)) { removed[table] = 0; return; }
     if (e) throw new Error(`${table}: ${e.message}`);
     removed[table] = data ? data.length : 0;
   };
@@ -50,6 +60,12 @@ export async function DELETE(req) {
   try {
     await wipe('workspaces', 'id', user.id);
     await wipe('subscriptions', 'email', email);
+    /* What the AI relay charged this address, month by month. The table
+       exists only once database.sql §5 has been run; on a deploy without it
+       there is nothing to delete, which is no reason to leave the login
+       behind, and the reply says 0 rather than passing on the database's
+       message. */
+    await wipe('ai_usage', 'email', email, { mayBeMissing: true });
 
     const { error: e } = await sb.auth.admin.deleteUser(user.id);
     if (e) throw new Error('login: ' + e.message);
