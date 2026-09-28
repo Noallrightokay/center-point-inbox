@@ -1,31 +1,48 @@
 # Backups, and getting back from one
 
-Everything RATA holds for a customer is in one Postgres on one VPS: the logins,
-the plans, and the encrypted mailbox credentials. At three thousand customers
-that is a forty-eight-thousand-dollar-a-month business sitting on a single disk.
-This is the cheapest insurance in the whole system and the one most often left
-until after it was needed.
+Everything RATA's server holds for a customer is in one Postgres (the
+self-hosted Supabase behind `db.mailrata.org`) on one VPS. It is small, and
+it is what turns "paid" into "licensed":
+
+| Where | What | Why it matters |
+|---|---|---|
+| `auth.users` | website logins (Supabase Auth) | a customer signs in to `/account` to get their licence key |
+| `public.subscriptions` | one row per paying address: plan, status, Stripe customer id | licence issue and renewal read it; lose it and nobody can renew |
+| `public.ai_usage` | per address and month, what AI cost (a number, no text) | the monthly AI cap; losing it resets this month's totals, nothing worse |
+| `public.workspaces` | each account's synced preferences, folder names, rules and linked mailbox addresses (no passwords, no mail, no signatures) | a customer's settings on a new device |
+
+There is no mail and no mail password in it. Mailbox passwords are in each
+customer's own OS keychain and mail stays at their provider; the desktop app
+never sends either to RATA. (A database set up before the desktop app may
+still hold the retired `provider_tokens` and `link_states` tables:
+ciphertext nothing reads any more. `database.sql` section 4 says how to
+drop them. Until you do, they are in every backup too.)
 
 `backup.sh` dumps nightly, encrypts, and ships the copy off the box. Set it up
 with the instructions at the top of the script.
 
-## The key is not in the backup, and must not be
+## The licence key is not in the backup, and must not be
 
-Mailbox credentials are encrypted with `TOKEN_ENC_KEY`, which lives in the
-environment, not the database. Two consequences, and they pull in opposite
-directions:
+The other thing the business cannot lose is the **licence signing key**:
+the Ed25519 private key at `/etc/rata/licence.key` on the VPS, which the
+website holds as `LICENCE_PRIVATE_KEY` (see `rata-next/LICENSING.md`). It
+lives in a file and in the host's environment, not in the database, so a
+database backup does not contain it. Two consequences, and they pull in
+opposite directions:
 
-- **Lose the key and the backup cannot give you the mailboxes.** The rows
-  restore, the passwords inside them stay shut, and every customer has to relink
-  every mailbox. Accounts and billing survive; mail connections do not.
-- **Store the key with the backup and one stolen file is everything.** The
-  encryption exists precisely so that a copy of the database is not a copy of
-  everyone's mail credentials. Putting the key beside it undoes that.
+- **Lose the key and a restored database cannot issue a licence.** The
+  subscriptions come back, but no licence can be issued or renewed until a
+  new key is made and a new app build ships with its public half, which
+  every customer then has to install. Licences already issued keep working
+  until they expire, at most thirty days.
+- **Store the key with the backup and one stolen file lets anyone mint
+  licences** for any address and plan, until you rotate the key and ship
+  that new build anyway.
 
-So keep `TOKEN_ENC_KEY` somewhere durable and *separate*: a password manager, a
-sealed envelope, anywhere that is not the backup bucket. Write down which key
-was current on which date — `TOKEN_ENC_KEY_OLD` exists for rotation, and a
-restore of an older backup may need the key that was current then.
+So keep a copy of `/etc/rata/licence.key` somewhere durable and *separate*:
+a password manager, a sealed envelope, anywhere that is not the backup
+bucket. The same goes for `BACKUP_PASSPHRASE`: a backup nobody can decrypt
+is not a backup.
 
 ## Restoring
 
@@ -41,26 +58,31 @@ gpg --batch --passphrase "$BACKUP_PASSPHRASE" -d rata-<stamp>.sql.gz.gpg | gunzi
 # 2. Load it into a database that is NOT production
 docker compose exec -T db psql --username postgres < rata.sql
 
-# 3. Check the three things that matter
+# 3. Check the things that matter
 docker compose exec -T db psql --username postgres -c \
   "select count(*) from auth.users; \
    select count(*) from public.subscriptions where status in ('active','trialing'); \
-   select count(*) from public.provider_tokens;"
+   select count(*) from public.ai_usage; \
+   select count(*) from public.workspaces;"
 ```
 
-Then the check that actually proves it: bring the app up against the restored
-database with the **same `TOKEN_ENC_KEY`**, sign in as a test account, and sync a
-mailbox. If the mail arrives, the restore is real. Row counts only prove the
-rows came back.
+Then the check that actually proves it: bring the website up against the
+restored database with the **same `LICENCE_PRIVATE_KEY`**, sign in to
+`/account` as a test account that has a subscription, and paste the licence
+key it shows into a released app. If the app accepts it, the restore is
+real. Row counts only prove the rows came back.
 
 ## What this does not cover
 
-- **The customers' mail.** It was never RATA's to back up — it is at their
-  provider, which is the entire point of the local-first design.
-- **Anything on a customer's device.** Messages, files and the audit chain live
-  there. That is deliberate and documented in BACKEND-SETUP.md; it also means a
-  customer who loses their laptop loses those, and they should be told so plainly
-  rather than discovering it.
+- **The customers' mail and mail passwords.** They were never RATA's to back
+  up: the mail is at their provider and the passwords are in their own
+  keychain, which is the entire point of the local-first design.
+- **Anything on a customer's device.** Messages, signatures, files and the
+  audit chain live there. That is deliberate (see the top of `CLAUDE.md`);
+  it also means a customer who loses their laptop loses those, and they
+  should be told so plainly rather than discovering it. Their mail is still
+  at their provider, and RATA fetches it again.
+- **The licence signing key.** See above: back it up yourself, separately.
 - **The VPS itself.** This restores the data, not the machine. Hostinger's own
   snapshots cover the box; they are not a substitute for this, because a snapshot
   of a corrupted database is a corrupted database.
@@ -103,8 +125,8 @@ a backup.
 `https://mailrata.org/api/health` — not `/`. The front page answers 200 for as
 long as the web server is alive, which is the least interesting thing that can
 be true about RATA. It stays 200 while Supabase is unreachable and nobody can
-sign in, and while `TOKEN_ENC_KEY` is missing and every attempt to link a
-mailbox is refused.
+sign in, and while `LICENCE_PRIVATE_KEY` is missing and no licence can be
+issued or renewed.
 
 That second one is why the endpoint exists. It is not a crash, it is a
 variable, and a variable can go missing on any redeploy without producing a
@@ -118,8 +140,8 @@ GET /api/health          -> {"ok":true,"ready":true,"service":"rata","time":"...
 `ok` and `ready` are different questions. **ok** is "can this serve at all" and
 is the only thing that sets the status code, so a deliberately unconfigured
 deployment does not page anyone at three in the morning. **ready** is
-"everything the product needs is configured" — database, encryption key, Stripe
-signing secret. A launch monitor should alert on `ok`; a pre-launch one can
+"everything the product needs is configured" — database, licence signing key,
+Stripe signing secret. A launch monitor should alert on `ok`; a pre-launch one can
 watch `ready` to know when the runbook is finished.
 
 The public body names which checks are failing but never why, and never an
@@ -135,7 +157,7 @@ Free tiers cover all of this at RATA's size.
 |---|---|---|
 | **Uptime** | `GET /api/health` every 5 min | non-200, twice in a row |
 | **Backup ran** | a healthchecks.io check, pinged by `HEARTBEAT_URL` in `backup.sh` | the nightly ping does not arrive |
-| **Errors** | a Sentry (or equivalent) DSN in the app | anything unhandled |
+| **Errors** | an error tracker (Sentry or similar); none is wired into the site today | anything unhandled |
 
 The middle one is the one people skip and the one that matters most. A cron job
 that stops running makes no noise, and silence is indistinguishable from

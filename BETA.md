@@ -25,7 +25,7 @@ Download from the latest release:
 The warnings are because the installers are not code-signed yet. That is
 expected for the beta.
 
-**Check your version:** it is in the window's title bar — `RATA 0.1.6 beta`.
+**Check your version:** it is in the window's title bar, as `RATA <version> beta`.
 Put it in every bug report.
 
 ## 2. Licence key
@@ -46,10 +46,13 @@ Your normal account password will be refused. Mail providers require an
 | Provider | Where |
 |---|---|
 | Gmail | https://myaccount.google.com/apppasswords (needs 2-Step Verification on) |
-| Outlook / Hotmail | https://account.live.com/proofs/AppPassword |
 | iCloud | https://account.apple.com → Sign-In and Security → App-Specific Passwords |
 | Yahoo | Account Security → Generate app password |
 | Fastmail | Settings → Privacy & Security → App passwords |
+
+Outlook, Hotmail and Microsoft 365 mailboxes are not supported yet: Microsoft
+no longer lets mail apps sign in to them over IMAP with a password, even an
+app password, and requires OAuth sign-in, which RATA does not do yet.
 
 Enter your email address and the app password. RATA works out the server
 itself. Only if it asks, enter your provider's IMAP server name
@@ -230,7 +233,7 @@ What makes a report fixable in minutes rather than days:
 
 1. **The exact error text**, copied, not paraphrased. RATA's errors are written
    to be diagnostic — they name the servers it tried and what each one said.
-2. **Your provider** (Gmail, Outlook, a work domain on Google Workspace…).
+2. **Your provider** (Gmail, iCloud, a work domain on Google Workspace…).
 3. **Version** from the title bar, and your OS.
 4. **What you did, what you expected, what happened.**
 5. A screenshot if the problem is something you see rather than an error.
