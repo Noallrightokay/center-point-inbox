@@ -336,7 +336,8 @@ async fn open(resolver: &Resolver, host: &str, port: u16) -> Result<Client<Tls>,
             "{host} closed the connection without answering."
         ))),
         Ok(Err(e)) => Err(Trouble::Net(format!(
-            "{host} did not answer as a mail server: {e}"
+            "{host} did not answer as a mail server: {}",
+            io_reason(&e)
         ))),
         Err(_) => Err(Trouble::Net(format!("{host} did not answer in time."))),
     }
@@ -463,13 +464,13 @@ where
         Ok(Err((ImapError::No(why), _))) => Err(Trouble::OAuth(said(why))),
         // The server's error report came first: that is its verdict, however
         // the exchange then ended.
-        Ok(Err((e, _))) if auth.refused.is_some() => Err(Trouble::OAuth(said(e.to_string()))),
+        Ok(Err((e, _))) if auth.refused.is_some() => Err(Trouble::OAuth(said(reason(&e)))),
         // BAD is about the conversation — most likely a server that does not
         // know XOAUTH2 at all. Nothing was said about the token.
         Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
             "the server did not understand the sign-in: {why}"
         ))),
-        Ok(Err((e, _))) => Err(Trouble::Net(e.to_string())),
+        Ok(Err((e, _))) => Err(Trouble::Net(reason(&e))),
         Err(_) => Err(Trouble::Net("the sign-in did not finish in time".into())),
     }
 }
@@ -495,9 +496,10 @@ where
         Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
             "the server did not understand the sign-in: {why}"
         ))),
+        // Judged on everything the library said, reported in a line of RATA's.
         Ok(Err((e, _))) => {
-            let msg = e.to_string();
-            if is_auth_failure(&msg) {
+            let msg = reason(&e);
+            if !unreadable(&e) && is_auth_failure(&e.to_string()) {
                 Err(Trouble::Auth(msg))
             } else {
                 Err(Trouble::Net(msg))
@@ -636,9 +638,7 @@ pub async fn verify_with(
     }
 
     if let Some(given) = host_override {
-        return Verify::Failed(format!(
-            "Could not reach {given}. Check the server address with your mail provider."
-        ));
+        return Verify::Failed(typed_host_failed(given, last_net.as_deref()));
     }
 
     let domain = domain_of(email);
@@ -666,6 +666,22 @@ pub async fn verify_with(
     Verify::NeedsHost(format!(
         "RATA checked {domain}’s DNS and tried {names} without finding a mailbox{because}. Enter the IMAP server address below — your provider or IT administrator lists it as \"IMAP server\" or \"incoming mail server\"."
     ))
+}
+
+/// What to tell someone whose typed server address did not work, with the
+/// reason when there is one: an untrusted certificate, a refused port and a
+/// wrong name are fixed in different places, and a refresh of the same server
+/// already says which.
+fn typed_host_failed(given: &str, why: Option<&str>) -> String {
+    match why.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(why) => format!(
+            "Could not connect to {given}: {}. Check the server address with your mail provider.",
+            why.trim_end_matches('.')
+        ),
+        None => {
+            format!("Could not reach {given}. Check the server address with your mail provider.")
+        }
+    }
 }
 
 /// What to tell someone whose password was refused. Almost always the same
@@ -821,21 +837,20 @@ pub async fn fetch_newest(
         }
     };
 
-    let found = newest_everywhere(&mut session, acct, limit, known).await;
+    let mut dial = Redial::new(Server { resolver, acct });
+    let found = newest_everywhere(&mut session, &mut dial, acct, limit, known).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
 
 /// The part of [`fetch_newest`] that talks to a signed-in session.
-async fn newest_everywhere<T>(
-    session: &mut Session<T>,
+async fn newest_everywhere<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     limit: u32,
     known: &[Known],
-) -> Result<Newest, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Result<Newest, Fetched> {
     let held = |folder: &Folder| known.iter().find(|k| k.folder == *folder);
     let Ok(Ok(mailbox)) = timeout(COMMAND, session.select("INBOX")).await else {
         return Err(Fetched::Net(format!(
@@ -845,6 +860,7 @@ where
     };
     let mut found = refresh_in(
         session,
+        dial,
         acct,
         &Folder::Inbox,
         &mailbox,
@@ -853,19 +869,27 @@ where
     )
     .await?;
     // The other folders are a bonus: any that is missing, will not open or
-    // fails partway is left out, and the inbox still arrives.
+    // fails partway is left out, and the inbox still arrives. So is the rest
+    // of them when a reply RATA could not read has left the connection
+    // unusable and no other may be opened.
+    if !dial.revive(session).await {
+        return Ok(found);
+    }
     let places = places(session).await;
     for folder in [Folder::Sent, Folder::Archive, Folder::Junk, Folder::Drafts] {
         let Some(name) = places.name(&folder) else {
             continue;
         };
+        if !dial.revive(session).await {
+            break;
+        }
         let Selected::Open(mailbox) = select_name(session, name).await else {
             continue;
         };
         let read = if folder == Folder::Archive && places.all_mail {
-            refresh_archived(session, acct, &mailbox, limit, held(&folder)).await
+            refresh_archived(session, dial, acct, &mailbox, limit, held(&folder)).await
         } else {
-            refresh_in(session, acct, &folder, &mailbox, limit, held(&folder)).await
+            refresh_in(session, dial, acct, &folder, &mailbox, limit, held(&folder)).await
         };
         if let Ok(mut more) = read {
             found.messages.append(&mut more.messages);
@@ -874,7 +898,7 @@ where
             if more.archived.is_some() {
                 found.archived = more.archived;
             }
-            if folder == Folder::Drafts {
+            if folder == Folder::Drafts && !dial.dead {
                 found.drafts = all_ids(session, acct, &folder).await;
             }
         }
@@ -932,23 +956,21 @@ where
 }
 
 /// One folder of a refresh, just selected: see [`fetch_newest`].
-async fn refresh_in<T>(
-    session: &mut Session<T>,
+async fn refresh_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     mailbox: &async_imap::types::Mailbox,
     limit: u32,
     known: Option<&Known>,
-) -> Result<Newest, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Result<Newest, Fetched> {
     let generation = mailbox.uid_validity.unwrap_or(0);
     let Some(since) = known
         .filter(|k| k.since > 0 && generation != 0 && k.uidvalidity == generation)
         .map(|k| k.since)
     else {
-        let messages = newest_in(session, acct, folder, mailbox, limit).await?;
+        let messages = newest_in(session, dial, acct, folder, mailbox, limit).await?;
         return Ok(Newest {
             messages,
             ..Newest::default()
@@ -962,13 +984,11 @@ where
     // Read and starred for the newest `limit`, as the server has them now.
     // No text: RATA has these already.
     let from = mailbox.exists.saturating_sub(limit - 1).max(1);
-    let recent = match timeout(COMMAND, session.fetch(format!("{from}:*"), "(UID FLAGS)")).await {
-        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
-        _ => return Err(listing_failed()),
+    let Ok(recent) = answered(session.fetch(format!("{from}:*"), "(UID FLAGS)")).await else {
+        return Err(listing_failed());
     };
     let flags: Vec<Flags> = recent
         .iter()
-        .filter_map(|f| f.as_ref().ok())
         .filter_map(|f| Some((f.uid?, f)))
         .filter(|(uid, f)| *uid <= since && !f.flags().any(|x| x == Flag::Deleted))
         .map(|(uid, f)| Flags {
@@ -980,18 +1000,14 @@ where
 
     // Everything after the newest message RATA holds. `n:*` returns the
     // newest message even when its UID is below n, so the answer is filtered.
-    let after = match timeout(
-        COMMAND,
-        session.uid_fetch(format!("{}:*", since.saturating_add(1)), "UID"),
-    )
-    .await
-    {
-        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
-        _ => return Err(listing_failed()),
+    let Ok(after) =
+        answered(session.uid_fetch(format!("{}:*", since.saturating_add(1)), "UID")).await
+    else {
+        return Err(listing_failed());
     };
     let mut fresh: Vec<u32> = after
         .iter()
-        .filter_map(|f| f.as_ref().ok()?.uid)
+        .filter_map(|f| f.uid)
         .filter(|u| *u > since)
         .collect();
     fresh.sort_unstable();
@@ -1014,15 +1030,19 @@ where
             ..Newest::default()
         });
     }
-    let stream = match timeout(COMMAND, session.uid_fetch(join(fresh), items())).await {
-        Ok(Ok(s)) => s,
-        _ => return Err(listing_failed()),
-    };
-    let messages = collect(stream, acct, folder, generation)
-        .await?
-        .into_iter()
-        .filter(|m| fresh.contains(&m.uid))
-        .collect();
+    let messages = read_whole(
+        session,
+        dial,
+        acct,
+        folder,
+        generation,
+        Want::Uids(fresh),
+        "the inbox could not be listed",
+    )
+    .await?
+    .into_iter()
+    .filter(|m| fresh.contains(&m.uid))
+    .collect();
     Ok(Newest {
         messages,
         flags,
@@ -1035,16 +1055,14 @@ where
 /// Gmail's archive, from All Mail just selected: like [`refresh_in`], but
 /// only for the messages [`GMAIL_ARCHIVED`] finds, and with the listing that
 /// lets the interface catch mail archived since it last looked.
-async fn refresh_archived<T>(
-    session: &mut Session<T>,
+async fn refresh_archived<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     mailbox: &async_imap::types::Mailbox,
     limit: u32,
     known: Option<&Known>,
-) -> Result<Newest, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Result<Newest, Fetched> {
     let folder = Folder::Archive;
     let generation = mailbox.uid_validity.unwrap_or(0);
     if mailbox.exists == 0 || limit == 0 || generation == 0 {
@@ -1092,7 +1110,7 @@ where
         .filter(|u| !fresh.contains(u))
         .collect();
     let flags = flags_of(session, acct, &folder, &tail(&older, limit)).await?;
-    let messages = by_uid(session, acct, &folder, &fresh, generation).await?;
+    let messages = by_uid(session, dial, acct, &folder, &fresh, generation).await?;
     Ok(Newest {
         messages,
         flags,
@@ -1171,13 +1189,11 @@ where
     if uids.is_empty() {
         return Ok(vec![]);
     }
-    let got = match timeout(COMMAND, session.uid_fetch(join(uids), "(UID FLAGS)")).await {
-        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
-        _ => return Err(Fetched::Net(unreachable_msg(acct, &cannot_open(folder)))),
+    let Ok(got) = answered(session.uid_fetch(join(uids), "(UID FLAGS)")).await else {
+        return Err(Fetched::Net(unreachable_msg(acct, &cannot_open(folder))));
     };
     Ok(got
         .iter()
-        .filter_map(|f| f.as_ref().ok())
         .filter_map(|f| Some((f.uid?, f)))
         .filter(|(uid, f)| uids.contains(uid) && !f.flags().any(|x| x == Flag::Deleted))
         .map(|(uid, f)| Flags {
@@ -1190,46 +1206,41 @@ where
 
 /// `uids` of the folder just selected, whole, newest first — only those asked
 /// for, since a server may volunteer others.
-async fn by_uid<T>(
-    session: &mut Session<T>,
+async fn by_uid<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     uids: &[u32],
     generation: u32,
-) -> Result<Vec<Message>, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Result<Vec<Message>, Fetched> {
     if uids.is_empty() {
         return Ok(vec![]);
     }
-    let stream = match timeout(COMMAND, session.uid_fetch(join(uids), items())).await {
-        Ok(Ok(s)) => s,
-        _ => {
-            return Err(Fetched::Net(unreachable_msg(
-                acct,
-                "those messages could not be read",
-            )));
-        }
-    };
-    Ok(collect(stream, acct, folder, generation)
-        .await?
-        .into_iter()
-        .filter(|m| uids.contains(&m.uid))
-        .collect())
+    Ok(read_whole(
+        session,
+        dial,
+        acct,
+        folder,
+        generation,
+        Want::Uids(uids),
+        "those messages could not be read",
+    )
+    .await?
+    .into_iter()
+    .filter(|m| uids.contains(&m.uid))
+    .collect())
 }
 
 /// The newest `limit` messages of a folder just selected.
-async fn newest_in<T>(
-    session: &mut Session<T>,
+async fn newest_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     mailbox: &async_imap::types::Mailbox,
     limit: u32,
-) -> Result<Vec<Message>, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Result<Vec<Message>, Fetched> {
     let generation = mailbox.uid_validity.unwrap_or(0);
     let total = mailbox.exists;
     if total == 0 || limit == 0 {
@@ -1239,7 +1250,7 @@ where
     // FETCH, and `*` means "whatever the last one is now".
     let from = total.saturating_sub(limit - 1).max(1);
     let range = format!("{from}:*");
-    read_range(session, acct, folder, &range, generation).await
+    read_range(session, dial, acct, folder, &range, generation).await
 }
 
 /// How opening a folder went.
@@ -1333,12 +1344,7 @@ async fn listing<T>(session: &mut Session<T>) -> Option<Vec<async_imap::types::N
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
-        .await
-        .ok()?
-        .ok()?;
-    let names: Vec<_> = stream.collect().await;
-    Some(names.into_iter().flatten().collect())
+    answered(session.list(Some(""), Some("*"))).await.ok()
 }
 
 async fn places<T>(session: &mut Session<T>) -> Places
@@ -1623,25 +1629,26 @@ pub async fn fetch_folder(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = folder_in(&mut session, acct, &folder, limit).await;
+    let mut dial = Redial::new(Server { resolver, acct });
+    let found = folder_in(&mut session, &mut dial, acct, &folder, limit).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
 
-async fn folder_in<T>(
-    session: &mut Session<T>,
+async fn folder_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     limit: u32,
-) -> Fetched
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Fetched {
     match select(session, folder).await {
-        Selected::Open(mailbox) => match newest_in(session, acct, folder, &mailbox, limit).await {
-            Ok(m) => Fetched::Messages(m),
-            Err(failed) => failed,
-        },
+        Selected::Open(mailbox) => {
+            match newest_in(session, dial, acct, folder, &mailbox, limit).await {
+                Ok(m) => Fetched::Messages(m),
+                Err(failed) => failed,
+            }
+        }
         Selected::Missing => Fetched::Stale(format!(
             "{} no longer has that folder — it was renamed or removed. Pick it again from Folders.",
             acct.email
@@ -1727,20 +1734,9 @@ where
         }
         Selected::Failed => return Whole::Net(unreachable_msg(acct, &cannot_open(folder))),
     }
-    let size = match timeout(
-        COMMAND,
-        session.uid_fetch(uid.to_string(), "(UID RFC822.SIZE)"),
-    )
-    .await
-    {
-        Ok(Ok(stream)) => {
-            let got: Vec<_> = stream.collect().await;
-            got.iter()
-                .filter_map(|f| f.as_ref().ok())
-                .find(|f| f.uid == Some(uid))
-                .and_then(|f| f.size)
-        }
-        _ => return Whole::Net(unreachable_msg(acct, "the message could not be found")),
+    let size = match answered(session.uid_fetch(uid.to_string(), "(UID RFC822.SIZE)")).await {
+        Ok(got) => got.iter().find(|f| f.uid == Some(uid)).and_then(|f| f.size),
+        Err(_) => return Whole::Net(unreachable_msg(acct, "the message could not be found")),
     };
     let Some(size) = size else { return Whole::Gone };
     if size > WHOLE_MAX {
@@ -1817,21 +1813,20 @@ pub async fn fetch_uids(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = uids_in(&mut session, acct, &folder, &uids, uidvalidity).await;
+    let mut dial = Redial::new(Server { resolver, acct });
+    let found = uids_in(&mut session, &mut dial, acct, &folder, &uids, uidvalidity).await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
 
-async fn uids_in<T>(
-    session: &mut Session<T>,
+async fn uids_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     uids: &[u32],
     uidvalidity: u32,
-) -> Fetched
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Fetched {
     match select(session, folder).await {
         Selected::Open(m) if m.uid_validity == Some(uidvalidity) => {}
         // A rebuilt mailbox numbers its messages afresh: these UIDs could now
@@ -1844,11 +1839,17 @@ where
         }
         Selected::Failed => return Fetched::Net(unreachable_msg(acct, &cannot_open(folder))),
     }
-    let stream = match timeout(COMMAND, session.uid_fetch(join(uids), items())).await {
-        Ok(Ok(s)) => s,
-        _ => return Fetched::Net(unreachable_msg(acct, "those messages could not be read")),
-    };
-    match collect(stream, acct, folder, uidvalidity).await {
+    let read = read_whole(
+        session,
+        dial,
+        acct,
+        folder,
+        uidvalidity,
+        Want::Uids(uids),
+        "those messages could not be read",
+    )
+    .await;
+    match read {
         // Only what was asked for: a server may volunteer others.
         Ok(m) => Fetched::Messages(m.into_iter().filter(|m| uids.contains(&m.uid)).collect()),
         Err(failed) => failed,
@@ -1894,23 +1895,31 @@ pub async fn fetch_older(
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let found = older_in(&mut session, acct, &folder, before_uid, uidvalidity, limit).await;
+    let mut dial = Redial::new(Server { resolver, acct });
+    let found = older_in(
+        &mut session,
+        &mut dial,
+        acct,
+        &folder,
+        before_uid,
+        uidvalidity,
+        limit,
+    )
+    .await;
     let _ = timeout(COMMAND, session.logout()).await;
     found
 }
 
 /// The part of [`fetch_older`] that talks to a signed-in session.
-async fn older_in<T>(
-    session: &mut Session<T>,
+async fn older_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     before_uid: u32,
     uidvalidity: u32,
     limit: u32,
-) -> Fetched
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
+) -> Fetched {
     let mailbox = match select(session, folder).await {
         Selected::Open(m) => m,
         // A Sent folder that has gone has nothing older in it.
@@ -1932,23 +1941,20 @@ where
         let Some(uids) = newest_archived(session, before_uid, limit).await else {
             return Fetched::Net(unreachable_msg(acct, "its archive could not be listed"));
         };
-        return match by_uid(session, acct, folder, &uids, uidvalidity).await {
+        return match by_uid(session, dial, acct, folder, &uids, uidvalidity).await {
             Ok(m) => Fetched::Messages(m),
             Err(failed) => failed,
         };
     }
 
     // How many messages sit at or above the oldest one RATA has.
-    let newer = match timeout(COMMAND, session.uid_fetch(format!("{before_uid}:*"), "UID")).await {
-        Ok(Ok(stream)) => {
-            let found: Vec<_> = stream.collect().await;
-            found
-                .iter()
-                .filter_map(|f| f.as_ref().ok()?.uid)
-                .filter(|u| *u >= before_uid)
-                .count() as u32
-        }
-        _ => return Fetched::Net(unreachable_msg(acct, "the inbox could not be counted")),
+    let newer = match answered(session.uid_fetch(format!("{before_uid}:*"), "UID")).await {
+        Ok(found) => found
+            .iter()
+            .filter_map(|f| f.uid)
+            .filter(|u| *u >= before_uid)
+            .count() as u32,
+        Err(_) => return Fetched::Net(unreachable_msg(acct, "the inbox could not be counted")),
     };
     let older = mailbox.exists.saturating_sub(newer);
     if older == 0 {
@@ -1956,7 +1962,7 @@ where
     }
     let from = older.saturating_sub(limit - 1).max(1);
     let range = format!("{from}:{older}");
-    match read_range(session, acct, folder, &range, uidvalidity).await {
+    match read_range(session, dial, acct, folder, &range, uidvalidity).await {
         // Filtered again by UID: if something was expunged between the count
         // and the fetch, positions shift, and a message RATA already has must
         // not come back as "older".
@@ -1967,48 +1973,61 @@ where
 
 /// FETCH one range of sequence numbers and turn it into messages, newest
 /// first. Shared by the newest-first refresh and paging back through history.
-async fn read_range<T>(
-    session: &mut Session<T>,
+async fn read_range<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
     acct: &Account,
     folder: &Folder,
     range: &str,
     generation: u32,
-) -> Result<Vec<Message>, Fetched>
-where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
-{
-    let stream = match timeout(COMMAND, session.fetch(range, items())).await {
-        Ok(Ok(s)) => s,
-        // The stream borrows the session for as long as it exists, so the
-        // caller cannot say goodbye politely on this path; dropping the
-        // connection closes the socket.
-        _ => {
-            return Err(Fetched::Net(unreachable_msg(
-                acct,
-                "the inbox could not be listed",
-            )));
-        }
-    };
-    collect(stream, acct, folder, generation).await
+) -> Result<Vec<Message>, Fetched> {
+    read_whole(
+        session,
+        dial,
+        acct,
+        folder,
+        generation,
+        Want::Range(range),
+        "the inbox could not be listed",
+    )
+    .await
+}
+
+/// What one FETCH of messages brought.
+struct Batch {
+    /// Newest first.
+    messages: Vec<Message>,
+    /// A reply could not be read, so nothing more can be read on this
+    /// connection (see [`unreadable`]): whatever was asked for and is not in
+    /// `messages` is still to come.
+    cut: bool,
 }
 
 /// Messages out of a FETCH response, newest first.
+///
+/// A reply the parser cannot read ends the batch but not the folder: the
+/// connection is unusable after it, the mail is not, and [`read_whole`]
+/// fetches the rest on a fresh one. A connection that really fails is
+/// different — what arrived so far is an arbitrary slice of the folder, and
+/// presenting it as the folder would be a refresh that silently lost mail.
 async fn collect<S>(
     stream: S,
     acct: &Account,
     folder: &Folder,
     generation: u32,
-) -> Result<Vec<Message>, Fetched>
+) -> Result<Batch, Fetched>
 where
     S: futures::Stream<Item = Result<async_imap::types::Fetch, ImapError>>,
 {
     let mut messages: Vec<Message> = Vec::new();
+    let mut cut = false;
     futures::pin_mut!(stream);
-    // A message that will not parse is skipped rather than failing the
-    // refresh: one malformed message must not cost the customer the other
-    // fourteen. A connection that stops answering is different — what
-    // arrived so far is an arbitrary slice of the inbox, and presenting it
-    // as the inbox would be a refresh that silently lost mail.
+    let partway = |what: &str| {
+        Fetched::Net(unreachable_msg(
+            acct,
+            &format!("{what} partway through {}", place(folder)),
+        ))
+    };
     loop {
         match timeout(COMMAND, stream.next()).await {
             // A message flagged \Deleted is on its way out — deleted by RATA
@@ -2016,30 +2035,381 @@ where
             // it would undo the delete on screen.
             Ok(Some(Ok(fetched))) if fetched.flags().any(|f| f == Flag::Deleted) => {}
             Ok(Some(Ok(fetched))) => messages.push(build(acct, &fetched, folder, generation)),
-            Ok(Some(Err(ImapError::Io(e)))) => {
-                return Err(Fetched::Net(unreachable_msg(
-                    acct,
-                    &format!("the connection failed partway through the inbox ({e})"),
-                )));
+            // Nothing more will come on this connection (see `unreadable`).
+            Ok(Some(Err(e))) if unreadable(&e) => {
+                cut = true;
+                break;
             }
             Ok(Some(Err(ImapError::ConnectionLost))) => {
-                return Err(Fetched::Net(unreachable_msg(
-                    acct,
-                    "the connection was lost partway through the inbox",
+                return Err(partway("the connection was lost"));
+            }
+            Ok(Some(Err(e))) => {
+                return Err(partway(&format!(
+                    "the connection failed ({})",
+                    reason(&e).trim_end_matches('.')
                 )));
             }
-            Ok(Some(Err(_))) => {}
             Ok(None) => break,
-            Err(_) => {
-                return Err(Fetched::Net(unreachable_msg(
-                    acct,
-                    "the server stopped answering partway through the inbox",
-                )));
-            }
+            Err(_) => return Err(partway("the server stopped answering")),
         }
     }
     messages.sort_by(|a, b| b.ts.cmp(&a.ts));
+    Ok(Batch { messages, cut })
+}
+
+// -------------------------------------------------- replies RATA cannot read
+
+/// How many more connections one request may open after a reply it could
+/// not read made its first unusable. Each is a sign-in, and providers count
+/// those; past this, what is left is listed without its text.
+const REDIALS: u8 = 2;
+
+/// A message without its text: enough to list it and to find it again.
+const LISTED: &str = "(UID FLAGS INTERNALDATE ENVELOPE)";
+
+/// In place of the text of a message whose reply RATA could not read.
+const UNREADABLE: &str = "RATA could not read this message as the server sent it. Opening it asks for the whole message again; if that fails too, read it in your provider's own app.";
+
+/// In place of the text of a message RATA had no connection left to read.
+const NOT_READ: &str = "RATA has not read the text of this message yet. Opening it fetches it.";
+
+/// What async-imap says, in RATA's words, when its parser refuses a reply.
+const UNPARSED: &str = "the server sent a reply RATA could not read";
+
+/// Whether an error is async-imap's parser refusing a reply rather than the
+/// connection failing.
+///
+/// No type tells the two apart. async-imap 0.11 (`imap_stream.rs`, `decode`)
+/// turns a reply imap-proto rejects into
+/// `io::Error::other(format!("{nom_error:?} during parsing of {reply:?}"))`:
+/// an `Error::Io` like a reset socket, but of kind `Other` and always with
+/// those words, which is what is matched. A socket or TLS failure has another
+/// kind.
+///
+/// After that error, as after any, async-imap reads nothing more on the
+/// connection (`read_closed`): every later answer ends at once, and a SELECT
+/// then "succeeds" with an empty mailbox. So the connection is done with,
+/// though the server and the mail are fine — the rest comes on a fresh one.
+fn unreadable(e: &ImapError) -> bool {
+    match e {
+        ImapError::Parse(_) => true,
+        ImapError::Io(io) => parse_failure(io),
+        _ => false,
+    }
+}
+
+fn parse_failure(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::Other && e.to_string().contains(" during parsing of ")
+}
+
+/// What went wrong, in one short line and never in the server's own bytes.
+/// async-imap's message for a reply it could not parse quotes all of it, and
+/// the reply to a FETCH is the message: its headers, addresses and text.
+fn reason(e: &ImapError) -> String {
+    match e {
+        ImapError::Io(io) => io_reason(io),
+        ImapError::Parse(_) => UNPARSED.into(),
+        ImapError::No(why) | ImapError::Bad(why) => one_line(why),
+        ImapError::ConnectionLost => "the connection was lost".into(),
+        _ => "the server's answer did not make sense to RATA".into(),
+    }
+}
+
+fn io_reason(e: &std::io::Error) -> String {
+    if parse_failure(e) {
+        UNPARSED.into()
+    } else {
+        one_line(&e.to_string())
+    }
+}
+
+/// The first line of `s`, without control characters, at most 200 of them.
+fn one_line(s: &str) -> String {
+    let line: String = s
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect();
+    line.trim().to_string()
+}
+
+/// "the inbox", "the Sent folder"…: where something happened, for a sentence.
+fn place(folder: &Folder) -> String {
+    match folder {
+        Folder::Inbox => "the inbox".into(),
+        Folder::Sent => "the Sent folder".into(),
+        Folder::Archive => "the Archive folder".into(),
+        Folder::Junk => "the Spam folder".into(),
+        Folder::Drafts => "the Drafts folder".into(),
+        Folder::Named(name) => format!("the folder \u{201c}{}\u{201d}", utf7_imap(name)),
+    }
+}
+
+/// Every item of one of async-imap's response streams, up to its end — or
+/// its first error, which is returned instead. An error is where such a
+/// stream ends (see [`unreadable`]), so what came before it is not the whole
+/// answer, and a listing cut short must not pass for a complete one: "no
+/// newer mail", "no longer there".
+async fn drain<I>(
+    stream: impl futures::Stream<Item = Result<I, ImapError>>,
+) -> Result<Vec<I>, ImapError> {
+    futures::pin_mut!(stream);
+    let mut out = Vec::new();
+    while let Some(item) = stream.next().await {
+        out.push(item?);
+    }
+    Ok(out)
+}
+
+/// A command answered by a stream, and the whole answer, within [`COMMAND`].
+/// `Err(None)` is a server that did not answer in time.
+async fn answered<S, I>(
+    sent: impl std::future::Future<Output = Result<S, ImapError>>,
+) -> Result<Vec<I>, Option<ImapError>>
+where
+    S: futures::Stream<Item = Result<I, ImapError>>,
+{
+    match timeout(COMMAND, async { drain(sent.await?).await }).await {
+        Ok(Ok(items)) => Ok(items),
+        Ok(Err(e)) => Err(Some(e)),
+        Err(_) => Err(None),
+    }
+}
+
+/// Which messages of the folder just selected a FETCH asks for.
+#[derive(Clone, Copy)]
+enum Want<'a> {
+    Uids(&'a [u32]),
+    /// By position: `a:b`, or `a:*`.
+    Range(&'a str),
+}
+
+/// Send a FETCH of `items` for `want`, or nothing if the server would not
+/// take it.
+async fn fetch_items<'s, T>(
+    session: &'s mut Session<T>,
+    want: Want<'_>,
+    items: &str,
+) -> Option<futures::stream::BoxStream<'s, Result<async_imap::types::Fetch, ImapError>>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    Some(match want {
+        Want::Uids(uids) => timeout(COMMAND, session.uid_fetch(join(uids), items))
+            .await
+            .ok()?
+            .ok()?
+            .boxed(),
+        Want::Range(range) => timeout(COMMAND, session.fetch(range, items))
+            .await
+            .ok()?
+            .ok()?
+            .boxed(),
+    })
+}
+
+/// How to open another signed-in connection to the same mailbox.
+trait Connect {
+    type Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send;
+    fn connect(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Session<Self::Stream>, String>> + Send;
+}
+
+/// The mailbox a public call was made for.
+struct Server<'a> {
+    resolver: &'a Resolver,
+    acct: &'a Account,
+}
+
+impl Connect for Server<'_> {
+    type Stream = Tls;
+    async fn connect(&self) -> Result<Session<Tls>, String> {
+        let acct = self.acct;
+        let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+        let said = |t: Trouble| match t {
+            Trouble::Host(why) | Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why) => {
+                why
+            }
+        };
+        let client = open(self.resolver, &acct.host, port).await.map_err(said)?;
+        sign_in(client, &acct.email, &acct.credential)
+            .await
+            .map_err(said)
+    }
+}
+
+/// Fresh connections for one request, at most [`REDIALS`] of them, and
+/// whether the one in use can still be read.
+struct Redial<C> {
+    via: C,
+    left: u8,
+    /// A reply that could not be read has made the session in use unusable.
+    dead: bool,
+}
+
+impl<C: Connect> Redial<C> {
+    fn new(via: C) -> Self {
+        Redial {
+            via,
+            left: REDIALS,
+            dead: false,
+        }
+    }
+
+    /// Replace `session` with a fresh one. Afterwards nothing is selected.
+    async fn again(&mut self, session: &mut Session<C::Stream>) -> Result<(), String> {
+        let Some(left) = self.left.checked_sub(1) else {
+            return Err("RATA has already reconnected as often as one refresh may".into());
+        };
+        self.left = left;
+        *session = self.via.connect().await?;
+        self.dead = false;
+        Ok(())
+    }
+
+    /// Before using `session` again: a fresh one if it is unusable. False if
+    /// it is and none can be had.
+    async fn revive(&mut self, session: &mut Session<C::Stream>) -> bool {
+        !self.dead || self.again(session).await.is_ok()
+    }
+}
+
+/// A fresh connection with `folder` open again under the same UIDVALIDITY.
+async fn reopen<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
+    folder: &Folder,
+    generation: u32,
+) -> Result<(), String> {
+    dial.again(session).await?;
+    match select(session, folder).await {
+        Selected::Open(m) if m.uid_validity.unwrap_or(0) == generation => Ok(()),
+        Selected::Open(_) => Err(format!("{} was rebuilt meanwhile", place(folder))),
+        Selected::Missing => Err(format!("{} has gone", place(folder))),
+        Selected::Failed => Err(cannot_open(folder)),
+    }
+}
+
+/// A message listed without its text, saying why.
+fn marked(mut m: Message, why: &str) -> Message {
+    m.body = why.into();
+    m.preview = why.into();
+    // What makes opening it fetch the whole message.
+    m.truncated = true;
+    m.attachments.clear();
+    m.html = false;
+    m
+}
+
+/// Whole messages (see [`items`]) of the folder just selected, newest first.
+///
+/// If a reply cannot be read, the rest is fetched on a fresh connection
+/// ([`recover`]) and the message it belonged to is kept, [`marked`], rather
+/// than costing the others. `failed` is what to say if the FETCH itself is
+/// refused.
+async fn read_whole<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
+    acct: &Account,
+    folder: &Folder,
+    generation: u32,
+    want: Want<'_>,
+    failed: &str,
+) -> Result<Vec<Message>, Fetched> {
+    let Some(stream) = fetch_items(session, want, &items()).await else {
+        return Err(Fetched::Net(unreachable_msg(acct, failed)));
+    };
+    let batch = collect(stream, acct, folder, generation).await?;
+    let mut messages = batch.messages;
+    if batch.cut {
+        dial.dead = true;
+        let mut rest = recover(session, dial, acct, folder, generation, want, &messages).await?;
+        messages.append(&mut rest);
+        messages.sort_by(|a, b| b.ts.cmp(&a.ts));
+    }
     Ok(messages)
+}
+
+/// The rest of a FETCH cut short by a reply RATA could not read, on fresh
+/// connections: what was asked for and did not arrive is listed without its
+/// text, then fetched one message at a time, newest first, so a reply that
+/// cannot be read is pinned to the one message it belongs to. That message
+/// is kept, [`marked`] [`UNREADABLE`], and the next is fetched on another
+/// connection; when this request may open no more, those left are kept
+/// [`marked`] [`NOT_READ`].
+async fn recover<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
+    acct: &Account,
+    folder: &Folder,
+    generation: u32,
+    want: Want<'_>,
+    have: &[Message],
+) -> Result<Vec<Message>, Fetched> {
+    let gave_up = |why: String| {
+        Fetched::Net(format!(
+            "{} did not sync — {} sent a reply about a message in {} that RATA could not read, and {}. It will be tried again on the next refresh.",
+            acct.email,
+            acct.host,
+            place(folder),
+            why.trim_end_matches('.')
+        ))
+    };
+    reopen(session, dial, folder, generation)
+        .await
+        .map_err(gave_up)?;
+    let Some(stream) = fetch_items(session, want, LISTED).await else {
+        return Err(gave_up(format!("{} could not be listed", place(folder))));
+    };
+    let listed = collect(stream, acct, folder, generation).await?;
+    if listed.cut {
+        dial.dead = true;
+        return Err(gave_up("nor could a list of it without the text".into()));
+    }
+    let held: Vec<u32> = have.iter().map(|m| m.uid).collect();
+    let mut rest: Vec<Message> = listed
+        .messages
+        .into_iter()
+        .filter(|m| m.uid != 0 && !held.contains(&m.uid))
+        .filter(|m| match want {
+            Want::Uids(asked) => asked.contains(&m.uid),
+            Want::Range(_) => true,
+        })
+        .collect();
+    rest.sort_by(|a, b| b.uid.cmp(&a.uid));
+
+    let mut out = Vec::with_capacity(rest.len());
+    let mut rest = rest.into_iter();
+    while let Some(m) = rest.next() {
+        if dial.dead && reopen(session, dial, folder, generation).await.is_err() {
+            dial.dead = true;
+            out.push(marked(m, NOT_READ));
+            out.extend(rest.by_ref().map(|m| marked(m, NOT_READ)));
+            break;
+        }
+        let one = [m.uid];
+        let Some(stream) = fetch_items(session, Want::Uids(&one), &items()).await else {
+            // Not even asked: this connection is no good either.
+            dial.dead = true;
+            out.push(marked(m, NOT_READ));
+            continue;
+        };
+        let got = collect(stream, acct, folder, generation).await?;
+        if got.cut {
+            dial.dead = true;
+        }
+        match got.messages.into_iter().find(|w| w.uid == m.uid) {
+            Some(whole) => out.push(whole),
+            None if got.cut => out.push(marked(m, UNREADABLE)),
+            // Deleted meanwhile.
+            None => {}
+        }
+    }
+    Ok(out)
 }
 
 // --------------------------------------------------------------------- watch
@@ -2314,7 +2684,9 @@ async fn apply<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let failed = |what: &str, e: ImapError| Acted::Net(format!("The server would not {what}: {e}"));
+    let failed = |what: &str, e: ImapError| {
+        Acted::Net(format!("The server would not {what}: {}", reason(&e)))
+    };
 
     let mailbox = match select(session, folder).await {
         Selected::Open(m) => m,
@@ -2336,14 +2708,13 @@ where
     // Which of them are still there? A STORE or MOVE naming a UID that no
     // longer exists succeeds and does nothing, which would be reported as done.
     let asked = join(uids);
-    let present: Vec<u32> = match timeout(COMMAND, session.uid_fetch(&asked, "UID")).await {
-        Ok(Ok(stream)) => {
-            let found: Vec<_> = stream.collect().await;
-            let seen: Vec<u32> = found.iter().filter_map(|f| f.as_ref().ok()?.uid).collect();
+    let present: Vec<u32> = match answered(session.uid_fetch(&asked, "UID")).await {
+        Ok(found) => {
+            let seen: Vec<u32> = found.iter().filter_map(|f| f.uid).collect();
             uids.iter().copied().filter(|u| seen.contains(u)).collect()
         }
-        Ok(Err(e)) => return failed("look the messages up", e),
-        Err(_) => return Acted::Net("The server did not answer in time.".into()),
+        Err(Some(e)) => return failed("look the messages up", e),
+        Err(None) => return Acted::Net("The server did not answer in time.".into()),
     };
     let gone: Vec<u32> = uids
         .iter()
@@ -2431,7 +2802,8 @@ where
             session.uid_copy(&set, &dest).await?;
             store(session, &set, "+FLAGS.SILENT (\\Deleted)").await?;
             if caps.has_str("UIDPLUS") {
-                session.uid_expunge(&set).await?.collect::<Vec<_>>().await;
+                // What it expunged is not needed; that it ends is.
+                let _ = drain(session.uid_expunge(&set).await?).await;
             }
             Ok(())
         })
@@ -2461,45 +2833,38 @@ async fn store<T>(session: &mut Session<T>, set: &str, change: &str) -> Result<(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let stream = session.uid_store(set, change).await?;
-    for item in stream.collect::<Vec<_>>().await {
-        item?;
-    }
+    drain(session.uid_store(set, change).await?).await?;
     Ok(())
 }
 
-/// Where a Trash or Archive goes on this server, by the folder's declared
-/// purpose (RFC 6154) rather than its name — "Trash", "Deleted Items",
-/// "[Gmail]/Bin" and "Papierkorb" are all the same folder to a server that
-/// says so. Archive falls back to Gmail's "All Mail", where moving a message
-/// out of the inbox is exactly what archiving means.
+/// Where an action puts messages on this server.
+///
+/// Archive is wherever a refresh reads the archive from ([`places_in`]): the
+/// folder the server declares `\Archive`, else one named exactly as
+/// [`ARCHIVE_NAMES`] lists, else Gmail's "All Mail", where moving a message
+/// out of the inbox is exactly what archiving means. So a server that
+/// declares nothing, and shows its "Archive" in RATA, can also be archived to.
+///
+/// Trash is only ever the folder the server declares `\Trash` (RFC 6154) —
+/// "Trash", "Deleted Items", "[Gmail]/Bin" and "Papierkorb" alike — never a
+/// guess by name: a wrong guess there puts mail somewhere the customer did
+/// not ask for, and none at all is a refusal they can see.
 async fn destination<T>(session: &mut Session<T>, action: &Action) -> Option<String>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
     use async_imap::types::NameAttribute as A;
     match action {
-        Action::Inbox => return Some("INBOX".into()),
-        Action::Move(to) => return name_of(session, to).await,
-        _ => {}
+        Action::Inbox => Some("INBOX".into()),
+        Action::Move(to) => name_of(session, to).await,
+        Action::Archive => name_of(session, &Folder::Archive).await,
+        Action::Trash => listing(session)
+            .await?
+            .into_iter()
+            .find(|n| n.attributes().contains(&A::Trash) && selectable(n))
+            .map(|n| n.name().to_string()),
+        Action::Read | Action::Unread | Action::Star | Action::Unstar => None,
     }
-    let stream = timeout(COMMAND, session.list(Some(""), Some("*")))
-        .await
-        .ok()?
-        .ok()?;
-    let names: Vec<_> = stream.collect().await;
-    let with = |want: &A| {
-        names
-            .iter()
-            .flatten()
-            .find(|n| n.attributes().contains(want) && !n.attributes().contains(&A::NoSelect))
-    };
-    let found = match action {
-        Action::Trash => with(&A::Trash),
-        Action::Archive => with(&A::Archive).or_else(|| with(&A::All)),
-        _ => None,
-    };
-    found.map(|n| n.name().to_string())
 }
 
 /// "its inbox could not be opened", for whichever folder it was.
@@ -3001,28 +3366,117 @@ mod tests {
         uids: &'static [u32],
         uidvalidity: u32,
     ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (addr, seen) = scripted_mailbox(uids, uidvalidity, Quirks::default()).await;
+        (scripted_login(addr).await, seen)
+    }
+
+    /// How the scripted mailbox departs from a well-behaved server.
+    #[derive(Clone, Copy, Default)]
+    struct Quirks {
+        /// Messages whose text comes as GreenMail 2.1 sends a partial fetch:
+        /// `BODY[]<0>{n}`, without the space RFC 3501 puts before a literal,
+        /// which the parser RATA uses rejects.
+        greenmail: &'static [u32],
+        /// The message partway through which the server hangs up.
+        hang_up_at: Option<u32>,
+    }
+
+    /// Where a test's fresh connections come from: another sign-in to the
+    /// scripted mailbox at `addr`, or none at all.
+    struct Scripted(Option<std::net::SocketAddr>);
+
+    impl Connect for Scripted {
+        type Stream = TcpStream;
+        async fn connect(&self) -> Result<Session<TcpStream>, String> {
+            match self.0 {
+                Some(addr) => Ok(scripted_login(addr).await),
+                None => Err("there is nowhere to reconnect to".into()),
+            }
+        }
+    }
+
+    fn no_redial() -> Redial<Scripted> {
+        Redial::new(Scripted(None))
+    }
+
+    fn redial_to(addr: std::net::SocketAddr) -> Redial<Scripted> {
+        Redial::new(Scripted(Some(addr)))
+    }
+
+    async fn scripted_login(addr: std::net::SocketAddr) -> Session<TcpStream> {
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap()
+    }
+
+    /// A scripted inbox holding `uids` that answers every connection made to
+    /// it, logging the commands of all of them in one list.
+    async fn scripted_mailbox(
+        uids: &'static [u32],
+        uidvalidity: u32,
+        quirks: Quirks,
+    ) -> (std::net::SocketAddr, Arc<std::sync::Mutex<Vec<String>>>) {
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let log = seen.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let log = seen.clone();
         tokio::spawn(async move {
-            let (sock, _) = listener.accept().await.unwrap();
+            while let Ok((sock, _)) = listener.accept().await {
+                log.lock().unwrap().push("(connected)".into());
+                tokio::spawn(scripted_mailbox_line(
+                    sock,
+                    uids,
+                    uidvalidity,
+                    quirks,
+                    log.clone(),
+                ));
+            }
+        });
+        (addr, seen)
+    }
+
+    /// One connection to [`scripted_mailbox`].
+    async fn scripted_mailbox_line(
+        sock: TcpStream,
+        uids: &'static [u32],
+        uidvalidity: u32,
+        quirks: Quirks,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        {
             let (r, mut w) = sock.into_split();
             let mut lines = BufReader::new(r).lines();
             w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            let envelope = |uid: u32| {
+                format!(
+                    "UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Subject {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\")",
+                    uid / 2, // minutes that keep receive-order equal to UID order for 0..119
+                )
+            };
             let full = |seq: usize, uid: u32| {
                 // What a real server sends for BODY[]: headers and a MIME
                 // body, here quoted-printable UTF-8 as most mail programs write.
                 let body = format!(
                     "From: Ann <ann@example.org>\r\nSubject: Subject {uid}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBody of {uid} =E2=80=94 caf=C3=A9\r\n"
                 );
+                let gap = if quirks.greenmail.contains(&uid) {
+                    ""
+                } else {
+                    " "
+                };
                 format!(
-                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Subject {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
-                    uid / 2, // minutes that keep receive-order equal to UID order for 0..119
+                    "* {seq} FETCH ({} BODY[]<0>{gap}{{{}}}\r\n{body})\r\n",
+                    envelope(uid),
                     body.len()
                 )
             };
+            let listed = |seq: usize, uid: u32| format!("* {seq} FETCH ({})\r\n", envelope(uid));
             while let Ok(Some(line)) = lines.next_line().await {
                 let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
                 log.lock().unwrap().push(cmd.to_string());
@@ -3055,6 +3509,14 @@ mod tests {
                         .filter(|(_, u)| want.contains(u))
                         .map(|(i, u)| full(i + 1, *u))
                         .collect()
+                } else if up.starts_with("UID FETCH") && up.contains("ENVELOPE") {
+                    // Particular messages by UID, without their text.
+                    let want: Vec<u32> = arg.split(',').filter_map(|u| u.parse().ok()).collect();
+                    uids.iter()
+                        .enumerate()
+                        .filter(|(_, u)| want.contains(u))
+                        .map(|(i, u)| listed(i + 1, *u))
+                        .collect()
                 } else if up.starts_with("UID FETCH") {
                     // "n:*" — every message with UID >= n, or, if there is
                     // none, the newest message anyway (RFC 3501's quirk).
@@ -3070,6 +3532,20 @@ mod tests {
                     }
                     hits.iter()
                         .map(|(seq, u)| format!("* {seq} FETCH (UID {u})\r\n"))
+                        .collect()
+                } else if up.starts_with("FETCH") && up.contains("ENVELOPE") && !up.contains("BODY")
+                {
+                    // A range of messages, without their text.
+                    let (a, b) = arg.split_once(':').unwrap();
+                    let a: usize = a.parse().unwrap();
+                    let b: usize = if b == "*" {
+                        uids.len()
+                    } else {
+                        b.parse().unwrap()
+                    };
+                    (a..=b)
+                        .filter(|s| *s >= 1 && *s <= uids.len())
+                        .map(|s| listed(s, uids[s - 1]))
                         .collect()
                 } else if up.starts_with("FETCH") && !up.contains("BODY") {
                     // Read and starred only: even UIDs are read, every fifth
@@ -3106,6 +3582,15 @@ mod tests {
                 } else {
                     String::new()
                 };
+                // Hanging up halfway through a message's text: the socket is
+                // closed with a literal still owed.
+                if let Some(at) = quirks
+                    .hang_up_at
+                    .and_then(|u| body.find(&format!("Body of {u} ")))
+                {
+                    let _ = w.write_all(&body.as_bytes()[..at]).await;
+                    return;
+                }
                 if w.write_all(format!("{body}{tag} OK done\r\n").as_bytes())
                     .await
                     .is_err()
@@ -3113,16 +3598,7 @@ mod tests {
                     return;
                 }
             }
-        });
-        let tcp = TcpStream::connect(addr).await.unwrap();
-        let mut client = async_imap::Client::new(tcp);
-        client.read_response().await.unwrap();
-        let session = client
-            .login("me@example.com", "pw")
-            .await
-            .map_err(|(e, _)| e)
-            .unwrap();
-        (session, seen)
+        }
     }
 
     fn me() -> Account {
@@ -3147,7 +3623,7 @@ mod tests {
         rt_act().block_on(async {
             // RATA holds 40, 50, 60; ask for two older than 40.
             let (mut s, log) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
-            let got = older_in(&mut s, &me(), &Folder::Inbox, 40, 7, 2).await;
+            let got = older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 40, 7, 2).await;
             assert_eq!(uids_of(got), vec![30, 20], "newest first, nothing RATA has");
             let log = log.lock().unwrap();
             assert!(log.iter().any(|c| c.starts_with("FETCH 2:3 ")), "{log:?}");
@@ -3160,7 +3636,7 @@ mod tests {
             // RATA's oldest was 40, which has since been deleted on a phone.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 40, 7, 2).await),
+                uids_of(older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 40, 7, 2).await),
                 vec![30, 20]
             );
         });
@@ -3173,7 +3649,7 @@ mod tests {
             // skip 60; it must come back as older.
             let (mut s, _) = scripted_inbox(&[10, 20, 30, 40, 50, 60], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 70, 7, 2).await),
+                uids_of(older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 70, 7, 2).await),
                 vec![60, 50]
             );
         });
@@ -3184,7 +3660,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert_eq!(
-                uids_of(older_in(&mut s, &me(), &Folder::Inbox, 10, 7, 50).await),
+                uids_of(older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 10, 7, 50).await),
                 Vec::<u32>::new()
             );
             assert!(
@@ -3199,7 +3675,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             assert!(matches!(
-                older_in(&mut s, &me(), &Folder::Inbox, 30, 9, 50).await,
+                older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 30, 9, 50).await,
                 Fetched::Stale(_)
             ));
             assert!(
@@ -3219,7 +3695,18 @@ mod tests {
             loop {
                 let (mut s, _) = scripted_inbox(inbox, 7).await;
                 let oldest = *seen.iter().min().unwrap();
-                let page = uids_of(older_in(&mut s, &me(), &Folder::Inbox, oldest, 7, 3).await);
+                let page = uids_of(
+                    older_in(
+                        &mut s,
+                        &mut no_redial(),
+                        &me(),
+                        &Folder::Inbox,
+                        oldest,
+                        7,
+                        3,
+                    )
+                    .await,
+                );
                 if page.is_empty() {
                     break;
                 }
@@ -3381,6 +3868,59 @@ mod tests {
             let (mut s, log) = scripted_session(Script {
                 caps: "MOVE UIDPLUS",
                 list: NO_FOLDERS,
+                uidvalidity: 7,
+                present: &[42],
+            })
+            .await;
+            assert!(matches!(
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
+                Acted::NoPlace(_)
+            ));
+            assert!(changed(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    /// GreenMail's LIST, and many a small host's: no special-use attribute on
+    /// anything, so every folder is known only by its name.
+    const UNDECLARED: &str =
+        "* LIST () \".\" INBOX\r\n* LIST () \".\" Archive\r\n* LIST () \".\" Trash\r\n";
+
+    #[test]
+    fn archive_goes_where_a_refresh_reads_it_on_a_server_that_declares_nothing() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: UNDECLARED,
+                uidvalidity: 7,
+                present: &[42],
+            })
+            .await;
+            // A refresh reads "Archive" as the archive, by its name…
+            assert_eq!(places(&mut s).await.archive.as_deref(), Some("Archive"));
+            // …so archiving files mail there, rather than refusing.
+            assert_eq!(
+                apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Archive).await,
+                done(&[42])
+            );
+            assert!(
+                log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c == "UID MOVE 42 \"Archive\""),
+                "{:?}",
+                log.lock().unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn trash_still_needs_a_declared_trash_even_one_called_trash() {
+        rt_act().block_on(async {
+            // "Delete" never guesses: a folder merely named Trash might be
+            // anything, and a wrong guess loses mail somewhere unexpected.
+            let (mut s, log) = scripted_session(Script {
+                caps: "MOVE UIDPLUS",
+                list: UNDECLARED,
                 uidvalidity: 7,
                 present: &[42],
             })
@@ -3644,6 +4184,29 @@ mod tests {
         assert!(msg.contains("apppasswords"), "{msg}");
     }
 
+    #[test]
+    fn a_typed_server_address_that_fails_says_why() {
+        // What B1 saw on a real server: the handshake's reason, dropped.
+        let msg = typed_host_failed(
+            "mail.example.com",
+            Some("mail.example.com could not be trusted: invalid peer certificate: UnknownIssuer"),
+        );
+        assert!(
+            msg.starts_with("Could not connect to mail.example.com: "),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("invalid peer certificate: UnknownIssuer."),
+            "{msg}"
+        );
+        assert!(msg.contains("Check the server address"), "{msg}");
+        // Nothing to add: the old sentence.
+        assert_eq!(
+            typed_host_failed("mail.example.com", None),
+            "Could not reach mail.example.com. Check the server address with your mail provider."
+        );
+    }
+
     // ---------------------------------------------------------- re-reading
 
     #[test]
@@ -3651,7 +4214,15 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20, 30], 7).await;
             // 25 was never there; 20 and 30 are.
-            let got = uids_in(&mut s, &me(), &Folder::Inbox, &[20, 25, 30], 7).await;
+            let got = uids_in(
+                &mut s,
+                &mut no_redial(),
+                &me(),
+                &Folder::Inbox,
+                &[20, 25, 30],
+                7,
+            )
+            .await;
             let Fetched::Messages(m) = got else {
                 panic!("{got:?}")
             };
@@ -3679,7 +4250,7 @@ mod tests {
     fn stored_mail_is_not_re_read_from_a_rebuilt_mailbox() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&[10, 20], 8).await;
-            let got = uids_in(&mut s, &me(), &Folder::Inbox, &[10], 7).await;
+            let got = uids_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, &[10], 7).await;
             assert!(matches!(got, Fetched::Stale(_)), "{got:?}");
             assert!(
                 !log.lock()
@@ -3768,7 +4339,7 @@ mod tests {
     fn fetched_mail_carries_what_a_reply_needs() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_inbox(&[7, 9], 5).await;
-            let got = read_range(&mut s, &me(), &Folder::Inbox, "1:2", 5)
+            let got = read_range(&mut s, &mut no_redial(), &me(), &Folder::Inbox, "1:2", 5)
                 .await
                 .ok()
                 .unwrap();
@@ -3781,6 +4352,224 @@ mod tests {
             // The fixture's Reply-To is the sender again, which is what servers
             // fill in when none was set; that is not worth keeping.
             assert_eq!(seven.reply_to, "");
+        });
+    }
+
+    // ------------------------------------------- replies RATA cannot read
+    //
+    // GreenMail 2.1 answers a partial fetch as `BODY[]<0>{n}`, with no space
+    // before the literal, and the parser RATA uses rejects it. That is one
+    // server's quirk, but any reply the parser cannot read must cost the
+    // message it belongs to — never the page, and never put the message's
+    // own words into an error.
+
+    /// Every word of the scripted mailbox's message `uid` that an error or a
+    /// marked message must never show.
+    fn words_of(uid: u32) -> [String; 4] {
+        [
+            format!("Body of {uid}"),
+            format!("Subject {uid}"),
+            "ann@example.org".into(),
+            "FETCH".into(),
+        ]
+    }
+
+    #[test]
+    fn a_reply_the_parser_cannot_read_costs_that_message_not_the_refresh() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                greenmail: &[2],
+                ..Quirks::default()
+            };
+            let (addr, log) = scripted_mailbox(&[1, 2, 3], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut redial_to(addr), &me(), 15, &[]).await;
+            let got = got.unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+            let mut uids: Vec<u32> = got.messages.iter().map(|m| m.uid).collect();
+            uids.sort();
+            assert_eq!(uids, vec![1, 2, 3], "every message is listed");
+            for m in &got.messages {
+                if m.uid == 2 {
+                    assert!(m.truncated, "opening it fetches it whole");
+                    assert_eq!(m.subject, "Subject 2", "listed as it is");
+                    assert_eq!(m.body, UNREADABLE);
+                    assert_eq!(m.preview, UNREADABLE);
+                } else {
+                    assert_eq!(m.body, format!("Body of {} — café", m.uid));
+                    assert!(!m.truncated);
+                }
+            }
+            // A fresh connection for what the broken one could not bring, and
+            // no more than the refresh's allowance of them.
+            let log = log.lock().unwrap();
+            let connections = log.iter().filter(|c| *c == "(connected)").count();
+            assert!((2..=1 + REDIALS as usize).contains(&connections), "{log:?}");
+            // The one that could not be read was asked for on its own.
+            assert!(
+                log.iter()
+                    .any(|c| c.starts_with("UID FETCH 2 ") && c.contains("BODY.PEEK")),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_server_whose_every_reply_is_unreadable_costs_two_more_sign_ins_at_most() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                greenmail: &[1, 2, 3],
+                ..Quirks::default()
+            };
+            let (addr, log) = scripted_mailbox(&[1, 2, 3], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut redial_to(addr), &me(), 15, &[])
+                .await
+                .unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+            // All listed, newest first pinned one by one while connections
+            // were allowed, the rest said to be unread.
+            let mut said: Vec<(u32, &str)> = got
+                .messages
+                .iter()
+                .map(|m| (m.uid, m.body.as_str()))
+                .collect();
+            said.sort();
+            assert_eq!(said, vec![(1, NOT_READ), (2, UNREADABLE), (3, UNREADABLE)]);
+            assert!(got.messages.iter().all(|m| m.truncated));
+            let log = log.lock().unwrap();
+            let connections = log.iter().filter(|c| *c == "(connected)").count();
+            assert_eq!(connections, 1 + REDIALS as usize, "{log:?}");
+        });
+    }
+
+    #[test]
+    fn async_imap_reads_nothing_more_after_a_reply_it_cannot_read() {
+        // What `recover` is built on: after a reply its parser rejects,
+        // async-imap reads nothing more on that connection — though here the
+        // server's tagged OK is right behind it — and a SELECT then
+        // "succeeds" with an empty mailbox. Were that connection used again,
+        // a folder would read as empty. If an upgrade changes this,
+        // recovering on a fresh connection is merely cautious.
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                greenmail: &[1],
+                ..Quirks::default()
+            };
+            let (addr, _) = scripted_mailbox(&[1, 2], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            s.select("INBOX").await.unwrap();
+            let got: Vec<_> = s.fetch("1:*", items()).await.unwrap().collect().await;
+            assert_eq!(got.len(), 1, "one error, then the end: {got:?}");
+            let Err(e) = &got[0] else {
+                panic!("expected the parser's error")
+            };
+            assert!(unreadable(e), "{:.80}", e.to_string());
+            assert_eq!(reason(e), UNPARSED);
+            let after = s.select("INBOX").await.unwrap();
+            assert_eq!((after.exists, after.uid_validity), (0, None));
+        });
+    }
+
+    #[test]
+    fn an_error_is_one_short_line_of_rata_s_own() {
+        let parse = ImapError::Io(std::io::Error::other(
+            "Error(Error { input: [42], code: TakeWhile1 }) during parsing of \"* 1 FETCH (BODY[]<0>{5}\\r\\nHello)\"",
+        ));
+        assert!(unreadable(&parse));
+        assert_eq!(reason(&parse), UNPARSED);
+        let reset = ImapError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ));
+        assert!(!unreadable(&reset));
+        assert_eq!(reason(&reset), "connection reset by peer");
+        let long = ImapError::No(format!("first line\r\nsecond {}", "x".repeat(500)));
+        assert_eq!(reason(&long), "first line");
+        let wide = ImapError::Bad("y".repeat(500));
+        assert_eq!(reason(&wide).len(), 200);
+    }
+
+    #[test]
+    fn a_page_of_older_mail_keeps_what_could_be_read() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                greenmail: &[20],
+                ..Quirks::default()
+            };
+            let (addr, _) = scripted_mailbox(&[10, 20, 30, 40], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let Fetched::Messages(got) = older_in(
+                &mut s,
+                &mut redial_to(addr),
+                &me(),
+                &Folder::Inbox,
+                40,
+                7,
+                50,
+            )
+            .await
+            else {
+                panic!("older mail failed")
+            };
+            let mut uids: Vec<u32> = got.iter().map(|m| m.uid).collect();
+            uids.sort();
+            assert_eq!(uids, vec![10, 20, 30]);
+            let twenty = got.iter().find(|m| m.uid == 20).unwrap();
+            assert!(twenty.truncated);
+            assert!(
+                got.iter()
+                    .find(|m| m.uid == 30)
+                    .unwrap()
+                    .body
+                    .contains("Body of 30")
+            );
+        });
+    }
+
+    #[test]
+    fn a_reply_that_cannot_be_read_is_never_quoted_in_an_error() {
+        rt_act().block_on(async {
+            // Nowhere to reconnect to: the refresh fails, and says so in a
+            // line of its own words.
+            let quirks = Quirks {
+                greenmail: &[2],
+                ..Quirks::default()
+            };
+            let (addr, _) = scripted_mailbox(&[1, 2, 3], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let Err(Fetched::Net(why)) =
+                newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[]).await
+            else {
+                panic!("expected the refresh to fail without a second connection")
+            };
+            for w in words_of(2) {
+                assert!(!why.contains(&w), "{w:?} is in {why:?}");
+            }
+            assert!(why.contains("inbox"), "names the folder: {why}");
+            assert!(
+                !why.contains('\n') && why.len() < 400,
+                "one short line: {why}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_connection_that_really_goes_fails_the_folder_without_quoting_mail() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                hang_up_at: Some(2),
+                ..Quirks::default()
+            };
+            let (addr, _) = scripted_mailbox(&[1, 2, 3], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let Err(Fetched::Net(why)) =
+                newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[]).await
+            else {
+                panic!("a connection that went partway must fail the refresh")
+            };
+            for w in words_of(2) {
+                assert!(!why.contains(&w), "{w:?} is in {why:?}");
+            }
+            assert!(why.contains("inbox"), "names the folder: {why}");
         });
     }
 
@@ -3922,7 +4711,7 @@ mod tests {
             let Selected::Open(inbox) = select(&mut s, &Folder::Inbox).await else {
                 panic!("the inbox opens");
             };
-            let got = newest_in(&mut s, &me(), &Folder::Inbox, &inbox, 15)
+            let got = newest_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, &inbox, 15)
                 .await
                 .unwrap();
             assert_eq!(got.len(), 3);
@@ -3940,7 +4729,7 @@ mod tests {
             let Selected::Open(sent) = select(&mut s, &Folder::Sent).await else {
                 panic!("Sent opens");
             };
-            let got = newest_in(&mut s, &me(), &Folder::Sent, &sent, 15)
+            let got = newest_in(&mut s, &mut no_redial(), &me(), &Folder::Sent, &sent, 15)
                 .await
                 .unwrap();
             let ids: Vec<&str> = got.iter().map(|m| m.id.as_str()).collect();
@@ -4000,9 +4789,16 @@ mod tests {
             let Selected::Open(drafts) = select(&mut s, &Folder::Drafts).await else {
                 panic!("Drafts opens");
             };
-            let got = newest_in(&mut s, &me(), &Folder::Drafts, &drafts, 15)
-                .await
-                .unwrap();
+            let got = newest_in(
+                &mut s,
+                &mut no_redial(),
+                &me(),
+                &Folder::Drafts,
+                &drafts,
+                15,
+            )
+            .await
+            .unwrap();
             let key = mail_key("me@example.com");
             assert_eq!(got[0].id, format!("{key}_drafts_12"));
             assert_eq!(got[0].folder, Folder::Drafts);
@@ -4020,7 +4816,9 @@ mod tests {
     fn a_refresh_reads_drafts_and_lists_every_one_by_id() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(GMAIL_DRAFTS, "[Gmail]/Drafts").await;
-            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
             let key = mail_key("me@example.com");
             assert_eq!(
                 found.drafts,
@@ -4041,7 +4839,9 @@ mod tests {
             // A mailbox without Drafts says nothing about drafts, rather than
             // "there are none".
             let (mut s, _) = scripted_folders(OUTLOOK, "Sent Items").await;
-            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
             assert_eq!(found.drafts, None);
         });
     }
@@ -4178,7 +4978,7 @@ mod tests {
             let Selected::Open(junk) = select(&mut s, &Folder::Junk).await else {
                 panic!("Spam opens");
             };
-            let got = newest_in(&mut s, &me(), &Folder::Junk, &junk, 15)
+            let got = newest_in(&mut s, &mut no_redial(), &me(), &Folder::Junk, &junk, 15)
                 .await
                 .unwrap();
             let key = mail_key("me@example.com");
@@ -4266,7 +5066,9 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, log) = scripted_folders(GMAIL_LABELS, "Work/Clients").await;
             let work = Folder::Named("Work/Clients".into());
-            let Fetched::Messages(got) = folder_in(&mut s, &me(), &work, 50).await else {
+            let Fetched::Messages(got) =
+                folder_in(&mut s, &mut no_redial(), &me(), &work, 50).await
+            else {
                 panic!("the folder is read");
             };
             let key = mail_key("me@example.com");
@@ -4296,7 +5098,7 @@ mod tests {
                 let asked = Folder::Named(name.into());
                 assert!(
                     matches!(
-                        folder_in(&mut s, &me(), &asked, 50).await,
+                        folder_in(&mut s, &mut no_redial(), &me(), &asked, 50).await,
                         Fetched::Stale(_)
                     ),
                     "{name}"
@@ -4433,7 +5235,7 @@ mod tests {
     fn a_refresh_with_nothing_new_downloads_no_text() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&TWENTY, 7).await;
-            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 20))
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 20))
                 .await
                 .unwrap();
             assert!(got.messages.is_empty());
@@ -4462,7 +5264,7 @@ mod tests {
     fn a_refresh_downloads_only_what_came_after() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_inbox(&TWENTY, 7).await;
-            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 17))
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 17))
                 .await
                 .unwrap();
             assert!(got.gaps.is_empty(), "three new messages leave nothing out");
@@ -4486,7 +5288,9 @@ mod tests {
         rt_act().block_on(async {
             for known in [vec![], inbox_known(9, 20), inbox_known(7, 0)] {
                 let (mut s, _) = scripted_inbox(&TWENTY, 7).await;
-                let got = newest_everywhere(&mut s, &me(), 5, &known).await.unwrap();
+                let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &known)
+                    .await
+                    .unwrap();
                 assert_eq!(
                     sorted_uids(&got.messages),
                     vec![16, 17, 18, 19, 20],
@@ -4503,7 +5307,7 @@ mod tests {
             let many: &'static [u32] =
                 Box::leak((1..=300).collect::<Vec<u32>>().into_boxed_slice());
             let (mut s, _) = scripted_inbox(many, 7).await;
-            let got = newest_everywhere(&mut s, &me(), 5, &inbox_known(7, 50))
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 50))
                 .await
                 .unwrap();
             // The newest of them, and where the rest are: above 50, below
@@ -4522,7 +5326,8 @@ mod tests {
                 }]
             );
             // Paging down from the top of the gap brings the next of them.
-            let Fetched::Messages(next) = older_in(&mut s, &me(), &Folder::Inbox, 101, 7, 50).await
+            let Fetched::Messages(next) =
+                older_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, 101, 7, 50).await
             else {
                 panic!("older mail")
             };
@@ -4677,7 +5482,9 @@ mod tests {
     fn gmail_archive_is_all_mail_searched_for_what_is_archived() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
-            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
             // Only the archived ones, not the inbox's or Sent's copies.
             assert_eq!(archive_uids(&found), vec![2, 4, 6, 9]);
             let key = mail_key("me@example.com");
@@ -4724,7 +5531,9 @@ mod tests {
     fn a_gmail_archive_page_is_the_newest_archived() {
         rt_act().block_on(async {
             let (mut s, _) = scripted_gmail(&[2, 4, 6, 9], true).await;
-            let found = newest_everywhere(&mut s, &me(), 2, &[]).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 2, &[])
+                .await
+                .unwrap();
             assert_eq!(archive_uids(&found), vec![6, 9]);
             // The listing is still whole, so the rest can be picked up.
             assert_eq!(found.archived.unwrap().uids, vec![2, 4, 6, 9]);
@@ -4740,7 +5549,9 @@ mod tests {
                 uidvalidity: 9,
                 since: 6,
             }];
-            let found = newest_everywhere(&mut s, &me(), 15, &known).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &known)
+                .await
+                .unwrap();
             assert_eq!(archive_uids(&found), vec![9]);
             // Read and starred for what RATA already has.
             let key = mail_key("me@example.com");
@@ -4771,7 +5582,7 @@ mod tests {
         rt_act().block_on(async {
             let (mut s, _) = scripted_gmail(&[2, 4, 6, 9], true).await;
             let Fetched::Messages(older) =
-                older_in(&mut s, &me(), &Folder::Archive, 6, 9, 50).await
+                older_in(&mut s, &mut no_redial(), &me(), &Folder::Archive, 6, 9, 50).await
             else {
                 panic!("older archived mail")
             };
@@ -4783,7 +5594,9 @@ mod tests {
     fn a_server_that_is_not_gmail_keeps_its_all_folder_out_of_archive() {
         rt_act().block_on(async {
             let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], false).await;
-            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
             assert!(archive_uids(&found).is_empty());
             assert_eq!(found.archived, None);
             // The inbox is not held hostage by the refusal.
