@@ -255,15 +255,28 @@ export function domainRefusal(plan, used, purchased = 0, env) {
   return `${have} Add ${purchased ? 'another' : 'one'} for ${money(DOMAIN_ADDON.price)} a month.${alt}`;
 }
 
+/* Stripe's statuses, reduced to the question every route asks: is this
+   person entitled right now? past_due is deliberately still entitled: a card
+   that failed this morning should not lock someone out of their mail while
+   Stripe retries it, which is Stripe's own grace period. It is safe because a
+   licence lasts 30 days and is renewed only while this holds, so once Stripe
+   gives up (canceled or unpaid) renewal stops and the licence runs out.
+
+   Kept here, not in lib/stripe.js, so this file stays free of Node imports;
+   the webhook re-exports it, and the two can no longer disagree (they did:
+   the licence routes accepted only active and trialing). */
+export const LIVE_STATUSES = ['active', 'trialing', 'past_due'];
+
+const entitled = (status) => LIVE_STATUSES.includes(String(status || '').toLowerCase());
+
 /* The user's plan, read from the subscriptions table the Stripe webhook
-   maintains. No active subscription is no plan — not a lesser one. */
+   maintains. No live subscription is no plan — not a lesser one. */
 export async function planForUser(sb, email) {
   if (!sb || !email) return null;
   const { data } = await sb.from('subscriptions')
     .select('plan,status').eq('email', String(email).toLowerCase()).maybeSingle();
   if (!data) return null;
-  const live = ['active', 'trialing'].includes(String(data.status || '').toLowerCase());
-  if (!live) return null;
+  if (!entitled(data.status)) return null;
   return PLANS[data.plan] ? data.plan : 'base';
 }
 
@@ -274,8 +287,7 @@ export async function entitlementsForUser(sb, email) {
   const { data } = await sb.from('subscriptions')
     .select('plan,status,domain_addons').eq('email', String(email).toLowerCase()).maybeSingle();
   if (!data) return { plan: null, domainAddons: 0 };
-  const live = ['active', 'trialing'].includes(String(data.status || '').toLowerCase());
-  if (!live) return { plan: null, domainAddons: 0 };
+  if (!entitled(data.status)) return { plan: null, domainAddons: 0 };
   return {
     plan: PLANS[data.plan] ? data.plan : 'base',
     domainAddons: Math.max(0, Number(data.domain_addons) || 0),

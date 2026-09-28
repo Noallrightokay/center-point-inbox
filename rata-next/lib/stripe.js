@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { LIVE_STATUSES } from './plan.js';
 
 /* ---------------------------------------------------------------------------
    Stripe, without the SDK.
@@ -65,11 +66,28 @@ export function planForPrice(priceId, env = process.env) {
   return null;
 }
 
-/* Stripe's statuses, reduced to the question the app actually asks: is this
-   person entitled right now? past_due is deliberately still entitled — a card
-   that failed this morning should not lock someone out of their mail while
-   Stripe retries it. */
-export const LIVE_STATUSES = ['active', 'trialing', 'past_due'];
+/* Which Stripe statuses are entitled (active, trialing, past_due): defined in
+   lib/plan.js, which the licence routes read, so the webhook and the licence
+   can never disagree about who has paid. */
+export { LIVE_STATUSES };
+
+/* Whether a checkout, keyed by address, would take over a live subscription
+   that belongs to a different Stripe customer.
+
+   Stripe's checkout lets the buyer type any address. Written blindly, a
+   second customer's checkout replaces a paying customer's plan and customer
+   id; cancelling it then cancels them, and their own subscription events
+   match no row. So a live row owned by another customer is never replaced.
+   The same customer checking out again updates their own row; a row with no
+   customer (minted by hand) is claimed by the first checkout; a row whose
+   subscription has ended may be taken by a new one. A checkout with no
+   customer id at all counts as another customer: it would strip the live
+   one's id. */
+export function checkoutConflict(held, row) {
+  if (!held || !held.stripe_customer) return false;
+  if (!LIVE_STATUSES.includes(String(held.status || '').toLowerCase())) return false;
+  return held.stripe_customer !== (row && row.stripe_customer);
+}
 
 /* What to write for an event, or null for one we do not act on.
 
