@@ -61,7 +61,7 @@ fn user(tag: &str) -> String {
 fn account(email: &str) -> Account {
     Account {
         email: email.into(),
-        pass: PASS.into(),
+        credential: rata_mail::Credential::Password(PASS.into()),
         host: HOST.into(),
         port: 993,
         label: "Loopback".into(),

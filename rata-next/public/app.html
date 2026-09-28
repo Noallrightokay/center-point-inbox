@@ -369,6 +369,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .set-row b{display:block;font-size:14px;font-weight:600}
 .set-row span{font-size:12.5px;color:var(--faint)}
 .set-row span.lf-note{display:block;margin-top:8px;padding:8px 12px;border-radius:var(--r-sm);background:var(--amber-soft);color:var(--amber);font-size:13px;line-height:1.45}
+.set-row span.lf-note.calm{background:var(--fill-2);color:var(--slate)}
 .set-row input[type=text]{border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;min-width:230px;border-radius:var(--r-sm);transition:box-shadow .12s}
 .set-row input[type=text]:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .sig-row{align-items:flex-start}
@@ -887,7 +888,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
             <div class="grow"><b>Add an account</b><span id="quota-line">Gmail, iCloud, Yahoo, Fastmail or your work address, with an app password. Outlook, Hotmail and Microsoft 365 are not supported yet.</span></div>
             <button class="btn primary" data-addlink="mail">＋ Email account</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-ms-go" style="display:none">Sign in with Microsoft</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
@@ -2339,7 +2340,7 @@ function renderResting(){
           ${b.unread?`<span class="rest-pip">${b.unread}</span>`:''}
         </span>
         <span class="rest-box-sub">${b.l.provLabel?esc(b.l.provLabel)+' · ':''}${b.total} message${b.total===1?'':'s'}${b.last?' · '+rel(b.last.ts)+' ago':''}</span>
-        ${b.l.needsRelink?'<span class="rest-warn">Needs its app password again</span>':''}
+        ${b.l.needsRelink?`<span class="rest-warn">${msLinked(b.l)?'Sign in to Microsoft again':'Needs its app password again'}</span>`:''}
       </button>`).join('')}
     </div>
 
@@ -3041,7 +3042,14 @@ function renderLinked(){
   if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
-    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'NOT SYNCED YET')}</span></b><span>${esc((l.provLabel||'Email')+(l.host?' · '+l.host:''))} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
+    /* A mailbox that signs in with Microsoft (C2) is never asked for an app
+       password: when Microsoft stops accepting its sign-in, the row says
+       so and offers to sign in again. */
+    const ms=msLinked(l);
+    const fix=!l.needsRelink?`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`
+      :ms?`<button class="btn" data-lkms="${l.id}">Sign in to Microsoft again</button>`
+      :`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`;
+    return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?(ms?'SIGN IN TO MICROSOFT AGAIN':'NEEDS APP PASSWORD'):(live?'LIVE':'NOT SYNCED YET')}</span></b><span>${esc((l.provLabel||'Email')+(l.host?' · '+l.host:''))}${ms?' · signs in with Microsoft':''} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${fix}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
   }).join('');
   /* A mailbox's own Sync now reads that mailbox (0.1.35), not all of them. */
   el.querySelectorAll('[data-lksync]').forEach(b=>b.onclick=()=>{const l=S.linked.find(x=>x.id===b.dataset.lksync);serverSync('mail',false,l?[String(l.label).toLowerCase()]:null)});
@@ -3053,34 +3061,106 @@ function renderLinked(){
     const l=S.linked.find(x=>x.id===b.dataset.lkfix);if(!l)return;
     openMailForm(l.label,l.lastError||'');
   });
+  /* Sign in to Microsoft again: the same form, straight into the browser
+     sign-in, whatever the address's domain looks like. */
+  el.querySelectorAll('[data-lkms]').forEach(b=>b.onclick=async()=>{
+    const l=S.linked.find(x=>x.id===b.dataset.lkms);if(!l)return;
+    LF_FOUND={email:String(l.label).toLowerCase(),microsoft:true,note:''};
+    openMailForm(l.label,'Microsoft needs you to sign in again before RATA can read '+l.label+'. Your mail stays where it is.');
+    if(await msReady())msSignIn();
+  });
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
-/* Microsoft mailboxes (C0). Microsoft turned off password sign-in to IMAP
-   (Outlook.com in September 2024, Microsoft 365 before that); only its own
-   OAuth sign-in gets in now, app passwords included, and RATA signs in with
-   passwords. So an address that is plainly Microsoft's is told so before a
-   password is asked for, and the password box goes. The engine refuses the
-   rest (a company domain whose mail is at Microsoft 365, found by its MX)
-   before any password is sent, with the same reason, which mailLink shows
-   here too. The words match discover.rs's MS_HELP. */
+/* Microsoft mailboxes (C0, then C2/C3). Microsoft turned off password
+   sign-in to IMAP (Outlook.com in September 2024, Microsoft 365 before
+   that); only its own OAuth sign-in gets in now, app passwords included. So
+   an address that is plainly Microsoft's never gets a password box. In an
+   app built with Microsoft sign-in (`MS_READY`) it gets **Sign in with
+   Microsoft**: Rust opens Microsoft's page in the browser and keeps the
+   tokens (oauth.rs); the page only ever hears how it ended. In a build
+   without it, and on the website, it gets C0's reason instead. A company
+   domain whose mail is at Microsoft 365 is only known by its DNS, so the app
+   asks (`lfFind` → discover_mailbox) as the address is typed, and the engine
+   refuses a password for one anyway (`microsoft: true` from link). */
 const MS_DOMAINS=new Set(['outlook.com','hotmail.com','live.com','msn.com','passport.com','windowslive.com',
   'hotmail.co.uk','hotmail.fr','hotmail.de','hotmail.it','hotmail.es',
   'live.co.uk','live.fr','live.de','live.it','live.nl','live.ca','live.com.au',
   'outlook.fr','outlook.de','outlook.es','outlook.it','outlook.jp']);
 const MS_NOT_YET='Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet. Microsoft only lets other apps into them through its own sign-in page (OAuth), and no longer accepts passwords or app passwords for IMAP. RATA does not have that sign-in yet.';
+const MS_SIGN_IN='Microsoft mailboxes sign in with Microsoft instead of an app password. RATA opens Microsoft\u2019s page in your browser, so your password goes only to Microsoft.';
+const MS_WAITING='Finish signing in in your browser. RATA is waiting for Microsoft, and stops after five minutes.';
 function msAddress(email){const d=String(email||'').trim().toLowerCase().split('@')[1]||'';return MS_DOMAINS.has(d)}
-/* Show why a mailbox cannot be added (or clear it), in place of the password
-   box. `why` is the engine's own sentence when it found Microsoft by DNS. */
+/* A linked mailbox that signs in with Microsoft. */
+function msLinked(l){return !!l&&(l.auth==='oauth'||l.signIn==='microsoft')}
+/* Whether this build can sign in with Microsoft: asked once, app only. */
+let MS_READY=null;
+async function msReady(){
+  if(MS_READY!==null)return MS_READY;
+  if(!window.__RATA_NATIVE__){MS_READY=false;return false}
+  try{const r=await apiFetch('/api/link/microsoft');MS_READY=!!(r&&r.configured)}catch(e){MS_READY=false}
+  return MS_READY;
+}
+/* What discovery said about the address in the form ({email, microsoft,
+   note}), and whether a Microsoft sign-in is waiting for the browser. */
+let LF_FOUND=null,LF_WAIT=false,LF_FIND_T=null;
+/* Put the form in the state its address needs: a password box, Sign in with
+   Microsoft, waiting for the browser, or C0's reason why a Microsoft mailbox
+   cannot be added. `why` is the engine's own sentence when it has one. */
 function lfMicrosoft(why){
   const note=$('#lf-ms');if(!note)return false;
-  const ms=why||(lfType==='mail'&&msAddress($('#lf-input').value)?MS_NOT_YET:'');
-  note.textContent=ms;note.style.display=ms?'':'none';
+  const v=$('#lf-input').value.trim().toLowerCase();
+  const dns=!!(LF_FOUND&&LF_FOUND.email===v&&LF_FOUND.microsoft);
+  const ms=!!why||(lfType==='mail'&&(msAddress(v)||dns));
+  const can=ms&&MS_READY===true;
+  const text=!ms?'':can?(LF_WAIT?MS_WAITING:MS_SIGN_IN):(why||(dns&&LF_FOUND.note)||MS_NOT_YET);
+  note.textContent=text;note.style.display=text?'':'none';
+  note.classList.toggle('calm',can);
   $('#lf-pass').style.display=ms?'none':'';
   if(ms){$('#lf-pass').value='';$('#lf-host').style.display='none';$('#lf-host').value=''}
-  /* Nothing here can be linked, so Link goes too; Cancel stays. */
+  /* No password is asked for, so Link goes too; Cancel stays. */
   $('#lf-save').disabled=!!ms;$('#lf-save').style.display=ms?'none':'';
-  return !!ms;
+  const go=$('#lf-ms-go');go.style.display=can&&!LF_WAIT?'':'none';go.disabled=LF_WAIT;
+  $('#lf-input').disabled=LF_WAIT;
+  return ms;
+}
+/* Ask the app what the typed address is, once it looks whole, so a company
+   domain at Microsoft 365 gets Sign in with Microsoft before any password
+   box. DNS only; a slow answer for an address since changed is dropped. */
+function lfFind(){
+  clearTimeout(LF_FIND_T);
+  const v=$('#lf-input').value.trim().toLowerCase();
+  if(!window.__RATA_NATIVE__||lfType!=='mail'||!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v)||msAddress(v)||(LF_FOUND&&LF_FOUND.email===v))return;
+  LF_FIND_T=setTimeout(async()=>{
+    let f=null;
+    try{f=await apiFetch('/api/link/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:v})})}catch(e){return}
+    if(!f||f.error)return;
+    LF_FOUND={email:v,microsoft:!!f.microsoft,note:f.note||''};
+    if(f.microsoft&&f.configured)MS_READY=true;
+    if($('#lf-input').value.trim().toLowerCase()===v&&!LF_WAIT)lfMicrosoft();
+  },500);
+}
+/* Sign in with Microsoft: the browser opens Microsoft's page, and the app
+   links the mailbox when Microsoft sends it back. Cancel stops it. */
+async function msSignIn(){
+  const email=$('#lf-input').value.trim();
+  if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  if(LF_WAIT)return;
+  LF_WAIT=true;lfMicrosoft();
+  let res;
+  try{
+    res=await apiFetch('/api/link/microsoft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+  }catch(e){res={ok:false,error:'RATA could not start signing in with Microsoft.'}}
+  LF_WAIT=false;
+  if(res&&res.cancelled){lfMicrosoft();return}
+  if(!res||!res.ok){
+    /* Said in the form, not a passing toast: "you signed in as someone
+       else" is something to read. */
+    lfMicrosoft(res&&res.microsoft&&!res.configured?res.error:undefined);
+    if(!(res&&res.microsoft))$('#lf-sub').textContent=(res&&res.error)||'Signing in with Microsoft did not finish.';
+    return;
+  }
+  await linkedOk(res);
 }
 /* One form for every provider. The address decides the rest — which server to
    reach and where that provider keeps its app-password screen — so the user is
@@ -3093,23 +3173,41 @@ function openMailForm(email,why){
   $('#lf-title').textContent=email?'Relink '+email:'Add an email account';
   $('#lf-sub').textContent=email
     ?(why||'That mailbox refused the sign-in. Generate a new app password with your provider and paste it here.')
-    :'Gmail, iCloud, Yahoo, your own company domain and most other mailboxes. Enter the address with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work. Outlook, Hotmail and Microsoft 365 are not supported yet.';
+    :'Gmail, iCloud, Yahoo, your own company domain and most other mailboxes. Enter the address with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work. '+msWords();
   $('#lf-input').placeholder='you@anywhere.com';
-  $('#lf-input').value=email||'';
+  $('#lf-input').value=email||'';$('#lf-input').disabled=false;
   $('#lf-pass').style.display='';$('#lf-pass').value='';
   $('#linkform').style.display='flex';
   const ms=lfMicrosoft();
   (email&&!ms?$('#lf-pass'):$('#lf-input')).focus();
+  /* Asked at start in the app (below); if that answer is not in yet, the
+     form is put right when it is. */
+  if(MS_READY===null)msReady().then(()=>{
+    if(lfType!=='mail')return;
+    if(!email)$('#lf-sub').textContent=$('#lf-sub').textContent.replace(/Outlook, Hotmail and Microsoft 365 are not supported yet\./,msWords());
+    lfMicrosoft();
+  });
+  lfFind();
+}
+if(window.__RATA_NATIVE__)msReady();
+/* What the app says about Microsoft mailboxes, by whether it can sign in. */
+function msWords(){
+  return MS_READY?'Outlook, Hotmail and Microsoft 365 sign in with Microsoft instead.':'Outlook, Hotmail and Microsoft 365 are not supported yet.';
 }
 
 $$('[data-addlink]').forEach(b=>b.onclick=()=>openMailForm());
-$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none';$('#lf-input').value='';lfMicrosoft()};
-$('#lf-input').addEventListener('input',()=>lfMicrosoft());
+$('#lf-cancel').onclick=()=>{
+  /* Stops a Microsoft sign-in waiting for the browser, too. */
+  if(LF_WAIT)apiFetch('/api/link/microsoft',{method:'DELETE'}).catch(()=>{});
+  $('#linkform').style.display='none';$('#lf-host').style.display='none';$('#lf-input').value='';LF_FOUND=null;lfMicrosoft();
+};
+$('#lf-input').addEventListener('input',()=>{lfMicrosoft();lfFind()});
 $('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
   await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());
 };
-$('#lf-input').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
+$('#lf-ms-go').onclick=()=>msSignIn();
+$('#lf-input').addEventListener('keydown',e=>{if(e.key!=='Enter')return;if($('#lf-ms-go').style.display!=='none')msSignIn();else $('#lf-save').click()});
 $('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').click()});
 
 /* Link a mailbox at any provider.
@@ -3132,29 +3230,45 @@ async function mailLink(email,pass,host){
       if(res.needsHost){
         $('#lf-host').style.display='';$('#lf-host').focus();
         $('#lf-sub').textContent=res.error;
-      }else if(/\bMicrosoft\b/.test(res.error||'')){
-        /* Microsoft found by DNS: the password was never sent, and a new one
-           will not help, so the form says why instead of a passing toast. */
-        lfMicrosoft(res.error);
+      }else if(res.microsoft||/\bMicrosoft\b/.test(res.error||'')){
+        /* Microsoft, found by DNS: the password was never sent, and a new one
+           will not help. The form switches to Sign in with Microsoft, or in a
+           build without it says why instead of a passing toast. */
+        LF_FOUND={email:email.toLowerCase(),microsoft:true,note:res.configured?'':res.error};
+        if(res.configured)MS_READY=true;
+        lfMicrosoft(res.configured?undefined:res.error);
       }else toast(res.error||'Could not link that mailbox');
       return;
     }
-    $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
-    let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
-    if(l){l.status='live';l.host=res.host;l.provLabel=res.label;delete l.needsRelink;delete l.lastError;save()}
-    $('#linkform').style.display='none';
-    renderLinked();refreshQuota();
-    await audit('mail.link',res.email+' linked ('+res.label+(res.foundBy?' · found by '+res.foundBy:'')+')');
-    toast(res.label&&res.foundBy==='mx'
-      ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
-      :res.email+' linked — pulling messages…');
-    await serverSync('mail');
-    /* A new mailbox arrives with its newest fifteen; take one page of history
-       straight away so it does not look nearly empty. */
-    await loadOlder(res.email,true);
+    await linkedOk(res);
   }catch(e){
     toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }finally{btn.disabled=$('#lf-ms').style.display!=='none';btn.textContent='Link'}
+}
+
+/* A mailbox the app has linked, by password or by Microsoft sign-in: into
+   the list, the form closed, and its mail fetched. */
+async function linkedOk(res){
+  $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
+  let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
+  if(l){
+    l.status='live';l.host=res.host;l.provLabel=res.label;
+    if(res.auth==='oauth')l.auth='oauth';else delete l.auth;
+    delete l.needsRelink;delete l.signIn;delete l.lastError;save();
+  }
+  LF_FOUND=null;
+  $('#linkform').style.display='none';
+  renderLinked();refreshQuota();
+  await audit('mail.link',res.email+' linked ('+res.label+(res.auth==='oauth'?' · signed in with Microsoft':res.foundBy?' · found by '+res.foundBy:'')+')');
+  toast(res.auth==='oauth'
+    ?res.email+' linked with Microsoft. Pulling messages…'
+    :res.label&&res.foundBy==='mx'
+      ?res.email+' — that domain\u2019s mail is at '+res.label+'. Linked, pulling messages…'
+      :res.email+' linked — pulling messages…');
+  await serverSync('mail');
+  /* A new mailbox arrives with its newest fifteen; take one page of history
+     straight away so it does not look nearly empty. */
+  await loadOlder(res.email,true);
 }
 
 /* What the plan still allows, read from the server rather than guessed here —
@@ -3721,7 +3835,7 @@ const CLOUD_FIELDS=['settings','folders','rules','linked'];
 /* Per-device facts, even inside a field that does travel. An API key belongs
    to the browser that holds it; when a mailbox last synced is true of one
    machine and not another. */
-const CLOUD_STRIP={settings:['api','sigs'],linked:['lastSync','lastError','status','needsRelink']};
+const CLOUD_STRIP={settings:['api','sigs'],linked:['lastSync','lastError','status','needsRelink','signIn']};
 
 function forCloud(st){
   const out={v:st.v};
@@ -3756,7 +3870,7 @@ function applyCloud(remote){
       if(f==='linked'){
         /* Keep this device's sync state for mailboxes it already knows. */
         const mine=Object.fromEntries((S.linked||[]).map(l=>[l.id,l]));
-        S.linked=v.filter(l=>l&&l.type==='mail').map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink}:{status:'pending'}));
+        S.linked=v.filter(l=>l&&l.type==='mail').map(l=>Object.assign({},l,mine[l.id]?{status:mine[l.id].status,lastSync:mine[l.id].lastSync,lastError:mine[l.id].lastError,needsRelink:mine[l.id].needsRelink,signIn:mine[l.id].signIn}:{status:'pending'}));
       }else S[f]=v;
     }else if(v&&typeof v==='object'){
       S[f]=Object.assign({},S[f],v);
@@ -4074,6 +4188,10 @@ async function absorbMail(res,quiet){
        saying "could not be reached" about it would send the user waiting for a
        refresh that is never going to come. */
     if(a.needsRelink)l.needsRelink=true;else delete l.needsRelink;
+    /* How it signs in (C2): a Microsoft mailbox that needs it again says
+       "Sign in to Microsoft again", never "app password". */
+    if(a.auth==='oauth')l.auth='oauth';else if(a.auth)delete l.auth;
+    if(a.signIn)l.signIn=a.signIn;else delete l.signIn;
     /* Not reached this time is not an error: nothing is wrong with it, and
        marking it would have the row claim a problem it does not have. */
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
@@ -4107,7 +4225,9 @@ async function absorbMail(res,quiet){
   (await settleArchives(res.archives)).forEach(take);
   save();
   setTimeout(upgradeBodies,0);
-  const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);
+  const msStuck=f=>f.signIn==='microsoft'||msLinked(linkedFind('mail',f.email));
+  const again=(res.partial||[]).filter(f=>f.needsRelink&&msStuck(f)).map(f=>f.email);
+  const stuck=(res.partial||[]).filter(f=>f.needsRelink&&!msStuck(f)).map(f=>f.email);
   const failed=(res.partial||[]).filter(f=>!f.needsRelink).map(f=>f.email);
   /* An automatic refresh that found nothing is not worth a line in the
      audit log every five minutes. */
@@ -4115,7 +4235,9 @@ async function absorbMail(res,quiet){
   renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();
   if(quiet){if(added){toast(`${added} new message${added===1?'':'s'}`);notifyNew(newIds)}return}
   const later=(res.deferred||[]).length;
-  toast(stuck.length
+  toast(again.length
+    ? `Sign in to Microsoft again for ${again.join(', ')} in Settings`
+    : stuck.length
     ? `${stuck.join(', ')} needs its app password again — relink it in Settings`
     : failed.length
       ? `${failed.join(', ')} could not be reached — RATA will try again on the next refresh`

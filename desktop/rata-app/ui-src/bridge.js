@@ -12,9 +12,8 @@
 
    Nothing here decides anything. It translates a path and a JSON body into a
    command and translates the answer back into the shape the interface already
-   expects. Where the desktop genuinely cannot do something — OAuth sign-in
-   needs a server to receive the callback — it says so in a sentence rather
-   than failing in a way that reads as a bug. */
+   expects. Where the desktop genuinely cannot do something, it says so in a
+   sentence rather than failing in a way that reads as a bug. */
 
 (function () {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -99,6 +98,37 @@
      exactly right for the things a device cannot do on its own. */
   const cannot = (why) => ({ error: why });
 
+  /* How linking ended, in the interface's words — for a password and for
+     Microsoft sign-in alike. */
+  function linkedAnswer(res) {
+    if (res.outcome === 'ok') {
+      const m = res.mailbox;
+      return {
+        ok: true,
+        email: m.email,
+        host: m.host,
+        port: m.port,
+        label: m.label,
+        foundBy: m.source,
+        auth: m.auth || 'password',
+        relinked: false,
+      };
+    }
+    /* Stopped by the customer: nothing to say. */
+    if (res.outcome === 'cancelled') return { ok: false, cancelled: true };
+    /* "Nothing answered" is the one failure with a next step, and the
+       interface has a box for it — so it has to stay distinguishable from
+       "your password was wrong". A Microsoft mailbox is the other: its
+       password was never sent, and the form switches to Sign in with
+       Microsoft (or says why this build cannot). */
+    return {
+      ok: false,
+      error: res.error,
+      ...(res.outcome === 'needs-host' ? { needsHost: true } : {}),
+      ...(res.outcome === 'microsoft' ? { microsoft: true, configured: !!res.configured } : {}),
+    };
+  }
+
   const ROUTES = {
     async '/api/link/mail'(opts) {
       if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
@@ -118,26 +148,49 @@
         password: b.appPassword,
         host: b.host || null,
       });
-      if (res.outcome === 'ok') {
-        const m = res.mailbox;
-        return {
-          ok: true,
-          email: m.email,
-          host: m.host,
-          port: m.port,
-          label: m.label,
-          foundBy: m.source,
-          relinked: false,
-        };
+      return linkedAnswer(res);
+    },
+
+    /* Signing in with Microsoft (C2): Rust opens Microsoft's page in the
+       browser, waits for it on a one-shot 127.0.0.1 listener and keeps the
+       tokens itself. The page names the address and hears how it ended —
+       never a token. DELETE stops a sign-in that is waiting; GET says
+       whether this build can sign in with Microsoft at all. */
+    async '/api/link/microsoft'(opts) {
+      const method = (opts?.method || 'GET').toUpperCase();
+      if (method === 'DELETE') {
+        try {
+          return { ok: true, stopped: await invoke('cancel_microsoft') };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
       }
-      /* "Nothing answered" is the one failure with a next step, and the
-         interface has a box for it — so it has to stay distinguishable from
-         "your password was wrong". */
-      return {
-        ok: false,
-        error: res.error,
-        ...(res.outcome === 'needs-host' ? { needsHost: true } : {}),
-      };
+      if (method === 'GET') {
+        try {
+          return { configured: !!(await invoke('microsoft_ready')) };
+        } catch {
+          return { configured: false };
+        }
+      }
+      const b = body(opts);
+      try {
+        return linkedAnswer(await invoke('link_microsoft', { email: String(b.email || '') }));
+      } catch (e) {
+        return { ok: false, error: String(e) };
+      }
+    },
+
+    /* What an address is before a password is asked for: its provider, and
+       whether it signs in with Microsoft (a company domain at Microsoft 365
+       is only known by its DNS). Nothing is dialled. */
+    async '/api/link/discover'(opts) {
+      const b = body(opts);
+      try {
+        const f = await invoke('discover_mailbox', { email: String(b.email || '') });
+        return { label: f.label || '', microsoft: !!f.microsoft, configured: !!f.configured, note: f.note || '' };
+      } catch (e) {
+        return { error: String(e) };
+      }
     },
 
     /* `known`: what the interface already holds of each folder, so only
@@ -153,27 +206,37 @@
          the empty lists below would report every mailbox as live and freshly
          synced, with "up to date" on top. */
       if (res.unlicensed) return { error: res.unlicensed, unlicensed: true };
+      const boxes = await invoke('list_mailboxes');
+      /* How each mailbox signs in: "oauth" is Microsoft's sign-in (C2), so a
+         mailbox that needs it again says "Sign in to Microsoft again", not
+         "app password". */
+      const authOf = (email) => (boxes.find((x) => x.email === email) || {}).auth || 'password';
       const accounts = [];
+      /* "microsoft": Microsoft no longer accepts the sign-in (or it is gone
+         from the keychain); only signing in again fixes it. */
+      const signIn = (p) => (p.kind === 'microsoft' ? { signIn: 'microsoft' } : {});
       for (const p of res.skipped) {
-        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink: true, deferred: false });
+        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink: true, deferred: false, auth: authOf(p.email), ...signIn(p) });
       }
       for (const p of res.problems) {
         /* "auth": the server refused the password. "missing": the keychain has
            no password for it. Both are fixed by relinking. "keychain": the
-           keychain would not open yet — nothing to relink, it clears itself. */
-        const needsRelink = p.kind === 'auth' || p.kind === 'missing';
-        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink, deferred: false });
+           keychain would not open yet — nothing to relink, it clears itself.
+           "oauth" and "net" for a Microsoft mailbox are not the customer's to
+           fix: a token refused twice, or Microsoft out of reach. */
+        const needsRelink = p.kind === 'auth' || p.kind === 'missing' || p.kind === 'microsoft';
+        accounts.push({ email: p.email, label: p.email, count: 0, error: p.error, needsRelink, deferred: false, auth: authOf(p.email), ...signIn(p) });
       }
       const counts = {};
       for (const m of res.messages) counts[m.acct] = (counts[m.acct] || 0) + 1;
-      for (const box of await invoke('list_mailboxes')) {
+      for (const box of boxes) {
         if (accounts.some((a) => a.email === box.email)) continue;
         /* A mailbox that was not asked about was not synced, and must not be
            stamped as though it had been. */
         if (only && !only.some((o) => o.toLowerCase() === box.email.toLowerCase())) continue;
-        accounts.push({ email: box.email, label: box.label, count: counts[box.email] || 0, error: null, needsRelink: false, deferred: false });
+        accounts.push({ email: box.email, label: box.label, count: counts[box.email] || 0, error: null, needsRelink: false, deferred: false, auth: box.auth || 'password' });
       }
-      const failures = accounts.filter((a) => a.error).map((a) => ({ email: a.email, error: a.error, needsRelink: a.needsRelink }));
+      const failures = accounts.filter((a) => a.error).map((a) => ({ email: a.email, error: a.error, needsRelink: a.needsRelink, ...(a.signIn ? { signIn: a.signIn } : {}) }));
       /* Never a top-level error, even when every mailbox failed. The
          interface treats `error` as "nothing to absorb" and returns early,
          which skipped the per-account marking — so with one mailbox (the
