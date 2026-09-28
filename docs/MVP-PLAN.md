@@ -68,20 +68,20 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 
 | Gap | Evidence | Task |
 |---|---|---|
-| **The live website is an old deploy.** `/api/licence/renew`, `/api/ai` and the new landing page's screenshots all return 404. | Fetched from mailrata.org during this session | [D4](#d4) |
+| **The live website is an old deploy.** `/api/licence/renew`, `/api/ai`, `/api/health` and the new landing page's screenshots all return 404. | Fetched from mailrata.org during this session | [D4](#d4) |
 | So renewal, AI and the new landing page have **never worked for anyone**. | same | [D4](#d4), [D5](#d5) |
 | **The update feed returns 404.** No updater key in GitHub secrets. | Fetched the `updater` release's `latest.json` | [E1](#e1) |
 | **No real mailbox has ever been opened by this code.** | CLAUDE.md, BETA.md; no tester reports (0 open issues) | [B2](#b2) |
-| **Outlook, Hotmail and Microsoft 365 cannot work.** Microsoft turned off password (Basic) sign-in to Outlook.com over IMAP in September 2024. It requires OAuth 2.0 now, and RATA only does passwords. Exchange Online IMAP Basic auth is gone too. | [Microsoft Support: Outlook.com and Basic authentication](https://support.microsoft.com/en-us/office/outlook-and-other-apps-are-unable-to-connect-to-outlook-com-when-using-basic-authentication-f4202ebf-89c6-4a8a-bec3-3d60cf7deaef), [Deprecation of Basic auth in Exchange Online](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online); `grep -i oauth` finds nothing in the engine | [C1](#c1)–[C4](#c4) |
-| The website, the app and BETA.md all **tell people Outlook works**. | `index.html:226`, `app.html:886,2301,3069`, `BETA.md:49` | [C0](#c0) |
-| **Installers are unsigned.** macOS signing is wired in `release.yml` but has no certificates. Windows signing is not wired at all. | `release.yml` lines 240–286 | [E2](#e2), [E3](#e3) |
-| The **UI harness is not in CI**. | workflows list | [A3](#a3) |
-| **Nothing is tested against a real IMAP server**, not even a local one: the outbound guard refuses private addresses. | `guard.rs` | [B1](#b1) |
+| **Outlook, Hotmail and Microsoft 365 cannot work.** Microsoft turned off password (Basic) sign-in to Outlook.com over IMAP in September 2024. It requires OAuth 2.0 now, and RATA only does passwords. Exchange Online IMAP Basic auth is gone too. | [Microsoft Support: Outlook.com and Basic authentication](https://support.microsoft.com/en-us/office/outlook-and-other-apps-are-unable-to-connect-to-outlook-com-when-using-basic-authentication-f4202ebf-89c6-4a8a-bec3-3d60cf7deaef), [Deprecation of Basic auth in Exchange Online](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online); `grep -i oauth` finds nothing in the engine | [C1](#c1)–[C4](#c4). **Done in code:** C1 ([#59](https://github.com/Noallrightokay/center-point-inbox/pull/59)), C2+C3 ([#67](https://github.com/Noallrightokay/center-point-inbox/pull/67)), shipping in 0.1.39; live only after the owner's [C4](#c4) |
+| The website, the app and BETA.md all **tell people Outlook works**. | `index.html:226`, `app.html:886,2301,3069`, `BETA.md:49` | [C0](#c0): **done** ([#57](https://github.com/Noallrightokay/center-point-inbox/pull/57)) |
+| **Installers are unsigned.** macOS signing is wired in `release.yml` but has no certificates. Windows signing is not wired at all. | `release.yml` lines 240–286 | [E2](#e2), [E3](#e3): Windows wiring **done** ([#55](https://github.com/Noallrightokay/center-point-inbox/pull/55)); both wait for the owner's certificates |
+| The **UI harness is not in CI**. | workflows list | [A3](#a3): **done** ([#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)) |
+| **Nothing is tested against a real IMAP server**, not even a local one: the outbound guard refuses private addresses. | `guard.rs` | [B1](#b1): **done** ([#58](https://github.com/Noallrightokay/center-point-inbox/pull/58)); its findings fixed in BUG-1..3 ([#66](https://github.com/Noallrightokay/center-point-inbox/pull/66)) |
 | RATA's **own drafts are not saved to the server**. | CLAUDE.md | [F1](#f1), waiting on an owner decision |
-| **The launch docs are wrong in places** (see [A4](#a4)). | read today | [A4](#a4) |
-| **No database backups and no uptime monitor.** | LAUNCH.md §8 | [D7](#d7) |
+| **The launch docs are wrong in places** (see [A4](#a4)). | read today | [A4](#a4): **done** ([#56](https://github.com/Noallrightokay/center-point-inbox/pull/56)), with DOC-1 ([#63](https://github.com/Noallrightokay/center-point-inbox/pull/63)) and WEB-1 ([#65](https://github.com/Noallrightokay/center-point-inbox/pull/65)) |
+| **No database backups and no uptime monitor.** | LAUNCH.md §8 | [D7](#d7): scripts **done** ([#64](https://github.com/Noallrightokay/center-point-inbox/pull/64)); owner steps pending |
 | Signups are auto-confirmed (anyone can claim any address). | LAUNCH.md §7 | [D8](#d8), after launch |
-| **Stale [PR #1](https://github.com/Noallrightokay/center-point-inbox/pull/1)** from the deleted architecture is still open. | PR list | [A2](#a2) |
+| **Stale [PR #1](https://github.com/Noallrightokay/center-point-inbox/pull/1)** from the deleted architecture is still open. | PR list | [A2](#a2): **done** (closed) |
 
 ### Things that are true but easy to get wrong
 
@@ -113,13 +113,13 @@ is working. "Plug-in done" means the last column passes.
 | **Anthropic** | the AI relay | hPanel `ANTHROPIC_API_KEY` (+ spend limit in the console) | [owner] | not set | Summarize in the app returns an AI summary |
 | **Tauri updater** | self-update | GitHub secrets `TAURI_SIGNING_PRIVATE_KEY`, `_PASSWORD`, `RATA_UPDATER_PUBKEY` | [owner] | not set; feed 404 | the release log says "Signing this build's installers for updates"; `latest.json` exists |
 | **Apple signing + notarisation** | macOS opens without a warning | GitHub secrets `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | [owner] ($99/yr Apple Developer) | wired, no secrets | `spctl -a -vv RATA.app` says accepted, notarized |
-| **Windows signing** | no SmartScreen block | not wired | agent wires [E3](#e3), [owner] buys | none | `signtool verify /pa` passes on the installer |
-| **Microsoft Entra app** | OAuth for Outlook/365 | public client id compiled into the app (not a secret) | [owner] registers; agent builds [C1](#c1)–[C3](#c3) | none | an Outlook.com mailbox links and syncs |
+| **Windows signing** | no SmartScreen block | GitHub secrets: Azure Artifact Signing `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_ENDPOINT`, `AZURE_CODE_SIGNING_NAME`, `AZURE_CERT_PROFILE_NAME` (the last three may be variables), **or** `WINDOWS_CERTIFICATE` + `WINDOWS_CERTIFICATE_PASSWORD`; never both (`docs/WINDOWS-SIGNING.md`) | agent wired [E3](#e3) ([#55](https://github.com/Noallrightokay/center-point-inbox/pull/55)), [owner] buys | wired, no secrets | `signtool verify /pa` passes on the installer |
+| **Microsoft Entra app** | OAuth for Outlook/365 | public client id compiled into the app (not a secret): GitHub repository **variable** `RATA_MS_CLIENT_ID` | [owner] registers ([C4](#c4), LAUNCH.md §10); agent built [C1](#c1)–[C3](#c3) ([#59](https://github.com/Noallrightokay/center-point-inbox/pull/59), [#67](https://github.com/Noallrightokay/center-point-inbox/pull/67)) | app built, needs C4 | an Outlook.com mailbox links and syncs |
 | **OS keychains** | mail passwords (and OAuth refresh tokens after C) | built in (`keyring`: apple-native, windows-native, sync-secret-service) | done | tested in code only | BETA.md §4 checks pass on each OS ([B2](#b2)) |
 | **OS notifications** | new mail | built in | done | seen on the Linux D-Bus wire only | a notification appears on Windows and macOS ([B2](#b2)) |
 | **GitHub Releases** | installers, update feed | `release.yml` | done | working | `verify-release.sh` passes |
 | **GoTrue SMTP sender** | email confirmation | Supabase auth settings | [owner], after launch | none | a signup gets a confirmation mail; only then `mailer_autoconfirm` off |
-| **Backups + uptime** | recovery, alerts | `infrastructure/backup/backup.sh` + any monitor | [owner] with agent help | none | a restore test passes; the monitor alerts on `/api/health` |
+| **Backups + uptime** | recovery, alerts | `infrastructure/backup/` (README → Setting it up, then the drill) + `infrastructure/monitoring/README.md` | [owner] with agent help ([D7](#d7), [#64](https://github.com/Noallrightokay/center-point-inbox/pull/64)) | scripts done, owner steps pending | a restore test passes; the monitor alerts on `/api/health` |
 
 **Never sell the domain add-on.** Leave `STRIPE_PRICE_DOMAIN` unset. It is
 priced in `lib/plan.js` ("host mail on your own domain") but RATA-hosted
