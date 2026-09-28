@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
-import { verifySignature, rowForEvent, isNewer, LIVE_STATUSES } from '../../../../lib/stripe';
+import { verifySignature, rowForEvent, isNewer, checkoutConflict, LIVE_STATUSES } from '../../../../lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,10 +49,20 @@ export async function POST(req) {
     if (row.by === 'email') {
       /* Read before writing, so a checkout event that took a long way round
          cannot land on top of a subscription change that already happened. */
-      const { data: held } = await sb.from('subscriptions')
-        .select('event_at').eq('email', row.email).maybeSingle();
+      const { data: held, error: readErr } = await sb.from('subscriptions')
+        .select('event_at,stripe_customer,status').eq('email', row.email).maybeSingle();
+      if (readErr) throw new Error(readErr.message);
       if (held && !isNewer(row.event_at, held.event_at)) {
         return NextResponse.json({ received: true, acted: false, stale: true, type: event.type });
+      }
+      if (checkoutConflict(held, row)) {
+        /* A second Stripe customer paying for an address that already has a
+           live subscription under another: never replace the first (see
+           checkoutConflict). 200 so Stripe stops retrying; the owner
+           reconciles by hand in the Stripe dashboard, refunding the second
+           payment. The log line names neither the address nor a customer. */
+        console.warn('stripe: checkout conflict: an address with a live subscription under another customer; row left alone');
+        return NextResponse.json({ received: true, acted: false, conflict: true, type: event.type });
       }
 
       const { error } = await sb.from('subscriptions').upsert({

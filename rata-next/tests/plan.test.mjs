@@ -7,8 +7,14 @@
 import { makeChecker } from './helpers.mjs';
 import {
   PLANS, SELLABLE, DOMAIN_ADDON, NO_DOMAIN_HOSTING,
-  money, domainRefusal, domainAddonOnSale,
+  money, domainRefusal, domainAddonOnSale, entitlementsForUser, planForUser,
 } from '../lib/plan.js';
+import { LIVE_STATUSES } from '../lib/stripe.js';
+
+/* A stand-in for the one query entitlementsForUser makes. */
+const holding = (row) => ({
+  from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row }) }) }) }),
+});
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -58,5 +64,22 @@ export default async function run(state) {
     check(domainRefusal('pro', 0, 1, {}) === null && domainRefusal('pro', 0, 1, { STRIPE_PRICE_DOMAIN: 'p' }) === null,
       'Pro with one bought and none in use: allowed either way');
     check(domainRefusal('enterprise', 50, 0, {}) === null, 'Enterprise: unlimited');
+  }
+
+  console.log('\n— a card being retried keeps its plan, as the webhook says —');
+  {
+    /* lib/stripe.js records past_due as still entitled (Stripe is retrying the
+       card); the licence routes read this. They used to disagree, so a
+       customer whose card was being retried could neither get nor renew a
+       licence. */
+    const pastDue = await entitlementsForUser(holding({ plan: 'pro', status: 'past_due', domain_addons: 0 }), 'a@b.com');
+    check(pastDue.plan === 'pro', `past_due keeps its plan while Stripe retries: ${pastDue.plan}`);
+    check(await planForUser(holding({ plan: 'pro', status: 'past_due' }), 'a@b.com') === 'pro',
+      'planForUser reads it the same way');
+    for (const status of ['active', 'trialing', 'past_due', 'canceled', 'unpaid', 'incomplete', 'incomplete_expired', 'paused', '']) {
+      const { plan } = await entitlementsForUser(holding({ plan: 'base', status, domain_addons: 0 }), 'a@b.com');
+      check(!!plan === LIVE_STATUSES.includes(status),
+        `${status || '(none)'}: ${plan ? 'entitled' : 'not entitled'}, as the webhook reads it`);
+    }
   }
 }
