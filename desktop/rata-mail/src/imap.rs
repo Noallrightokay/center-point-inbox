@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use async_imap::error::Error as ImapError;
 use async_imap::types::Flag;
-use async_imap::{Client, Session};
+use async_imap::{Authenticator, Client, Session};
 use futures::StreamExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -37,6 +37,7 @@ use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::ServerName;
 
 use crate::body;
+use crate::credential::{self, Credential};
 use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure};
 use crate::guard::HostVerdict;
 use crate::key::{domain_of, mail_key};
@@ -53,8 +54,9 @@ const COMMAND: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct Account {
     pub email: String,
-    /// An app password, in almost every case. Held only for the call.
-    pub pass: String,
+    /// How to sign in: an app password in almost every case, an OAuth
+    /// access token for a Microsoft mailbox. Held only for the call.
+    pub credential: Credential,
     pub host: String,
     pub port: u16,
     /// What to call this account in the interface — "Gmail", "Work", the
@@ -229,6 +231,9 @@ pub enum Verify {
     Failed(String),
     /// A server answered and rejected the password.
     Refused(String),
+    /// A server answered and did not accept the OAuth token: get a fresh one.
+    /// Never a verdict on a password.
+    OAuth(String),
     /// Nothing answered. Show the "server address" box.
     NeedsHost(String),
 }
@@ -242,6 +247,10 @@ pub enum Fetched {
     Messages(Vec<Message>),
     Host(String),
     Auth(String),
+    /// The OAuth access token was refused — expired, most likely, since they
+    /// last about an hour. Get a fresh one and try again; unlike `Auth`, this
+    /// says nothing about anything the customer typed.
+    OAuth(String),
     Net(String),
     /// Only from [`fetch_older`]: the mailbox was rebuilt since RATA read it,
     /// so "older than UID n" no longer means anything. Refresh first.
@@ -255,8 +264,23 @@ enum Trouble {
     Host(String),
     /// Nothing answered, or the conversation broke. Try the next candidate.
     Net(String),
-    /// The server said no. Stop.
+    /// The server said no to the password. Stop.
     Auth(String),
+    /// The server said no to the OAuth token. Stop, and get a fresh one.
+    OAuth(String),
+}
+
+impl Trouble {
+    /// The same, with the credential's secret taken out of what it says.
+    fn redacted(self, credential: &Credential) -> Trouble {
+        let r = |why: String| credential::redact(&why, credential);
+        match self {
+            Trouble::Host(why) => Trouble::Host(r(why)),
+            Trouble::Net(why) => Trouble::Net(r(why)),
+            Trouble::Auth(why) => Trouble::Auth(r(why)),
+            Trouble::OAuth(why) => Trouble::OAuth(r(why)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- connection
@@ -357,10 +381,106 @@ pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<T
         .map_err(|e| format!("{host} could not be trusted: {e}"))
 }
 
-/// Sign in. A `NO` from the server during LOGIN is the server refusing the
-/// credentials, whatever words it chooses to refuse them in — more reliable
-/// than reading the message, which is why it is checked first.
-async fn sign_in(client: Client<Tls>, email: &str, pass: &str) -> Result<Session<Tls>, Trouble> {
+/// Sign in with whatever the mailbox signs in with. Whatever goes wrong is
+/// said without the secret in it.
+async fn sign_in<T>(
+    client: Client<T>,
+    email: &str,
+    credential: &Credential,
+) -> Result<Session<T>, Trouble>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    match credential {
+        Credential::Password(pass) => login(client, email, pass).await,
+        Credential::OAuth { user, access_token } => xoauth2(client, user, access_token)
+            .await
+            .map_err(|t| t.redacted(credential)),
+    }
+}
+
+/// `XOAUTH2` as IMAP carries it: `AUTHENTICATE XOAUTH2`, the server's empty
+/// `+`, then the one string [`credential::xoauth2`] builds.
+///
+/// Without SASL-IR (the string on the command line itself): RFC 3501 requires
+/// every server to take this form, and SASL-IR would mean asking for the
+/// capability list first. It costs one round trip, once per connection.
+///
+/// A refused token gets a second `+`, carrying base64 JSON that says why
+/// (Google sends `{"status":"401",…}`). SASL requires an answer before the
+/// server will finish, so the client sends an empty line and then reads the
+/// tagged `NO`.
+struct XOAuth2 {
+    /// The string to send at the first `+`. Taken, so it is sent once.
+    first: Option<Vec<u8>>,
+    /// The server's error report, decoded, if it sent one.
+    refused: Option<Vec<u8>>,
+}
+
+impl Authenticator for &mut XOAuth2 {
+    type Response = Vec<u8>;
+
+    fn process(&mut self, challenge: &[u8]) -> Vec<u8> {
+        if let Some(first) = self.first.take() {
+            return first;
+        }
+        // Any challenge after the token is the server saying no. An empty
+        // answer acknowledges it, and the tagged NO follows.
+        self.refused.get_or_insert_with(|| challenge.to_vec());
+        Vec::new()
+    }
+}
+
+/// Present an OAuth access token. A refusal is [`Trouble::OAuth`] — never
+/// [`Trouble::Auth`], whatever words it comes in: the fix is a fresh token,
+/// which the app can get by itself, not a new password from the customer.
+async fn xoauth2<T>(client: Client<T>, user: &str, token: &str) -> Result<Session<T>, Trouble>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let Some(sasl) = credential::xoauth2(user, token) else {
+        return Err(Trouble::OAuth(
+            "the sign-in token RATA holds is not one a mail server would accept".into(),
+        ));
+    };
+    let mut auth = XOAuth2 {
+        first: Some(sasl),
+        refused: None,
+    };
+    let outcome = timeout(COMMAND, client.authenticate("XOAUTH2", &mut auth)).await;
+    let status = auth
+        .refused
+        .as_deref()
+        .and_then(credential::challenge_status);
+    let said = |why: String| match &status {
+        Some(s) => format!("{why} (status {s})"),
+        None => why,
+    };
+    match outcome {
+        Ok(Ok(session)) => Ok(session),
+        // "Come back later" is the server, not the token — as with a password.
+        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => Err(Trouble::Net(why)),
+        Ok(Err((ImapError::No(why), _))) => Err(Trouble::OAuth(said(why))),
+        // The server's error report came first: that is its verdict, however
+        // the exchange then ended.
+        Ok(Err((e, _))) if auth.refused.is_some() => Err(Trouble::OAuth(said(e.to_string()))),
+        // BAD is about the conversation — most likely a server that does not
+        // know XOAUTH2 at all. Nothing was said about the token.
+        Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
+            "the server did not understand the sign-in: {why}"
+        ))),
+        Ok(Err((e, _))) => Err(Trouble::Net(e.to_string())),
+        Err(_) => Err(Trouble::Net("the sign-in did not finish in time".into())),
+    }
+}
+
+/// Sign in with a password. A `NO` from the server during LOGIN is the server
+/// refusing the credentials, whatever words it chooses to refuse them in —
+/// more reliable than reading the message, which is why it is checked first.
+async fn login<T>(client: Client<T>, email: &str, pass: &str) -> Result<Session<T>, Trouble>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
     match timeout(COMMAND, client.login(email, pass)).await {
         Ok(Ok(session)) => Ok(session),
         // A NO that says, in so many words, that the *server* is the problem
@@ -415,10 +535,28 @@ fn is_temporary_refusal(why: &str) -> bool {
 /// Prove the credentials work — and find the server while we are at it —
 /// before anything is saved. A typo then surfaces as a sign-in error rather
 /// than a mailbox that silently never syncs.
+///
+/// With a password; [`verify_with`] takes any [`Credential`].
 pub async fn verify(
     resolver: &Resolver,
     email: &str,
     pass: &str,
+    host_override: Option<&str>,
+) -> Verify {
+    verify_with(
+        resolver,
+        email,
+        &Credential::Password(pass.to_string()),
+        host_override,
+    )
+    .await
+}
+
+/// [`verify`], signing in with `credential` — a password or an OAuth token.
+pub async fn verify_with(
+    resolver: &Resolver,
+    email: &str,
+    credential: &Credential,
     host_override: Option<&str>,
 ) -> Verify {
     let found = discover(resolver, email, host_override).await;
@@ -451,13 +589,13 @@ pub async fn verify(
                 blocked.get_or_insert(why);
                 continue;
             }
-            Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+            Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
                 last_net = Some(why);
                 continue;
             }
         };
 
-        match sign_in(client, email, pass).await {
+        match sign_in(client, email, credential).await {
             Ok(mut session) => {
                 let _ = timeout(COMMAND, session.logout()).await;
                 return Verify::Ok(Box::new(Verified {
@@ -471,6 +609,19 @@ pub async fn verify(
             // The password is wrong. Every remaining candidate is the same
             // password at another address, and providers count failures.
             Err(Trouble::Auth(_)) => return Verify::Refused(refusal(cand)),
+            // The same token goes to every candidate, so the same answer
+            // would come back from each.
+            Err(Trouble::OAuth(why)) => {
+                let who = if cand.label.is_empty() {
+                    "The mail server"
+                } else {
+                    &cand.label
+                };
+                return Verify::OAuth(format!(
+                    "{who} did not accept the sign-in token. The server said: {}",
+                    why.trim()
+                ));
+            }
             Err(Trouble::Net(why) | Trouble::Host(why)) => {
                 last_net = Some(why);
                 continue;
@@ -656,14 +807,15 @@ pub async fn fetch_newest(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Err(Fetched::Host(why)),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Err(Fetched::Net(unreachable_msg(acct, &why)));
         }
     };
 
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Err(Fetched::Auth(revoked_msg(acct, &why))),
+        Err(Trouble::OAuth(why)) => return Err(Fetched::OAuth(oauth_msg(acct, &why))),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Err(Fetched::Net(unreachable_msg(acct, &why)));
         }
@@ -1408,6 +1560,8 @@ pub enum Listed {
     Folders(Vec<OwnFolder>),
     Host(String),
     Auth(String),
+    /// See [`Fetched::OAuth`].
+    OAuth(String),
     Net(String),
 }
 
@@ -1418,13 +1572,14 @@ pub async fn list_folders(resolver: &Resolver, acct: &Account) -> Listed {
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Listed::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Listed::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Listed::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Listed::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Listed::Net(unreachable_msg(acct, &why));
         }
@@ -1456,13 +1611,14 @@ pub async fn fetch_folder(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Fetched::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Fetched::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
@@ -1514,6 +1670,8 @@ pub enum Whole {
     Stale(String),
     Host(String),
     Auth(String),
+    /// See [`Fetched::OAuth`].
+    OAuth(String),
     Net(String),
 }
 
@@ -1533,13 +1691,14 @@ pub async fn fetch_whole(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Whole::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Whole::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Whole::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Whole::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Whole::Net(unreachable_msg(acct, &why));
         }
@@ -1646,13 +1805,14 @@ pub async fn fetch_uids(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Fetched::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Fetched::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
@@ -1722,13 +1882,14 @@ pub async fn fetch_older(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Fetched::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Fetched::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Fetched::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Fetched::Net(unreachable_msg(acct, &why));
         }
@@ -1899,6 +2060,8 @@ pub enum Watched {
     /// The server has no IDLE. Checking every few minutes is all there is.
     Unsupported,
     Auth(String),
+    /// See [`Fetched::OAuth`].
+    OAuth(String),
     Host(String),
     /// The connection went; try again later.
     Net(String),
@@ -1919,13 +2082,14 @@ pub async fn watch(resolver: &Resolver, acct: &Account) -> Result<Watch, Watched
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Err(Watched::Host(why)),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Err(Watched::Net(unreachable_msg(acct, &why)));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Err(Watched::Auth(revoked_msg(acct, &why))),
+        Err(Trouble::OAuth(why)) => return Err(Watched::OAuth(oauth_msg(acct, &why))),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Err(Watched::Net(unreachable_msg(acct, &why)));
         }
@@ -2085,6 +2249,8 @@ pub enum Acted {
     /// was done rather than deleting anything for good.
     NoPlace(String),
     Auth(String),
+    /// See [`Fetched::OAuth`].
+    OAuth(String),
     Host(String),
     Net(String),
 }
@@ -2119,13 +2285,14 @@ pub async fn act(
     let client = match open(resolver, &acct.host, port).await {
         Ok(c) => c,
         Err(Trouble::Host(why)) => return Acted::Host(why),
-        Err(Trouble::Net(why) | Trouble::Auth(why)) => {
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
             return Acted::Net(unreachable_msg(acct, &why));
         }
     };
-    let mut session = match sign_in(client, &acct.email, &acct.pass).await {
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
         Ok(s) => s,
         Err(Trouble::Auth(why)) => return Acted::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return Acted::OAuth(oauth_msg(acct, &why)),
         Err(Trouble::Net(why) | Trouble::Host(why)) => {
             return Acted::Net(unreachable_msg(acct, &why));
         }
@@ -2360,6 +2527,17 @@ fn unreachable_msg(acct: &Account, why: &str) -> String {
         acct.email,
         acct.host,
         why.trim_end_matches('.')
+    )
+}
+
+/// What to say when a mailbox refused its OAuth token. Worded for the app to
+/// act on rather than the customer: a fresh token usually fixes it without
+/// them, and only if that is refused too do they need to sign in again.
+fn oauth_msg(acct: &Account, why: &str) -> String {
+    format!(
+        "{} did not accept RATA's sign-in token — it has expired or been withdrawn. The server said: {}",
+        acct.email,
+        why.trim()
     )
 }
 
@@ -2950,7 +3128,7 @@ mod tests {
     fn me() -> Account {
         Account {
             email: "me@example.com".into(),
-            pass: "pw".into(),
+            credential: Credential::Password("pw".into()),
             host: "imap.example.com".into(),
             port: 993,
             label: "Me".into(),
@@ -3353,7 +3531,7 @@ mod tests {
     fn acct(host: &str) -> Account {
         Account {
             email: "owner@example.com".into(),
-            pass: "not-a-real-password".into(),
+            credential: Credential::Password("not-a-real-password".into()),
             host: host.into(),
             port: IMAP_PORT,
             label: "Work".into(),
@@ -4697,6 +4875,233 @@ mod tests {
             assert!(matches!(
                 select(&mut s, &Folder::Inbox).await,
                 Selected::Open(_)
+            ));
+        });
+    }
+
+    // ------------------------------------------------------- sign-in tests
+    //
+    // A scripted server for the sign-in alone: after its greeting it answers
+    // each line RATA sends with the next reply, `{tag}` standing for the tag
+    // of the first command, and records every line it heard. What is under
+    // test is which kind of failure each answer becomes — above all that a
+    // refused token is never read as a refused password.
+
+    const TOKEN: &str = "EwBIA8l6BAAUbDba3x2OMJElkF7gJ4z/VbCPEz0AAZmp-secret";
+
+    async fn scripted_sign_in(
+        replies: Vec<String>,
+    ) -> (Client<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK [CAPABILITY IMAP4rev1 AUTH=XOAUTH2] scripted IMAP ready\r\n")
+                .await
+                .unwrap();
+            let mut tag = String::new();
+            let mut replies = replies.into_iter();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tag.is_empty() {
+                    tag = line.split(' ').next().unwrap_or_default().to_string();
+                }
+                log.lock().unwrap().push(line);
+                let Some(reply) = replies.next() else {
+                    continue;
+                };
+                let reply = format!("{}\r\n", reply.replace("{tag}", &tag));
+                if w.write_all(reply.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        (client, seen)
+    }
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn token() -> Credential {
+        Credential::oauth("me@outlook.com", TOKEN)
+    }
+
+    /// What goes on the wire for [`token`], base64 and all.
+    fn token_on_the_wire() -> String {
+        words::base64_encode(&credential::xoauth2("me@outlook.com", TOKEN).unwrap())
+    }
+
+    /// Google's error challenge for an expired token, as it sends it.
+    fn expired_challenge() -> String {
+        format!(
+            "+ {}",
+            words::base64_encode(
+                br#"{"status":"401","schemes":"bearer","scope":"https://mail.google.com/"}"#
+            )
+        )
+    }
+
+    #[test]
+    fn a_token_signs_in_with_xoauth2() {
+        // "+ " is what Gmail and Microsoft send; some servers leave out the
+        // space, and the parser has to take both.
+        for go_ahead in ["+ ", "+"] {
+            rt_act().block_on(async {
+                let (client, log) =
+                    scripted_sign_in(lines(&[go_ahead, "{tag} OK AUTHENTICATE completed."])).await;
+                let signed = sign_in(client, "me@outlook.com", &token()).await;
+                assert!(signed.is_ok(), "{go_ahead:?}: {:?}", signed.err());
+                let log = log.lock().unwrap();
+                assert_eq!(log.len(), 2, "{log:?}");
+                assert!(log[0].ends_with(" AUTHENTICATE XOAUTH2"), "{log:?}");
+                // Exactly the string, once, and never a LOGIN.
+                assert_eq!(log[1], token_on_the_wire());
+                assert!(!log.iter().any(|l| l.to_ascii_uppercase().contains("LOGIN")));
+            });
+        }
+    }
+
+    #[test]
+    fn an_expired_token_is_an_oauth_failure_not_a_wrong_password() {
+        rt_act().block_on(async {
+            let (client, log) = scripted_sign_in(vec![
+                "+ ".into(),
+                expired_challenge(),
+                "{tag} NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)".into(),
+            ])
+            .await;
+            match sign_in(client, "me@outlook.com", &token()).await {
+                Err(Trouble::OAuth(why)) => {
+                    assert!(why.contains("status 401"), "{why}");
+                    assert!(why.contains("Invalid credentials"), "{why}");
+                }
+                Err(other) => panic!("wrong kind of failure: {other:?}"),
+                Ok(_) => panic!("an expired token signed in"),
+            }
+            // The error challenge was answered with an empty line, which is
+            // what makes the server send its NO rather than wait.
+            let log = log.lock().unwrap();
+            assert_eq!(log.len(), 3, "{log:?}");
+            assert_eq!(log[2], "", "{log:?}");
+        });
+    }
+
+    #[test]
+    fn a_refused_token_is_an_oauth_failure_not_a_wrong_password() {
+        rt_act().block_on(async {
+            // Microsoft's answer: a plain NO, no error challenge.
+            let (client, _) =
+                scripted_sign_in(lines(&["+ ", "{tag} NO AUTHENTICATE failed."])).await;
+            match sign_in(client, "me@outlook.com", &token()).await {
+                Err(Trouble::OAuth(why)) => assert!(why.contains("AUTHENTICATE failed"), "{why}"),
+                Err(other) => panic!("wrong kind of failure: {other:?}"),
+                Ok(_) => panic!("a refused token signed in"),
+            }
+        });
+    }
+
+    #[test]
+    fn a_busy_server_is_not_a_refused_token() {
+        rt_act().block_on(async {
+            let (client, _) = scripted_sign_in(lines(&[
+                "+ ",
+                "{tag} NO [UNAVAILABLE] Temporary server problem, try again later",
+            ]))
+            .await;
+            assert!(matches!(
+                sign_in(client, "me@outlook.com", &token()).await,
+                Err(Trouble::Net(_))
+            ));
+        });
+    }
+
+    #[test]
+    fn a_server_without_xoauth2_is_not_a_refused_token() {
+        rt_act().block_on(async {
+            let (client, log) =
+                scripted_sign_in(lines(&["{tag} BAD Unsupported authentication mechanism"])).await;
+            assert!(matches!(
+                sign_in(client, "me@outlook.com", &token()).await,
+                Err(Trouble::Net(_))
+            ));
+            // And the token itself was never sent.
+            assert_eq!(log.lock().unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_token_that_could_forge_a_field_is_never_sent() {
+        rt_act().block_on(async {
+            let (client, log) = scripted_sign_in(lines(&["+ ", "{tag} OK"])).await;
+            let forged = Credential::oauth("me@outlook.com", "tok\u{1}\u{1}");
+            assert!(matches!(
+                sign_in(client, "me@outlook.com", &forged).await,
+                Err(Trouble::OAuth(_))
+            ));
+            assert!(log.lock().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_token_is_never_in_what_a_failure_says() {
+        rt_act().block_on(async {
+            // A server that echoes what it was sent, both ways.
+            let (client, _) = scripted_sign_in(vec![
+                "+ ".into(),
+                format!(
+                    "{{tag}} NO token {TOKEN} in {} refused",
+                    token_on_the_wire()
+                ),
+            ])
+            .await;
+            let Err(Trouble::OAuth(why)) = sign_in(client, "me@outlook.com", &token()).await else {
+                panic!("not an OAuth failure");
+            };
+            let acct = Account {
+                email: "me@outlook.com".into(),
+                credential: token(),
+                host: "outlook.office365.com".into(),
+                port: 993,
+                label: "Outlook".into(),
+            };
+            let shown = Fetched::OAuth(oauth_msg(&acct, &why));
+            for said in [
+                format!("{shown:?}"),
+                format!("{acct:?}"),
+                format!("{:?}", Trouble::OAuth(why.clone())),
+            ] {
+                assert!(!said.contains(TOKEN), "{said}");
+                assert!(!said.contains("-secret"), "{said}");
+                assert!(!said.contains(&token_on_the_wire()), "{said}");
+            }
+            assert!(why.contains(credential::HIDDEN), "{why}");
+        });
+    }
+
+    #[test]
+    fn a_password_still_signs_in_with_login_and_a_no_is_still_auth() {
+        rt_act().block_on(async {
+            let (client, log) = scripted_sign_in(lines(&["{tag} OK LOGIN completed"])).await;
+            let pw = Credential::Password("pw".into());
+            assert!(sign_in(client, "me@example.com", &pw).await.is_ok());
+            let first = log.lock().unwrap()[0].clone();
+            assert!(first.contains(" LOGIN "), "{first}");
+
+            let (client, _) = scripted_sign_in(lines(&[
+                "{tag} NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)",
+            ]))
+            .await;
+            assert!(matches!(
+                sign_in(client, "me@example.com", &pw).await,
+                Err(Trouble::Auth(_))
             ));
         });
     }

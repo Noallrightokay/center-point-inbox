@@ -3,7 +3,9 @@
 //! Reading somebody's mail without being able to answer it is half a product,
 //! and a message dragged between two inboxes has to leave from the one it
 //! landed on or the transfer is theatre. The app password already stored for
-//! reading is used for submission too, which is how these providers work — the
+//! reading is used for submission too (or, for a mailbox that signs in with
+//! OAuth, the same access token, over `AUTH XOAUTH2` — see `xoauth2`),
+//! which is how these providers work — the
 //! message is sent by the customer's own mail server, from their own address,
 //! so it lands in their Sent folder and passes SPF like anything else they
 //! send.
@@ -32,6 +34,7 @@ use tokio::time::timeout;
 use tokio_rustls::client::TlsStream;
 
 use crate::compose::{Outgoing, message_id, render};
+use crate::credential::{self, Credential};
 use crate::discover::{SMTP_PORTS, smtp_candidates};
 use crate::guard::HostVerdict;
 use crate::imap::Account;
@@ -69,6 +72,10 @@ pub enum Sent {
     /// The server rejected the password. Every remaining candidate is the same
     /// password at another address, so this stops the search.
     Auth(String),
+    /// The server did not accept the OAuth access token — expired, most
+    /// likely. Stops the search like `Auth`, but the fix is a fresh token,
+    /// not a new password: this is never a verdict on anything typed.
+    OAuth(String),
     /// A server took the message and said no to it — a bad recipient, a size
     /// limit, a spam rule. Retrying changes nothing; the customer has to.
     Rejected(String),
@@ -217,7 +224,7 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
                 // The password is wrong, or the message itself was refused.
                 // Another port would produce the same answer, and repeating a
                 // rejected password is how accounts get locked.
-                done @ (Sent::Auth(_) | Sent::Rejected(_)) => return done,
+                done @ (Sent::Auth(_) | Sent::OAuth(_) | Sent::Rejected(_)) => return done,
                 // A host pointing somewhere private is not retried on another
                 // port, but a *different* host might still be fine.
                 Sent::Host(why) => {
@@ -432,6 +439,14 @@ async fn starttls(wire: Wire, name: &str, host: &str) -> Result<Wire, Sent> {
 async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -> Result<(), Sent> {
     let upper = caps.to_ascii_uppercase();
     let user = acct.email.trim();
+    let pass = match &acct.credential {
+        Credential::Password(pass) => pass,
+        Credential::OAuth { user, access_token } => {
+            return xoauth2(wire, user, access_token, &upper, host)
+                .await
+                .map_err(|sent| redacted(sent, &acct.credential));
+        }
+    };
 
     if upper.contains("AUTH") && upper.contains("PLAIN") {
         // \0user\0pass, base64. One round trip, so it is preferred.
@@ -439,7 +454,7 @@ async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -
         secret.push(0);
         secret.extend_from_slice(user.as_bytes());
         secret.push(0);
-        secret.extend_from_slice(acct.pass.as_bytes());
+        secret.extend_from_slice(pass.as_bytes());
         let command = format!("AUTH PLAIN {}", words::base64_encode(&secret));
         sign_in_step(wire, &command, host).await?;
         return Ok(());
@@ -448,7 +463,7 @@ async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -
     if upper.contains("AUTH") && upper.contains("LOGIN") {
         sign_in_step(wire, "AUTH LOGIN", host).await?;
         sign_in_step(wire, &words::base64_encode(user.as_bytes()), host).await?;
-        sign_in_step(wire, &words::base64_encode(acct.pass.as_bytes()), host).await?;
+        sign_in_step(wire, &words::base64_encode(pass.as_bytes()), host).await?;
         return Ok(());
     }
 
@@ -459,6 +474,93 @@ async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -
     Err(Sent::Net(format!(
         "{host} did not offer a way to sign in that RATA can use"
     )))
+}
+
+/// Present an OAuth access token with `AUTH XOAUTH2` (`caps` upper-cased).
+///
+/// In two steps — the mechanism, the server's empty `334`, then the string —
+/// rather than on one line: that is how Microsoft documents it, and a token
+/// runs to a couple of thousand characters, past what some servers take on
+/// a command line.
+///
+/// A refused token may get a `334` carrying base64 JSON that says why
+/// (Google sends `{"status":"401",…}`); SASL wants an answer before the
+/// server finishes, so an empty line goes back and the final `535` is read.
+/// A refusal is [`Sent::OAuth`], never [`Sent::Auth`]: whatever words it
+/// comes in, the fix is a fresh token.
+async fn xoauth2(
+    wire: &mut Wire,
+    user: &str,
+    token: &str,
+    caps: &str,
+    host: &str,
+) -> Result<(), Sent> {
+    // Net, as for a server offering no password mechanism: another port or
+    // host may well offer it.
+    if !(caps.contains("AUTH") && caps.contains("XOAUTH2")) {
+        return Err(Sent::Net(format!(
+            "{host} did not offer a way to sign in with a token"
+        )));
+    }
+    let Some(sasl) = credential::xoauth2(user, token) else {
+        return Err(Sent::OAuth(format!(
+            "The sign-in token RATA holds is not one {host} would accept."
+        )));
+    };
+
+    let ready = talk(wire, "AUTH XOAUTH2", host).await?;
+    if ready.code != 334 {
+        // Only the mechanism's name has been sent, so whatever this is, it is
+        // not a verdict on the token.
+        return Err(Sent::Net(format!(
+            "{host} would not take a token sign-in: {}",
+            ready.text
+        )));
+    }
+
+    let mut answer = talk(wire, &words::base64_encode(&sasl), host).await?;
+    let mut status = None;
+    if answer.code == 334 {
+        status = credential::challenge_status(&words::base64(answer.text.as_bytes()));
+        answer = talk(wire, "", host).await?;
+    }
+
+    if (200..300).contains(&answer.code) {
+        return Ok(());
+    }
+    if answer.permanent() {
+        let status = status.map(|s| format!(" (status {s})")).unwrap_or_default();
+        return Err(Sent::OAuth(format!(
+            "{host} did not accept RATA's sign-in token for sending — it has expired or been withdrawn{status}. The server said: {}",
+            answer.text.trim()
+        )));
+    }
+    // 4xx — Gmail's "too many login attempts" among them — is the server
+    // asking for time, as it is for a password.
+    Err(Sent::Net(format!("{host} was not ready: {}", answer.text)))
+}
+
+/// One command and its reply, whatever the reply says. Only a broken or
+/// silent connection is a failure here.
+async fn talk(wire: &mut Wire, line: &str, host: &str) -> Result<Reply, Sent> {
+    match timeout(COMMAND, wire.ask(line)).await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(Sent::Net(format!("{host}: {e}"))),
+        Err(_) => Err(Sent::Net(format!("{host} did not answer in time."))),
+    }
+}
+
+/// `sent` with the credential's secret taken out of what it says.
+fn redacted(sent: Sent, credential: &Credential) -> Sent {
+    let r = |why: String| credential::redact(&why, credential);
+    match sent {
+        Sent::Host(why) => Sent::Host(r(why)),
+        Sent::Auth(why) => Sent::Auth(r(why)),
+        Sent::OAuth(why) => Sent::OAuth(r(why)),
+        Sent::Rejected(why) => Sent::Rejected(r(why)),
+        Sent::Net(why) => Sent::Net(r(why)),
+        ok @ Sent::Ok { .. } => ok,
+    }
 }
 
 /// What to call ourselves in EHLO. The customer's own domain: a submission
@@ -589,7 +691,7 @@ mod tests {
     fn acct(host: &str) -> Account {
         Account {
             email: "owner@example.com".into(),
-            pass: "not-a-real-password".into(),
+            credential: Credential::Password("not-a-real-password".into()),
             host: host.into(),
             port: IMAP_PORT,
             label: "Work".into(),
@@ -950,5 +1052,210 @@ mod tests {
         assert_eq!(data_timeout(2_000), DATA);
         let big = data_timeout(24 * 1024 * 1024);
         assert!(big >= Duration::from_secs(400), "{big:?}");
+    }
+
+    // ------------------------------------------------------- sign-in tests
+    //
+    // A server that answers each line with the next reply and records every
+    // line it heard, so what RATA sends while signing in can be checked as
+    // well as how it reads the answers. Line by line rather than read by
+    // read: a token line is thousands of characters long.
+
+    use std::sync::{Arc, Mutex};
+
+    const TOKEN: &str = "EwBIA8l6BAAUbDba3x2OMJElkF7gJ4z/VbCPEz0AAZmp-secret";
+    const CAPS: &str = "smtp.office365.com Hello SIZE 157286400 AUTH LOGIN XOAUTH2 8BITMIME";
+
+    async fn scripted_sign_in(replies: Vec<String>) -> (Wire, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            let mut replies = replies.into_iter();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log.lock().unwrap().push(line);
+                let Some(reply) = replies.next() else {
+                    continue;
+                };
+                if w.write_all(format!("{reply}\r\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let wire = Wire::Plain(BufReader::new(TcpStream::connect(addr).await.unwrap()));
+        (wire, seen)
+    }
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn oauth_acct() -> Account {
+        Account {
+            email: "me@outlook.com".into(),
+            credential: Credential::oauth("me@outlook.com", TOKEN),
+            host: "outlook.office365.com".into(),
+            port: IMAP_PORT,
+            label: "Outlook".into(),
+        }
+    }
+
+    fn token_on_the_wire() -> String {
+        words::base64_encode(&credential::xoauth2("me@outlook.com", TOKEN).unwrap())
+    }
+
+    #[test]
+    fn a_token_signs_in_to_send_with_xoauth2() {
+        rt().block_on(async {
+            let (mut wire, log) =
+                scripted_sign_in(lines(&["334 ", "235 2.7.0 Authentication successful"])).await;
+            let signed = authenticate(&mut wire, &oauth_acct(), CAPS, "smtp.office365.com").await;
+            assert!(signed.is_ok(), "{signed:?}");
+            // The mechanism, then exactly the string — never AUTH PLAIN or
+            // LOGIN, although the server offered LOGIN too.
+            assert_eq!(
+                *log.lock().unwrap(),
+                ["AUTH XOAUTH2".to_string(), token_on_the_wire()]
+            );
+        });
+    }
+
+    #[test]
+    fn an_expired_token_for_sending_is_an_oauth_failure_not_a_wrong_password() {
+        rt().block_on(async {
+            // Google's answer to an expired token: an error challenge, then
+            // the same 535 it gives a wrong password.
+            let challenge = words::base64_encode(
+                br#"{"status":"401","schemes":"bearer","scope":"https://mail.google.com/"}"#,
+            );
+            let (mut wire, log) = scripted_sign_in(vec![
+                "334 ".into(),
+                format!("334 {challenge}"),
+                "535-5.7.8 Username and Password not accepted. For more information, go to\r\n535 5.7.8  https://support.google.com/mail/?p=BadCredentials".into(),
+            ])
+            .await;
+            match authenticate(&mut wire, &oauth_acct(), CAPS, "smtp.gmail.com").await {
+                Err(Sent::OAuth(why)) => {
+                    assert!(why.contains("status 401"), "{why}");
+                    assert!(why.contains("not accepted"), "{why}");
+                }
+                other => panic!("wrong kind of failure: {other:?}"),
+            }
+            // The error challenge was answered with an empty line.
+            let log = log.lock().unwrap();
+            assert_eq!(log.len(), 3, "{log:?}");
+            assert_eq!(log[2], "", "{log:?}");
+        });
+    }
+
+    #[test]
+    fn a_refused_token_for_sending_is_an_oauth_failure_not_a_wrong_password() {
+        rt().block_on(async {
+            // Microsoft's answer: a plain 535, no error challenge.
+            let (mut wire, _) = scripted_sign_in(lines(&[
+                "334 ",
+                "535 5.7.3 Authentication unsuccessful [SN4PR0601CA0002.namprd06.prod.outlook.com]",
+            ]))
+            .await;
+            match authenticate(&mut wire, &oauth_acct(), CAPS, "smtp.office365.com").await {
+                Err(Sent::OAuth(why)) => {
+                    assert!(why.contains("Authentication unsuccessful"), "{why}")
+                }
+                other => panic!("wrong kind of failure: {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn a_server_asking_for_time_is_not_a_refused_token() {
+        rt().block_on(async {
+            let (mut wire, _) = scripted_sign_in(lines(&[
+                "334 ",
+                "454 4.7.0 Too many login attempts, please try again later.",
+            ]))
+            .await;
+            assert!(matches!(
+                authenticate(&mut wire, &oauth_acct(), CAPS, "smtp.gmail.com").await,
+                Err(Sent::Net(_))
+            ));
+        });
+    }
+
+    #[test]
+    fn a_server_that_does_not_offer_xoauth2_never_sees_the_token() {
+        rt().block_on(async {
+            let (mut wire, log) = scripted_sign_in(lines(&["235 ok"])).await;
+            let caps = "mail.example.com Hello AUTH PLAIN LOGIN";
+            assert!(matches!(
+                authenticate(&mut wire, &oauth_acct(), caps, "mail.example.com").await,
+                Err(Sent::Net(_))
+            ));
+            // Net, so the next port and host are still tried; and nothing,
+            // above all no password mechanism, was attempted with the token.
+            assert!(log.lock().unwrap().is_empty());
+
+            // Nor one that refuses the mechanism before the token is sent.
+            let (mut wire, log) =
+                scripted_sign_in(lines(&["504 5.7.4 Unrecognized authentication type"])).await;
+            assert!(matches!(
+                authenticate(&mut wire, &oauth_acct(), CAPS, "mail.example.com").await,
+                Err(Sent::Net(_))
+            ));
+            assert_eq!(*log.lock().unwrap(), ["AUTH XOAUTH2"]);
+        });
+    }
+
+    #[test]
+    fn a_token_is_never_in_what_a_sending_failure_says() {
+        rt().block_on(async {
+            let (mut wire, _) = scripted_sign_in(vec![
+                "334 ".into(),
+                format!("535 5.7.3 token {TOKEN} in {} refused", token_on_the_wire()),
+            ])
+            .await;
+            let failed = authenticate(&mut wire, &oauth_acct(), CAPS, "smtp.office365.com").await;
+            let Err(Sent::OAuth(why)) = &failed else {
+                panic!("not an OAuth failure: {failed:?}");
+            };
+            for said in [
+                why.clone(),
+                format!("{failed:?}"),
+                format!("{:?}", oauth_acct()),
+            ] {
+                assert!(!said.contains(TOKEN), "{said}");
+                assert!(!said.contains("-secret"), "{said}");
+                assert!(!said.contains(&token_on_the_wire()), "{said}");
+            }
+        });
+    }
+
+    #[test]
+    fn a_password_still_signs_in_to_send_with_auth_plain() {
+        rt().block_on(async {
+            let (mut wire, log) = scripted_sign_in(lines(&["235 2.7.0 Accepted"])).await;
+            let caps = "smtp.gmail.com at your service AUTH LOGIN PLAIN XOAUTH2";
+            assert!(
+                authenticate(&mut wire, &acct("imap.gmail.com"), caps, "smtp.gmail.com")
+                    .await
+                    .is_ok()
+            );
+            let first = log.lock().unwrap()[0].clone();
+            assert!(first.starts_with("AUTH PLAIN "), "{first}");
+
+            // And a 535 to a password is still a refused password.
+            let (mut wire, _) =
+                scripted_sign_in(lines(&["535 5.7.8 Username and Password not accepted"])).await;
+            assert!(matches!(
+                authenticate(&mut wire, &acct("imap.gmail.com"), caps, "smtp.gmail.com").await,
+                Err(Sent::Auth(_))
+            ));
+        });
     }
 }
