@@ -314,6 +314,173 @@ jobs:
           echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
           echo "Signing this build's installers for updates."
 
+      # Windows code signing, optional and all-or-nothing like the two above.
+      # docs/WINDOWS-SIGNING.md is the owner's side. Two ways, never both:
+      #
+      #   Azure Artifact Signing (formerly Trusted Signing): AZURE_TENANT_ID,
+      #   AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and the account's
+      #   AZURE_ENDPOINT, AZURE_CODE_SIGNING_NAME and AZURE_CERT_PROFILE_NAME
+      #   (those three are not secret and may be repository variables instead,
+      #   which keeps a short account name from being masked all over the log).
+      #   Tauri's bundler runs `signCommand`: signtool with Microsoft's dlib.
+      #
+      #   A certificate file: WINDOWS_CERTIFICATE (the .pfx, base64) and
+      #   WINDOWS_CERTIFICATE_PASSWORD. It is decoded in memory and imported
+      #   into this runner's certificate store, never written out as a file;
+      #   the bundler then signs with Tauri's built-in signtool call, by
+      #   thumbprint.
+      #
+      # Either way the signing happens inside the bundler, which is the only
+      # place it can: tauri-action uploads the installer to the release the
+      # moment it is built, the update signature (.sig) is made over the
+      # installer as it stands, and the program inside the installer is packed
+      # before either exists. Given a `signCommand` or a `certificateThumbprint`
+      # the bundler signs rata-app.exe (after patching it, before NSIS packs
+      # it), NSIS's plugin DLLs, the uninstaller and the finished -setup.exe.
+      #
+      # What is written to the Tauri config and so into the generated NSIS
+      # script under target/ (which rust-cache saves, and a later run can
+      # restore) is a path or a thumbprint, never a password or a key. That is
+      # why the certificate goes through the store rather than
+      # `signtool /f cert.pfx /p <password>` as a signCommand.
+      - name: Configure Windows signing
+        id: winsign
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZ_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          AZ_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          AZ_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZ_ENDPOINT: ${{ secrets.AZURE_ENDPOINT || vars.AZURE_ENDPOINT }}
+          AZ_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_NAME || vars.AZURE_CODE_SIGNING_NAME }}
+          AZ_PROFILE: ${{ secrets.AZURE_CERT_PROFILE_NAME || vars.AZURE_CERT_PROFILE_NAME }}
+          PFX: ${{ secrets.WINDOWS_CERTIFICATE }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $azure = [ordered]@{
+            AZURE_TENANT_ID = $env:AZ_TENANT; AZURE_CLIENT_ID = $env:AZ_CLIENT; AZURE_CLIENT_SECRET = $env:AZ_SECRET
+            AZURE_ENDPOINT = $env:AZ_ENDPOINT; AZURE_CODE_SIGNING_NAME = $env:AZ_ACCOUNT; AZURE_CERT_PROFILE_NAME = $env:AZ_PROFILE
+          }
+          $azureMissing = @($azure.Keys | Where-Object { -not $azure[$_] })
+          $useAzure = $azureMissing.Count -eq 0
+          $usePfx = [bool]$env:PFX
+          if ($azureMissing.Count -eq $azure.Count -and -not $env:PFX -and -not $env:PFX_PASSWORD) {
+            Write-Output "No Windows signing secrets - building unsigned."
+            "mode=none" >> $env:GITHUB_OUTPUT
+            Write-Output "::warning::This Windows build is unsigned. SmartScreen will say 'Windows protected your PC' and hide Run anyway behind More info. See docs/WINDOWS-SIGNING.md."
+            exit 0
+          }
+          if (-not $useAzure -and $azureMissing.Count -lt $azure.Count) {
+            Write-Output "::error::Azure Artifact Signing is half set up. Missing: $($azureMissing -join ', '). See docs/WINDOWS-SIGNING.md."
+            exit 1
+          }
+          if ($usePfx -ne [bool]$env:PFX_PASSWORD) {
+            Write-Output "::error::WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD go together; only one is set. See docs/WINDOWS-SIGNING.md."
+            exit 1
+          }
+          if ($useAzure -and $usePfx) {
+            Write-Output "::error::Both Azure Artifact Signing and WINDOWS_CERTIFICATE are set. Pick one and remove the other's secrets, so there is no doubt which certificate a release carries."
+            exit 1
+          }
+
+          $work = Join-Path $env:RUNNER_TEMP 'rata-sign'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+          if ($useAzure) {
+            if ($env:AZ_ENDPOINT -notmatch '^https://[a-z0-9]+\.codesigning\.azure\.net/?$') {
+              Write-Output "::error::AZURE_ENDPOINT should look like https://weu.codesigning.azure.net (the region the signing account is in)."
+              exit 1
+            }
+            # The newest x64 signtool in the Windows SDK: the dlib is x64 and
+            # needs signtool 10.0.22621.755 or later.
+            $signtool = Get-ChildItem -ErrorAction SilentlyContinue "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Where-Object { $_.Directory.Parent.Name -match '^\d+(\.\d+)+$' } |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+            if (-not $signtool) { Write-Output "::error::No x64 signtool.exe in the Windows SDK on this runner."; exit 1 }
+            # Microsoft's signing client, pinned by version and by hash.
+            $ver = '1.0.128'
+            $sha = '74bd7d27e6ce1051409c38d9b46bc8df0400ecd643d51ffbf2ac00869061e40b'
+            $pkg = Join-Path $work 'client.zip'
+            Invoke-WebRequest -UseBasicParsing -OutFile $pkg "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/$ver/microsoft.artifactsigning.client.$ver.nupkg"
+            if ((Get-FileHash -Algorithm SHA256 $pkg).Hash -ne $sha) { Write-Output "::error::Microsoft.ArtifactSigning.Client $ver does not match its pinned hash."; exit 1 }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory($pkg, (Join-Path $work 'client'))
+            $dlib = Join-Path $work 'client\bin\x64\Azure.CodeSigning.Dlib.dll'
+            if (-not (Test-Path $dlib)) { Write-Output "::error::Azure.CodeSigning.Dlib.dll is not where it should be in the signing client."; exit 1 }
+            # Only the client secret signs in: every other way the Azure
+            # library would try (a managed identity, a cached login...) is off.
+            $metadata = Join-Path $work 'metadata.json'
+            [IO.File]::WriteAllText($metadata, (@{
+              Endpoint = $env:AZ_ENDPOINT; CodeSigningAccountName = $env:AZ_ACCOUNT; CertificateProfileName = $env:AZ_PROFILE
+              ExcludeCredentials = @('WorkloadIdentityCredential', 'ManagedIdentityCredential', 'SharedTokenCacheCredential',
+                'VisualStudioCredential', 'VisualStudioCodeCredential', 'AzureCliCredential', 'AzurePowerShellCredential',
+                'AzureDeveloperCliCredential', 'InteractiveBrowserCredential')
+            } | ConvertTo-Json), $utf8)
+            $conf = @{ bundle = @{ windows = @{ signCommand = @{
+              cmd = $signtool.FullName
+              args = @('sign', '/v', '/fd', 'SHA256', '/tr', 'http://timestamp.acs.microsoft.com', '/td', 'SHA256',
+                '/d', 'RATA', '/dlib', $dlib, '/dmdf', $metadata, '%1')
+            } } } }
+            # The dlib signs in with these, read from the environment of the
+            # bundler (and of makensis, which signs the uninstaller).
+            @(
+              "AZURE_TENANT_ID<<__RATA_EOF__", $env:AZ_TENANT, "__RATA_EOF__",
+              "AZURE_CLIENT_ID<<__RATA_EOF__", $env:AZ_CLIENT, "__RATA_EOF__",
+              "AZURE_CLIENT_SECRET<<__RATA_EOF__", $env:AZ_SECRET, "__RATA_EOF__"
+            ) | Add-Content -Path $env:GITHUB_ENV
+            $mode = 'azure'
+            Write-Output "Signing Windows binaries with Azure Artifact Signing (signtool $($signtool.Directory.Parent.Name))."
+          } else {
+            # Read from memory, never written out as a file: the certificate
+            # and its key go straight into this user's store, where signtool
+            # finds them by thumbprint. (A certutil -encode copy carries
+            # BEGIN/END lines; they are not base64 and are dropped.)
+            try {
+              $bytes = [Convert]::FromBase64String(($env:PFX -replace '-----[^-]+-----', ''))
+            } catch {
+              Write-Output "::error::WINDOWS_CERTIFICATE is not base64. Encode the .pfx as docs/WINDOWS-SIGNING.md says."
+              exit 1
+            }
+            $imported = [Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
+            $imported.Import($bytes, $env:PFX_PASSWORD, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]'UserKeySet, PersistKeySet')
+            $bytes = $null
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new(
+              [Security.Cryptography.X509Certificates.StoreName]::My, [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            $store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite); $store.AddRange($imported); $store.Close()
+            # Every certificate that came in, chain included, so the clean-up
+            # at the end of the job can take them all out again.
+            "thumbprints=$(($imported | ForEach-Object Thumbprint) -join ',')" >> $env:GITHUB_OUTPUT
+            # The one with its private key and the Code Signing usage.
+            $cert = $null
+            foreach ($c in $imported) {
+              if (-not $c.HasPrivateKey) { continue }
+              foreach ($ext in $c.Extensions) {
+                if ($ext -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] -and
+                    @($ext.EnhancedKeyUsages | ForEach-Object Value) -contains '1.3.6.1.5.5.7.3.3') { $cert = $c }
+              }
+              if ($cert) { break }
+            }
+            if (-not $cert) { Write-Output "::error::WINDOWS_CERTIFICATE holds no code-signing certificate with its private key."; exit 1 }
+            if ($cert.NotAfter -lt (Get-Date)) { Write-Output "::error::The Windows signing certificate expired on $($cert.NotAfter.ToString('yyyy-MM-dd'))."; exit 1 }
+            # Tauri's own signtool call: /sha1 <thumbprint> /fd sha256, and an
+            # RFC 3161 timestamp so the signature outlives the certificate.
+            $conf = @{ bundle = @{ windows = @{
+              certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'
+              timestampUrl = 'http://timestamp.digicert.com'; tsp = $true
+            } } }
+            $mode = 'pfx'
+            Write-Output "Signing Windows binaries with the certificate for $($cert.Subject) (thumbprint $($cert.Thumbprint), valid until $($cert.NotAfter.ToString('yyyy-MM-dd')))."
+          }
+          # Merged over tauri.conf.json by the CLI, like the updater's. Paths
+          # and a thumbprint only; deleted again at the end of the job.
+          $confFile = Join-Path $env:GITHUB_WORKSPACE 'desktop/rata-app/src-tauri/tauri.winsign.conf.json'
+          [IO.File]::WriteAllText($confFile, ($conf | ConvertTo-Json -Depth 6), $utf8)
+          "args=--config src-tauri/tauri.winsign.conf.json" >> $env:GITHUB_OUTPUT
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+          exit 0
+
       - uses: tauri-apps/tauri-action@v0
         env:
           # Required whenever this runs from a tag, because that is when the
@@ -324,15 +491,98 @@ jobs:
           # installer had been built — with "GITHUB_TOKEN is required".
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RATA_LICENCE_PUBLIC_KEY: ${{ secrets.RATA_LICENCE_PUBLIC_KEY }}
-          # The Apple and update variables arrive from the steps above, and
-          # only when they are real. Do not add them here.
+          # The Apple, update and Azure signing variables arrive from the
+          # steps above, and only when they are real. Do not add them here.
         with:
           projectPath: desktop/rata-app
-          args: ${{ matrix.args }} ${{ steps.updates.outputs.args }}
+          args: ${{ matrix.args }} ${{ steps.updates.outputs.args }} ${{ steps.winsign.outputs.args }}
           # The release made by create-release, or nothing for a build-only
           # run — with no release id and no tag the action only builds.
           releaseId: ${{ needs.create-release.outputs.id }}
           includeUpdaterJson: false
+
+      # A signed build is checked the way Windows will check it, on the
+      # installer and on the program inside it. Inside, because
+      # target/release/rata-app.exe is not what shipped: the bundler signs a
+      # patched copy, packs it, then puts the unsigned original back. 7-Zip
+      # opens NSIS installers (as verify-release.sh does). /pa is the ordinary
+      # Authenticode policy: a signature that does not chain to a root Windows
+      # trusts fails, and so does one with no timestamp, which dies with its
+      # certificate (Azure's last three days).
+      - name: Check the Windows signatures
+        id: winverify
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MODE: ${{ steps.winsign.outputs.mode }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:MODE -or $env:MODE -eq 'none') {
+            Write-Output "Unsigned build: no Windows signing secrets are set, so there is no signature to check."
+            exit 0
+          }
+          $signtool = Get-ChildItem -ErrorAction SilentlyContinue "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Where-Object { $_.Directory.Parent.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+          if (-not $signtool) { Write-Output "::error::No x64 signtool.exe in the Windows SDK on this runner."; exit 1 }
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) { $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe' }
+          $setups = @(Get-ChildItem -ErrorAction SilentlyContinue desktop/rata-app/src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($setups.Count -eq 0) { Write-Output "::error::No -setup.exe was built, so there is nothing to check."; exit 1 }
+          $check = @()
+          $i = 0
+          foreach ($setup in $setups) {
+            $check += $setup.FullName
+            $inside = Join-Path $env:RUNNER_TEMP "rata-verify\$i"; $i++
+            & $sevenZip x -y "-o$inside" $setup.FullName | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Output "::error::7-Zip could not open $($setup.Name)."; exit 1 }
+            $app = Get-ChildItem -Recurse -File -Path $inside -Filter 'rata-app.exe' | Select-Object -First 1
+            if (-not $app) { Write-Output "::error::No rata-app.exe inside $($setup.Name)."; exit 1 }
+            $check += $app.FullName
+            # The uninstaller is signed while makensis runs; whether 7-Zip
+            # shows it depends on its version, so it is checked when it can be.
+            Get-ChildItem -Recurse -File -Path $inside -Filter 'uninstall.exe' | ForEach-Object { $check += $_.FullName }
+          }
+          # signtool's own exit code decides, not PowerShell's view of its stderr.
+          $ErrorActionPreference = 'Continue'
+          $bad = @()
+          foreach ($file in $check) {
+            Write-Output "::group::signtool verify /pa /v $file"
+            $out = & $signtool.FullName verify /pa /v $file 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Output $out
+            Write-Output "::endgroup::"
+            if ($code -ne 0) { $bad += "$file (signtool exit $code)" }
+            elseif ($out -match 'not timestamped') { $bad += "$file (no timestamp)" }
+            else { Write-Output "Signed: $file" }
+          }
+          if ($bad.Count) {
+            foreach ($b in $bad) { Write-Output "::error::Bad Windows signature: $b" }
+            exit 1
+          }
+          Write-Output "Every Windows binary checked is signed, trusted and timestamped ($($check.Count) files, $env:MODE)."
+          exit 0
+
+      # The installer reached the draft release before the check above could
+      # run, and the publish job below publishes whatever is attached. A
+      # Windows installer whose signature failed must not be what ships, so it
+      # comes off the draft (its update signature with it); the run's artifact
+      # still has it for looking into. A published release is never touched.
+      - name: Keep a badly signed installer off the release
+        if: failure() && steps.winverify.outcome == 'failure' && needs.create-release.outputs.id != ''
+        uses: actions/github-script@v7
+        env:
+          ID: ${{ needs.create-release.outputs.id }}
+        with:
+          script: |
+            const release_id = Number(process.env.ID);
+            const { data: r } = await github.rest.repos.getRelease({ ...context.repo, release_id });
+            if (!r.draft) { core.warning(`${r.tag_name} is already published; its Windows installer was left in place. Replace it by hand.`); return; }
+            for (const a of r.assets) {
+              if (!/-setup\.exe(\.sig)?$/.test(a.name)) continue;
+              await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: a.id });
+              core.info(`Removed ${a.name} from the draft ${r.tag_name}.`);
+            }
 
       # `always()` because the installers are worth keeping precisely when
       # something went wrong. Without it a failure in the step above — which
@@ -356,6 +606,32 @@ jobs:
             desktop/rata-app/src-tauri/target/**/release/bundle/**/*-setup.exe
           if-no-files-found: error
           retention-days: 14
+
+      # Last, and whatever happened above: the signing client and its
+      # metadata, the Tauri signing config, the unpacked installers, and every
+      # certificate the .pfx brought into this runner's store, private keys
+      # included. (The .pfx itself is never written to disk.) GitHub's runners
+      # are thrown away after the job anyway; this is so that nothing depends
+      # on that.
+      - name: Remove the Windows signing material
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          THUMBPRINTS: ${{ steps.winsign.outputs.thumbprints }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+            (Join-Path $env:RUNNER_TEMP 'rata-sign'), (Join-Path $env:RUNNER_TEMP 'rata-verify'), 'desktop/rata-app/src-tauri/tauri.winsign.conf.json'
+          foreach ($t in @($env:THUMBPRINTS -split ',' | Where-Object { $_ })) {
+            try {
+              Remove-Item -Force -DeleteKey -ErrorAction Stop "Cert:\CurrentUser\My\$t"
+            } catch {
+              # Without -DeleteKey at least the certificate goes.
+              try { Remove-Item -Force -ErrorAction Stop "Cert:\CurrentUser\My\$t" } catch { Write-Output "::warning::Could not remove certificate $t from the runner's store: $_" }
+            }
+          }
+          Write-Output "Windows signing material removed."
+          exit 0
 
   # Out of draft once the installers are on it. Publishing is also what
   # creates the tag, at the commit the release was made from. A release with
