@@ -1,0 +1,546 @@
+// Drives the real desktop interface (ui/ as sync-ui.sh assembles it) with a
+// fake Tauri backend, to check the bridge fixes behave — not just parse.
+//
+// Run from the repository root, after ./sync-ui.sh and `npm ci` in rata-next:
+//   (cd desktop/rata-app/ui && python3 -m http.server 3181 --bind 127.0.0.1 &)
+//   node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+// Exit status is non-zero when any check fails.
+import pw from '../../../rata-next/node_modules/playwright/index.js';
+const { chromium } = pw;
+const B = process.argv[2];
+const STORE_SOFT_CAP_JS = 3500000;
+let fails = 0;
+const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
+
+const MOCK = ({ licensed }) => {
+  // Playwright injects this into every frame; the app is only the top one.
+  if (window !== window.top) return;
+  window.__mock = {
+    licensed,
+    mailboxes: [{ email: 'me@example.com', host: 'imap.example.com', port: 993, label: 'Example' }],
+    unlinkFails: false,
+    setLicenceRejects: false,
+    refresh: null,
+    calls: [],
+  };
+  const M = window.__mock;
+  const standing = () => M.licensed
+    ? { licensed: true, message: M.planMessage || 'Licensed for RATA Pro until 26 October 2026.', plan: M.plan || { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
+        used: M.mailboxes.length, limit: M.plan && M.plan.mail !== undefined ? M.plan.mail : null, renewSoon: false, token: 'v1.test-licence.sig' }
+    : { licensed: false, message: 'Enter your licence key.', token: null, renewSoon: false };
+  window.__TAURI__ = { core: { invoke: async (cmd, args) => {
+    M.calls.push([cmd, args]);
+    switch (cmd) {
+      case 'licence_status': return standing();
+      case 'set_licence':
+        if (M.setLicenceRejects) throw 'The licence could not be written to disk';
+        return standing();
+      case 'list_mailboxes': return M.mailboxes;
+      case 'unlink_mailbox':
+        if (M.unlinkFails) throw 'This computer’s keychain refused access';
+        M.mailboxes = M.mailboxes.filter((m) => m.email !== args.email);
+        return null;
+      case 'refresh_mail':
+        if (M.refreshDelay) await new Promise((r) => setTimeout(r, M.refreshDelay));
+        return M.refresh || { messages: [], problems: [], skipped: [] };
+      case 'older_mail': {
+        if (M.olderFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
+        if (args.folder === 'sent') return (M.sentOlder || []).filter((m) => m.uid < args.beforeUid);
+        if (args.folder && args.folder.named) return (M.folderOlder || []).filter((m) => m.uid < args.beforeUid);
+        const inbox = M.inbox || [];
+        const older = inbox.filter((u) => u < args.beforeUid).sort((a, b) => b - a).slice(0, args.limit || 50);
+        return older.map((u) => M.mk(u));
+      }
+      case 'link_mailbox':
+        return { outcome: 'ok', mailbox: { email: args.email, host: 'imap.example.com', port: 993, label: 'Example', source: 'table' } };
+      case 'reread_mail':
+        if (args.folder === 'archive') {
+          M.archReads = (M.archReads || []).concat([args]);
+          return args.uids.map((u) => ({ id: args.email + '_archive_' + u, folder: 'archive', acct: args.email, acct_label: 'Example',
+            from_name: 'Bo', from_addr: 'bo@example.org', to_name: '', to_addr: args.email, subject: 'Archived later ' + u, preview: 'p', body: 'b',
+            ts: Date.now() - u * 1000, unread: false, starred: false, uid: u, uidvalidity: args.uidvalidity, message_id: 'l' + u + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }));
+        }
+        M.rereads = (M.rereads || 0) + 1;
+        return args.uids.map((u) => ({ id: args.email + '_' + u, acct: args.email, acct_label: 'Example', from_name: 'Ann',
+          from_addr: 'ann@example.org', subject: 'Old ' + u, preview: 'Decoded ' + u, body: 'Decoded body of ' + u + ' — café',
+          ts: 1e12 + u, unread: false, starred: false, uid: u, uidvalidity: args.uidvalidity, message_id: 'o' + u + '@example.org',
+          reply_to: '', truncated: u === 3 }));
+      case 'read_attachment': {
+        if (M.readFails) throw { email: args.email, kind: 'too-large', error: 'huge.pdf is too large to convert in RATA (40 MB; the most is 25 MB). Save it and convert it elsewhere.' };
+        const f = (M.readable || {})[args.index];
+        if (!f) throw { email: args.email, kind: 'gone', error: 'That attachment is no longer in the message.' };
+        return f;
+      }
+      case 'open_message':
+        if (M.openFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
+        if (M.openAtts && args.uid === 90) return { text: 'Please see the attached report.', truncated: false, attachments: M.openAtts };
+        /* 60 and up are HTML mail. The HTML here has NOT been through the Rust
+           sanitiser, on purpose: it tests the frame's own lock. */
+        if (args.uid >= 60) return { text: 'Your order shipped. Track it <https://shop.example/t>', truncated: false, attachments: [],
+          html: args.uid === 61 ? null : '<h1 style="color:rgb(200,0,0)">Your order shipped</h1><p>Thanks!</p>'
+            + '<img id="pix" src="https://tracker.example/open.gif" width="1" height="1">'
+            + '<script>parent.window.__pwned = "script"</script>'
+            + '<img src="x" onerror="parent.window.__pwned = \'onerror\'">'
+            + '<a id="lnk" href="https://phish.example/login">Sign in</a>'
+            + '<a id="lnk2" href="https://phish.example/self" target="_self">Also</a>',
+          remote_images: args.uid === 60 };
+        return { text: 'The whole of message ' + args.uid + ', every paragraph of it.', truncated: false,
+          attachments: [{ index: 1, name: 'Q3 figures.pdf', mime: 'application/pdf', size: 245760 },
+            { index: 2, name: '<img src=x onerror=window.__pwned=1>.pdf', mime: 'application/pdf', size: 10 }] };
+      case 'save_file':
+        M.files = (M.files || []).concat([args]);
+        if (M.saveFails) throw 'It could not be saved in /home/me/Downloads (disk full).';
+        return { path: '/home/me/Downloads/' + args.name, name: args.name, size: atob(args.data).length };
+      case 'list_folders':
+        if (M.foldersFail) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached: its folders could not be listed' };
+        return M.folders || [];
+      case 'folder_mail': {
+        M.folderReads = (M.folderReads || []).concat([args]);
+        if (M.folderFails) throw { email: args.email, kind: 'stale', error: 'me@example.com no longer has that folder — it was renamed or removed. Pick it again from Folders.' };
+        return (M.inFolder || {})[args.folder && args.folder.named] || [];
+      }
+      case 'watching':
+        return M.live || [];
+      case 'notify_mail':
+        M.notified = (M.notified || []).concat([args]);
+        return null;
+      case 'check_update':
+        return M.update || { enabled: false, current: '0.1.23', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
+      case 'install_update':
+        M.installs = (M.installs || 0) + 1;
+        if (M.installFails) throw M.installFails;
+        return null;
+      case 'open_link':
+        M.opened = (M.opened || []).concat([args.url]);
+        if (!/^https?:\/\//i.test(args.url)) throw 'RATA only opens web addresses (http and https).';
+        return null;
+      case 'save_attachment':
+        M.saved = (M.saved || []).concat([args]);
+        return { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760 };
+      case 'send_mail':
+        M.sent = M.sent || [];
+        M.sent.push(args.draft);
+        if (M.sendFails) throw 'smtp.example.com refused the message';
+        return { via: 'smtp.example.com', messageId: 'rata' + M.sent.length + '@example.com' };
+      case 'change_messages':
+        if (M.changeFails) return { ok: false, done: [], gone: [], kind: 'net', error: 'imap.example.com could not be reached' };
+        return { ok: true, done: args.uids, gone: [] };
+      default: throw 'unmocked ' + cmd;
+    }
+  } } };
+  localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' }));
+};
+
+const browser = await chromium.launch();
+
+/* The app's own content security policy, from its config, applied to every
+   page here the way the packaged app applies it — so these checks test the
+   interface under the rules it actually ships with. */
+import { readFileSync as _read } from 'node:fs';
+const APP_CSP = JSON.parse(_read(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')).app.security.csp;
+async function open(licensed) {
+  const page = await browser.newPage();
+  await page.route('**/app.html', async (route) => {
+    const resp = await route.fetch();
+    await route.fulfill({ response: resp, headers: { ...resp.headers(), 'content-security-policy': APP_CSP } });
+  });
+  page.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  page.on('dialog', (d) => d.accept());
+  await page.addInitScript(MOCK, { licensed });
+  await page.goto(B + '/app.html');
+  await page.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+  /* A licensed app refreshes by itself a moment after start (0.1.27); let
+     that finish so it does not land in the middle of a check. */
+  if (licensed) await page.waitForFunction(() => lastSync > 0 && !SYNCING, null, { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => {
+    window.__toasts = [];
+    const t = toast;
+    toast = (m) => { window.__toasts.push(String(m)); return t(m); };
+  });
+  return page;
+}
+const row = (page) => page.evaluate(() => S.linked.find((l) => l.type === 'mail' && l.label === 'me@example.com') || null);
+const toasts = (page) => page.evaluate(() => window.__toasts.splice(0));
+
+
+console.log('\n— new mail in the background says so on the desktop —');
+{
+  const pg = await open(true);
+  let uid = 60;
+  const mk = (folder, extra) => { uid++; return Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Subject ' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - (100 - uid) * 1000, unread: true, starred: false, uid, uidvalidity: 7, message_id: 'n' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {}); };
+  const arrive = (msgs, quiet = true) => pg.evaluate(async ({ msgs, quiet }) => {
+    __mock.notified = []; __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', quiet); return __mock.notified;
+  }, { msgs, quiet });
+  await pg.evaluate(() => { document.hasFocus = () => false; });
+  let n = await arrive([mk('inbox', { from_name: 'Ann', subject: 'Lunch?' })]);
+  check(n.length === 1 && n[0].title === 'Ann' && n[0].body === 'Lunch?', `one new message names its sender and subject: ${JSON.stringify(n)}`);
+  n = await arrive([mk('inbox', { from_name: 'Ann' }), mk('inbox', { from_name: 'Bo Li', from_addr: 'bo@example.org' }), mk('junk', { from_name: 'Prize desk', subject: 'You won' })]);
+  check(n.length === 1 && n[0].title === '2 new messages' && n[0].body === 'From Bo Li, Ann', `several say how many and from whom, newest first — spam is not counted: ${JSON.stringify(n)}`);
+  await pg.evaluate(() => { S.settings.notify = 'count'; });
+  n = await arrive([mk('inbox', { subject: 'Private matter' })]);
+  check(n.length === 1 && n[0].title === 'RATA' && n[0].body === '1 new message', `"Only say new mail arrived" names nobody: ${JSON.stringify(n)}`);
+  await pg.evaluate(() => { S.settings.notify = 'off'; });
+  check((await arrive([mk('inbox')])).length === 0, 'Off means off');
+  await pg.evaluate(() => { S.settings.notify = 'full'; document.hasFocus = () => true; });
+  check((await arrive([mk('inbox')])).length === 0, 'while RATA is in front, the toast is enough');
+  await pg.evaluate(() => { document.hasFocus = () => false; });
+  check((await arrive([mk('inbox')], false)).length === 0, 'a refresh the customer asked for does not notify');
+  await pg.evaluate(() => go('set'));
+  const row = await pg.evaluate(() => ({ shown: getComputedStyle(document.querySelector('#notify-row')).display !== 'none', value: document.querySelector('#set-notify').value }));
+  check(row.shown && row.value === 'full', `Settings offers the choice, sender and subject by default: ${JSON.stringify(row)}`);
+  await pg.close();
+}
+
+console.log('\n— several messages archived, moved home, or filed at once —');
+{
+  const pg = await open(true);
+  const mk = (who, folder, uid, extra) => Object.assign({ id: who + '_' + (folder === 'inbox' ? '' : (folder.named ? 'fwork' : folder) + '_') + uid, folder, acct: who, acct_label: who,
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Bo', to_addr: 'bo@example.org', subject: 'S' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'b' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate((msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.folders = [{ name: 'Receipts', label: 'Receipts' }, { name: 'Travel', label: 'Travel' }];
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+  }, [mk('me@example.com', 'inbox', 1), mk('me@example.com', 'inbox', 2), mk('me@example.com', 'sent', 3), mk('me@example.com', 'junk', 4), mk('me@example.com', 'archive', 5), mk('work@example.net', 'inbox', 6)]);
+  await pg.evaluate(() => serverSync('mail'));
+  const pick = (ids) => pg.evaluate((ids) => { go('inbox'); selecting = true; SEL.clear(); ids.forEach((i) => SEL.add(i)); bulkRefresh(); __mock.calls = []; window.__toasts = []; }, ids);
+  const acts = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => ({ email: a.email, folder: a.folder, uids: a.uids, action: a.action })));
+  const has = (id) => pg.evaluate((id) => S.messages.some((m) => m.id === id), id);
+  check(await pg.evaluate(() => [...document.querySelectorAll('#bulk-bar .native-only')].every((e) => e.style.display !== 'none')), 'the selection bar offers Archive, Move to inbox and Move to in the app');
+
+  await pick(['me@example.com_1', 'me@example.com_2', 'me@example.com_sent_3']);
+  await pg.click('#bulk-bar [data-bulk="archive"]');
+  await pg.waitForTimeout(250);
+  let a = await acts();
+  check(a.length === 1 && a[0].action === 'archive' && a[0].uids.join() === '1,2' && a[0].folder === 'inbox', `Archive moves the inbox mail of a selection in one go: ${JSON.stringify(a)}`);
+  check(!(await has('me@example.com_1')) && (await has('me@example.com_sent_3')) && /Archived — 2 \(1 could not be\)/.test((await toasts(pg))[0] || ''), 'sent mail in the selection stays, and the toast says so');
+
+  await pick(['me@example.com_junk_4', 'me@example.com_archive_5']);
+  await pg.click('#bulk-bar [data-bulk="inbox"]');
+  await pg.waitForTimeout(250);
+  a = await acts();
+  check(a.length === 2 && a.every((x) => x.action === 'inbox') && a.map((x) => x.folder).sort().join() === 'archive,junk', `Move to inbox brings spam and archived mail home, each from its own folder: ${JSON.stringify(a)}`);
+
+  await pg.evaluate((m) => { __mock.refresh = { messages: m, flags: [], problems: [], skipped: [] }; }, [mk('me@example.com', 'inbox', 7), mk('me@example.com', 'inbox', 8)]);
+  await pg.evaluate(() => serverSync('mail'));
+  await pick(['me@example.com_7', 'work@example.net_6']);
+  await pg.click('#bulk-bar [data-bulk="file"]');
+  await pg.waitForTimeout(250);
+  check(/one mailbox/.test(await pg.textContent('#bulk-filemenu')), 'Move to asks for messages from one mailbox when a selection spans two');
+  await pg.evaluate(() => document.querySelector('#bulk-filemenu').classList.remove('open'));
+  await pick(['me@example.com_7', 'me@example.com_8']);
+  await pg.click('#bulk-bar [data-bulk="file"]');
+  await pg.waitForFunction(() => document.querySelectorAll('#bulk-filemenu [data-to]').length === 2, null, { timeout: 5000 }).catch(() => {});
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#bulk-filemenu [data-to="Travel"]');
+  await pg.waitForTimeout(250);
+  a = await acts();
+  check(a.length === 1 && JSON.stringify(a[0].action) === '{"move":{"named":"Travel"}}' && a[0].uids.join() === '7,8' && a[0].email === 'me@example.com',
+    `Move to files the whole selection into that folder on one connection: ${JSON.stringify(a)}`);
+  check(!(await has('me@example.com_7')) && /Moved to Travel — 2/.test((await toasts(pg))[0] || ''), 'and it leaves the list at once');
+  await pg.close();
+}
+
+console.log('\n— drafts begun elsewhere are finished here —');
+{
+  const pg = await open(true);
+  const mk = (folder, uid, extra) => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Me', from_addr: 'me@example.com', to_name: 'Bo Li', to_addr: 'bo@example.org', to_all: ['bo@example.org'], cc: [], in_reply_to: '',
+    subject: 'S' + uid, preview: 'p', body: 'b', ts: Date.now() - uid * 1000, unread: true, starred: false, uid, uidvalidity: 7, message_id: 'd' + uid + '@example.com',
+    reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const d21 = mk('drafts', 21, { subject: 'Plan', body: 'Half a thought', to_all: ['bo@example.org', 'cy@example.org'], cc: ['dee@example.org', 'bo@example.org'], bcc: ['Boss@example.net', 'dee@example.org'], in_reply_to: 'orig@example.org' });
+  const d22 = mk('drafts', 22, { subject: '(no subject)', body: '', to_all: [], to_addr: '', to_name: '', attachments: [{ index: 1, name: 'Q3 figures.pdf', mime: 'application/pdf', size: 245760 }] });
+  const inbox = mk('inbox', 20, { from_name: 'Ann', from_addr: 'ann@example.org', subject: 'Hello' });
+  await pg.evaluate(async (msgs) => {
+    document.hasFocus = () => false; __mock.notified = [];
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: ['me@example.com_drafts_21', 'me@example.com_drafts_22'] }] };
+    await serverSync('mail', true);
+  }, [d21, d22, inbox]);
+  const st = await pg.evaluate(() => {
+    go('inbox'); mailFilter = 'all'; renderMailFilters(); renderMail();
+    const chips = [...document.querySelectorAll('#mail-filters .pill')].map((p) => p.dataset.f);
+    const inboxIds = mailPool().map((m) => m.id);
+    mailFilter = 'drafts'; renderMailFilters(); renderMail();
+    const rows = [...document.querySelectorAll('#mail-scroll .mail-row .m-from')].map((e) => e.textContent);
+    return { chips, inboxIds, rows, notified: __mock.notified.length, unread: S.messages.filter((m) => m.draft && m.unread).length,
+      linked: S.messages.filter((m) => m.draft && (m.cid || m.toId)).length };
+  });
+  check(st.chips.includes('drafts') && st.inboxIds.join() === 'me@example.com_20', `drafts get their own chip and stay out of the inbox: ${JSON.stringify(st.chips)} ${JSON.stringify(st.inboxIds)}`);
+  check(JSON.stringify(st.rows) === '["Draft to Bo Li","Draft"]', `a draft is listed by who it is for: ${JSON.stringify(st.rows)}`);
+  check(st.notified === 1 && st.unread === 0 && st.linked === 0, `drafts never notify, count as unread or join a person's thread: ${JSON.stringify(st)}`);
+
+  await pg.evaluate(() => openMail('me@example.com_drafts_21'));
+  const pane = await pg.evaluate(() => ({ cont: !!document.querySelector('#md-continue'), reply: !!document.querySelector('#md-reply'), fwd: !!document.querySelector('#md-forward'),
+    note: (document.querySelector('#mail-detail .md-note') || {}).textContent || '', to: document.querySelector('.md-fromtext span').textContent }));
+  check(pane.cont && !pane.reply && !pane.fwd && /not sent/.test(pane.note) && /bo@example\.org, cy@example\.org, dee@example\.org/.test(pane.to),
+    `a draft opens with Continue, says it is not sent and who it is for: ${JSON.stringify(pane)}`);
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(200);
+  const cmp = await pg.evaluate(() => ({ to: document.querySelector('#cmp-to').value, cc: document.querySelector('#cmp-cc').value, ccShown: !document.querySelector('#cmp-cc').hidden,
+    bcc: document.querySelector('#cmp-bcc').value, bccShown: !document.querySelector('#cmp-bcc').hidden, subj: document.querySelector('#cmp-subj').value,
+    body: document.querySelector('#cmp-body').value, title: document.querySelector('#cmp-title').textContent, from: document.querySelector('#cmp-from').value,
+    want: (S.linked.find((l) => l.label === 'me@example.com') || {}).id }));
+  check(cmp.to === 'bo@example.org, cy@example.org' && cmp.cc === 'dee@example.org' && cmp.ccShown && cmp.bcc === 'boss@example.net' && cmp.bccShown && cmp.subj === 'Plan'
+    && cmp.body === 'Half a thought' && cmp.title === 'Draft reply' && cmp.from === cmp.want,
+    `Continue puts everyone, the subject, the words and the mailbox back: ${JSON.stringify(cmp)}`);
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  let sent = await pg.evaluate(() => ({ send: __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => a.draft),
+    act: __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => ({ folder: a.folder, uids: a.uids, action: a.action })),
+    still: S.messages.some((m) => m.id === 'me@example.com_drafts_21') }));
+  check(sent.send.length === 1 && sent.send[0].inReplyTo === 'orig@example.org' && sent.send[0].to === 'bo@example.org, cy@example.org' && sent.send[0].cc === 'dee@example.org'
+    && sent.send[0].bcc === 'boss@example.net', `it is sent to everyone, copied as it was, in the thread it answers: ${JSON.stringify(sent.send)}`);
+  check(sent.act.length === 1 && sent.act[0].folder === 'drafts' && sent.act[0].uids.join() === '21' && sent.act[0].action === 'trash' && !sent.still,
+    `and once sent, the draft goes from Drafts to the Trash: ${JSON.stringify(sent.act)}`);
+
+  await pg.evaluate(() => { __mock.calls = []; openMail('me@example.com_drafts_22'); });
+  await pg.waitForTimeout(200);
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(300);
+  const c2 = await pg.evaluate(() => ({ opened: __mock.calls.filter(([c]) => c === 'open_message').map(([, a]) => a.folder), subj: document.querySelector('#cmp-subj').value,
+    body: document.querySelector('#cmp-body').value, files: document.querySelector('#cmp-files').textContent, title: document.querySelector('#cmp-title').textContent }));
+  check(c2.opened.includes('drafts') && c2.subj === '' && /The whole of message 22/.test(c2.body) && /Q3 figures\.pdf/.test(c2.files) && c2.title === 'Draft',
+    `a draft with a file is fetched whole and keeps its file, with no "(no subject)": ${JSON.stringify(c2)}`);
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-discard');
+  const kept = await pg.evaluate(() => ({ calls: __mock.calls.filter(([c]) => c === 'change_messages').length, has: S.messages.some((m) => m.id === 'me@example.com_drafts_22'),
+    title: document.querySelector('#cmp-title').textContent, files: document.querySelector('#cmp-files').textContent,
+    hidden: ['#cmp-cc', '#cmp-bcc'].every((q) => document.querySelector(q).hidden) }));
+  check(kept.calls === 0 && kept.has && kept.title === 'New message' && kept.files === '' && kept.hidden, `Discard while finishing a draft leaves the draft where it is: ${JSON.stringify(kept)}`);
+  await pg.evaluate(() => closeCompose());
+  await pg.evaluate(() => { __mock.calls = []; openMail('me@example.com_drafts_22'); });
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(300);
+  await pg.fill('#cmp-to', 'bo@example.org');
+  await pg.fill('#cmp-subj', 'Figures');
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  sent = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => a.draft.forward));
+  check(sent.length === 1 && sent[0] && sent[0].folder === 'drafts' && sent[0].uid === 22 && sent[0].indexes.join() === '1,2',
+    `its attachments are fetched from Drafts at send time: ${JSON.stringify(sent)}`);
+
+  await pg.evaluate(async (msgs) => { __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: ['me@example.com_drafts_23', 'me@example.com_drafts_24'] }] }; await serverSync('mail', true); },
+    [mk('drafts', 23, { subject: 'First try' }), mk('drafts', 24, { subject: 'Second' })]);
+  await pg.evaluate(async () => { __mock.refresh = { messages: [], flags: [], problems: [], skipped: [] }; await serverSync('mail', true); });
+  const before = await pg.evaluate(() => S.messages.filter((m) => m.draft).map((m) => m.id).sort());
+  await pg.evaluate(async () => { openMail('me@example.com_drafts_23'); __mock.refresh = { messages: [], flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: ['me@example.com_drafts_24'] }] }; await serverSync('mail', true); });
+  const after = await pg.evaluate(() => ({ ids: S.messages.filter((m) => m.draft).map((m) => m.id), gone: !!(S.gone || {})['me@example.com_drafts_23'], open: document.querySelector('#mail-detail').classList.contains('open'), sel: selMail }));
+  check(before.join() === 'me@example.com_drafts_23,me@example.com_drafts_24', `a refresh without the Drafts list removes nothing: ${JSON.stringify(before)}`);
+  check(after.ids.join() === 'me@example.com_drafts_24' && !after.gone && !after.open && after.sel === null, `a draft no longer in Drafts leaves, and its open pane closes: ${JSON.stringify(after)}`);
+  await pg.close();
+}
+
+console.log('\n— Cc, Bcc, and replying to everyone —');
+{
+  const pg = await open(true);
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Me', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '',
+    subject: 'Plans ' + uid, preview: 'p', body: 'Shall we?', ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7,
+    message_id: 'r' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    S.messages.push({ id: 'old-1', ch: 'email', prov: 'imap', acct: S.messages[0].acct, mailbox: 'me@example.com', fromName: 'Ann', fromAddr: 'ann@example.org', subj: 'Stored before', prev: 'p', body: 'b', ts: 1, unread: false, starred: false, atts: [], uid: 1, uidvalidity: 7 });
+  }, [mk(31, { to_all: ['me@example.com', 'Xan@example.org'], cc: ['yu@example.org', 'work@example.net', 'ann@example.org'] }), mk(32), mk(33, { reply_to: 'list@example.org', to_all: ['list@example.org'] })]);
+  const btn = (id) => pg.evaluate((id) => { openMail(id); return !!document.querySelector('#md-replyall'); }, id);
+  check(await btn('me@example.com_31'), 'a message that went to others offers Reply all');
+  check(!(await btn('me@example.com_32')) && !(await btn('old-1')), 'one that went only to me does not, nor mail stored before RATA knew who else it went to');
+  await pg.evaluate(() => openMail('me@example.com_31'));
+  await pg.click('#md-replyall');
+  await pg.waitForTimeout(200);
+  const c = await pg.evaluate(() => ({ to: document.querySelector('#cmp-to').value, cc: document.querySelector('#cmp-cc').value, shown: !document.querySelector('#cmp-cc').hidden,
+    title: document.querySelector('#cmp-title').textContent, subj: document.querySelector('#cmp-subj').value }));
+  check(c.to === 'ann@example.org' && c.cc === 'xan@example.org, yu@example.org' && c.shown && c.subj === 'Re: Plans 31' && c.title === 'Reply to Ann and 2 more',
+    `Reply all copies everyone else, never my own mailboxes or the sender twice: ${JSON.stringify(c)}`);
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  const sent = await pg.evaluate(() => __mock.calls.filter(([x]) => x === 'send_mail').map(([, a]) => a.draft)[0]);
+  check(sent && sent.to === 'ann@example.org' && sent.cc === 'xan@example.org, yu@example.org' && sent.inReplyTo === 'r31@example.org', `and it is sent that way, in the thread: ${JSON.stringify(sent)}`);
+  await pg.evaluate(() => openMail('me@example.com_33'));
+  await pg.click('#md-replyall');
+  await pg.waitForTimeout(200);
+  const l = await pg.evaluate(() => ({ to: document.querySelector('#cmp-to').value, cc: document.querySelector('#cmp-cc').value }));
+  check(l.to === 'list@example.org' && l.cc === 'ann@example.org', `to a list, the list is To and the sender is copied: ${JSON.stringify(l)}`);
+  await pg.evaluate(() => { newDraft(); openCompose(); });
+  const hidden = await pg.evaluate(() => document.querySelector('#cmp-cc').hidden && !document.querySelector('#cmp-cc-btn').hidden);
+  await pg.click('#cmp-cc-btn');
+  await pg.fill('#cmp-to', 'bo@example.org');
+  await pg.fill('#cmp-cc', 'cy@example.org');
+  await pg.click('#cmp-bcc-btn');
+  await pg.fill('#cmp-bcc', 'boss@example.net');
+  await pg.fill('#cmp-subj', 'Hi');
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  const hand = await pg.evaluate(() => __mock.calls.filter(([x]) => x === 'send_mail').map(([, a]) => a.draft)[0]);
+  check(hidden && hand && hand.to === 'bo@example.org' && hand.cc === 'cy@example.org' && hand.bcc === 'boss@example.net', `Cc and Bcc are out of the way until asked for, then sent: ${JSON.stringify(hand)}`);
+  check(await pg.evaluate(() => { newDraft(); return ['#cmp-cc', '#cmp-bcc'].every((q) => document.querySelector(q).value === '' && document.querySelector(q).hidden); }), 'and a new message starts without either');
+  await pg.close();
+}
+
+console.log('\n— new mail as it arrives —');
+{
+  const pg = await open(true);
+  let uid = 400;
+  const mk = () => { uid++; return { id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example', from_name: 'Ann', from_addr: 'ann@example.org',
+    to_name: '', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], subject: 'Pushed ' + uid, preview: 'p', body: 'b', ts: Date.now(), unread: true, starred: false,
+    uid, uidvalidity: 7, message_id: 'w' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }; };
+  const refreshes = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'refresh_mail').length);
+  await pg.evaluate((m) => { document.hasFocus = () => false; __mock.calls = []; __mock.notified = []; __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] }; }, mk());
+  await pg.evaluate(() => { window.__rataMail({ email: 'me@example.com' }); window.__rataMail({ email: 'me@example.com' }); window.__rataMail({ email: 'me@example.com' }); });
+  await pg.waitForTimeout(400);
+  check((await refreshes()) === 0, 'a wake waits a moment, so a burst of mail is one refresh');
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'refresh_mail') && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  await pg.waitForTimeout(300);
+  const one = await pg.evaluate(() => ({ n: __mock.calls.filter(([c]) => c === 'refresh_mail').length, has: S.messages.some((m) => m.subj && m.subj.startsWith('Pushed')), notified: __mock.notified.length }));
+  check(one.n === 1 && one.has && one.notified === 1, `then one quiet refresh brings the mail and notifies as the timer's would: ${JSON.stringify(one)}`);
+  await pg.evaluate((m) => { __mock.calls = []; __mock.refreshDelay = 900; __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] }; serverSync('mail', true); }, mk());
+  await pg.waitForTimeout(100);
+  await pg.evaluate(() => window.__rataMail({ email: 'me@example.com' }));
+  await pg.waitForFunction(() => __mock.calls.filter(([c]) => c === 'refresh_mail').length >= 2 && !SYNCING, null, { timeout: 8000 }).catch(() => {});
+  await pg.waitForTimeout(1500);
+  check((await refreshes()) === 2, `a wake during a refresh gets exactly one refresh of its own after it: ${await refreshes()}`);
+  await pg.evaluate(() => { __mock.refreshDelay = 0; });
+  await pg.close();
+  const un = await open(false);
+  await un.evaluate(() => { __mock.calls = []; window.__rataMail({ email: 'me@example.com' }); });
+  await un.waitForTimeout(1800);
+  check(await un.evaluate(() => !__mock.calls.some(([c]) => c === 'refresh_mail')), 'without a licence a wake fetches nothing');
+  await un.close();
+}
+
+console.log('\n— fewer sign-ins: only the mailbox that woke, only what is due —');
+{
+  const pg = await open(true);
+  const onlyOf = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'refresh_mail').map(([, a]) => a.only));
+  await pg.evaluate(async () => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = null; await serverSync('mail');
+  });
+  const workStamp = () => pg.evaluate(() => (S.linked.find((l) => l.label === 'work@example.net') || {}).lastSync || 0);
+  const before = await workStamp();
+  await pg.evaluate(() => { __mock.calls = []; window.__rataMail({ email: 'Me@example.com' }); });
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'refresh_mail') && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  let o = await onlyOf();
+  check(JSON.stringify(o) === '[["me@example.com"]]', `new mail in one mailbox reads that mailbox only: ${JSON.stringify(o)}`);
+  check((await workStamp()) === before, 'and the other is not marked as synced when it was not asked');
+  /* The timer: a live mailbox waits half an hour, the other five minutes. */
+  await pg.evaluate(() => { const t = Date.now() - 6 * 60e3; LAST_TRY.set('me@example.com', t); LAST_TRY.set('work@example.net', t); __mock.live = ['me@example.com']; __mock.calls = []; });
+  await pg.evaluate(() => autoTick());
+  o = await onlyOf();
+  check(JSON.stringify(o) === '[["work@example.net"]]', `after five minutes the timer reads only the mailbox without a live connection: ${JSON.stringify(o)}`);
+  await pg.evaluate(() => { const t = Date.now() - 31 * 60e3; LAST_TRY.set('me@example.com', t); LAST_TRY.set('work@example.net', t); __mock.calls = []; });
+  await pg.evaluate(() => autoTick());
+  o = await onlyOf();
+  check(o.length === 1 && o[0] == null, `after half an hour both are due, and one refresh reads every mailbox: ${JSON.stringify(o)}`);
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.evaluate(() => autoTick());
+  check((await onlyOf()).length === 0, 'and nothing is due straight after');
+  /* Coming back to the window reads everything, even just after a wake. */
+  await pg.evaluate(async () => { __mock.calls = []; lastFull = Date.now() - 2 * 60e3; await serverSync('mail', true, ['me@example.com']); __mock.calls = []; window.dispatchEvent(new Event('focus')); });
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'refresh_mail') && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  o = await onlyOf();
+  check(o.length === 1 && o[0] == null, `coming back to RATA reads every mailbox, whatever woke just before: ${JSON.stringify(o)}`);
+  /* A mailbox's own Sync now. */
+  await pg.evaluate(() => { go('set'); renderLinked(); __mock.calls = []; });
+  const id = await pg.evaluate(() => S.linked.find((l) => l.label === 'work@example.net').id);
+  await pg.evaluate((id) => document.querySelector(`[data-lksync="${id}"]`).click(), id);
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'refresh_mail') && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  o = await onlyOf();
+  check(JSON.stringify(o) === '[["work@example.net"]]', `a mailbox's Sync now reads that mailbox: ${JSON.stringify(o)}`);
+  await pg.close();
+}
+
+console.log('\n— signatures —');
+{
+  const pg = await open(true);
+  await pg.evaluate(async (m) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] }; await serverSync('mail');
+  }, { id: 'me@example.com_71', folder: 'inbox', acct: 'me@example.com', acct_label: 'Example', from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com',
+    to_all: ['me@example.com'], cc: [], subject: 'Lunch', preview: 'p', body: 'Lunch on Friday?', ts: Date.now(), unread: false, starred: false, uid: 71, uidvalidity: 7,
+    message_id: 's71@example.org', reply_to: '', truncated: false, attachments: [], html: false, bcc: [] });
+  await pg.evaluate(() => { go('set'); renderSettings(); });
+  const rows = await pg.evaluate(() => [...document.querySelectorAll('#sig-list [data-sig]')].map((t) => t.dataset.sig));
+  check(await pg.evaluate(() => getComputedStyle(document.querySelector('#sig-sec')).display !== 'none') && rows.join() === 'me@example.com,work@example.net',
+    `Settings has a signature for each mailbox: ${JSON.stringify(rows)}`);
+  await pg.fill('[data-sig="me@example.com"]', 'Me Smith\nACME, Accounts');
+  await pg.waitForTimeout(600);
+  check(await pg.evaluate(() => S.settings.sigs['me@example.com'] === 'Me Smith\nACME, Accounts'), 'what is typed is kept');
+  const cloud = await pg.evaluate(() => JSON.stringify(forCloud(S).settings || {}));
+  check(!cloud.includes('Me Smith') && !cloud.includes('sigs'), `and never leaves this computer with the settings that sync: ${cloud.slice(0, 120)}`);
+  const ids = await pg.evaluate(() => ({ me: S.linked.find((l) => l.label === 'me@example.com').id, work: S.linked.find((l) => l.label === 'work@example.net').id }));
+  await pg.evaluate((id) => { newDraft(); openCompose(); document.querySelector('#cmp-from').value = id; document.querySelector('#cmp-from').dispatchEvent(new Event('change')); }, ids.me);
+  let c = await pg.evaluate(() => ({ body: document.querySelector('#cmp-body').value, discard: document.querySelector('#cmp-discard').hidden }));
+  check(c.body === '\n\n-- \nMe Smith\nACME, Accounts' && c.discard, `a new message starts with the signature, and counts as empty: ${JSON.stringify(c)}`);
+  await pg.evaluate(() => { S.settings.sigs['work@example.net'] = 'Work me'; });
+  await pg.evaluate((id) => { const f = document.querySelector('#cmp-from'); f.value = id; f.dispatchEvent(new Event('change')); }, ids.work);
+  c = await pg.evaluate(() => document.querySelector('#cmp-body').value);
+  check(c === '\n\n-- \nWork me', `changing From swaps it for that mailbox's: ${JSON.stringify(c)}`);
+  await pg.evaluate(() => { delete S.settings.sigs['work@example.net']; });
+  await pg.evaluate((id) => { const f = document.querySelector('#cmp-from'); f.value = id; f.dispatchEvent(new Event('change')); }, ids.me);
+  await pg.evaluate(() => { document.querySelector('#cmp-body').value = 'Hi Bo,\n\nSee you.' + document.querySelector('#cmp-body').value; });
+  await pg.evaluate((id) => { const f = document.querySelector('#cmp-from'); f.value = id; f.dispatchEvent(new Event('change')); }, ids.work);
+  c = await pg.evaluate(() => document.querySelector('#cmp-body').value);
+  check(c === 'Hi Bo,\n\nSee you.', `to a mailbox without one, it goes, and the words stay: ${JSON.stringify(c)}`);
+  await pg.evaluate(() => { closeCompose(); go('inbox'); openMail('me@example.com_71'); });
+  await pg.click('#md-reply');
+  await pg.waitForTimeout(200);
+  c = await pg.evaluate(() => document.querySelector('#cmp-body').value);
+  check(/^\n\n-- \nMe Smith\nACME, Accounts\n\nOn .*, Ann wrote:\n> Lunch on Friday\?$/.test(c), `a reply has it above the quote: ${JSON.stringify(c)}`);
+  await pg.evaluate(() => { closeCompose(); go('inbox'); openMail('me@example.com_71'); });
+  await pg.click('#md-forward');
+  await pg.waitForTimeout(300);
+  c = await pg.evaluate(() => document.querySelector('#cmp-body').value);
+  check(c.startsWith('\n\n-- \nMe Smith\nACME, Accounts\n\n---------- Forwarded message'), `so does a forward: ${JSON.stringify(c.slice(0, 80))}`);
+  await pg.evaluate(() => { S.settings.sigReplies = false; closeCompose(); go('inbox'); openMail('me@example.com_71'); });
+  await pg.click('#md-reply');
+  await pg.waitForTimeout(200);
+  c = await pg.evaluate(() => document.querySelector('#cmp-body').value);
+  check(/^\n\nOn .*, Ann wrote:/.test(c), `with "In replies and forwards too" off, a reply has none: ${JSON.stringify(c.slice(0, 40))}`);
+  c = await pg.evaluate(() => { closeCompose(); newDraft(); openCompose(); return document.querySelector('#cmp-body').value; });
+  check(c === '\n\n-- \nMe Smith\nACME, Accounts', `but a new message still does: ${JSON.stringify(c)}`);
+  await pg.close();
+}
+
+console.log('\n— Gmail\'s archive: mail archived later arrives, mail moved out leaves —');
+{
+  const pg = await open(true);
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_archive_' + uid, folder: 'archive', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Archived ' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 9, message_id: 'a' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const sync = (msgs, archives) => pg.evaluate(async ({ msgs, archives }) => {
+    __mock.archReads = []; __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], archives };
+    await serverSync('mail', true);
+    return { held: S.messages.filter((m) => folderOf(m) === 'archive').map((m) => m.uid).sort((a, b) => a - b), reads: __mock.archReads };
+  }, { msgs, archives });
+  let r = await sync([mk(40), mk(50)], [{ email: 'me@example.com', uidvalidity: 9, floor: 1, uids: [40, 50] }]);
+  check(r.held.join() === '40,50' && r.reads.length === 0, `the archive arrives, and nothing more is fetched when all of it is held: ${JSON.stringify(r)}`);
+  // Since then: 40 went back to the inbox elsewhere, 45 (older than 50, so no
+  // refresh of "newer" would find it) was archived, 30 is older than anything held.
+  r = await sync([], [{ email: 'me@example.com', uidvalidity: 9, floor: 1, uids: [30, 45, 50] }]);
+  check(r.held.join() === '45,50', `mail moved out of the archive leaves, and mail archived since arrives: ${JSON.stringify(r.held)}`);
+  check(r.reads.length === 1 && r.reads[0].uids.join() === '45' && r.reads[0].uidvalidity === 9 && r.reads[0].email === 'me@example.com',
+    `only what RATA covers is fetched, not older mail Load older mail is for: ${JSON.stringify(r.reads)}`);
+  // Below the listing's floor nothing is judged: it was not listed.
+  await pg.evaluate(() => { const m = S.messages.find((x) => x.uid === 45); m.uid = 5; m.id = 'me@example.com_archive_5'; });
+  r = await sync([], [{ email: 'me@example.com', uidvalidity: 9, floor: 20, uids: [45, 50] }]);
+  check(r.held.includes(5), `a held message below the listing's floor stays: ${JSON.stringify(r.held)}`);
+  // Another generation of All Mail is not this one.
+  r = await sync([], [{ email: 'me@example.com', uidvalidity: 10, floor: 1, uids: [] }]);
+  check(r.held.join() === '5,45,50' && r.reads.length === 0, `a listing under another UIDVALIDITY changes nothing: ${JSON.stringify(r)}`);
+  const toast = (await toasts(pg)).filter((t) => /new message/.test(t));
+  check(toast.length === 0, `archived mail never announces itself as new: ${JSON.stringify(toast)}`);
+  await pg.close();
+}
+
+await browser.close();
+console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
+process.exit(fails ? 1 : 0);
