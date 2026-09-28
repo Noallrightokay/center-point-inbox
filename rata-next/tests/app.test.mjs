@@ -819,6 +819,54 @@ export default async function run(state) {
        reading a crafted file (CVE-2023-30533). The Bridge reads user files. */
     check(!rt.version.startsWith('0.18'), `SheetJS ${rt.version} — not the vulnerable 0.18.5 npm build`);
 
+    /* ---- F2: in a browser the page says where mail is read ---- */
+    console.log('\n— the website says RATA reads mail in the desktop app —');
+    {
+      /* Every block above ran with the banner up, which is part of the proof
+         that it breaks nothing. */
+      await page.evaluate(() => go('inbox'));
+      const note = await page.evaluate(() => {
+        const el = document.querySelector('#web-note');
+        const r = el ? el.getBoundingClientRect() : null;
+        const main = document.querySelector('#main').getBoundingClientRect();
+        const dl = document.querySelector('#wn-download');
+        const cs = el ? getComputedStyle(el) : null;
+        return el && {
+          text: el.textContent.replace(/\s+/g, ' ').trim(),
+          shown: !el.hidden && r.height > 0,
+          atTop: r.top < main.top + 80,
+          href: dl && dl.getAttribute('href'),
+          dlRound: dl && parseFloat(getComputedStyle(dl).borderRadius),
+          bg: cs.backgroundColor,
+          fill2: getComputedStyle(document.documentElement).getPropertyValue('--fill-2').trim(),
+        };
+      });
+      check(!!note && note.shown && note.atTop, `in a browser, the banner is at the top of the workspace: ${JSON.stringify(note && { shown: note.shown, atTop: note.atTop })}`);
+      check(note && /RATA reads your mail in the desktop app\. This page keeps your account and settings\./.test(note.text) && !/[—!]/.test(note.text),
+        `and says so plainly, with no em dash or exclamation mark: "${note && note.text}"`);
+      check(note && note.href === '/index.html#download' && note.dlRound === 8 && note.bg === hex(note.fill2),
+        `Download goes to the download section, as an 8px button on --fill-2: ${JSON.stringify(note && { href: note.href, round: note.dlRound, bg: note.bg })}`);
+
+      await page.click('#wn-dismiss');
+      const after = await page.evaluate(() => ({
+        hidden: document.querySelector('#web-note').hidden,
+        height: document.querySelector('#web-note').getBoundingClientRect().height,
+        kept: localStorage.getItem('rata_web_note_dismissed'),
+      }));
+      check(after.hidden && after.height === 0 && after.kept === '1', `Dismiss hides it and remembers: ${JSON.stringify(after)}`);
+
+      /* A fresh load in the same browser keeps it dismissed, and the link
+         lands on the site's download section. */
+      const again = await ctx.newPage();
+      await again.goto(s.url + '/app.html');
+      await again.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 15000 });
+      await again.waitForTimeout(300);
+      check(await again.isHidden('#web-note'), 'and it stays dismissed on the next load');
+      await again.goto(s.url + note.href);
+      check(await again.isVisible('#download'), 'the Download link lands on the download section');
+      await again.close();
+    }
+
     /* ---- in-house: precached, offline-capable, no third-party CDN ---- */
     console.log('\n— in-house engines —');
     const cached = await page.evaluate(async () => {

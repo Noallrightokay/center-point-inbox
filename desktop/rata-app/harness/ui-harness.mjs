@@ -748,6 +748,26 @@ console.log('\n— Sign in with Microsoft (C2/C3) —');
   await pg.close();
 }
 
+console.log('\n— the website banner never shows in the app —');
+{
+  /* F2: "RATA reads your mail in the desktop app" is the website's sentence.
+     In the app it would be false and in the way, licensed or not, whatever
+     this browser's storage says and however often it is asked. */
+  for (const licensed of [true, false]) {
+    const pg = await open(licensed);
+    const seen = await pg.evaluate(() => {
+      const el = document.querySelector('#web-note');
+      const before = { stored: localStorage.getItem('rata_web_note_dismissed') };
+      webNote(); go('set'); go('inbox');
+      const r = el.getBoundingClientRect();
+      return { ...before, hidden: el.hidden, display: getComputedStyle(el).display, height: r.height };
+    });
+    check(seen.stored === null && seen.hidden && seen.display === 'none' && seen.height === 0,
+      `${licensed ? 'licensed' : 'unlicensed'}: the banner is not drawn, though it was never dismissed: ${JSON.stringify(seen)}`);
+    await pg.close();
+  }
+}
+
 await browser.close();
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);
