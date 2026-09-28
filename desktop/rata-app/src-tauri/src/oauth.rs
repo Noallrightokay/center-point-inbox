@@ -987,10 +987,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         // Nor can the code itself carry words.
-        match heard(
-            &format!("/?error=Call+support+on+0800+123&state={st}"),
-            st,
-        ) {
+        match heard(&format!("/?error=Call+support+on+0800+123&state={st}"), st) {
             Heard::Ours(Callback::Failed(w)) => {
                 assert!(!w.contains("0800") && !w.contains("support"), "{w}")
             }

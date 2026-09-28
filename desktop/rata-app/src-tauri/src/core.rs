@@ -2921,7 +2921,9 @@ mod tests {
                 })
                 .await
             {
-                Err(Linked::Failed { error }) => assert!(error.contains("Wait a moment"), "{error}"),
+                Err(Linked::Failed { error }) => {
+                    assert!(error.contains("Wait a moment"), "{error}")
+                }
                 other => panic!("{other:?}"),
             }
             app.ms.gap = std::time::Duration::ZERO;
