@@ -87,7 +87,7 @@ first deploy that needs them**, and redeploy after any change:
 | `SUPABASE_ANON_KEY` | Settings → API → **anon** key | accounts | **shipped to browser** |
 | `SUPABASE_SERVICE_ROLE_KEY` | Settings → API → **service_role** (SECRET) | linking | server only |
 | `LICENCE_PRIVATE_KEY` | see LICENSING.md | issuing licences | server only |
-| `GOOGLE_CLIENT_ID` | Google Cloud OAuth client | Gmail | **shipped to browser** |
+| `GOOGLE_CLIENT_ID` | not used: leave unset | nothing (one-click sign-in is off) | not published: `/api/config` no longer reads it |
 | `STRIPE_MONTHLY` / `STRIPE_ANNUAL` / `STRIPE_PORTAL` | see STRIPE-SETUP.md | billing | **shipped to browser** |
 
 **Every one of these is optional**, with one condition: `LICENCE_PRIVATE_KEY` is
@@ -135,11 +135,9 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
 - **Mailboxes of any kind** — no setup on your side, and none possible: linking,
   syncing and sending happen in the desktop app, on the customer's own machine.
   The server has no route that touches a mailbox.
-- **Real Gmail inbox** — Google Cloud → OAuth client ID (Web) with your domain as an
-  authorized origin → set as `GOOGLE_CLIENT_ID`. Add BOTH scopes on the consent screen:
-  `gmail.readonly` and `gmail.send`. Users then link Google accounts in Settings —
-  each account really syncs its inbox AND really sends email from compose. This one
-  runs entirely in the browser; tokens live in memory only, never stored.
+- **Google sign-in** — off, and nothing to set up. `/api/config` no longer
+  publishes `GOOGLE_CLIENT_ID` and no page reads one, so setting it does nothing.
+  Gmail mailboxes link in the desktop app with an app password, like any other.
 - **AI briefings** — each user pastes their own Anthropic key in Settings.
   (Personal secret — deliberately never in the site configuration.)
 - **Payments** — free for now. When ready to charge $12.99/mo, follow
@@ -155,7 +153,7 @@ Google Play packages; the iOS App Store needs a thin Capacitor wrapper. Same cod
 | Blank-slate inboxes, People, Documents, DLP, audit chain, Assist | **Real**, in-app |
 | Mailboxes that sign in with an app password over IMAP and SMTP (Gmail, iCloud, most others) | **Real**, in the desktop app only. The website fetches nobody's mail |
 | Outlook.com, Hotmail, Live and Microsoft 365 mailboxes | **Not available.** Microsoft accepts only its own sign-in page (OAuth) for other apps, and the app refuses these addresses with that reason |
-| Gmail in the browser, Discord, SMS | **Removed** in 0.1.6. `/api/config` still publishes `GOOGLE_CLIENT_ID`, but no page reads it |
+| Gmail in the browser, Discord, SMS | **Removed** in 0.1.6. `/api/config` no longer publishes `GOOGLE_CLIENT_ID` either, and no page reads one |
 | Stripe checkout, portal, entitlements | **Ready**, activates when links are added (see STRIPE-SETUP.md) |
 
 ## The Format Bridge — two files, not one

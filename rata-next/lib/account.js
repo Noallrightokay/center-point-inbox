@@ -30,6 +30,7 @@ export function blocksDeletion(sub) {
 export const DELETION_REMOVES = [
   'your preferences and folder names',
   'your subscription record',
+  'your AI usage record (only what your AI requests cost each month)',
   'your login',
 ];
 
