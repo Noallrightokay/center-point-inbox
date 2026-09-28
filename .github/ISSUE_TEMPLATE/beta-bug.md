@@ -15,7 +15,7 @@ Replace your email with me@<provider> if you'd rather not share it.
 
 **OS** (Windows 11 / macOS 15 Apple silicon / Ubuntu 24.04 …):
 
-**Mail provider** (Gmail, Outlook, iCloud, a work domain on Google Workspace …):
+**Mail provider** (Gmail, iCloud, a work domain on Google Workspace …):
 
 **What I did**
 

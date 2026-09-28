@@ -9,9 +9,14 @@
 
 -- ------------------------------------------------------------
 -- 1. WORKSPACES — one row per registered user.
---    Holds the user's entire RATA workspace (messages, people,
---    documents, settings, audit chain) as JSON. Synced by the
---    app automatically ~1.5s after every change.
+--    Holds the user's preferences as JSON: settings, folders,
+--    rules and the list of linked mailboxes (CLOUD_FIELDS in
+--    app.html), minus per-device facts (CLOUD_STRIP: API keys,
+--    signatures, sync state). Never mail, people, documents or
+--    the audit chain: those stay on the device that read them.
+--    Synced by the app automatically ~1.5s after a change; each
+--    sync replaces the whole row, so what an older build uploaded
+--    goes with the first save after an update.
 -- ------------------------------------------------------------
 create table if not exists public.workspaces (
   id uuid primary key references auth.users (id) on delete cascade,
