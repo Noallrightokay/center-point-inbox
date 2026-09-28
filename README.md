@@ -44,6 +44,7 @@ no connection, and no code for it.
 | `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, and the glue to the interface. |
 | `rata-next/` | The website — marketing pages, Stripe checkout, licence issuing and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. One copy, shared: the desktop app builds its own from this file. |
+| `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
 | `infrastructure/backup/` | Postgres backups for the VPS, with a self-test. |
 | `docs/hostinger-mcp.md` | Managing the VPS and DNS from the repo. |
 
@@ -98,6 +99,12 @@ npm ci
 npm test            # no network, no database required
 npm run dev
 ```
+
+Fonts are vendored under `public/fonts` (Geist, Geist Mono, and Fredoka for the
+wordmark only) by `node scripts/vendor-fonts.mjs`. Never link a font CDN: the
+shipped app is checked for `fonts.googleapis`/`fonts.gstatic`. The landing
+page's screenshots in `public/shots` are of the real interface; retake them
+after a visible change rather than editing them.
 
 ---
 
