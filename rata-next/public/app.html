@@ -368,6 +368,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .set-row .grow{flex:1;min-width:200px}
 .set-row b{display:block;font-size:14px;font-weight:600}
 .set-row span{font-size:12.5px;color:var(--faint)}
+.set-row span.lf-note{display:block;margin-top:8px;padding:8px 12px;border-radius:var(--r-sm);background:var(--amber-soft);color:var(--amber);font-size:13px;line-height:1.45}
 .set-row input[type=text]{border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;min-width:230px;border-radius:var(--r-sm);transition:box-shadow .12s}
 .set-row input[type=text]:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .sig-row{align-items:flex-start}
@@ -883,10 +884,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">Linked accounts</div>
           <div id="linked-list"></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Add an account</b><span id="quota-line">Email works with any provider — Gmail, Outlook, Yahoo, your work address, anything.</span></div>
+            <div class="grow"><b>Add an account</b><span id="quota-line">Gmail, iCloud, Yahoo, Fastmail or your work address, with an app password. Outlook, Hotmail and Microsoft 365 are not supported yet.</span></div>
             <button class="btn primary" data-addlink="mail">＋ Email account</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
@@ -2298,7 +2299,7 @@ function renderResting(){
   if(!boxes.length){
     d.innerHTML=`<div class="rest-wrap"><div class="rest-empty">
       <h2>Nothing connected yet</h2>
-      <p>RATA brings every mailbox you have into one stream — Gmail, Outlook, iCloud, a work address on your own domain. Add the first one and it starts filling in.</p>
+      <p>RATA brings your mailboxes into one stream: Gmail, iCloud, Yahoo, a work address on your own domain. Add the first one and it starts filling in.</p>
       <button class="btn primary" id="rest-add">＋ Add an email account</button>
     </div></div>`;
     const b=$('#rest-add');if(b)b.onclick=openAddMailbox;
@@ -3037,7 +3038,7 @@ $('#set-sigreplies').addEventListener('change',e=>{S.settings.sigReplies=e.targe
 $('#set-notify').addEventListener('change',e=>{S.settings.notify=e.target.value;save();toast(e.target.value==='off'?'New-mail notifications are off':'New-mail notifications are on')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
-  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below — any provider — and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
+  if(!S.linked.length){el.innerHTML='<div class="set-row"><div class="grow"><b>No accounts yet</b><span>Add an email account below and your mail appears in one inbox. Nothing is connected until you connect it.</span></div></div>';return}
   el.innerHTML=S.linked.map(l=>{
     const live=l.status==='live';
     return `<div class="set-row"><div class="grow"><b>${esc(l.label)} <span style="font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;${live?'background:var(--green-soft);color:var(--green)':'background:var(--tint-wash);color:var(--tint-deep)'}">${l.needsRelink?'NEEDS APP PASSWORD':(live?'LIVE':'NOT SYNCED YET')}</span></b><span>${esc((l.provLabel||'Email')+(l.host?' · '+l.host:''))} · linked ${new Date(l.addedAt).toLocaleDateString()}${l.lastSync?' · synced '+rel(l.lastSync)+' ago':''}${l.lastError?' · '+esc(l.lastError):''}</span></div>${l.needsRelink?`<button class="btn primary" data-lkfix="${l.id}">Relink</button>`:`<button class="btn primary" data-lksync="${l.id}">Sync now</button>`}<button class="btn danger" data-lkrm="${l.id}">Remove</button></div>`;
@@ -3055,6 +3056,32 @@ function renderLinked(){
   el.querySelectorAll('[data-lkrm]').forEach(b=>b.onclick=()=>removeLinked(b.dataset.lkrm));
 }
 let lfType=null;
+/* Microsoft mailboxes (C0). Microsoft turned off password sign-in to IMAP
+   (Outlook.com in September 2024, Microsoft 365 before that); only its own
+   OAuth sign-in gets in now, app passwords included, and RATA signs in with
+   passwords. So an address that is plainly Microsoft's is told so before a
+   password is asked for, and the password box goes. The engine refuses the
+   rest (a company domain whose mail is at Microsoft 365, found by its MX)
+   before any password is sent, with the same reason, which mailLink shows
+   here too. The words match discover.rs's MS_HELP. */
+const MS_DOMAINS=new Set(['outlook.com','hotmail.com','live.com','msn.com','passport.com','windowslive.com',
+  'hotmail.co.uk','hotmail.fr','hotmail.de','hotmail.it','hotmail.es',
+  'live.co.uk','live.fr','live.de','live.it','live.nl','live.ca','live.com.au',
+  'outlook.fr','outlook.de','outlook.es','outlook.it','outlook.jp']);
+const MS_NOT_YET='Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet. Microsoft only lets other apps into them through its own sign-in page (OAuth), and no longer accepts passwords or app passwords for IMAP. RATA does not have that sign-in yet.';
+function msAddress(email){const d=String(email||'').trim().toLowerCase().split('@')[1]||'';return MS_DOMAINS.has(d)}
+/* Show why a mailbox cannot be added (or clear it), in place of the password
+   box. `why` is the engine's own sentence when it found Microsoft by DNS. */
+function lfMicrosoft(why){
+  const note=$('#lf-ms');if(!note)return false;
+  const ms=why||(lfType==='mail'&&msAddress($('#lf-input').value)?MS_NOT_YET:'');
+  note.textContent=ms;note.style.display=ms?'':'none';
+  $('#lf-pass').style.display=ms?'none':'';
+  if(ms){$('#lf-pass').value='';$('#lf-host').style.display='none';$('#lf-host').value=''}
+  /* Nothing here can be linked, so Link goes too; Cancel stays. */
+  $('#lf-save').disabled=!!ms;$('#lf-save').style.display=ms?'none':'';
+  return !!ms;
+}
 /* One form for every provider. The address decides the rest — which server to
    reach and where that provider keeps its app-password screen — so the user is
    not asked to know any of it. Called both to add a mailbox and to repair one
@@ -3066,16 +3093,18 @@ function openMailForm(email,why){
   $('#lf-title').textContent=email?'Relink '+email:'Add an email account';
   $('#lf-sub').textContent=email
     ?(why||'That mailbox refused the sign-in. Generate a new app password with your provider and paste it here.')
-    :'Any email address — Gmail, Yahoo, Outlook, your own company domain. Enter it with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work.';
+    :'Gmail, iCloud, Yahoo, your own company domain and most other mailboxes. Enter the address with an app password, and RATA finds the server by looking at the address\u2019s own DNS. Most providers issue app passwords under their security settings; your normal password usually will not work. Outlook, Hotmail and Microsoft 365 are not supported yet.';
   $('#lf-input').placeholder='you@anywhere.com';
   $('#lf-input').value=email||'';
   $('#lf-pass').style.display='';$('#lf-pass').value='';
   $('#linkform').style.display='flex';
-  (email?$('#lf-pass'):$('#lf-input')).focus();
+  const ms=lfMicrosoft();
+  (email&&!ms?$('#lf-pass'):$('#lf-input')).focus();
 }
 
 $$('[data-addlink]').forEach(b=>b.onclick=()=>openMailForm());
-$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none'};
+$('#lf-cancel').onclick=()=>{$('#linkform').style.display='none';$('#lf-host').style.display='none';$('#lf-input').value='';lfMicrosoft()};
+$('#lf-input').addEventListener('input',()=>lfMicrosoft());
 $('#lf-save').onclick=async()=>{
   const v=$('#lf-input').value.trim();
   await mailLink(v,$('#lf-pass').value,$('#lf-host').value.trim());
@@ -3092,6 +3121,7 @@ $('#lf-pass').addEventListener('keydown',e=>{if(e.key==='Enter')$('#lf-save').cl
    which is the one case where we ask the user for it. */
 async function mailLink(email,pass,host){
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  if(msAddress(email)){lfMicrosoft();return}
   if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
   const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
   try{
@@ -3102,6 +3132,10 @@ async function mailLink(email,pass,host){
       if(res.needsHost){
         $('#lf-host').style.display='';$('#lf-host').focus();
         $('#lf-sub').textContent=res.error;
+      }else if(/\bMicrosoft\b/.test(res.error||'')){
+        /* Microsoft found by DNS: the password was never sent, and a new one
+           will not help, so the form says why instead of a passing toast. */
+        lfMicrosoft(res.error);
       }else toast(res.error||'Could not link that mailbox');
       return;
     }
@@ -3120,7 +3154,7 @@ async function mailLink(email,pass,host){
     await loadOlder(res.email,true);
   }catch(e){
     toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
-  }finally{btn.disabled=false;btn.textContent='Link'}
+  }finally{btn.disabled=$('#lf-ms').style.display!=='none';btn.textContent='Link'}
 }
 
 /* What the plan still allows, read from the server rather than guessed here —

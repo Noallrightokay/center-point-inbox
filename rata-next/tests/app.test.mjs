@@ -174,8 +174,11 @@ export default async function run(state) {
     check(!form.hostShown, 'and does not ask for a server address unless it has to');
     /* Naming providers here is the point, not a slip: one form takes all of
        them, and a list of familiar names says that better than avoiding the
-       word "Gmail" does. What would be wrong is copy that promises only some. */
-    check(/any email address/i.test(form.sub), `the help text opens with the promise: "${form.sub.slice(0, 48)}…"`);
+       word "Gmail" does. What would be wrong is a promise the app cannot keep:
+       Microsoft's IMAP no longer takes a password (C0), so the text must not
+       say "any email address" and must say Microsoft is not supported yet. */
+    check(!/any email address/i.test(form.sub) && /outlook/i.test(form.sub) && /not supported yet/i.test(form.sub),
+      `the help text names Microsoft as not supported rather than promising every address: "${form.sub.slice(0, 48)}…"`);
     check(/company domain|own domain/i.test(form.sub),
       'and says a work address on its own domain counts, which is the one people assume will not');
     check(/app password/i.test(form.sub), 'while being clear it is an app password, not the account password');
