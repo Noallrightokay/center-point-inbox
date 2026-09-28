@@ -66,16 +66,22 @@ Your normal password will be refused. Make one app password per mailbox.
 | Yahoo | login.yahoo.com, Account security, Generate app password | mail.yahoo.com | |
 | Fastmail | Settings, Privacy & Security, App passwords | app.fastmail.com | Give it mail (IMAP and SMTP) access. |
 | Hostinger domain | hPanel, Emails, the mailbox's own password | mail.hostinger.com | Hostinger has no app passwords. Use the mailbox password. |
-| Outlook.com | https://account.live.com/proofs/AppPassword | outlook.live.com | **Expected to fail.** See below. |
+| Outlook.com | none: Microsoft's own sign-in page, no app password | outlook.live.com | **Fails until C4, then must pass.** See below. |
 
-**Outlook.com is expected to fail.** Microsoft turned off password sign-in
-over IMAP for Outlook.com in September 2024, and RATA signs in only with
-passwords (MVP-PLAN Part 2). Until [C0](MVP-PLAN.md#c0) ships, expect row 2
-to fail at sign-in with Microsoft's refusal. Once C0 ships, expect a message
-saying Microsoft mailboxes are not supported yet, shown before RATA asks for
-a password. Either result, copied exactly, is a pass for this column: it
-proves the finding. Rows 3 to 20 are then `n/a` for Outlook until
-[C1](MVP-PLAN.md#c1) to [C4](MVP-PLAN.md#c4) ship.
+**Outlook.com fails until [C4](MVP-PLAN.md#c4), then must pass.**
+Microsoft turned off password sign-in over IMAP for Outlook.com in September
+2024; from v0.1.39 RATA signs in to Microsoft mailboxes with Microsoft's own
+page (**Sign in with Microsoft**, [C1](MVP-PLAN.md#c1) to
+[C3](MVP-PLAN.md#c3)). That button appears only in a build made with the
+owner's Microsoft client id (C4: the `RATA_MS_CLIENT_ID` repository
+variable, `rata-next/LAUNCH.md` §10). Until then, row 2 shows, in Add
+mailbox and before any password box, "Outlook.com, Hotmail and Live
+mailboxes cannot be added to RATA yet. …": copied exactly, that is the
+expected result for this column, and rows 3 to 20 are `n/a`. From the first
+release built with the client id, this column is no longer expected to
+fail: row 2 is **Sign in with Microsoft** (your browser opens Microsoft's
+page, then an account picker), and every row must pass like any other
+column's. Record any failure's exact text as usual.
 
 ### Set up each mailbox in webmail first
 

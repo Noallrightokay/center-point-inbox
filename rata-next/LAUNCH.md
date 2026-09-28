@@ -6,7 +6,7 @@ issue (`/api/licence`) and renewal (`/api/licence/renew`), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's nine test suites pass with `npm test` after it.
+the website's test suites pass with `npm test` after it (457 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -115,7 +115,7 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `SUPABASE_SERVICE_ROLE_KEY` | the service-role key |
 | `LICENCE_PRIVATE_KEY` | the existing key from `/etc/rata/licence.key` (step 2) |
 | `LICENCE_PUBLIC_KEY` | its public half (step 2), the same as the GitHub secret `RATA_LICENCE_PUBLIC_KEY` — renewal and the AI relay check licences with it |
-| `HEALTH_TOKEN` | any long random string, e.g. from `openssl rand -hex 24`. With it, `/api/health?token=…` says which check fails and why; without it, only which |
+| `HEALTH_TOKEN` | make it with `openssl rand -hex 32` and use it for nothing else. With it, `/api/health?token=…` says which check fails and why; without it, only which. Paste the same value into the uptime monitor's "RATA ready" check (§8) |
 | `ANTHROPIC_API_KEY` | an API key from console.anthropic.com, for the AI relay. Paste it into hPanel only — never into a chat, an issue or a commit |
 | `AI_MONTHLY_CAP_USD` | optional; what AI may cost per customer per month. Default `2` |
 | `AI_MODEL` | optional; default `claude-haiku-4-5-20251001` |
@@ -123,7 +123,6 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_DOMAIN` | **leave unset** — there is no domain add-on to sell (step 3) |
-| `APP_URL` | `https://mailrata.org` |
 
 Public — these are emitted to every visitor, which is correct for all of them:
 
@@ -139,11 +138,13 @@ Public — these are emitted to every visitor, which is correct for all of them:
 and logs why. That refusal is covered by a test, but check the browser console
 after deploying anyway.
 
-Leave unset unless you mean them: `GOOGLE_CLIENT_ID` (one-click sign-in stays
-off without it), and `STRIPE_ENTERPRISE` / `STRIPE_PRICE_ENTERPRISE`
-(Enterprise is not for sale). The Microsoft and Slack variables are gone:
-mailboxes are linked in the desktop app, and the server has no route that
-reads anybody's messages.
+Leave unset unless you mean them: `STRIPE_ENTERPRISE` /
+`STRIPE_PRICE_ENTERPRISE` (Enterprise is not for sale). Nothing reads
+`GOOGLE_CLIENT_ID` or `APP_URL` any more, and `/api/config` no longer
+publishes a Google client id to the browser; delete both from hPanel if
+they are there. The Microsoft and Slack variables are gone from the
+website: mailboxes are linked in the desktop app (Microsoft sign-in
+included, §10), and the server has no route that reads anybody's messages.
 
 ### The AI relay
 
@@ -167,6 +168,16 @@ Deploy `rata-next` to the Hostinger Node.js site, from the current branch.
 > only; `release.yml` cuts desktop installers. Neither touches the live site.
 
 The build command is `npm run build`, the start command `npm start`, Node 22.
+
+This deploy also turns on the security headers in `next.config.js`, on
+every path: `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+(no `preload`), `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
+`X-Content-Type-Options: nosniff` and
+`Referrer-Policy: strict-origin-when-cross-origin`. The live site has none
+of them until it is redeployed. Check with
+`curl -sI https://mailrata.org/ | grep -iE 'strict-transport|x-frame|frame-ancestors|nosniff|referrer'`.
+Submitting the domain for the HSTS preload list is your call: it is hard to
+undo, and nothing here asks for it.
 
 ## 6. Smoke test on the live site
 
@@ -244,12 +255,18 @@ turn it off, and the whole class goes away.
 
 ## 8. Before you sleep, not after
 
-- **Backups.** `infrastructure/backup/backup.sh`, nightly, off the box. There
-  is currently no copy of the database anywhere. At a few hundred paying
-  customers this is the largest single risk in the system, and it is an hour's
-  work.
-- **Uptime and error alerts.** Without them you find out about an outage from
-  a customer. Free at this size.
+- **Backups.** Follow `infrastructure/backup/README.md` → *Setting it up*
+  (a bucket and a key that cannot delete, an age key kept off the box, the
+  env file, the nightly cron line and its heartbeat), then do the restore
+  drill once and record it in `docs/MVP-EVIDENCE.md`. Until then there is no
+  copy of the database anywhere, which at a few hundred paying customers is
+  the largest single risk in the system. Run `database.sql` (§1) first:
+  `backup.sh` refuses a database without `ai_usage`.
+- **Uptime and alerts.** Follow `infrastructure/monitoring/README.md`: an
+  uptime monitor on `/api/health` (its "ready" check needs `HEALTH_TOKEN`
+  from §4), the backup and drill heartbeats, and Stripe's failed-delivery
+  emails reaching an inbox you read. Trigger one test alert of each kind.
+  Without them you find out about an outage from a customer.
 
 ## 9. The update key (so RATA updates itself)
 
@@ -281,6 +298,40 @@ installed before that release have no key and cannot update themselves: each
 tester installs that one release by hand, and from then on RATA offers every
 new version itself ("RATA x.y.z is ready — Restart to update").
 
+## 10. Microsoft sign-in (so Outlook and Microsoft 365 mailboxes can be added)
+
+From v0.1.39 the desktop app signs in to Outlook.com, Hotmail, Live and
+Microsoft 365 mailboxes with Microsoft's own sign-in page (OAuth), because
+Microsoft no longer accepts passwords or app passwords for IMAP. It needs a
+registration of yours at Microsoft. Without it, every build says these
+mailboxes cannot be added yet. No server is involved: the tokens stay in
+each customer's keychain.
+
+1. [entra.microsoft.com](https://entra.microsoft.com) → App registrations →
+   New registration. Supported account types: **Accounts in any
+   organizational directory and personal Microsoft accounts**. A
+   registration for personal accounts only is refused with `AADSTS9002331`.
+2. Authentication → Add a platform → **Mobile and desktop applications**,
+   redirect URI `http://127.0.0.1` (Microsoft allows any port on it, which
+   RATA needs). Turn on **Allow public client flows**. Create no client
+   secret: a desktop app cannot keep one.
+3. API permissions → Add → **Office 365 Exchange Online** → Delegated:
+   `IMAP.AccessAsUser.All` and `SMTP.Send`; and **Microsoft Graph** →
+   Delegated: `offline_access`, `openid` and `email`.
+4. Copy the **Application (client) ID**. In GitHub → the repository →
+   Settings → Secrets and variables → Actions → **Variables** (not
+   Secrets), add `RATA_MS_CLIENT_ID` with that value. It is not a secret: it
+   is compiled into every copy of the app. The next release's build picks it
+   up.
+5. A work or school account's organisation may need to grant admin consent
+   to these permissions, and to have IMAP and SMTP AUTH enabled for its
+   mailboxes, before its people can sign in.
+
+**How to tell it worked:** in the next release, Settings → Linked accounts →
+＋ Email account with an `@outlook.com` address shows **Sign in with
+Microsoft** instead of a password box, and signing in links the mailbox
+(`docs/SMOKE.md`, the Outlook column).
+
 ---
 
 ## What is deliberately not in this launch
@@ -291,8 +342,10 @@ new version itself ("RATA x.y.z is ready — Restart to update").
   there is no mail server, and the code that anticipated one went with the
   rest of the server-side mail handling. Do not create the domain add-on
   price in Stripe, and leave `STRIPE_PRICE_DOMAIN` unset.
-- **Outlook, Hotmail and Microsoft 365 mailboxes** — Microsoft requires OAuth
-  sign-in for IMAP, and RATA signs in with app passwords only.
-- **Google one-click sign-in** — no client id. Gmail still links by app
-  password, which is the path most people take anyway.
+- **Outlook, Hotmail and Microsoft 365 mailboxes, until §10 is done.** The
+  app has Sign in with Microsoft from v0.1.39, but a build without your
+  client id says these mailboxes cannot be added yet.
+- **Google one-click sign-in** — removed; nothing reads `GOOGLE_CLIENT_ID`.
+  Gmail links by app password (Google's OAuth for full mail access needs a
+  paid security assessment).
 - **The affiliate programme** — modelled, not built.

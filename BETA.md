@@ -5,8 +5,10 @@ expect, and — most importantly — how to report what breaks so it can be fixe
 the same day.
 
 **The single most useful thing you can do is connect a real mailbox.** No
-mailbox has ever been opened by this code outside a test. Whatever happens when
-you try — success or an error — is the most valuable data this project has.
+customer's mailbox has been opened by this code yet: it is tested against
+real mail servers set up for testing, but not against Gmail, Outlook or any
+other provider. Whatever happens when you try, success or an error, is the
+most valuable data this project has.
 
 ---
 
@@ -49,10 +51,16 @@ Your normal account password will be refused. Mail providers require an
 | iCloud | https://account.apple.com → Sign-In and Security → App-Specific Passwords |
 | Yahoo | Account Security → Generate app password |
 | Fastmail | Settings → Privacy & Security → App passwords |
+| Hostinger (your own domain) | hPanel → Emails → the mailbox's own password. Hostinger has no app passwords. |
 
-Outlook, Hotmail and Microsoft 365 mailboxes are not supported yet: Microsoft
-no longer lets mail apps sign in to them over IMAP with a password, even an
-app password, and requires OAuth sign-in, which RATA does not do yet.
+Outlook, Hotmail, Live and Microsoft 365 mailboxes do not use a password at
+all. Microsoft accepts only its own sign-in (OAuth) for mail apps now, so
+from v0.1.39 RATA shows **Sign in with Microsoft** instead of the password
+box: it opens Microsoft's page in your browser, and your password goes only
+to Microsoft. That button appears only once RATA's Microsoft registration
+is in the build; until then RATA says in Add mailbox that these mailboxes
+cannot be added yet. A work account may need its IT administrator to allow
+RATA first.
 
 Enter your email address and the app password. RATA works out the server
 itself. Only if it asks, enter your provider's IMAP server name
@@ -65,22 +73,44 @@ your computer.
 
 - **The password is in your OS keychain.** Windows: Credential Manager →
   Windows Credentials → look for `org.mailrata.desktop`. macOS: Keychain Access,
-  search `org.mailrata.desktop`. Linux: Seahorse / KWallet.
+  search `org.mailrata.desktop`. Linux: Seahorse / KWallet. A Microsoft
+  mailbox's entry holds a sign-in token that begins `rata-oauth2:`, not a
+  password, and a long token (usual for work accounts) also makes entries
+  under `org.mailrata.desktop.oauth-piece`.
 - **The password is NOT in RATA's own file.** Open `mailboxes.json`:
   - Windows: `%APPDATA%\org.mailrata.desktop\`
   - macOS: `~/Library/Application Support/org.mailrata.desktop/`
   - Linux: `~/.local/share/org.mailrata.desktop/`
 
-  It should list your address and server — and no password. Search it for part
-  of your app password; zero matches is correct. **If you find it, report that
-  first — it is the most serious bug possible here.**
+  It should list your address and server, and no password (a Microsoft
+  mailbox shows `"auth": "oauth"` and no token). Search it for part of your
+  app password; zero matches is correct. **If you find it, report that
+  first: it is the most serious bug possible here.** This file also holds
+  your licence key, so never paste it, attach it or screenshot it anywhere.
 
-And one more: **Remove** a mailbox in Accounts, then check the keychain entry is
-gone too.
+And one more: in **Settings → Linked accounts**, press **Remove** on a
+mailbox, then check its keychain entry is gone too (for a Microsoft mailbox,
+the `oauth-piece` entries as well).
 
 ## 5. What works, and what doesn't yet
 
 Don't spend time reporting these — they are known and planned:
+
+- **Microsoft mailboxes** (Outlook.com, Hotmail, Live, Microsoft 365) can
+  be added only in a build that has RATA's Microsoft registration; in one
+  without it, Add mailbox says they cannot be added yet. Until a release
+  note says Sign in with Microsoft is switched on, that message is expected.
+- **v0.1.39:** Microsoft mailboxes get **Sign in with Microsoft** (above),
+  and if one later needs you again its row in Settings says **Sign in to
+  Microsoft again**. A message RATA cannot read no longer stops a refresh:
+  the rest of your mail arrives, and that one is listed with a sentence
+  saying RATA could not read it; opening it asks for it again. **Archive**
+  now works on providers whose Archive folder is only named "Archive"
+  (before, RATA showed the folder but would not archive into it); on Gmail,
+  a label called exactly "Archive" is now where Archive files mail. When
+  you type your server's address yourself and it fails, RATA now says why,
+  for example that the server's certificate could not be trusted. Copy any
+  such sentence exactly into your report, with the provider.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
@@ -229,6 +259,9 @@ Open an issue with the **Beta bug** template:
 Your own email address is fine to include if you are comfortable with that; if
 not, replace it with `me@<provider>` — the provider is the useful part.
 
+Running the full check on real mailboxes, provider by provider? Follow
+`docs/SMOKE.md` and record the results in `docs/MVP-EVIDENCE.md`.
+
 What makes a report fixable in minutes rather than days:
 
 1. **The exact error text**, copied, not paraphrased. RATA's errors are written
@@ -246,15 +279,15 @@ Start with `README.md` (layout, build, the traps) and `CLAUDE.md` (current
 state and the rules of the road). Short version:
 
 ```bash
-# mail engine — no network needed
-cd desktop/rata-mail && cargo test
+# mail engine, no network needed
+cd desktop/rata-mail && cargo test --all-targets
 
 # desktop app — sync-ui.sh FIRST, every time
 cd desktop/rata-app && ./sync-ui.sh && cd src-tauri && cargo test
 cargo tauri dev          # run it (from desktop/rata-app)
 
-# website
-cd rata-next && npm ci && npm test
+# website (npm test reads the build)
+cd rata-next && npm ci && npm run build && npm test
 ```
 
 Rust 1.94.1. On Linux you also need
