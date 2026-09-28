@@ -185,6 +185,7 @@
         flags: res.flags || [],
         gaps: res.gaps || [],
         drafts: res.drafts || [],
+        archives: res.archives || [],
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };

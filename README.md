@@ -236,8 +236,9 @@ it, new versions are a download from the releases page.
   begun on a phone or in webmail is under **Drafts** and opens with
   **Continue**; once sent from RATA, its copy goes to the Trash. What you
   write in RATA stays in RATA until it is sent. There is Cc and Reply all
-  (v0.1.32) and Bcc (v0.1.33). Gmail's archive is not shown (Gmail keeps archived mail in "All
-  Mail", which also holds everything else). The inbox, Sent, Archive, Spam
+  (v0.1.32) and Bcc (v0.1.33). Gmail's archive is shown from v0.1.38: Gmail
+  keeps archived mail in "All Mail" with everything else, so RATA asks Gmail
+  which of it is archived. The inbox, Sent, Archive, Spam
   and Drafts are read on every refresh; your own folders (Gmail
   labels included) are listed under **Folders** and read when you open one,
   and **Move to** files a message into one. Mail sent from RATA appears in

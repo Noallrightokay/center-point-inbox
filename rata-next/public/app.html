@@ -3991,6 +3991,37 @@ function dropVanishedDrafts(list){
   }
   if(selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
 }
+/* Gmail's archive (0.1.38) is All Mail searched for what is archived, and a
+   message archived there keeps the number it arrived with, so "newer than
+   the newest held" never brings it. Each refresh lists what is archived from
+   `floor` up. A message RATA holds there that is not listed has left the
+   archive (back to the inbox, or deleted, elsewhere) and goes, not through
+   S.gone; one listed that RATA does not hold, among the numbers it already
+   covers, was archived since and is fetched, a page a mailbox a refresh.
+   Below the oldest one held is what Load older mail is for. Resolves to the
+   messages fetched, for absorbMail to take in like any other. */
+async function settleArchives(list){
+  const got=[];
+  for(const a of (list||[])){
+    if(!a||!a.email||!Array.isArray(a.uids)||!a.uidvalidity)continue;
+    const email=String(a.email).toLowerCase(),listed=new Set(a.uids);
+    const mine=m=>folderOf(m)==='archive'&&mailEmailOf(m)===email&&m.uidvalidity===a.uidvalidity&&!!m.uid;
+    /* The range RATA covers is taken before anything leaves it: if the
+       oldest one held is what left, mail archived just above it still counts. */
+    const before=S.messages.filter(mine);
+    S.messages=S.messages.filter(m=>!(mine(m)&&m.uid>=a.floor&&!listed.has(m.uid)));
+    if(!before.length||!window.__RATA_NATIVE__)continue;
+    const low=Math.min(...before.map(m=>m.uid)),have=new Set(S.messages.filter(mine).map(m=>m.uid));
+    const want=a.uids.filter(u=>u>=low&&!have.has(u)).sort((x,y)=>y-x).slice(0,REREAD_PAGE);
+    if(!want.length)continue;
+    let r;
+    try{r=await apiFetch('/api/mail/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:a.email,folder:'archive',uids:want,uidvalidity:a.uidvalidity})})}
+    catch(e){continue}
+    if(r&&!r.error)got.push(...(r.messages||[]));
+  }
+  if(selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
+  return got;
+}
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
    says so by name rather than sinking the whole refresh. */
@@ -4022,8 +4053,8 @@ async function absorbMail(res,quiet){
     const byId=new Map(S.messages.map(m=>[m.id,m]));
     for(const f of res.flags){const have=byId.get(f.id);if(have){have.unread=!!f.unread;have.starred=!!f.starred}}
   }
-  for(const m of (res.messages||[])){
-    if(isGone(m.id))continue;
+  const take=m=>{
+    if(isGone(m.id))return;
     /* A message sent from RATA, now back from the Sent folder the provider
        filed it in: the server's copy takes the place of RATA's own record,
        rather than the list showing it twice. */
@@ -4032,11 +4063,14 @@ async function absorbMail(res,quiet){
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
-    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;continue}
+    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));
     if(inInbox(m))added++;
     newIds.push(m.id);
-  }
+  };
+  (res.messages||[]).forEach(take);
+  /* After this refresh's own mail is in, so what it brought counts as held. */
+  (await settleArchives(res.archives)).forEach(take);
   save();
   setTimeout(upgradeBodies,0);
   const stuck=(res.partial||[]).filter(f=>f.needsRelink).map(f=>f.email);

@@ -45,9 +45,9 @@ pub use discover::{
 };
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
-    Account, Acted, Action, Fetched, Flags, Folder, Gap, IDLE_FOR, Known, Listed, Message, Newest,
-    OwnFolder, Verified, Verify, Watch, Watched, Whole, act, fetch_folder, fetch_newest,
-    fetch_older, fetch_uids, fetch_whole, list_folders, verify, watch,
+    ARCHIVE_WINDOW, Account, Acted, Action, Archived, Fetched, Flags, Folder, Gap, IDLE_FOR, Known,
+    Listed, Message, Newest, OwnFolder, Verified, Verify, Watch, Watched, Whole, act, fetch_folder,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify, watch,
 };
 pub use key::{domain_of, mail_key};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
