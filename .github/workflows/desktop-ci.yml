@@ -66,6 +66,74 @@ jobs:
       - name: Tests
         run: cargo test --all-targets
 
+  # The mail layer against real servers: Dovecot for IMAP and GreenMail as the
+  # SMTP sink, on this machine, with TLS verified against a CA made for the run
+  # (tests/loopback/servers.sh). Everything above talks to scripted servers,
+  # which only ever say what their author expected; the first real server that
+  # behaves differently should be this one, not a customer's.
+  loopback:
+    name: Mail layer against real servers
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop/rata-mail
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-mail
+
+      # The feature lets the outbound guard connect to 127.0.0.1. It must be
+      # impossible to ship: a release build with it on has to fail, and fail
+      # for that reason rather than any other.
+      - name: The loopback feature cannot build for release
+        env:
+          # Plain text, so the message can be matched and shown.
+          CARGO_TERM_COLOR: never
+        run: |
+          if cargo build --release --features loopback-tests 2> release.log; then
+            echo "::error::a release build with loopback-tests compiled"
+            exit 1
+          fi
+          if ! grep -q "must never be on in a release build" release.log; then
+            cat release.log
+            echo "::error::the release build failed, but not on the loopback-tests gate"
+            exit 1
+          fi
+          echo "Refused, as it must be:"
+          grep -m1 -A2 "must never be on in a release build" release.log
+
+      - name: Clippy, with the feature
+        run: cargo clippy --all-targets --features loopback-tests -- -D warnings
+
+      # Installing the package starts the system's own Dovecot on 143 and 993;
+      # servers.sh runs one of its own there instead.
+      - name: Install Dovecot
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dovecot-imapd
+          sudo systemctl stop dovecot
+          java -version
+
+      - name: Start the servers
+        run: sudo env "PATH=$PATH" tests/loopback/servers.sh start "$RUNNER_TEMP/rata-lb"
+
+      - name: Tests against the servers
+        env:
+          SSL_CERT_FILE: ${{ runner.temp }}/rata-lb/ca.crt
+        run: cargo test --features loopback-tests --test loopback
+
+      - name: Server logs
+        if: failure()
+        run: sudo tail -n 80 "$RUNNER_TEMP/rata-lb/dovecot.log" "$RUNNER_TEMP/rata-lb/greenmail.log" || true
+
   # The shell. Needs the system webview, and needs ui/ to exist before
   # tauri-build reads the config — which also means sync-ui.sh runs here, so its
   # three anchor checks against rata-next/public are part of CI rather than
