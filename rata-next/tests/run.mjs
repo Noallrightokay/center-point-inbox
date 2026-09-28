@@ -2,6 +2,7 @@
    already run — CI builds first, and so should you locally. */
 const SUITES = [
   ['config route',       './config-route.test.mjs'],
+  ['security headers',   './headers.test.mjs'],
   ['Stripe webhook',     './stripe.test.mjs'],
   ['plans',              './plan.test.mjs'],
   ['account deletion',   './account-delete.test.mjs'],
