@@ -3,14 +3,20 @@ import { admin } from '../../../lib/server';
 import { check } from '../../../lib/licence';
 import { planDef } from '../../../lib/plan';
 import { corsHeaders, preflight } from '../../../lib/cors';
-import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate } from '../../../lib/ai';
+import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
 
 export const dynamic = 'force-dynamic';
 
 /* Summaries, translation and task flags for the desktop app. See lib/ai.js
    for the rules; in short: the licence is the credential, the plan decides
-   what is allowed, every request is charged against the customer's monthly
-   allowance, and no text is ever written anywhere. */
+   what is allowed, every request holds its worst-case cost against the
+   customer's monthly allowance before it is sent and is settled to the real
+   cost after, and no text is ever written anywhere. */
+/* PostgREST's "no such function" (PGRST202) and Postgres's own (42883): a
+   deploy whose database has not had section 5 of database.sql run since the
+   reservation functions were added. */
+const missingFunction = (e) => e && (e.code === 'PGRST202' || e.code === '42883');
+
 export function OPTIONS(req) {
   return preflight(req);
 }
@@ -45,18 +51,42 @@ export async function POST(req) {
 
   if (tooFast(who)) return reply({ error: 'Too many AI requests at once — try again in a minute.', reason: 'rate' }, 429);
 
-  /* The month's spending so far. Refused before anything is sent when it is
-     used up; a request already running when the cap is reached is still
-     charged, which is the most it can go over by. */
+  /* The month's allowance. The most this request could cost is held against
+     it before anything is sent, in one statement that refuses when the hold
+     would pass the cap — so requests arriving together cannot all fit under
+     it on the same reading. No answer from the database means no request to
+     the model: the cap fails closed. */
+  const p = prompt(asked.task, asked.input);
   const month = monthOf();
   const cap = MONTHLY_CAP_MICRO();
-  const { data: spent, error: readErr } = await sb.rpc('ai_spent', { p_email: who, p_month: month });
-  if (readErr) { console.warn('ai: could not read spending', readErr.message); return reply({ error: 'AI is unavailable right now.' }, 503); }
-  if (Number(spent) >= cap) {
+  const hold = worstCaseMicro(p);
+  const call = async (fn, args) => {
+    try { return await sb.rpc(fn, args); } catch (e) { return { data: null, error: { message: (e && e.name) || 'unreachable' } }; }
+  };
+  const { data: held, error: holdErr } = await call('ai_reserve', { p_email: who, p_month: month, p_micro: hold, p_cap: cap });
+  if (holdErr) {
+    if (missingFunction(holdErr)) {
+      console.warn('ai: the database has no ai_reserve function; run section 5 of rata-next/database.sql');
+      return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
+    }
+    console.warn('ai: could not reserve spending', holdErr.code || holdErr.message);
+    return reply({ error: 'AI is unavailable right now.' }, 503);
+  }
+  if (held === null || held === undefined) {
     return reply({ error: 'This month’s AI allowance is used up. It starts again on the 1st.', reason: 'allowance', used: 1 }, 429);
   }
 
-  const p = prompt(asked.task, asked.input);
+  /* Moves the hold to what was actually spent: back down by the difference,
+     or all of it when the model never answered. If this fails the larger
+     hold stays: the month is over-counted by at most this request's worst
+     case, and the cap is never passed. */
+  const settle = async (delta) => {
+    if (!delta) return Number(held);
+    const { data, error } = await call('ai_settle', { p_email: who, p_month: month, p_delta: delta });
+    if (error) { console.warn('ai: could not settle spending', error.code || error.message); return null; }
+    return data;
+  };
+
   let r, d;
   try {
     r = await fetch(API_URL(), {
@@ -69,17 +99,17 @@ export async function POST(req) {
   } catch (e) {
     /* The reason, never the text. */
     console.warn('ai: upstream unreachable', e && e.name);
+    await settle(-hold);
     return reply({ error: 'The AI service could not be reached. Try again shortly.' }, 502);
   }
   if (!r.ok) {
     console.warn('ai: upstream refused', r.status, d && d.error && d.error.type);
+    await settle(-hold);
     return reply({ error: 'The AI service could not answer. Try again shortly.' }, 502);
   }
 
-  const cost = costMicro(d.usage);
-  const { data: total, error: chargeErr } = await sb.rpc('ai_charge', { p_email: who, p_month: month, p_micro: cost });
-  if (chargeErr) console.warn('ai: could not record spending', chargeErr.message);
-  const used = Math.min(1, Number(total ?? (Number(spent) + cost)) / cap);
+  const total = await settle(costMicro(d.usage) - hold);
+  const used = Math.min(1, Number(total ?? held) / cap);
 
   const text = (Array.isArray(d.content) ? d.content : []).filter(c => c && c.type === 'text').map(c => c.text).join('').trim();
   if (asked.task === 'tasks') {

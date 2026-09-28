@@ -9,10 +9,14 @@
    - Passed through, never kept. No text goes to a log, a database or a disk.
      What is recorded is how much each customer's requests cost, in
      millionths of a dollar, so that a month's spending can be capped.
-   - Paid for by RATA, within a budget. Every request is charged at what the
-     model actually used, and a customer whose month has cost AI_MONTHLY_CAP_USD
-     is told the allowance is used up until the 1st. That is what keeps AI a
-     fixed operating cost per customer instead of an open-ended one.
+   - Paid for by RATA, within a budget. Before the model is called, the most
+     a request could cost is held against the customer's month, in one
+     database statement that refuses when the hold would pass
+     AI_MONTHLY_CAP_USD, so requests arriving together cannot all slip under
+     the cap. Afterwards the hold is settled to what the model actually used
+     (or released, if it never answered). If the database cannot be asked,
+     nothing is sent. That is what keeps AI a fixed operating cost per
+     customer instead of an open-ended one.
    - Mail is untrusted. Every prompt says the email is data to be described,
      never instructions to follow, and every answer is plain text (or strictly
      checked JSON) that the app shows as text.
@@ -167,11 +171,24 @@ export function costMicro(usage) {
   return Math.ceil(inT * PRICE_IN() + outT * PRICE_OUT());
 }
 
+/* The most a request could cost, in millionths of a dollar, before the model
+   has said: every byte of the prompt counted as a token (a token is never
+   shorter than one byte, so this is never an underestimate however the text
+   tokenises), plus a margin for the message framing, and max_tokens of
+   output. It is what the relay holds against the month before calling. */
+export const FRAME_TOKENS = 64;
+const utf8 = new TextEncoder();
+export function worstCaseMicro(p) {
+  const inT = utf8.encode(String(p.system || '')).length + utf8.encode(String(p.user || '')).length + FRAME_TOKENS;
+  const outT = Math.max(0, Number(p.max_tokens) || 0);
+  return Math.ceil(inT * PRICE_IN() + outT * PRICE_OUT());
+}
+
 export const monthOf = (now = Date.now()) => new Date(now).toISOString().slice(0, 7);
 
-/* A per-process brake on bursts, so a runaway client cannot fire a hundred
-   requests before the first is charged. The monthly cap is the real limit;
-   this only bounds how far past it concurrent requests could land. */
+/* A per-process brake on bursts, so a runaway client cannot tie up the
+   relay. The monthly cap is the real limit, and it holds on its own: every
+   request reserves its worst case against the cap before it is sent. */
 const recent = new Map();
 export function tooFast(who, now = Date.now()) {
   const since = now - 60_000;

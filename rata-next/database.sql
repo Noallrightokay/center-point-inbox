@@ -132,9 +132,14 @@ create index if not exists subscriptions_status_idx
 --    address, a month and a number — never any text: the mail
 --    passes through the relay and is not written anywhere.
 --
---    Only the server (service role) touches it, through the two
+--    Only the server (service role) touches it, through the
 --    functions below; no policy lets a signed-in user read or
---    write it.
+--    write it. The relay uses ai_reserve and ai_settle: it holds
+--    a request's worst-case cost before calling the model, and
+--    refuses when that would pass the cap, in one statement, so
+--    requests arriving together cannot all slip under it. Then it
+--    settles to what the model actually used. ai_spent and
+--    ai_charge are what older deploys call; they stay.
 -- ------------------------------------------------------------
 create table if not exists public.ai_usage (
   email text not null,
@@ -153,6 +158,7 @@ returns bigint language sql stable security definer set search_path = public as 
 $$;
 
 -- One statement, so two requests finishing together cannot lose a charge.
+-- (Used by deploys before the reservation below; kept for them.)
 create or replace function public.ai_charge(p_email text, p_month text, p_micro bigint)
 returns bigint language sql security definer set search_path = public as $$
   insert into public.ai_usage (email, month, micro_usd, requests)
@@ -168,3 +174,41 @@ revoke all on function public.ai_spent(text, text) from public, anon, authentica
 revoke all on function public.ai_charge(text, text, bigint) from public, anon, authenticated;
 grant execute on function public.ai_spent(text, text) to service_role;
 grant execute on function public.ai_charge(text, text, bigint) to service_role;
+
+-- Holds p_micro against the month's total, but only if the total
+-- stays within p_cap. One statement: the row is locked by the
+-- upsert and the WHERE is judged against its latest value, so two
+-- requests arriving together cannot both fit under the cap on the
+-- same reading. The first request of a month takes the insert
+-- path, which the SELECT's WHERE holds to the cap as well. Returns
+-- the new total, or NULL (no row) when refused.
+create or replace function public.ai_reserve(p_email text, p_month text, p_micro bigint, p_cap bigint)
+returns bigint language sql security definer set search_path = public as $$
+  insert into public.ai_usage (email, month, micro_usd, requests)
+  select p_email, p_month, greatest(p_micro, 0), 1
+  where greatest(p_micro, 0) <= p_cap
+  on conflict (email, month) do update
+    set micro_usd = public.ai_usage.micro_usd + excluded.micro_usd,
+        requests = public.ai_usage.requests + 1,
+        updated_at = now()
+    where public.ai_usage.micro_usd + excluded.micro_usd <= p_cap
+  returning micro_usd;
+$$;
+
+-- Corrects a reservation once the real cost is known: p_delta is
+-- actual minus reserved (usually negative), or minus the whole
+-- reservation when the model never answered. Never below zero.
+-- Returns the new total, or NULL if there is no row to settle.
+create or replace function public.ai_settle(p_email text, p_month text, p_delta bigint)
+returns bigint language sql security definer set search_path = public as $$
+  update public.ai_usage
+    set micro_usd = greatest(micro_usd + p_delta, 0),
+        updated_at = now()
+    where email = p_email and month = p_month
+  returning micro_usd;
+$$;
+
+revoke all on function public.ai_reserve(text, text, bigint, bigint) from public, anon, authenticated;
+revoke all on function public.ai_settle(text, text, bigint) from public, anon, authenticated;
+grant execute on function public.ai_reserve(text, text, bigint, bigint) to service_role;
+grant execute on function public.ai_settle(text, text, bigint) to service_role;
