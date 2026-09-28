@@ -260,6 +260,7 @@ button.att-card{border:0;font:inherit;color:inherit;cursor:pointer;text-align:le
 .att-conv:disabled{opacity:.6;cursor:default}
 button.att-card:hover{background:var(--tint-soft)}
 button.att-card:disabled{opacity:.6;cursor:progress}
+.att-warn{font-size:11.5px;font-weight:600;color:var(--red);background:var(--red-soft);padding:2px 7px;border-radius:5px;white-space:nowrap}
 .md-back{display:none}
 
 /* ---------- people thread ---------- */
@@ -521,6 +522,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .link-host{font-size:20px;font-weight:700;overflow-wrap:anywhere;margin:2px 0 6px}
 .link-url{font:12px/1.45 var(--mono);color:var(--slate);background:var(--fill-2);border-radius:var(--r-sm);padding:8px 10px;overflow-wrap:anywhere;max-height:88px;overflow:auto}
 .link-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+#warn-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:61;align-items:center;justify-content:center;padding:20px}
+#warn-ov.open{display:flex}
+#warn-card{width:min(480px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
+#warn-card h2{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35}
 .md-content a.md-link{color:var(--tint-deep);text-decoration:underline;overflow-wrap:anywhere}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
@@ -949,6 +954,16 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <div class="link-url" id="link-url"></div>
     <p class="link-lead">The words of a link in an email can say anything. If this is not the site you expected, do not open it.</p>
     <div class="link-btns"><button class="btn" id="link-cancel">Cancel</button><button class="btn primary" id="link-open">Open in browser</button></div>
+  </div>
+</div>
+
+<!-- Saving a program named to look like a document (invoice.pdf.exe) -->
+<div id="warn-ov" role="alertdialog" aria-modal="true" aria-labelledby="warn-title" aria-describedby="warn-lead">
+  <div id="warn-card">
+    <h2 id="warn-title"></h2>
+    <div class="link-url" id="warn-name"></div>
+    <p class="link-lead" id="warn-lead"></p>
+    <div class="link-btns"><button class="btn" id="warn-cancel">Cancel</button><button class="btn danger" id="warn-go"></button></div>
   </div>
 </div>
 
@@ -1545,16 +1560,56 @@ async function openWhole(m){
   const have=S.messages.find(x=>x.id===m.id);
   if(have){have.atts=r.atts||[];have.html=!!r.html;save();renderMail()}
 }
+/* A program named to look like a document: invoice.pdf.exe, which Windows
+   shows as invoice.pdf while it hides extensions, as it does by default. The
+   app marks it (rata_mail::names::looks_disguised, `disguised` on the
+   attachment); the page labels it and asks before saving or converting it,
+   and Rust refuses either without `confirmed` (kind needs-confirmation), so
+   skipping the question here saves nothing. Only disguised names are asked
+   about; a program that says what it is (setup.exe) is not. */
+const DISGUISED_AS={pdf:'a PDF',doc:'a Word document',docx:'a Word document',xls:'a spreadsheet',xlsx:'a spreadsheet',ppt:'a presentation',pptx:'a presentation',jpg:'a picture',jpeg:'a picture',png:'a picture',gif:'a picture',txt:'a text file',zip:'a zip file'};
+function disguiseOf(name){
+  const parts=String(name||'').replace(/[\s.]+$/,'').split('.').map(x=>x.trim().toLowerCase());
+  const ext=parts.length>2?parts[parts.length-1].replace(/[^a-z0-9]/g,'').slice(0,10):'';
+  const doc=parts.length>2?parts[parts.length-2]:'';
+  return {ext,looks:DISGUISED_AS[doc]||'a document',shown:ext?String(name).replace(/[\s.]+$/,'').replace(/\s*\.[^.]*$/,''):''};
+}
+const disguiseLabel=a=>{const d=disguiseOf(a.n);return 'a program'+(d.ext?' (.'+d.ext+')':'')+', not '+d.looks};
+let WARN_DONE=null;
+function askDisguised(a,saving){
+  if(WARN_DONE)closeWarn(false);
+  const d=disguiseOf(a.n);
+  $('#warn-title').textContent='This file is a program'+(d.ext?' (.'+d.ext+')':'')+' named to look like a document. '+(saving?'Save it anyway?':'Open it in the Format Bridge anyway?');
+  $('#warn-name').textContent=a.n;
+  $('#warn-lead').textContent=(d.shown?'Windows can show its name as '+d.shown+', and opening it would run it. ':'Opening it would run it. ')+'Go ahead only if you expected a program from this sender.';
+  $('#warn-go').textContent=saving?'Save anyway':'Open anyway';
+  $('#warn-ov').classList.add('open');
+  $('#warn-cancel').focus();
+  return new Promise(res=>{WARN_DONE=res});
+}
+function closeWarn(yes){const done=WARN_DONE;WARN_DONE=null;$('#warn-ov').classList.remove('open');if(done)done(yes===true)}
+$('#warn-cancel').onclick=()=>closeWarn(false);
+$('#warn-go').onclick=()=>closeWarn(true);
+$('#warn-ov').addEventListener('click',e=>{if(e.target.id==='warn-ov')closeWarn(false)});
+/* Cancel is the default: Escape cancels, and so does Enter anywhere but on
+   the confirming button itself. Nothing behind the question hears the key. */
+window.addEventListener('keydown',e=>{
+  if(!WARN_DONE)return;
+  if(e.key==='Escape'||(e.key==='Enter'&&document.activeElement!==$('#warn-go'))){e.preventDefault();e.stopPropagation();closeWarn(false)}
+},true);
 /* An attachment goes to the Downloads folder and is never opened by RATA:
    it is a stranger's file, and running it is the customer's decision. */
-async function saveAttachment(m,a,btn){
+async function saveAttachment(m,a,btn,confirmed){
   if(!a)return;
+  if(a.disguised&&!confirmed){if(!await askDisguised(a,true))return;confirmed=true}
   if(btn)btn.disabled=true;
   let r;
-  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:!!confirmed})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected)btn.disabled=false;
-  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path);toast('Saved to '+r.path)}
+  /* Listed by a build that did not mark disguises: Rust knows, so ask now. */
+  if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){a.disguised=true;return saveAttachment(m,a,btn)}
+  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path+(confirmed?' (a program named as a document, saved after asking)':''));toast('Saved to '+r.path)}
   else toast('Could not save '+a.n+' \u2014 '+((r&&r.error)||'try again'));
 }
 /* An attachment straight into the Format Bridge: the app fetches it from the
@@ -1562,13 +1617,15 @@ async function saveAttachment(m,a,btn){
    saved on the way, and the file is read by the same readers as one dropped
    in. Only for kinds the Bridge can read. */
 const bridgeable=a=>!!(a&&a.n&&BR_KINDS[String(a.n).split('.').pop().toLowerCase()]);
-async function convertAttachment(m,a,btn){
+async function convertAttachment(m,a,btn,confirmed){
   if(!a)return;
+  if(a.disguised&&!confirmed){if(!await askDisguised(a,false))return;confirmed=true}
   if(btn){btn.disabled=true;btn.textContent='Opening\u2026'}
   let r;
-  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i})})}
+  try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:!!confirmed})})}
   catch(e){r={ok:false,error:String(e&&e.message||e)}}
   if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Convert'}
+  if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){a.disguised=true;return convertAttachment(m,a,btn)}
   if(!r||!r.ok){toast('Could not open '+a.n+' \u2014 '+((r&&r.error)||'try again'));return}
   const bin=atob(r.data),bytes=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
@@ -2516,8 +2573,8 @@ function openMail(id){
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
-      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}</span>`
-      :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
+      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}</span>`
+      :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
   $('#md-person')&&($('#md-person').onclick=()=>{go('people');openPerson(c.id)});

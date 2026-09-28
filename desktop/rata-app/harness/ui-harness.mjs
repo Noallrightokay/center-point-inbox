@@ -141,9 +141,15 @@ const MOCK = ({ licensed, ms }) => {
         M.opened = (M.opened || []).concat([args.url]);
         if (!/^https?:\/\//i.test(args.url)) throw 'RATA only opens web addresses (http and https).';
         return null;
-      case 'save_attachment':
+      case 'save_attachment': {
         M.saved = (M.saved || []).concat([args]);
-        return { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760 };
+        /* As core::save_attachment: a program named as a document (judged
+           from the mailbox's copy, M.disguisedAt) needs `confirmed`. */
+        const name = (M.openAtts || []).find((a) => a.index === args.index)?.name;
+        if ((M.disguisedAt || []).includes(args.index) && args.confirmed !== true)
+          throw { email: args.email, kind: 'needs-confirmation', error: name + ' is a program (.exe) named to look like a document. RATA saves it only after you say so.' };
+        return name ? { path: '/home/me/Downloads/' + name, name, size: 4 } : { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760 };
+      }
       case 'send_mail':
         M.sent = M.sent || [];
         M.sent.push(args.draft);
@@ -745,6 +751,103 @@ console.log('\n— Sign in with Microsoft (C2/C3) —');
   await pg.waitForFunction(() => { const l = S.linked.find((x) => x.label === 'someone@outlook.com'); return l && !l.needsRelink && !SYNCING; }, null, { timeout: 5000 }).catch(() => {});
   const back = await pg.evaluate(() => { const l = S.linked.find((x) => x.label === 'someone@outlook.com'); return { needs: !!l.needsRelink, signIn: l.signIn || null, status: l.status }; });
   check(!back.needs && !back.signIn && back.status === 'live', `signing in again clears the parked state: ${JSON.stringify(back)}`);
+  await pg.close();
+}
+
+console.log('\n— a program named to look like a document is labelled, and asked about before saving —');
+{
+  /* UI-1: invoice.pdf.exe shows as invoice.pdf in Windows. The engine marks
+     it (`disguised`), the page labels it and asks, and Rust refuses to save it
+     without `confirmed`. A document, or a program that says so, is not asked
+     about. */
+  const pg = await open(true);
+  const atts = [
+    { index: 1, name: 'invoice.pdf.exe', mime: 'application/octet-stream', size: 4, disguised: true },
+    { index: 2, name: 'invoice.pdf', mime: 'application/pdf', size: 9, disguised: false },
+    { index: 3, name: 'setup.exe', mime: 'application/octet-stream', size: 4, disguised: false },
+  ];
+  await pg.evaluate(async (atts) => {
+    __mock.openAtts = atts; __mock.disguisedAt = [1];
+    __mock.refresh = { messages: [{ id: 'me@example.com_90', folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+      from_name: 'Billing', from_addr: 'billing@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Your invoice', preview: 'Please see the attached report.',
+      body: 'Please see the attached report.', ts: Date.now(), unread: true, starred: false, uid: 90, uidvalidity: 7, message_id: 'inv90@example.org',
+      reply_to: '', truncated: false, attachments: atts, html: false }], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    go('inbox'); openMail(S.messages.find((m) => m.uid === 90).id);
+  }, atts);
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'open_message') && document.querySelectorAll('#mail-detail [data-att]').length === 3, null, { timeout: 5000 }).catch(() => {});
+  const shown = await pg.evaluate(() => [...document.querySelectorAll('#mail-detail [data-att]')].map((b) => ({ text: b.textContent, warn: b.querySelector('.att-warn')?.textContent || null })));
+  check(shown.length === 3 && shown[0].warn === 'a program (.exe), not a PDF' && shown[1].warn === null && shown[2].warn === null,
+    `only invoice.pdf.exe is labelled, and the label says what it is: ${JSON.stringify(shown)}`);
+  const saves = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'save_attachment').map(([, a]) => ({ index: a.index, confirmed: a.confirmed })));
+  const ask = async () => {
+    await pg.click('#mail-detail [data-att="0"]');
+    await pg.waitForSelector('#warn-ov.open', { timeout: 3000 }).catch(() => {});
+    return pg.evaluate(() => ({ open: document.querySelector('#warn-ov').classList.contains('open'), title: document.querySelector('#warn-title').textContent,
+      name: document.querySelector('#warn-name').textContent, lead: document.querySelector('#warn-lead').textContent, go: document.querySelector('#warn-go').textContent,
+      goDanger: document.querySelector('#warn-go').classList.contains('danger'), focus: document.activeElement && document.activeElement.id }));
+  };
+  let q = await ask();
+  check(q.open && q.title === 'This file is a program (.exe) named to look like a document. Save it anyway?' && q.name === 'invoice.pdf.exe' && q.go === 'Save anyway' && q.goDanger && q.focus === 'warn-cancel',
+    `Save asks first, with Cancel focused and only "Save anyway" in danger colour: ${JSON.stringify(q)}`);
+  check(!/—|!/.test(q.title + q.lead + q.go), `the question has no em dash or exclamation mark: ${q.lead}`);
+  if (process.env.UI1_SHOTS) await pg.screenshot({ path: process.env.UI1_SHOTS + '/ui1-question.png' });
+  await pg.keyboard.press('Escape');
+  let closed = await pg.evaluate(() => !document.querySelector('#warn-ov').classList.contains('open'));
+  check(closed && (await saves()).length === 0, `Escape cancels and saves nothing: ${JSON.stringify(await saves())}`);
+  q = await ask();
+  await pg.keyboard.press('Enter');
+  closed = await pg.evaluate(() => !document.querySelector('#warn-ov').classList.contains('open'));
+  check(q.open && closed && (await saves()).length === 0, `Enter cancels too (Cancel is the default): ${JSON.stringify(await saves())}`);
+  q = await ask();
+  await pg.click('#warn-cancel');
+  check(q.open && (await saves()).length === 0, `Cancel saves nothing: ${JSON.stringify(await saves())}`);
+  q = await ask();
+  await pg.click('#warn-go');
+  await pg.waitForFunction(() => window.__toasts.some((t) => /^Saved to /.test(t)), null, { timeout: 3000 }).catch(() => {});
+  let s = await saves();
+  check(s.length === 1 && s[0].index === 1 && s[0].confirmed === true, `"Save anyway" saves, saying the customer confirmed: ${JSON.stringify(s)}`);
+  check((await toasts(pg)).includes('Saved to /home/me/Downloads/invoice.pdf.exe'), 'and says where it went');
+  // A document and a program that says what it is: no question.
+  await pg.click('#mail-detail [data-att="1"]');
+  await pg.click('#mail-detail [data-att="2"]');
+  await pg.waitForFunction(() => __mock.calls.filter(([c]) => c === 'save_attachment').length === 3, null, { timeout: 3000 }).catch(() => {});
+  s = await saves();
+  const asked = await pg.evaluate(() => document.querySelector('#warn-ov').classList.contains('open'));
+  check(!asked && s.length === 3 && s[1].index === 2 && s[1].confirmed === false && s[2].index === 3 && s[2].confirmed === false,
+    `invoice.pdf and setup.exe save without asking: ${JSON.stringify(s)}`);
+  if (process.env.UI1_SHOTS) {
+    await pg.evaluate(() => { __mock.calls.length = 0; });
+    await pg.screenshot({ path: process.env.UI1_SHOTS + '/ui1-label.png' });
+  }
+  // Listed by a build that did not mark it: the page learns from Rust's
+  // refusal and asks, rather than failing or saving.
+  await pg.evaluate(() => {
+    const m = S.messages.find((x) => x.uid === 90);
+    OPENED.delete(m.id); m.atts.forEach((a) => { delete a.disguised; });
+    __mock.openFails = true; __mock.calls.length = 0; openMail(m.id);
+  });
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail [data-att]').length === 3, null, { timeout: 3000 }).catch(() => {});
+  const unlabelled = await pg.evaluate(() => document.querySelector('#mail-detail [data-att="0"] .att-warn'));
+  await pg.click('#mail-detail [data-att="0"]');
+  await pg.waitForSelector('#warn-ov.open', { timeout: 3000 }).catch(() => {});
+  q = await pg.evaluate(() => ({ open: document.querySelector('#warn-ov').classList.contains('open'), title: document.querySelector('#warn-title').textContent }));
+  s = await saves();
+  check(unlabelled === null && q.open && /Save it anyway\?$/.test(q.title) && s.length === 1 && s[0].confirmed === false,
+    `an unmarked disguise is refused by Rust, and the page asks then: ${JSON.stringify({ q, s })}`);
+  await pg.click('#warn-go');
+  await pg.waitForFunction(() => __mock.calls.filter(([c]) => c === 'save_attachment').length === 2, null, { timeout: 3000 }).catch(() => {});
+  s = await saves();
+  check(s.length === 2 && s[1].confirmed === true, `and "Save anyway" then saves it: ${JSON.stringify(s)}`);
+  // Convert asks the same way (the button shows only for kinds the Bridge
+  // reads, which a disguised name never ends in, so it is called directly).
+  await pg.evaluate(() => { __mock.calls.length = 0; const m = S.messages.find((x) => x.uid === 90); window.__conv = convertAttachment(m, { i: 1, n: 'invoice.pdf.exe', disguised: true }); });
+  await pg.waitForSelector('#warn-ov.open', { timeout: 3000 }).catch(() => {});
+  const cq = await pg.evaluate(() => ({ title: document.querySelector('#warn-title').textContent, go: document.querySelector('#warn-go').textContent }));
+  await pg.keyboard.press('Escape');
+  await pg.evaluate(() => window.__conv);
+  const reads = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_attachment').length);
+  check(/Open it in the Format Bridge anyway\?$/.test(cq.title) && cq.go === 'Open anyway' && reads === 0, `Convert asks too, and Escape reads nothing: ${JSON.stringify({ cq, reads })}`);
   await pg.close();
 }
 
