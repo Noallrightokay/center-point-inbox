@@ -537,7 +537,8 @@ pub struct Safe {
 }
 
 /// The largest picture carried inside a message that is shown inline, and the
-/// most of them in total. Past these the picture is simply not shown.
+/// most of them in total, counting a copy for every reference to a picture.
+/// Past these the picture is simply not shown.
 const INLINE_ONE: usize = 1024 * 1024;
 const INLINE_ALL: usize = 4 * 1024 * 1024;
 
@@ -563,11 +564,21 @@ pub fn safe(html: &str, inline: &[(String, String, Vec<u8>)]) -> Safe {
             mime.as_str(),
             "image/png" | "image/jpeg" | "image/gif" | "image/webp"
         );
-        let reference = format!("cid:{cid}");
-        if !image || data.len() > INLINE_ONE || data.len() > budget || !html.contains(&reference) {
+        if !image || data.len() > INLINE_ONE || data.len() > budget {
             continue;
         }
-        budget -= data.len();
+        // Every reference becomes a copy, so every reference is charged: one
+        // picture named two hundred times would otherwise turn a few KB of
+        // HTML into hundreds of MB. `matches` finds exactly what `replace`
+        // will replace. A picture that does not fit in full is left out
+        // everywhere (its `cid:` goes nowhere); the words stay.
+        let reference = format!("cid:{cid}");
+        let uses = html.matches(&reference).count();
+        let cost = data.len().saturating_mul(uses);
+        if uses == 0 || cost > budget {
+            continue;
+        }
+        budget -= cost;
         let url = format!("data:{mime};base64,{}", crate::words::base64_encode(data));
         html = html.replace(&reference, &url);
     }
@@ -1031,6 +1042,63 @@ pub(crate) mod tests {
             out.html
         );
         assert!(!out.remote_images);
+    }
+
+    /// A picture the message carries, as `safe` is handed it.
+    fn picture(cid: &str, bytes: usize) -> (String, String, Vec<u8>) {
+        (cid.into(), "image/png".into(), vec![0x5a; bytes])
+    }
+
+    #[test]
+    fn a_picture_referenced_many_times_is_charged_each_time() {
+        // One picture, carried once, referenced over and over: every
+        // reference becomes a copy, so the output must stay within the
+        // budget however many references there are.
+        let img = "<img src=\"cid:big@x\">";
+        let html = format!("<p>Keep these words</p>{}", img.repeat(40));
+        let out = safe(&html, &[picture("big@x", INLINE_ONE)]);
+        let cap = INLINE_ALL * 4 / 3 + html.len() + 1024;
+        assert!(
+            out.html.len() < cap,
+            "{} bytes of output from {} of HTML (cap {cap})",
+            out.html.len(),
+            html.len()
+        );
+        // It degrades: the pictures go, the words stay.
+        assert!(out.html.contains("Keep these words"), "lost the text");
+        assert!(!out.html.contains("data:image/png"), "no copy fits");
+    }
+
+    #[test]
+    fn a_picture_used_a_few_times_still_shows_every_time() {
+        // A logo in the header and the footer, a spacer used three times:
+        // ordinary mail, well inside the budget.
+        let html = "<img src=\"cid:logo@x\"><p>Hi</p><img src=\"cid:logo@x\">\
+                    <img src=\"cid:dot@x\"><img src=\"cid:dot@x\"><img src=\"cid:dot@x\">";
+        let out = safe(html, &[picture("logo@x", 200 * 1024), picture("dot@x", 64)]);
+        assert_eq!(
+            out.html.matches("data:image/png").count(),
+            5,
+            "{}",
+            &out.html[..200]
+        );
+        assert!(!out.html.contains("cid:"));
+    }
+
+    #[test]
+    fn the_budget_is_shared_across_pictures_and_their_references() {
+        // Three uses of a 1 MiB picture fit (3 MiB); a second picture used
+        // twice would take the total past 4 MiB, so it is left out and the
+        // first still shows.
+        let html = "<img src=\"cid:a@x\"><img src=\"cid:a@x\"><img src=\"cid:a@x\">\
+                    <p>between</p><img src=\"cid:b@x\" alt=\"B\"><img src=\"cid:b@x\">";
+        let out = safe(
+            html,
+            &[picture("a@x", INLINE_ONE), picture("b@x", INLINE_ONE)],
+        );
+        assert_eq!(out.html.matches("data:image/png").count(), 3);
+        assert!(out.html.contains("between") && out.html.contains("alt=\"B\""));
+        assert!(out.html.len() < INLINE_ALL * 4 / 3 + html.len() + 1024);
     }
 
     #[test]
