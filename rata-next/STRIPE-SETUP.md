@@ -163,8 +163,10 @@ set the test values, then:
 
 If the delivery shows `400`, the signing secret does not match the one in the
 environment. A `500` means the webhook could not write to Supabase — check
-`SUPABASE_SERVICE_ROLE_KEY`. Stripe retries `500`s for up to three days, so a
-payment is not lost while that is fixed.
+`SUPABASE_SERVICE_ROLE_KEY`. Stripe retries every failed delivery, a `400`
+included, for up to three days in live mode (three times over a few hours in
+test mode), so once the signing secret or the key is corrected the next retry
+lands and no payment is lost.
 
 `npm test` covers the parts that do not need Stripe: signature verification
 including replay and tolerance, price-to-plan mapping, what each event does to

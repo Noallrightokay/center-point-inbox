@@ -25,10 +25,14 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE). Standalone, knows nothing about the app. 182 tests. |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 63 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2). Standalone, knows nothing about the app. 219 tests, plus 12 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 102 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 457 checks (`npm test`, after `npm run build`). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (84 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
+| `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`. |
 | `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
@@ -63,9 +67,34 @@ creates the tag, with the workflow's own token. A merge without a version bump
 builds nothing. Nobody creates a tag by hand: that step failed three times in
 four through the GitHub UI, and an assistant session cannot do it at all.
 
-The version lives in three places, bumped together: `tauri.conf.json`
-(`version` *and* the window `title`, which is how testers report their build)
-and `src-tauri/Cargo.toml`.
+The version lives in four places, bumped together: `tauri.conf.json`
+(`version` *and* the window `title`, which is how testers report their build),
+`src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` (`cargo update -p rata-app
+--precise <version>`), and the cache name in `rata-next/public/sw.js`
+(`rata-shell-v<n>`, one up), so the website's shell is fetched afresh.
+
+Before an installer is kept, `release.yml` installs and launches it on its
+own runner (`harness/smoke-installed.sh`, `.ps1` on Windows; B3): it must
+stay up 15 s with the window titled `RATA <version> beta` (`RATA <version>`
+for 1.x) and no `panicked at` in its log, or that platform's files come off
+the draft release and stay on the run as an artifact. A bump that forgets
+the window `title` fails here. The first real run is v0.1.39's; the macOS
+and Windows halves had never run before it, and on macOS a runner that will
+not let the title be read falls back to "stays up, clean log" with a
+warning. The build step also gets `RATA_MS_CLIENT_ID` from a repository
+**variable** (not a secret: a public client id), which turns on Sign in
+with Microsoft; unset, the build has none (see *Sign in with Microsoft*).
+
+Windows signing is optional, like Apple's (E3): Azure Artifact Signing
+(six `AZURE_*` values) or a `.pfx` (`WINDOWS_CERTIFICATE` +
+`WINDOWS_CERTIFICATE_PASSWORD`), never both, and half a set fails the
+Windows job before it compiles. Owner steps are in
+`docs/WINDOWS-SIGNING.md`. The bundler signs `rata-app.exe` before NSIS
+packs it, then the uninstaller and the `-setup.exe`; `signtool verify /pa`
+then checks the installer and the exe inside it (and the uninstaller when
+7-Zip lists it), and a bad signature takes the installer off the draft. `target/release/rata-app.exe` is left unsigned by design (the
+bundler restores it), so check the copy inside the installer. With no
+secrets the job logs `Unsigned build` and carries on.
 
 Traps, all of which have bitten:
 
@@ -112,7 +141,12 @@ shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
 begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
 as it arrives (IMAP IDLE); v0.1.35 signs in far less often; v0.1.36 adds signatures; v0.1.37 is the
-redesign to `DESIGN.md`; v0.1.38 shows Gmail's archive. An
+redesign to `DESIGN.md`; v0.1.38 shows Gmail's archive; v0.1.39 adds Sign
+in with Microsoft (live once the owner's client id is in the build), no
+longer lets one unreadable message stop a refresh, archives on servers that
+only name the folder, says why a typed server address failed, and is the
+first release whose installers are installed and launched before they are
+kept (watch that run). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -129,13 +163,37 @@ mid-task and hand it back; say so immediately.
 A signed Ed25519 token, verified offline against a public key compiled in at
 build time via `RATA_LICENCE_PUBLIC_KEY`. Tokens last 30 days
 (`LICENCE_DAYS` in `rata-next/lib/licence.js`) and the app renews itself in the
-final week. The private key lives only on the VPS at `/etc/rata/licence.key`
-and is minted with `/etc/rata/mint.sh <email> <plan> <days>`.
+final week. The private key lives on the VPS at `/etc/rata/licence.key`
+and is minted with `/etc/rata/mint.sh <email> <plan> <days>`. The website's
+`LICENCE_PRIVATE_KEY` is this same VPS key (`rata-next/LAUNCH.md` §2);
+never generate a new one for the site, or every licence it issues fails in
+every installed app.
 
 A build without the public key rejects every licence; a build with the wrong one
 rejects every legitimate licence with a signature error.
 
+On the website side, a licence is issued or renewed only while the
+`subscriptions` row is live: `LIVE_STATUSES` (`active`, `trialing`,
+`past_due`) lives once in `lib/plan.js` and `lib/stripe.js` re-exports it.
+`past_due`, Stripe's grace state while a failed card is retried, is
+entitled everywhere; that is safe because a licence lasts 30 days and
+renews only while the row is live. A `checkout.session.completed` for an
+address whose row is live under a **different** `stripe_customer` gets 200
+`conflict: true`, writes nothing and logs one line without the address or
+customer id (`checkoutConflict`); the owner reconciles it in Stripe. The
+same customer, a hand-minted row with no customer, or a row no longer live
+may be written. Deleting an account (`app/api/account/route.js`) removes
+`workspaces`, `subscriptions` and the person's `ai_usage` rows, and still
+finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
+`database.sql` never ran). `next.config.js` sends HSTS (one year,
+subdomains, no preload), `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
+`nosniff` and `strict-origin-when-cross-origin` on every path
+(`tests/headers.test.mjs`); they reach mailrata.org only when it is
+redeployed.
+
 ## Status
+
+The MVP plan is `docs/MVP-PLAN.md`; the security review is `docs/SECURITY-REVIEW-2026-09.md`.
 
 **In beta.** Testers follow `BETA.md` and report through the *Beta bug* issue
 template. A report's exact error text is the primary evidence — read it before
@@ -159,7 +217,9 @@ redirecting the app at the local network.
 translation, the AI brief, the Extras/Connections/launcher screens and the
 operator config rows — all were switches with nothing behind them, and
 translation and the AI brief sent mail text to Google or Anthropic. `tidyV6`
-strips their leftovers from an older saved workspace. Adding a mailbox has one
+strips their leftovers from an older saved workspace. Translation and AI came
+back in v0.1.17 through RATA's own relay, and signing in to a Microsoft
+*mailbox* in v0.1.39 (below); each is real. Adding a mailbox has one
 home: Settings → Linked accounts (`openAddMailbox`).
 
 Stored, and acted on for real: the interface keeps every fetched message, so
@@ -285,7 +345,21 @@ limit, or text past `BODY_CHARS` (16 000), sets `truncated` and the reading
 pane says so. Mail stored
 by an older build (no `bodyV: 2`) is re-read by UID (`reread_mail` →
 `rata_mail::imap::fetch_uids`), 50 per mailbox after each sync and at once
-when opened.
+when opened. **A reply RATA cannot parse (v0.1.39)** no longer fails the
+page. GreenMail sends `BODY[]<0>{n}` with no space, imap-proto rejects it,
+and async-imap then reads nothing more on that connection; so `collect`
+tells a parse failure from an I/O failure (`unreadable`), keeps what
+arrived, and `recover` fetches the rest on a fresh connection, at most
+`REDIALS` (2) more per request since each is a sign-in. The message whose
+reply cannot be read is listed from its envelope with `UNREADABLE` as its
+text and `truncated` set, so opening it fetches it whole; anything left
+when the redials run out is listed as `NOT_READ`. A connection that really
+fails still fails the folder. Errors never carry message text or FETCH
+bytes: `reason()` makes each one line of at most 200 characters, a fixed
+sentence for a parse failure, naming the folder (`place`); a server's own
+NO/BAD text is kept, cut to that one line. Stream listings (flags, UID
+lists, LIST, STORE) go through `drain`, so one cut short by an error is a
+failure, never a complete answer.
 **Opening in full (v0.1.8).** A message marked `truncated`, or with
 attachments seen in its first 64 KiB, is fetched whole when opened
 (`openWhole` → `open_message` → `rata_mail::imap::fetch_whole`, which asks
@@ -326,7 +400,10 @@ blank message.
 sanitises with ammonia: scripts, handlers, forms, frames, `<meta>`, `<base>`,
 relative URLs and any `href` that is not http, https or mailto go; layout, `<style>`, an allowlist of
 CSS properties and `cid:` pictures (inlined as `data:`, images only, capped)
-stay. (2) The interface shows it in `<iframe sandbox="allow-popups">` —
+stay. An inline picture is charged against `INLINE_ALL` (4 MiB) once for
+**every** `cid:` reference; one that does not fit in full is left out
+everywhere and the text stays, so the output is bounded however often a
+picture is named (SEC-1: one 1 MiB PNG named 200 times built 280 MB before). (2) The interface shows it in `<iframe sandbox="allow-popups">` —
 never add `allow-scripts` or `allow-same-origin` (together they undo the
 sandbox, and this page can call the app), nor `allow-top-navigation`,
 `allow-forms` or `allow-popups-to-escape-sandbox`. `allow-popups` is there
@@ -340,9 +417,9 @@ packaged WebKit build with a hostile message that bypassed the sanitiser: it
 rendered, and neither its script nor its `onerror` ran. Testing traps found
 on the way: Chromium fires a `request` event for pictures its CSP then
 refuses — count what reaches the network (a route handler or a real server),
-not request events; and the desktop harness (`beta-fixes.mjs` in the session
-scratchpad) now serves the page under the app's real CSP from
-`tauri.conf.json`. Opening a message fetches it whole when it may have HTML
+not request events; and the desktop harness
+(`desktop/rata-app/harness/ui-harness.mjs`) serves the page under the app's
+real CSP from `tauri.conf.json`. Opening a message fetches it whole when it may have HTML
 (`m.html`, or unknown for mail stored before 0.1.12).
 **Links (v0.1.14).** The app's webview holds the bridge to everything, so no
 outside page may ever load in it; links go to the customer's browser, and
@@ -354,7 +431,7 @@ from the config (`"create": false`) so it can carry two handlers.
 frame's only permission), always answers `Deny`, and tells the page via
 `eval` of a JSON literal: `window.__rataLink({kind:'web',url,host})` shows
 "Open this link in your browser?" naming the host — the words of a link can
-say anything — and only **Open** calls `open_link`; `kind:'mail'` opens
+say anything — and only **Open in browser** calls `open_link`; `kind:'mail'` opens
 RATA's composer (`writeTo`, with an empty body). `on_navigation` keeps the
 window on `tauri://localhost` / `http(s)://tauri.localhost` / `about:`,
 sends mailrata.org links to the browser and refuses the rest — the licence
@@ -375,7 +452,10 @@ https://mailrata.org/api/ai` with the licence token as the credential
 (`translate` for Base, `ai` for Pro — `lib/plan.js`), Haiku 4.5, text capped
 (12 000 chars; the briefing sends the start, 1 500 chars, of the 25 most
 recent messages from the last 14 days), every prompt fences the email as
-untrusted, the task list is parsed strictly (ids must be ones sent). Each
+untrusted (`fence` turns any `<` that starts an `email` tag, in any case or
+spacing, opening or closing, into `‹`, so a message cannot close its fence
+early; `clean` strips control and bidi-control characters from what goes in
+and from each task that comes back), the task list is parsed strictly (ids must be ones sent). Each
 request is charged from Anthropic's reported token use into `ai_usage`
 (`database.sql` §5) and refused at the month's cap; nothing is logged but a
 status. The app asks once before the first AI use (`aiOk`, `AI_NOTICE`),
@@ -522,6 +602,12 @@ message says it was in Spam and offers **Not spam**, an archived one **Move
 to inbox** — both `Action::Inbox` (a MOVE to INBOX; the message leaves RATA
 and the next refresh brings it back as inbox mail, since a moved message
 gets the newest UID). Older mail pages every folder (`FOLDER_DONE`).
+Archive by exact name is also where Archive files mail (v0.1.39:
+`destination` asks `name_of(Folder::Archive)`, the same `places()` answer a
+refresh reads), so a server that declares no `\Archive` can be archived to;
+until then RATA showed such a folder but refused to archive into it. On
+Gmail that means a label named exactly "Archive" is now archived into, as
+it was already shown as Archive. Trash still needs a declared `\Trash`.
 **Your own folders (v0.1.26).** `Folder::Named(name)` — the server's own
 name, exactly as LIST gave it (modified UTF-7 and all; `folder_label` decodes
 it for showing, joins levels with " / " and drops an `INBOX.` prefix).
@@ -621,17 +707,16 @@ than waking, or every read would cause a refresh. The watch reads nothing
 and keeps no password. The supervisor (`watch::supervise`) re-checks every
 minute: `Rata::watchable` is every linked mailbox not parked for its
 password, and none without a licence, so a lapse or an unlink closes the
-connection; `Rata::watch` runs the refresh's own checks (`readable`) and
-parks a mailbox whose password is refused, so a wrong one is never sent
-twice. A failed connection is retried after 30 s, doubling to 15 minutes;
+connection; `Rata::watch` runs the refresh's own checks (`usable`, then
+`signed`) and parks a mailbox whose password is refused, so a wrong one is
+never sent twice. A failed connection is retried after 30 s, doubling to 15 minutes;
 a server without IDLE is not asked again until RATA restarts. On new mail
 Rust evals `window.__rataMail({email})` (a JSON literal, as with links);
 the page waits 1.2 s so a burst is one refresh, then runs `autoSync` — the
 same quiet refresh as the timer, so fetching, showing and notifying stay in
 one place — and a wake during a refresh (`MAIL_AGAIN`) gets one more after
-it. Not seen against a real server: the guard refuses a private address, so
-no local IMAP server can stand in; the IDLE exchange is covered by a
-scripted server in the engine's tests.
+it. Checked against a real Dovecot in CI
+(`idle_wakes_on_an_append_but_not_on_a_flag_change`).
 **Fewer sign-ins (v0.1.35).** Every refresh used to sign in to every
 mailbox — 288 a day each, and providers throttle that. `refresh_mail`
 takes `only` (addresses; none is all), `Rata::refresh` reads just those,
@@ -675,9 +760,14 @@ every row from one it drew), the provider badge ("Imap") is gone from rows,
 and "via mailbox" is text in the sender line rather than a dead button. The
 account button shows initials from the start. The website was rewritten to
 say only what the app does (it still sold texts, Slack, Discord, DLP and a
-browser install, all gone since 0.1.6), with screenshots of the real
-interface in `public/shots` (retake them after a visible change) and no em
-dashes in visible copy. `vendor-fonts.mjs` now keeps a variable font once
+browser install; all but DLP have been gone from the app since 0.1.6, and
+DLP is still in the app, not sold on the website: Privacy checks, compose
+scanning (`runDLP`) and the sidebar's "DLP profile HIPAA", all local, no
+network), with screenshots of the real interface in `public/shots` and no
+em dashes in visible copy. Retake the screenshots after any visible change:
+`./sync-ui.sh`, serve `desktop/rata-app/ui` (`python3 -m http.server 3185
+--bind 127.0.0.1`), then `node desktop/rata-app/harness/shots.mjs
+http://127.0.0.1:3185 rata-next/public/shots`. `vendor-fonts.mjs` now keeps a variable font once
 instead of once per weight (460 KB → 167 KB).
 **Gmail's archive (v0.1.38).** Where a server has no `\Archive` but
 declares `\All`, `places()` takes that as Archive with `all_mail` set, and
@@ -707,13 +797,87 @@ nothing", so a server refusing the Drafts listing would have had the page
 drop every draft; `search()` reads the tagged status itself and returns
 nothing on a refusal (tested). Not seen against real Gmail: covered by a
 scripted Gmail server in the engine tests.
-Also not built: saving RATA's drafts to the server; no code signing.
+**OAuth in the engine (C1, v0.1.39).** `Account.credential` is
+`Credential::Password` or `Credential::OAuth { user, access_token }`. A
+token goes by `AUTHENTICATE XOAUTH2` (IMAP) or `AUTH XOAUTH2` (SMTP), never
+on a command line and without SASL-IR; `xoauth2` refuses control
+characters, spaces and empty parts, so a token cannot forge a field. A
+refused or expired token is its own kind: `OAuth` on every result enum, the
+app's problem kind `oauth`, never `auth`. A "come back later" answer, IMAP
+`BAD`, or SMTP refusing the mechanism before the token is sent is `net`, and
+an SMTP server that does not offer XOAUTH2 never sees the token. No token
+appears in a `Debug` or an error (`credential::redact`, which also removes
+its base64 wire form). `verify_with` verifies with any credential. Two
+traps: async-imap 0.11 logs at `log::trace!` every command it sends,
+`LOGIN user pass` and the XOAUTH2 line included, and every reply it reads
+(`imap_stream.rs`); the app installs no logger, and any future logger must
+keep `async_imap` below trace. And
+`cargo doc` with `RUSTDOCFLAGS="-D warnings"` fails on three old
+intra-doc links (`imap.rs` → private `own_folders`, `smtp.rs` → private
+`starttls`, `resolve.rs` → the ambiguous `crate::discover`); CI does not
+build docs.
+**Sign in with Microsoft (C2/C3, v0.1.39).** Microsoft mailboxes
+(Outlook.com, Hotmail, Live, Microsoft 365) sign in with OAuth 2.0 code +
+PKCE (`oauth.rs`). The browser, never the webview, opens
+`login.microsoftonline.com/common` (with `prompt=select_account`) through
+`links::classify`. There is one sign-in at a time, and none within 3 s of
+the last (`BEGIN_GAP`); it gives up after five minutes. A one-shot
+`127.0.0.1:<any port>` listener takes the one request carrying this
+attempt's `state` (32 random bytes, single-use; 404 to everything else, 2 s
+to speak, `HEAD_WAIT`). A redirect error shows only its code, and only if
+it looks like one. The refresh token lives in the mailbox's keychain entry,
+marked `rata-oauth2:<n>:`. Pieces past the first 1 000 characters go under
+**their own service** `org.mailrata.desktop.oauth-piece` (`<addr>#2…#8`),
+because Windows holds 1 280 characters per entry. In the mailbox service, a
+mailbox linked as `<addr>#2` would have been sent piece 2 as its password
+(security review M1), so `link()` also refuses anything that is not an
+address, and a password replacing a sign-in removes old pieces.
+`mailboxes.json` records only `"auth": "oauth"`. Access tokens are kept in
+memory and renewed within 2 minutes of expiry (`EARLY`). A rotation the
+keychain half-writes puts the old token back (a kill between the two writes
+is not covered). The token endpoint is called over reqwest with the
+engine's own TLS config (`tls_client_config`), no redirects, 30 s. Every
+operation goes through `usable` → `account` → `signed`. A refused token is
+renewed and retried once. `invalid_grant` parks the mailbox as "Sign in to
+Microsoft again". A network failure or a refused renewal backs the watcher
+off and parks nothing. A password never reaches Microsoft: `verify_with`
+returns `Verify::Microsoft(label)` before any socket opens when a password
+would go to a Microsoft host. A token only goes to `is_microsoft` hosts.
+`discover_mailbox` (no password; bridge `/api/link/discover`) needs a
+licence and a plausible address, and tells the page when a company domain's
+mail is at Microsoft 365, so the form offers **Sign in with Microsoft**
+instead of a password box; `link_microsoft`, `cancel_microsoft` and
+`microsoft_ready` sit behind `/api/link/microsoft`. The client id comes
+from `option_env!("RATA_MS_CLIENT_ID")` (not a secret). A build without it,
+and the website, keep C0's words: `MS_HELP`/`MS365_HELP` in the engine and
+`MS_NOT_YET` in the page ("…cannot be added to RATA yet…"). Not seen
+against a real Microsoft sign-in until the owner's registration (C4) and
+B2's Outlook column. Not handled: a Microsoft 365 domain behind a mail
+filter such as Mimecast (typing `outlook.office365.com` works around it),
+shared or delegated mailboxes.
+**Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
+findings, each with a severity; no High. SEC-1 fixed the `cid:`
+amplification, the Stripe checkout conflict, `past_due`, the AI fence and
+the site's headers; two Mediums wait on the owner: Mark of the Web on saved
+attachments (none is set today) and email confirmation before paid launch
+(LAUNCH.md §7). The `loopback-tests` gate is a `compile_error!` on the
+feature without `debug_assertions`, not on the release profile: a build
+with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` passes it. `release.yml`
+sets neither; never enable the feature in rata-app.
+Also not built: saving RATA's drafts to the server. Windows and macOS
+signing are wired and wait for the owner's certificates.
 
-**Never tested: no real mailbox has ever been opened by this code.** The suites
-cover every path up to the socket and stop. When a real connection fails, the
-three files to read are `resolve.rs` (discovery), `imap.rs` (handshake and
-auth classification) and `guard.rs` (host refusal). Errors are typed, so the
-message names the hosts tried and what each said.
+**Never tested with a customer's mailbox.** No customer's mailbox has been
+opened yet; the engine runs against real Dovecot (IMAP) and GreenMail (SMTP,
+and IMAPS on 3993 for a server that declares no special-use folders) on
+every PR (`tests/loopback.rs`), but not against Gmail, Outlook or any hosted
+provider. Run them locally with `sudo
+desktop/rata-mail/tests/loopback/servers.sh start /tmp/rata-lb`, then
+`SSL_CERT_FILE=/tmp/rata-lb/ca.crt cargo test --features loopback-tests
+--test loopback`. When a real connection fails, the three files to read are
+`resolve.rs` (discovery), `imap.rs` (handshake and auth classification) and
+`guard.rs` (host refusal). Errors are typed, so the message names the hosts
+tried and what each said.
 
 ## Working style that earned its place here
 

@@ -4946,7 +4946,7 @@ $('#assist-ov').addEventListener('click',e=>{if(e.target===$('#assist-ov'))close
 function showWelcome(ob){
   $('#w-title').textContent='Welcome, '+(ob.name||'friend');
   $('#w-sub').textContent=ob.org?('Your '+ob.org+' workspace is ready. Let\u2019s bring your inboxes over.'):'Your workspace is ready. Let\u2019s bring your inboxes over.';
-  const rows=['<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Blank slate, by design</b><span>Add your first mailbox in Settings → Linked accounts, with an app password from your provider.</span></div></div>'];
+  const rows=['<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Blank slate, by design</b><span>Add your first mailbox in Settings → Linked accounts, with an app password from your provider or, where RATA offers it, Sign in with Microsoft.</span></div></div>'];
   $('#w-rows').innerHTML=rows.join('');
   $('#welcome-ov').classList.add('open');
   $('#w-enter').onclick=()=>$('#welcome-ov').classList.remove('open');
