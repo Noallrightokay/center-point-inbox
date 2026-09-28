@@ -125,6 +125,10 @@ export function money(n) {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }
 
+/* Priced, and not on sale. RATA-hosted mail does not exist, so
+   STRIPE_PRICE_DOMAIN stays unset (LAUNCH.md, STRIPE-SETUP.md), and nothing
+   may quote this price while it is: every sentence that would offer the add-on
+   asks domainAddonOnSale() first. */
 export const DOMAIN_ADDON = {
   price: 1.5,
   label: 'Your own domain',
@@ -211,15 +215,31 @@ export function domainsAllowed(plan, purchased = 0) {
   return included + Math.max(0, Number(purchased) || 0);
 }
 
+/* Whether the domain add-on can actually be bought: only once its Stripe price
+   is configured. The same variable decides whether the webhook grants a domain
+   at all (domainAddonsOf in lib/stripe.js), so an offer and the ability to
+   honour it cannot come apart. */
+export function domainAddonOnSale(env = typeof process === 'undefined' ? {} : process.env) {
+  return !!String(env?.STRIPE_PRICE_DOMAIN || '').trim();
+}
+
+/* What to say while the add-on is not on sale: the fact, with no price and
+   nothing to buy. Mail on your own domain that a provider hosts is a different
+   thing, and RATA does connect it. */
+export const NO_DOMAIN_HOSTING = 'RATA does not host mail on your own domain. A mailbox on your domain that your provider hosts can be linked like any other.';
+
 /* Null when another domain is allowed, or the sentence to show when it is not.
 
    This is deliberately not `refusal()`. Every other limit in RATA is lifted by
    moving up a plan, and saying "upgrade to Enterprise" to a Pro member who
    wants one custom domain would be both wrong and expensive — the answer there
-   is $1.50, not $56. */
-export function domainRefusal(plan, used, purchased = 0) {
+   is $1.50, not $56, once the add-on is on sale. Until then the answer is
+   that RATA does not do it. */
+export function domainRefusal(plan, used, purchased = 0, env) {
   const cap = domainsAllowed(plan, purchased);
   if (used < cap) return null;
+  /* Never an offer of something that cannot be bought. */
+  if (!domainAddonOnSale(env)) return NO_DOMAIN_HOSTING;
 
   if (!PLANS[plan]) {
     return `Choose a plan to host mail on your own domain. ${PLANS.pro.label} (${money(PLANS.pro.price)} a month) can add one for ${money(DOMAIN_ADDON.price)} a month.`;
