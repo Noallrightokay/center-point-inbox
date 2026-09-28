@@ -94,6 +94,9 @@ jobs:
       # impossible to ship: a release build with it on has to fail, and fail
       # for that reason rather than any other.
       - name: The loopback feature cannot build for release
+        env:
+          # Plain text, so the message can be matched and shown.
+          CARGO_TERM_COLOR: never
         run: |
           if cargo build --release --features loopback-tests 2> release.log; then
             echo "::error::a release build with loopback-tests compiled"
@@ -104,7 +107,8 @@ jobs:
             echo "::error::the release build failed, but not on the loopback-tests gate"
             exit 1
           fi
-          grep -m1 -A2 "^error" release.log
+          echo "Refused, as it must be:"
+          grep -m1 -A2 "must never be on in a release build" release.log
 
       - name: Clippy, with the feature
         run: cargo clippy --all-targets --features loopback-tests -- -D warnings
@@ -128,7 +132,7 @@ jobs:
 
       - name: Server logs
         if: failure()
-        run: sudo tail -n 80 "$RUNNER_TEMP/rata-lb/dovecot.log" "$RUNNER_TEMP/rata-lb/greenmail.log"
+        run: sudo tail -n 80 "$RUNNER_TEMP/rata-lb/dovecot.log" "$RUNNER_TEMP/rata-lb/greenmail.log" || true
 
   # The shell. Needs the system webview, and needs ui/ to exist before
   # tauri-build reads the config — which also means sync-ui.sh runs here, so its
