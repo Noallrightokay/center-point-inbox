@@ -236,8 +236,9 @@ jobs:
         run: |
           python3 -m http.server 3181 --bind 127.0.0.1 --directory desktop/rata-app/ui \
             > "$RUNNER_TEMP/http.log" 2>&1 &
+          # Quiet while it waits; the check after the loop says what went wrong.
           for _ in $(seq 1 30); do
-            curl -fsS -o /dev/null http://127.0.0.1:3181/app.html && break
+            curl -fs -o /dev/null http://127.0.0.1:3181/app.html && break
             sleep 0.5
           done
           curl -fsS -o /dev/null http://127.0.0.1:3181/app.html || {
