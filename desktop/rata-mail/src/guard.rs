@@ -21,6 +21,16 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+// The loopback tests (`tests/loopback.rs`) need RATA to open a socket to a real
+// mail server on this machine, which is exactly what this module exists to
+// refuse. So the one exception is a feature that cannot reach a customer: a
+// release build with it on does not compile, and a debug build without it is
+// unchanged. See `loopback_test_server`.
+#[cfg(all(feature = "loopback-tests", not(debug_assertions)))]
+compile_error!(
+    "the loopback-tests feature lets the outbound guard connect to 127.0.0.1 and is for debug test builds only; it must never be on in a release build"
+);
+
 /// Why a host was refused. `NotFound` is separate from the rest because it
 /// means "try the next candidate", not "stop".
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +168,7 @@ pub fn check_literal(host: &str) -> Option<HostVerdict> {
     }
     let bare = h.trim_start_matches('[').trim_end_matches(']');
     match bare.parse::<IpAddr>() {
+        Ok(ip) if loopback_test_server(ip) => Some(HostVerdict::Allowed),
         Ok(ip) => Some(if is_public(ip) {
             HostVerdict::Allowed
         } else {
@@ -166,6 +177,26 @@ pub fn check_literal(host: &str) -> Option<HostVerdict> {
         // Not a literal — the caller has to resolve it.
         Err(_) => None,
     }
+}
+
+/// Whether `ip` is the loopback tests' own mail server: `127.0.0.1` written as
+/// exactly that, and only in a debug build with the `loopback-tests` feature.
+/// Always false otherwise — the release build cannot even be compiled with the
+/// feature on (see the `compile_error!` at the top of this file).
+///
+/// Deliberately narrow. Not the rest of 127/8, not `::1`, not
+/// `::ffff:127.0.0.1` or any other spelling, not `localhost` (refused as a
+/// name before this is asked), and never a name that *resolves* to 127.0.0.1:
+/// only a literal typed as the server address, so a hostile DNS answer still
+/// cannot reach the loopback interface even in a test build.
+#[cfg(all(feature = "loopback-tests", debug_assertions))]
+fn loopback_test_server(ip: IpAddr) -> bool {
+    ip == IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
+#[cfg(not(all(feature = "loopback-tests", debug_assertions)))]
+fn loopback_test_server(_ip: IpAddr) -> bool {
+    false
 }
 
 /// Judge a set of resolved addresses. Empty means nothing answered.
