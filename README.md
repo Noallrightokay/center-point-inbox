@@ -40,13 +40,15 @@ no connection, and no code for it.
 
 | Path | What it is |
 |---|---|
-| `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, and the outbound guard. Knows nothing about the app. |
-| `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, and the glue to the interface. |
+| `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, signing in with a password or an OAuth token, and the outbound guard. Knows nothing about the app. |
+| `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, Sign in with Microsoft, and the glue to the interface. |
+| `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the release check (`verify-release.sh`) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
 | `rata-next/` | The website — marketing pages, Stripe checkout, licence issuing and renewal. Next.js on a Hostinger VPS. |
 | `rata-next/public/app.html` | The interface. One copy, shared: the desktop app builds its own from this file. |
 | `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
-| `infrastructure/backup/` | Postgres backups for the VPS, with a self-test. |
-| `docs/hostinger-mcp.md` | Managing the VPS and DNS from the repo. |
+| `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
+| `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries) and how. |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 
 There is no `src/`. An earlier version of this product was nine .NET
 microservices on Kubernetes; it was abandoned and the code removed in favour of
@@ -61,15 +63,33 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test          # 162 tests, no network required
+cargo test --all-targets   # 219 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
 Toolchain is pinned to **1.94.1** in CI; anything from that release on works.
 
-The tests never open a socket. Protocol handling is tested against recorded
-server dialogue, which means the suite is fast and honest about what it proves —
-and about what it does not. See *What has never been tested* below.
+Those tests never open a socket beyond a scripted server of their own.
+Protocol handling is tested against recorded server dialogue, which means the
+suite is fast and honest about what it proves, and about what it does not.
+See *What has never been tested* below.
+
+A second suite, `tests/loopback.rs` (12 tests), runs the engine against a
+real Dovecot (IMAP) and GreenMail (SMTP, and IMAPS for a server that
+declares no special-use folders) on 127.0.0.1. CI runs it on every PR as
+*Mail layer against real servers*. Locally (needs `dovecot-imapd`, Java and
+`openssl`):
+
+```bash
+sudo desktop/rata-mail/tests/loopback/servers.sh start /tmp/rata-lb
+cd desktop/rata-mail
+SSL_CERT_FILE=/tmp/rata-lb/ca.crt cargo test --features loopback-tests --test loopback
+sudo tests/loopback/servers.sh stop /tmp/rata-lb
+```
+
+The `loopback-tests` feature lets the outbound guard connect to 127.0.0.1,
+so it refuses to compile without debug assertions. Never enable it in
+`rata-app`.
 
 ### The desktop app
 
@@ -77,7 +97,7 @@ and about what it does not. See *What has never been tested* below.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 60 tests
+cargo test          # 102 tests
 ```
 
 On Linux you need the system webview first:
@@ -88,15 +108,32 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
 ```
 
 Building installers, and where things land on a customer's machine, are covered
-in **[`desktop/rata-app/README.md`](desktop/rata-app/README.md)** — read that
+in **[`desktop/rata-app/README.md`](desktop/rata-app/README.md)**. Read that
 before packaging anything.
+
+### The interface, driven
+
+`desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
+Chromium against a fake backend, under the app's own content security
+policy (84 checks). CI runs it as *Desktop interface, driven*. From the
+repository root:
+
+```bash
+(cd desktop/rata-app && ./sync-ui.sh)
+(cd rata-next && npm ci && npx playwright install chromium)   # once
+(cd desktop/rata-app/ui && python3 -m http.server 3181 --bind 127.0.0.1 &)
+node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+```
+
+It exits non-zero on any FAIL.
 
 ### The website
 
 ```bash
 cd rata-next
 npm ci
-npm test            # no network, no database required
+npm run build       # npm test reads the build
+npm test            # 457 checks, no network, no database required
 npm run dev
 ```
 
@@ -153,7 +190,10 @@ sign-in, translation and the AI brief were switches with nothing behind them,
 and translation and the AI brief sent the text of your mail to Google or
 Anthropic. They were removed in v0.1.6, together with the screens that held
 them; a workspace saved by an older build is tidied on load (`tidyV6`). Do not
-bring any of them back as a control that leads nowhere.
+bring any of them back as a control that leads nowhere. Translation and AI
+summaries came back in v0.1.17 through RATA's own relay, and Sign in with
+Microsoft (for a Microsoft mailbox, v0.1.39) is real OAuth with the tokens
+in the keychain.
 
 **The licence public key is compiled in at build time.**
 The build reads `RATA_LICENCE_PUBLIC_KEY`. A binary built without it cannot
@@ -194,8 +234,11 @@ because the alternative is phoning home.
 
 Releases are built by the **Release installers** workflow, which produces a
 `.deb` and `.AppImage` for Linux, a `.dmg` for each Mac architecture, and an
-NSIS `.exe` for Windows. They are **unsigned**, so Windows shows a SmartScreen
-warning and macOS requires right-click → Open.
+NSIS `.exe` for Windows. They are **unsigned** so far, so Windows shows a
+SmartScreen warning and macOS requires right-click → Open. Signing is wired
+for both (`docs/WINDOWS-SIGNING.md` for Windows) and waits for the owner's
+certificates. Before an installer is kept, the workflow installs and
+launches it on its own runner and checks the window title.
 
 ---
 
@@ -206,7 +249,9 @@ Be realistic about this before promising anything to a customer.
 **Works, and is tested:**
 
 - Licence verification, including offline and self-renewal
-- Adding a mailbox by address and app password
+- Adding a mailbox by address and app password, and telling a wrong
+  password (`auth`) from a refused or expired OAuth token (`oauth`) and from
+  a server that cannot be reached (`net`)
 - Server discovery — asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
 - New mail within seconds on servers that offer IMAP IDLE (nearly all do),
@@ -265,16 +310,23 @@ it, new versions are a download from the releases page.
   go through RATA's relay at `mailrata.org/api/ai` (Haiku, capped at $2 per
   customer a month, nothing stored), which is not live until the site is
   redeployed with `ANTHROPIC_API_KEY` set and `database.sql` §5 run.
-- No auto-update, and no code signing.
+- **Microsoft mailboxes** (Outlook.com, Hotmail, Live, Microsoft 365) sign
+  in with **Sign in with Microsoft** from v0.1.39, in a build made with the
+  owner's Microsoft client id; a build without it says they cannot be added
+  yet. Not yet seen against a real Microsoft sign-in.
+- Code signing: wired for Windows and macOS, waiting for certificates.
 
 ### What has never been tested
 
-**No real mailbox has ever been opened by this code.** The test suite covers
-every path up to the socket and stops there. IMAP and SMTP handshakes, the
-authentication classification that decides "wrong password" versus "server
-unreachable", and the discovery chain against real DNS have never run against a
-live provider.
+**No customer's mailbox has been opened yet.** The engine runs against a real
+Dovecot and GreenMail on every PR (`tests/loopback.rs`), but not against
+Gmail, Outlook or any hosted provider. The classification that decides
+"wrong password" (`auth`) versus "refused token" (`oauth`) versus "server
+unreachable" (`net`), and the discovery chain against real DNS, have never
+run against a live provider.
 
+That is what `docs/SMOKE.md` is for: a checklist, one column per provider,
+that the owner runs on real machines and records in `docs/MVP-EVIDENCE.md`.
 If you are picking this up, that is the first thing to do, and the three files
 worth reading first when it misbehaves are `resolve.rs` (finding the server),
 `imap.rs` (handshake and authentication), and `guard.rs` (host refusal).
