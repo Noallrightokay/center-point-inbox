@@ -11,6 +11,30 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// How a mailbox signs in. Only the kind is kept here, never the secret:
+/// that is in the keychain (`vault`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Auth {
+    /// An app password. Every mailbox linked before C2, which is why it is
+    /// the default for a record without the field — and why it is never
+    /// written: a record for one looks exactly as it always did.
+    #[default]
+    Password,
+    /// Signed in with Microsoft: the keychain holds Microsoft's refresh
+    /// token, and access tokens live only in memory.
+    OAuth,
+}
+
+impl Auth {
+    pub fn is_password(&self) -> bool {
+        *self == Auth::Password
+    }
+    pub fn is_oauth(&self) -> bool {
+        *self == Auth::OAuth
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mailbox {
     pub email: String,
@@ -33,6 +57,10 @@ pub struct Mailbox {
     /// provider decides to lock the account.
     #[serde(default)]
     pub auth_failed_at: Option<u64>,
+    /// `"oauth"` for a mailbox that signs in with Microsoft; absent for one
+    /// with an app password.
+    #[serde(default, skip_serializing_if = "Auth::is_password")]
+    pub auth: Auth,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -185,6 +213,7 @@ mod tests {
             source: "mx".into(),
             added_at: 1,
             auth_failed_at: None,
+            auth: Auth::Password,
         }
     }
 
@@ -222,6 +251,48 @@ mod tests {
                 "{word} appears in {raw}"
             );
         }
+    }
+
+    #[test]
+    fn a_microsoft_mailbox_records_how_it_signs_in_and_nothing_more() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        let mut s = Store::open(&file);
+        s.put(mailbox("owner@example.com"));
+        let mut ms = mailbox("me@outlook.com");
+        ms.host = "outlook.office365.com".into();
+        ms.label = "Outlook".into();
+        ms.source = "microsoft".into();
+        ms.auth = Auth::OAuth;
+        s.put(ms);
+        s.save().unwrap();
+
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"auth\": \"oauth\""), "{raw}");
+        // Once: the password mailbox is written exactly as before.
+        assert_eq!(raw.matches("\"auth\"").count(), 1, "{raw}");
+        for word in ["pass", "secret", "token", "credential", "refresh", "bearer"] {
+            assert!(
+                !raw.to_lowercase().contains(word),
+                "{word} appears in {raw}"
+            );
+        }
+        let back = Store::open(&file);
+        assert_eq!(back.find("me@outlook.com").unwrap().auth, Auth::OAuth);
+        assert_eq!(back.find("owner@example.com").unwrap().auth, Auth::Password);
+    }
+
+    #[test]
+    fn a_record_written_before_microsoft_sign_in_still_reads() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"mailboxes":[{"email":"old@example.com","host":"imap.example.com","port":993,"label":"Old","help":null,"source":"mx","added_at":5,"auth_failed_at":null}],"licence":null}"#,
+        )
+        .unwrap();
+        let s = Store::open(&file);
+        assert_eq!(s.find("old@example.com").unwrap().auth, Auth::Password);
     }
 
     #[test]

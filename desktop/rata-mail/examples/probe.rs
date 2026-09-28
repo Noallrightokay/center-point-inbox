@@ -33,6 +33,9 @@ async fn main() {
             Verify::OAuth(w) => println!("TOKEN   {w}"),
             Verify::NeedsHost(w) => println!("NEEDS   {w}"),
             Verify::Failed(w) => println!("FAILED  {w}"),
+            Verify::Microsoft(w) => {
+                println!("MS      {w}: signs in with Microsoft, not a password")
+            }
         },
         "fetch" => match fetch_newest(&r, &acct, 15, &[]).await {
             Ok(found) => {

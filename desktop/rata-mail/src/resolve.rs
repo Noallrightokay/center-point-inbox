@@ -13,8 +13,8 @@ use std::net::IpAddr;
 use hickory_resolver::{Resolver as HickoryResolver, TokioResolver, proto::rr::RData};
 
 use crate::discover::{
-    Candidate, IMAP_PORT, MS_HELP, MS365_HELP, MxRule, Source, conventional, is_microsoft, mx_rule,
-    no_imap, table,
+    Candidate, IMAP_PORT, MS_SIGN_IN, MxRule, Source, conventional, is_microsoft,
+    is_microsoft_consumer, mx_rule, no_imap, table,
 };
 use crate::guard::{HostVerdict, check_literal, check_resolved, normalise};
 use crate::key::domain_of;
@@ -192,17 +192,22 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
                 "\"{raw}\" is not a server address RATA can use. Enter just the name, like imap.example.com."
             ));
         };
-        // Microsoft's IMAP no longer takes a password, so the one the customer
-        // typed would only come back "refused" (see `discover::MS_HELP`).
-        if is_microsoft(&given) {
-            return Discovery::Refuse(MS_HELP.into());
-        }
+        // A Microsoft server is honoured like any other. What differs is how
+        // it is signed in to, and `verify` sees to that: a password is never
+        // sent to Microsoft (see `discover::MS_SIGN_IN`). It is named for
+        // Microsoft, not for the address's own domain.
+        let microsoft = is_microsoft(&given);
+        let label = match (microsoft, is_microsoft_consumer(&domain)) {
+            (true, true) => "Outlook".to_string(),
+            (true, false) => "Microsoft 365".to_string(),
+            (false, _) => domain,
+        };
         return Discovery::Candidates {
             hosts: vec![Candidate {
                 host: given,
                 port: IMAP_PORT,
-                label: domain,
-                help: None,
+                label,
+                help: microsoft.then(|| MS_SIGN_IN.to_string()),
                 source: Source::Override,
             }],
             filtered_by: None,
@@ -218,11 +223,6 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
         ));
     }
     if let Some(known) = table(&domain) {
-        // Outlook.com, Hotmail, Live and MSN: said before a password is sent
-        // anywhere, not discovered as a refusal of a password that was right.
-        if is_microsoft(known.host) {
-            return Discovery::Refuse(known.help.into());
-        }
         return Discovery::Candidates {
             hosts: vec![Candidate {
                 host: known.host.into(),
@@ -237,23 +237,22 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
 
     let mut hosts: Vec<Candidate> = Vec::new();
     let mut filtered_by: Option<String> = None;
-    // A domain whose mail is at Microsoft 365. Refused below unless its own
-    // SRV record names another IMAP server, which is the domain saying where
-    // its mailboxes really are.
-    let mut microsoft: Option<&'static str> = None;
 
+    // A domain at Microsoft 365 is found here like any other: its SRV or MX
+    // names Microsoft's host, and `verify` then keeps a password away from it.
     if let Some((target, port)) = resolver.srv_imaps(&domain).await {
-        if is_microsoft(&target) {
-            microsoft = Some(MS365_HELP);
-        } else {
-            hosts.push(Candidate {
-                host: target,
-                port,
-                label: domain.clone(),
-                help: None,
-                source: Source::Srv,
-            });
-        }
+        let microsoft = is_microsoft(&target);
+        hosts.push(Candidate {
+            host: target,
+            port,
+            label: if microsoft {
+                "Microsoft 365".into()
+            } else {
+                domain.clone()
+            },
+            help: microsoft.then(|| MS_SIGN_IN.to_string()),
+            source: Source::Srv,
+        });
     }
 
     for exchange in resolver.mx(&domain).await {
@@ -261,9 +260,6 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
             Some(MxRule::Refuse(why)) => return Discovery::Refuse(why.into()),
             Some(MxRule::Filtered) => {
                 filtered_by.get_or_insert_with(|| exchange.trim_end_matches('.').to_string());
-            }
-            Some(MxRule::Serves(h)) if is_microsoft(h.host) => {
-                microsoft.get_or_insert(h.help);
             }
             Some(MxRule::Serves(h)) => {
                 if !hosts.iter().any(|c| c.host == h.host) {
@@ -278,12 +274,6 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
             }
             None => {}
         }
-    }
-
-    if let Some(why) = microsoft
-        && hosts.is_empty()
-    {
-        return Discovery::Refuse(why.into());
     }
 
     for guess in conventional(email) {
@@ -342,40 +332,57 @@ mod tests {
     }
 
     #[test]
-    fn microsoft_is_refused_before_a_password_is_used() {
+    fn microsoft_is_found_like_any_other_provider() {
+        // C0 refused these here. They are found now, and `verify` keeps a
+        // password away from them (imap.rs:
+        // `a_password_is_never_sent_to_microsoft`).
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             for addr in [
                 "someone@outlook.com",
                 "someone@hotmail.com",
                 "someone@live.com",
+                "someone@hotmail.co.uk",
             ] {
                 match discover(&r, addr, None).await {
-                    Discovery::Refuse(why) => {
-                        assert!(why.contains("cannot be added to RATA yet"), "{addr}: {why}");
-                        assert!(why.contains("OAuth"), "{addr}: {why}");
+                    Discovery::Candidates { hosts, .. } => {
+                        assert_eq!(hosts.len(), 1, "{addr}: {hosts:?}");
+                        assert_eq!(hosts[0].host, "outlook.office365.com", "{addr}");
+                        assert_eq!(hosts[0].label, "Outlook", "{addr}");
+                        assert_eq!(hosts[0].source, Source::Table, "{addr}");
                     }
                     other => panic!("{addr}: {other:?}"),
                 }
             }
-            // Typing Microsoft's server by hand is the same mailbox.
+            // Typing Microsoft's server by hand is honoured like any other.
             match discover(&r, "me@example.com", Some("outlook.office365.com")).await {
-                Discovery::Refuse(why) => assert!(why.contains("OAuth"), "{why}"),
+                Discovery::Candidates { hosts, .. } => {
+                    assert_eq!(hosts.len(), 1);
+                    assert_eq!(hosts[0].host, "outlook.office365.com");
+                    assert_eq!(hosts[0].source, Source::Override);
+                }
                 other => panic!("{other:?}"),
             }
         });
     }
 
     #[test]
-    fn a_domain_at_microsoft_365_is_refused_by_its_mx() {
+    fn a_domain_at_microsoft_365_is_found_by_its_mx() {
         // Real DNS, like the Anthropic test below: microsoft.com's MX is
         // Microsoft 365's (microsoft-com.mail.protection.outlook.com).
         rt().block_on(async {
             let r = Resolver::system().expect("resolver");
             match discover(&r, "someone@microsoft.com", None).await {
-                Discovery::Refuse(why) => {
-                    assert!(why.contains("Microsoft 365"), "{why}");
-                    assert!(why.contains("OAuth"), "{why}");
+                Discovery::Candidates { hosts, .. } => {
+                    let first = &hosts[0];
+                    assert!(is_microsoft(&first.host), "{hosts:?}");
+                    assert_eq!(first.label, "Microsoft 365", "{hosts:?}");
+                    assert!(
+                        hosts
+                            .iter()
+                            .any(|c| c.host == "outlook.office365.com" && c.source == Source::Mx),
+                        "{hosts:?}"
+                    );
                 }
                 other => panic!("{other:?}"),
             }

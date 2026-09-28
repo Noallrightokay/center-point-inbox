@@ -92,7 +92,7 @@ pub(crate) const HIDDEN: &str = "[token hidden]";
 /// left to the server's manners. Passwords are left alone: the existing
 /// messages never carried one, and a short password would blank out ordinary
 /// words.
-pub(crate) fn redact(text: &str, credential: &Credential) -> String {
+pub fn redact(text: &str, credential: &Credential) -> String {
     let Credential::OAuth { user, access_token } = credential else {
         return text.to_string();
     };

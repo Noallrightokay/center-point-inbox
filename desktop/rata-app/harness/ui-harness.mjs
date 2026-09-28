@@ -12,7 +12,7 @@ const STORE_SOFT_CAP_JS = 3500000;
 let fails = 0;
 const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
 
-const MOCK = ({ licensed }) => {
+const MOCK = ({ licensed, ms }) => {
   // Playwright injects this into every frame; the app is only the top one.
   if (window !== window.top) return;
   window.__mock = {
@@ -22,6 +22,10 @@ const MOCK = ({ licensed }) => {
     setLicenceRejects: false,
     refresh: null,
     calls: [],
+    /* Whether this build can sign in with Microsoft (RATA_MS_CLIENT_ID). */
+    msConfigured: !!ms,
+    /* Domains the fake DNS puts at Microsoft 365. */
+    msDomains: [],
   };
   const M = window.__mock;
   const standing = () => M.licensed
@@ -55,7 +59,27 @@ const MOCK = ({ licensed }) => {
         /* The engine's refusal (a Microsoft 365 domain found by its MX, say):
            core::link answers `failed` with the reason. */
         if (M.linkFails) return { outcome: 'failed', error: M.linkFails };
+        /* C2: a Microsoft mailbox reached with a password. The password went
+           nowhere; the answer says whether this build can sign in instead. */
+        if (M.linkMicrosoft) return { outcome: 'microsoft', configured: M.msConfigured,
+          error: M.msConfigured ? 'Microsoft 365 mailboxes sign in with Microsoft, not with a password, so RATA did not send the password anywhere. Use Sign in with Microsoft.' : M.linkMicrosoft };
         return { outcome: 'ok', mailbox: { email: args.email, host: 'imap.example.com', port: 993, label: 'Example', source: 'table' } };
+      case 'microsoft_ready':
+        return M.msConfigured;
+      case 'discover_mailbox': {
+        const d = String(args.email).split('@')[1] || '';
+        const ms = M.msDomains.includes(d);
+        return { label: ms ? 'Microsoft 365' : 'Example', microsoft: ms, configured: M.msConfigured,
+          ...(ms && !M.msConfigured ? { note: 'That address’s mail is at Microsoft 365, which RATA cannot open yet. Microsoft only lets other apps into Microsoft 365 mailboxes through its own sign-in page (OAuth), and no longer accepts passwords for IMAP. RATA does not have that sign-in yet.' } : {}) };
+      }
+      /* The sign-in waits for the browser; the harness answers for it with
+         __mock.msPending(outcome), or Cancel does. */
+      case 'link_microsoft':
+        if (!M.msConfigured) return { outcome: 'microsoft', configured: false, error: 'Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet.' };
+        return new Promise((r) => { M.msPending = (o) => { M.msPending = null; r(o); }; });
+      case 'cancel_microsoft':
+        if (M.msPending) { M.msPending({ outcome: 'cancelled' }); return true; }
+        return false;
       case 'reread_mail':
         if (args.folder === 'archive') {
           M.archReads = (M.archReads || []).concat([args]);
@@ -141,7 +165,7 @@ const browser = await chromium.launch();
    interface under the rules it actually ships with. */
 import { readFileSync as _read } from 'node:fs';
 const APP_CSP = JSON.parse(_read(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')).app.security.csp;
-async function open(licensed) {
+async function open(licensed, opts = {}) {
   const page = await browser.newPage();
   await page.route('**/app.html', async (route) => {
     const resp = await route.fetch();
@@ -149,7 +173,7 @@ async function open(licensed) {
   });
   page.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
   page.on('dialog', (d) => d.accept());
-  await page.addInitScript(MOCK, { licensed });
+  await page.addInitScript(MOCK, { licensed, ms: !!opts.ms });
   await page.goto(B + '/app.html');
   await page.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
   /* A licensed app refreshes by itself a moment after start (0.1.27); let
@@ -553,14 +577,15 @@ console.log('\n— Microsoft mailboxes are named as not supported, before a pass
     noteShown: getComputedStyle($('#lf-ms')).display !== 'none',
     passShown: getComputedStyle($('#lf-pass')).display !== 'none',
     canLink: !$('#lf-save').disabled && getComputedStyle($('#lf-save')).display !== 'none',
+    goShown: getComputedStyle($('#lf-ms-go')).display !== 'none',
     links: __mock.calls.filter((c) => c[0] === 'link_mailbox').length,
   }));
   let f = await form();
   check(!f.noteShown && f.passShown && f.canLink, `an empty form asks for the password as before: ${JSON.stringify(f)}`);
   await pg.fill('#lf-input', 'someone@outlook.com');
   f = await form();
-  check(f.noteShown && /cannot be added to RATA yet/.test(f.note) && /OAuth/.test(f.note) && !f.passShown && !f.canLink,
-    `an @outlook.com address says Microsoft is not supported yet, and why, with no password box: ${JSON.stringify(f)}`);
+  check(f.noteShown && /cannot be added to RATA yet/.test(f.note) && /OAuth/.test(f.note) && !f.passShown && !f.canLink && !f.goShown,
+    `in a build without Microsoft sign-in, an @outlook.com address says Microsoft is not supported yet, and why, with no password box and no sign-in button: ${JSON.stringify(f)}`);
   await pg.press('#lf-input', 'Enter');
   await pg.waitForTimeout(100);
   f = await form();
@@ -589,6 +614,137 @@ console.log('\n— Microsoft mailboxes are named as not supported, before a pass
   await pg.evaluate(() => { __mock.linkFails = null; openMailForm('old@live.com', 'That mailbox refused the sign-in.'); });
   f = await form();
   check(f.noteShown && /OAuth/.test(f.note) && !f.passShown && !f.canLink, `Relink on an old @live.com mailbox says why instead of asking again: ${JSON.stringify(f)}`);
+  await pg.close();
+}
+
+console.log('\n— Sign in with Microsoft (C2/C3) —');
+{
+  const pg = await open(true, { ms: true });
+  await pg.evaluate(() => { go('set'); openMailForm(); __mock.calls = []; window.__toasts = []; });
+  await pg.waitForFunction(() => MS_READY === true, null, { timeout: 5000 });
+  const form = () => pg.evaluate(() => ({
+    note: $('#lf-ms').textContent,
+    noteShown: getComputedStyle($('#lf-ms')).display !== 'none',
+    calm: $('#lf-ms').classList.contains('calm'),
+    sub: $('#lf-sub').textContent,
+    open: $('#linkform').style.display !== 'none',
+    passShown: getComputedStyle($('#lf-pass')).display !== 'none',
+    canLink: !$('#lf-save').disabled && getComputedStyle($('#lf-save')).display !== 'none',
+    goShown: getComputedStyle($('#lf-ms-go')).display !== 'none',
+    goClass: $('#lf-ms-go').className,
+    goText: $('#lf-ms-go').textContent,
+    inputOff: $('#lf-input').disabled,
+    ms: __mock.calls.filter((c) => c[0] === 'link_microsoft').map((c) => c[1]),
+    links: __mock.calls.filter((c) => c[0] === 'link_mailbox').length,
+    cancels: __mock.calls.filter((c) => c[0] === 'cancel_microsoft').length,
+  }));
+  const sub = await pg.evaluate(() => $('#lf-sub').textContent);
+  check(/sign in with Microsoft instead/.test(sub) && !/not supported yet/.test(sub), `the form says Microsoft mailboxes sign in with Microsoft, not that they are unsupported: "${sub.slice(-70)}"`);
+  await pg.fill('#lf-input', 'someone@outlook.com');
+  let f = await form();
+  check(f.goShown && f.goText === 'Sign in with Microsoft' && !f.passShown && !f.canLink && f.noteShown && f.calm && /instead of an app password/.test(f.note),
+    `an @outlook.com address shows Sign in with Microsoft in place of the password box: ${JSON.stringify(f)}`);
+  check(f.goClass === 'btn' && !/—/.test(f.note), `a secondary button, and the words have no em dash: ${JSON.stringify({ c: f.goClass, n: f.note })}`);
+
+  // Pressing it: the app signs in; the form waits for the browser.
+  await pg.click('#lf-ms-go');
+  await pg.waitForFunction(() => LF_WAIT === true && !!__mock.msPending, null, { timeout: 3000 });
+  f = await form();
+  check(f.ms.length === 1 && f.ms[0].email === 'someone@outlook.com' && /Finish signing in in your browser/.test(f.note) && !f.goShown && f.inputOff && f.open,
+    `pressing it asks the app to sign in, and the form waits for the browser: ${JSON.stringify(f)}`);
+  check(f.links === 0, 'and no password link is ever attempted');
+  await pg.click('#lf-cancel');
+  await pg.waitForFunction(() => !LF_WAIT, null, { timeout: 3000 });
+  f = await form();
+  const cancelToasts = (await toasts(pg)).filter((t) => /Microsoft|sign/i.test(t));
+  check(f.cancels === 1 && !f.open && cancelToasts.length === 0 && !(await pg.evaluate(() => S.linked.some((l) => l.label === 'someone@outlook.com'))),
+    `Cancel stops the listener and closes the form, with nothing linked and nothing to say: ${JSON.stringify({ c: f.cancels, open: f.open, t: cancelToasts })}`);
+
+  // A sign-in that ends badly says why in the form, and can be tried again.
+  await pg.evaluate(() => { openMailForm(); __mock.calls = []; });
+  await pg.fill('#lf-input', 'someone@outlook.com');
+  await pg.click('#lf-ms-go');
+  await pg.waitForFunction(() => !!__mock.msPending, null, { timeout: 3000 });
+  await pg.evaluate(() => __mock.msPending({ outcome: 'failed', error: 'You signed in to Microsoft as other@outlook.com, which cannot open someone@outlook.com. Sign in as someone@outlook.com, or add other@outlook.com instead.' }));
+  await pg.waitForFunction(() => !LF_WAIT, null, { timeout: 3000 });
+  f = await form();
+  check(f.open && /You signed in to Microsoft as other@outlook.com/.test(f.sub) && f.goShown && !f.inputOff,
+    `a failed sign-in is said in the form and the button comes back: ${JSON.stringify(f)}`);
+
+  // Success adds the mailbox.
+  await pg.evaluate(() => { __mock.calls = []; window.__toasts = []; });
+  await pg.click('#lf-ms-go');
+  await pg.waitForFunction(() => !!__mock.msPending, null, { timeout: 3000 });
+  await pg.evaluate(() => {
+    const mb = { email: 'someone@outlook.com', host: 'outlook.office365.com', port: 993, label: 'Outlook', source: 'microsoft', auth: 'oauth' };
+    __mock.mailboxes.push(mb);
+    __mock.msPending({ outcome: 'ok', mailbox: mb });
+  });
+  await pg.waitForFunction(() => S.linked.some((l) => l.label === 'someone@outlook.com' && l.status === 'live') && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  const added = await pg.evaluate(() => {
+    const l = S.linked.find((x) => x.label === 'someone@outlook.com');
+    return { l, open: $('#linkform').style.display !== 'none', rows: $('#linked-list').textContent };
+  });
+  const okToast = (await toasts(pg)).find((t) => /linked with Microsoft/.test(t));
+  check(added.l && added.l.auth === 'oauth' && !added.open && /signs in with Microsoft/.test(added.rows) && !!okToast,
+    `a finished sign-in adds the mailbox, marked as signing in with Microsoft: ${JSON.stringify({ l: added.l, open: added.open, toast: okToast })}`);
+  check(!JSON.stringify(await pg.evaluate(() => S.linked)).match(/token|EwB|refresh/i), 'nothing token-like reaches the page\'s state');
+
+  // A company domain at Microsoft 365, known only by DNS, gets the button
+  // before any password box.
+  await pg.evaluate(() => { __mock.msDomains = ['contoso.example']; openMailForm(); __mock.calls = []; });
+  await pg.fill('#lf-input', 'ann@contoso.example');
+  await pg.waitForFunction(() => getComputedStyle($('#lf-ms-go')).display !== 'none', null, { timeout: 4000 }).catch(() => {});
+  f = await form();
+  const found = await pg.evaluate(() => __mock.calls.filter((c) => c[0] === 'discover_mailbox').map((c) => c[1].email));
+  check(found.includes('ann@contoso.example') && f.goShown && !f.passShown, `a company domain the app finds at Microsoft 365 by DNS switches to the button: ${JSON.stringify({ found, f })}`);
+  await pg.fill('#lf-input', 'ann@gmail.com');
+  await pg.waitForTimeout(700);
+  f = await form();
+  check(!f.goShown && f.passShown && f.canLink, `an address that is not Microsoft's keeps the password box: ${JSON.stringify(f)}`);
+
+  // A password typed before discovery answered: the engine refuses to send it
+  // to Microsoft, and the form switches.
+  await pg.evaluate(() => { __mock.linkMicrosoft = true; openMailForm(); __mock.calls = []; });
+  await pg.fill('#lf-input', 'bo@fabrikam.example');
+  await pg.fill('#lf-pass', 'abcd efgh ijkl mnop');
+  await pg.click('#lf-save');
+  await pg.waitForFunction(() => $('#lf-save').textContent === 'Link');
+  f = await form();
+  const passLeft = await pg.evaluate(() => $('#lf-pass').value);
+  check(f.links === 1 && f.goShown && !f.passShown && passLeft === '' && f.calm, `the engine's "Microsoft takes no password" switches the form to the button and drops the password: ${JSON.stringify(f)}`);
+  await pg.evaluate(() => { __mock.linkMicrosoft = false; $('#lf-cancel').click(); });
+
+  // Microsoft stops accepting the sign-in: the mailbox is parked as "Sign in
+  // to Microsoft again", never "app password", and the button reruns it.
+  await pg.evaluate(async () => {
+    window.__toasts = [];
+    __mock.refresh = { messages: [], problems: [{ email: 'someone@outlook.com', kind: 'microsoft', error: 'Sign in to Microsoft again to keep reading someone@outlook.com. Microsoft said: AADSTS70008 (invalid_grant)' }], skipped: [] };
+    await serverSync('mail');
+    go('set'); renderLinked();
+  });
+  const parked = await pg.evaluate(() => {
+    const l = S.linked.find((x) => x.label === 'someone@outlook.com');
+    const b = document.querySelector(`[data-lkms="${l.id}"]`);
+    const rowText = b ? b.closest('.set-row').textContent : '';
+    return { needs: l.needsRelink, signIn: l.signIn, button: b ? b.textContent : null, cls: b ? b.className : null, rowText, relink: !!document.querySelector(`[data-lkfix="${l.id}"]`) };
+  });
+  const parkToast = (await toasts(pg)).join(' | ');
+  check(parked.needs && parked.button === 'Sign in to Microsoft again' && /SIGN IN TO MICROSOFT AGAIN/.test(parked.rowText) && !/APP PASSWORD/.test(parked.rowText) && !parked.relink,
+    `a refused sign-in shows "Sign in to Microsoft again" with its button, not "app password": ${JSON.stringify(parked)}`);
+  check(/Sign in to Microsoft again for someone@outlook.com/.test(parkToast) && !/app password/.test(parkToast), `and the sync says so in those words: ${parkToast}`);
+  await pg.evaluate(() => { __mock.calls = []; const l = S.linked.find((x) => x.label === 'someone@outlook.com'); document.querySelector(`[data-lkms="${l.id}"]`).click(); });
+  await pg.waitForFunction(() => !!__mock.msPending, null, { timeout: 3000 }).catch(() => {});
+  f = await form();
+  check(f.open && f.ms.length === 1 && f.ms[0].email === 'someone@outlook.com' && /Finish signing in in your browser/.test(f.note),
+    `its button reruns the sign-in for that mailbox, straight to the browser: ${JSON.stringify(f)}`);
+  await pg.evaluate(() => {
+    __mock.refresh = null;
+    __mock.msPending({ outcome: 'ok', mailbox: { email: 'someone@outlook.com', host: 'outlook.office365.com', port: 993, label: 'Outlook', source: 'microsoft', auth: 'oauth' } });
+  });
+  await pg.waitForFunction(() => { const l = S.linked.find((x) => x.label === 'someone@outlook.com'); return l && !l.needsRelink && !SYNCING; }, null, { timeout: 5000 }).catch(() => {});
+  const back = await pg.evaluate(() => { const l = S.linked.find((x) => x.label === 'someone@outlook.com'); return { needs: !!l.needsRelink, signIn: l.signIn || null, status: l.status }; });
+  check(!back.needs && !back.signIn && back.status === 'live', `signing in again clears the parked state: ${JSON.stringify(back)}`);
   await pg.close();
 }
 

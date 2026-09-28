@@ -38,7 +38,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 
 use crate::body;
 use crate::credential::{self, Credential};
-use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure};
+use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure, is_microsoft};
 use crate::guard::HostVerdict;
 use crate::key::{domain_of, mail_key};
 use crate::resolve::{Discovery, Resolver, discover, resolve_public};
@@ -236,6 +236,10 @@ pub enum Verify {
     OAuth(String),
     /// Nothing answered. Show the "server address" box.
     NeedsHost(String),
+    /// The mailbox is Microsoft's, which takes no password over IMAP: it signs
+    /// in through Microsoft instead. Settled before the password was sent
+    /// anywhere. Carries the provider, "Outlook" or "Microsoft 365".
+    Microsoft(String),
 }
 
 /// Why a refresh produced nothing. `Auth` is separated because the caller must
@@ -312,6 +316,13 @@ fn tls() -> Result<Arc<ClientConfig>, String> {
                 .map(|b| Arc::new(b.with_no_client_auth()))
         })
         .clone()
+}
+
+/// The TLS configuration every connection RATA makes uses — the platform's
+/// trust store, the named provider — for the app's one HTTPS client (signing
+/// in with Microsoft), so that it trusts exactly what the mail connections do.
+pub fn tls_client_config() -> Result<ClientConfig, String> {
+    tls().map(|c| c.as_ref().clone())
 }
 
 /// Open a verified TLS connection to a host, having judged where it points.
@@ -580,6 +591,18 @@ pub async fn verify_with(
         // the customer is owed the list — "RATA tried the usual server names"
         // is not something an IT administrator can act on.
         tried.push(cand.host.clone());
+
+        // Microsoft takes no password over IMAP. Sending one would only come
+        // back "refused" — against a password that may well be right — and
+        // count as a failed sign-in on the customer's account. Said before a
+        // socket is opened.
+        if matches!(credential, Credential::Password(_)) && is_microsoft(&cand.host) {
+            return Verify::Microsoft(if cand.label.is_empty() {
+                "Microsoft".into()
+            } else {
+                cand.label.clone()
+            });
+        }
 
         let client = match open(resolver, &cand.host, cand.port).await {
             Ok(c) => c,
@@ -4121,6 +4144,28 @@ mod tests {
             let r = Resolver::system().expect("resolver");
             match verify(&r, "someone@proton.me", "x", None).await {
                 Verify::Failed(why) => assert!(why.contains("no IMAP server"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn a_password_is_never_sent_to_microsoft() {
+        rt().block_on(async {
+            let r = Resolver::system().expect("resolver");
+            // A consumer address (from the table, no DNS) and Microsoft's
+            // server typed by hand: both answered before any socket opens.
+            match verify(&r, "someone@outlook.com", "right-password", None).await {
+                Verify::Microsoft(label) => assert_eq!(label, "Outlook"),
+                other => panic!("{other:?}"),
+            }
+            // Named for Microsoft, not for the address's own domain.
+            match verify(&r, "me@example.com", "pw", Some("outlook.office365.com")).await {
+                Verify::Microsoft(label) => assert_eq!(label, "Microsoft 365"),
+                other => panic!("{other:?}"),
+            }
+            match verify(&r, "me@hotmail.com", "pw", Some("outlook.office365.com")).await {
+                Verify::Microsoft(label) => assert_eq!(label, "Outlook"),
                 other => panic!("{other:?}"),
             }
         });
