@@ -29,9 +29,10 @@ use async_imap::types::Flag;
 use futures::StreamExt;
 use mail_parser::MimeHeaders;
 use rata_mail::{
-    Account, Acted, Action, Address, Fetched, File, Folder, HostVerdict, Known, Listed, Outgoing,
-    Resolver, Sent, Source, Verify, Watched, act, check_literal, check_resolved, fetch_newest,
-    fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders, send, verify, watch,
+    Account, Acted, Action, Address, Credential, Fetched, File, Folder, HostVerdict, Known, Listed,
+    Outgoing, Resolver, Sent, Source, Verify, Watched, act, check_literal, check_resolved,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders, send, verify,
+    watch,
 };
 use tokio::net::TcpStream;
 
@@ -61,7 +62,7 @@ fn user(tag: &str) -> String {
 fn account(email: &str) -> Account {
     Account {
         email: email.into(),
-        pass: PASS.into(),
+        credential: Credential::Password(PASS.into()),
         host: HOST.into(),
         port: 993,
         label: "Loopback".into(),
