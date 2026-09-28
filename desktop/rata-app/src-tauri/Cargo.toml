@@ -29,6 +29,11 @@ tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
 
+# Marking saved files as downloads on macOS (mark.rs). Already in the tree
+# through the updater's tar, so nothing new is built.
+[target.'cfg(target_os = "macos")'.dependencies]
+xattr = "1"
+
 [features]
 # Tauri needs this to build a release binary without a console window on Windows.
 default = []

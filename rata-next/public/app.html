@@ -569,6 +569,16 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 #upd-bar[hidden]{display:none}
 #upd-bar .upd-text{font-weight:600}
 #upd-bar .upd-why{display:block;font-weight:400;color:var(--faint);font-size:12.5px;max-width:520px}
+/* The website only (F2): in a browser this page reaches no mailbox, and
+   says so once, at the top, until dismissed. Never drawn in the app. */
+#web-note{flex-shrink:0;display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:10px 24px;background:var(--fill-2);border-bottom:1px solid var(--hair);font-size:13px;color:var(--slate)}
+#web-note[hidden]{display:none}
+#web-note .wn-text{flex:1 1 260px;min-width:0}
+#web-note .wn-text b{color:var(--ink);font-weight:600}
+#web-note .btn{min-height:30px;padding:5px 12px;text-decoration:none}
+#web-note .btn.quiet{background:transparent;box-shadow:none;color:var(--slate)}
+#web-note .btn.quiet:hover{background:var(--fill);color:var(--ink)}
+@media (max-width:880px){#web-note{padding:10px 16px}}
 
 /* ---------- the resting reading pane ---------- */
 .rest-wrap{max-width:720px;margin:0 auto;padding:46px 30px 60px;width:100%;display:flex;flex-direction:column;gap:26px}
@@ -741,6 +751,11 @@ button.att-card:disabled{opacity:.6;cursor:progress}
         <button class="am-item" id="am-signout">Sign out</button>
       </div>
     </div>
+    <div id="web-note" role="note" aria-label="About this page" hidden>
+      <span class="wn-text"><b>RATA reads your mail in the desktop app.</b> This page keeps your account and settings.</span>
+      <a class="btn" id="wn-download" href="/index.html#download">Download</a>
+      <button type="button" class="btn quiet" id="wn-dismiss">Dismiss</button>
+    </div>
 
     <!-- MESSAGES -->
     <section class="view active pane-view" id="view-inbox">
@@ -885,7 +900,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">Linked accounts</div>
           <div id="linked-list"></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Add an account</b><span id="quota-line">Gmail, iCloud, Yahoo, Fastmail or your work address, with an app password. Outlook, Hotmail and Microsoft 365 are not supported yet.</span></div>
+            <div class="grow"><b>Add an account</b><span id="quota-line">Gmail, iCloud, Yahoo, Fastmail or your work address, with an app password or, where RATA offers it, Sign in with Microsoft.</span></div>
             <button class="btn primary" data-addlink="mail">＋ Email account</button>
           </div>
           <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-ms-go" style="display:none">Sign in with Microsoft</button><button class="btn" id="lf-cancel">Cancel</button></div>
@@ -3190,6 +3205,23 @@ function openMailForm(email,why){
   lfFind();
 }
 if(window.__RATA_NATIVE__)msReady();
+/* The website's one sentence about itself (F2). In a browser this page can
+   reach no mailbox: linking, reading and sending happen in the desktop app.
+   So a browser shows a banner saying so, with Download, until Dismiss (kept
+   in this browser's storage, which may be missing or refuse: then it shows
+   again next time, which is harmless). The app never shows it: the markup
+   starts hidden and only a page without the bridge unhides it. */
+const WEB_NOTE_KEY='rata_web_note_dismissed';
+function webNote(){
+  const el=$('#web-note');if(!el)return;
+  let gone=false;
+  try{gone=localStorage.getItem(WEB_NOTE_KEY)==='1'}catch(e){}
+  el.hidden=!!window.__RATA_NATIVE__||gone;
+  $('#wn-dismiss').onclick=()=>{
+    el.hidden=true;
+    try{localStorage.setItem(WEB_NOTE_KEY,'1')}catch(e){}
+  };
+}
 /* What the app says about Microsoft mailboxes, by whether it can sign in. */
 function msWords(){
   return MS_READY?'Outlook, Hotmail and Microsoft 365 sign in with Microsoft instead.':'Outlook, Hotmail and Microsoft 365 are not supported yet.';
@@ -5010,6 +5042,7 @@ function showWelcome(ob){
      whenever a link changes — the Accounts screen states the allowance before
      anyone runs into it. */
   refreshQuota();
+  webNote();
   /* In the app, what the licence allows. */
   if(window.__RATA_NATIVE__){try{takeStanding(await apiFetch('/api/licence'))}catch(e){}}
   renderSplitLock();

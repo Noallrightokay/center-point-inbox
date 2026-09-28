@@ -1803,6 +1803,10 @@ fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
         {
             Ok(mut f) => {
                 f.write_all(bytes)?;
+                drop(f);
+                // Tagged as a download, so SmartScreen, Protected View and
+                // Gatekeeper look at it. Best effort: never fails the save.
+                let _ = crate::mark::from_internet(&path);
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

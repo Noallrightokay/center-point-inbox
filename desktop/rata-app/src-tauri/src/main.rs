@@ -17,6 +17,7 @@ mod commands;
 mod core;
 mod licence;
 mod links;
+mod mark;
 mod notify;
 mod oauth;
 mod store;
