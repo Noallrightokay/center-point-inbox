@@ -45,15 +45,22 @@ pub const IMAP_PORT: u16 = 993;
 const GOOGLE_HELP: &str = "myaccount.google.com/apppasswords — needs 2-Step Verification on";
 const APPLE_HELP: &str = "appleid.apple.com → Sign-In and Security → App-Specific Passwords";
 /// Microsoft's IMAP host, for Outlook.com, Hotmail, Live, MSN and Microsoft
-/// 365 alike. Discovery still finds it, so the app can say who the mailbox
-/// is with; linking refuses it (see [`is_microsoft`]).
+/// 365 alike. Discovery finds it like any other; what differs is how it is
+/// signed in to (see [`is_microsoft`]).
 pub const MS_IMAP: &str = "outlook.office365.com";
 
+/// What a Microsoft mailbox signs in with, in the place other providers say
+/// where their app passwords are.
+///
 /// Microsoft turned off password sign-in to IMAP: Outlook.com in September
 /// 2024, Exchange Online before that. Only OAuth 2.0 gets in now, app
-/// passwords included, and RATA signs in with passwords. So a Microsoft
-/// mailbox is refused before a password is sent anywhere, with the reason,
-/// instead of failing as "password refused" against a password that was right.
+/// passwords included. So a password is never sent to Microsoft (`verify`
+/// answers `Verify::Microsoft` before dialling) and the app signs in through
+/// Microsoft's own page instead.
+pub const MS_SIGN_IN: &str = "Signs in through Microsoft's own page, in your browser.";
+
+/// What to say in a build that has no Microsoft sign-in (no client id was
+/// compiled in): the mailbox cannot be added, and why. C0's words.
 pub const MS_HELP: &str = "Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet. Microsoft only lets other apps into them through its own sign-in page (OAuth), and no longer accepts passwords or app passwords for IMAP. RATA does not have that sign-in yet.";
 pub const MS365_HELP: &str = "That address's mail is at Microsoft 365, which RATA cannot open yet. Microsoft only lets other apps into Microsoft 365 mailboxes through its own sign-in page (OAuth), and no longer accepts passwords for IMAP. RATA does not have that sign-in yet.";
 
@@ -71,15 +78,48 @@ pub fn is_microsoft(host: &str) -> bool {
     .iter()
     .any(|s| h == *s || h.ends_with(&format!(".{s}")))
 }
+
+/// Microsoft's own consumer domains: Outlook.com, Hotmail, Live and MSN,
+/// regional ones included. The same list as `MS_DOMAINS` in `app.html`.
+pub fn is_microsoft_consumer(domain: &str) -> bool {
+    matches!(
+        domain.trim().to_ascii_lowercase().as_str(),
+        "outlook.com"
+            | "hotmail.com"
+            | "live.com"
+            | "msn.com"
+            | "passport.com"
+            | "windowslive.com"
+            | "hotmail.co.uk"
+            | "hotmail.fr"
+            | "hotmail.de"
+            | "hotmail.it"
+            | "hotmail.es"
+            | "live.co.uk"
+            | "live.fr"
+            | "live.de"
+            | "live.it"
+            | "live.nl"
+            | "live.ca"
+            | "live.com.au"
+            | "outlook.fr"
+            | "outlook.de"
+            | "outlook.es"
+            | "outlook.it"
+            | "outlook.jp"
+    )
+}
 const YAHOO_HELP: &str = "login.yahoo.com → Account security → Generate app password";
 
 /// Consumer domains, answered without a lookup.
 pub fn table(domain: &str) -> Option<MailHost> {
     let h = |host, label, help| Some(MailHost { host, label, help });
+    if is_microsoft_consumer(domain) {
+        return h(MS_IMAP, "Outlook", MS_SIGN_IN);
+    }
     match domain {
         "gmail.com" | "googlemail.com" => h("imap.gmail.com", "Gmail", GOOGLE_HELP),
         "icloud.com" | "me.com" | "mac.com" => h("imap.mail.me.com", "iCloud Mail", APPLE_HELP),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => h(MS_IMAP, "Outlook", MS_HELP),
         "yahoo.com" | "ymail.com" => h("imap.mail.yahoo.com", "Yahoo Mail", YAHOO_HELP),
         "aol.com" => h(
             "imap.aol.com",
@@ -176,7 +216,7 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
         );
     }
     if under("outlook.com") || under("office365.com") {
-        return serves(MS_IMAP, "Microsoft 365", MS365_HELP);
+        return serves(MS_IMAP, "Microsoft 365", MS_SIGN_IN);
     }
     if under("zoho.com") || under("zoho.eu") || under("zoho.in") {
         return serves(
@@ -307,7 +347,14 @@ pub fn smtp_candidates(imap_host: &str, email: &str) -> Vec<String> {
     }
     let mut out: Vec<String> = Vec::new();
 
-    if imap_host == "outlook.office365.com" {
+    if imap_host == MS_IMAP {
+        // Outlook.com's own submission host first for its own addresses: a
+        // token refused by one Microsoft host stops the attempt (a second
+        // host would say the same about a password), so the likelier one
+        // goes first.
+        if is_microsoft_consumer(&domain_of(email)) {
+            add(&mut out, "smtp-mail.outlook.com".into());
+        }
         add(&mut out, "smtp.office365.com".into());
         add(&mut out, "smtp-mail.outlook.com".into());
         add(&mut out, imap_host.into());
@@ -451,25 +498,35 @@ mod tests {
     }
 
     #[test]
-    fn microsoft_says_why_it_cannot_be_linked_yet() {
-        for d in ["outlook.com", "hotmail.com", "live.com", "msn.com"] {
+    fn microsoft_is_found_and_signs_in_through_microsoft() {
+        for d in [
+            "outlook.com",
+            "hotmail.com",
+            "live.com",
+            "msn.com",
+            "hotmail.co.uk",
+            "outlook.jp",
+            "live.com.au",
+        ] {
             let known = table(d).expect(d);
+            assert_eq!(known.host, MS_IMAP, "{d}");
             assert!(is_microsoft(known.host), "{d}");
-            assert!(known.help.contains("OAuth"), "{d}: {}", known.help);
-            assert!(
-                known.help.contains("cannot be added"),
-                "{d}: {}",
-                known.help
-            );
+            assert_eq!(known.label, "Outlook", "{d}");
+            assert_eq!(known.help, MS_SIGN_IN, "{d}");
         }
+        assert!(!is_microsoft_consumer("gmail.com"));
+        assert!(!is_microsoft_consumer("notoutlook.com"));
         match mx_rule("acme-com.mail.protection.outlook.com") {
             Some(MxRule::Serves(h)) => {
                 assert!(is_microsoft(h.host));
-                assert!(h.help.contains("Microsoft 365"), "{}", h.help);
-                assert!(h.help.contains("OAuth"), "{}", h.help);
+                assert_eq!(h.label, "Microsoft 365");
+                assert_eq!(h.help, MS_SIGN_IN);
             }
             other => panic!("{other:?}"),
         }
+        // C0's words stay, for a build without Microsoft sign-in.
+        assert!(MS_HELP.contains("cannot be added") && MS_HELP.contains("OAuth"));
+        assert!(MS365_HELP.contains("Microsoft 365") && MS365_HELP.contains("OAuth"));
         for host in [
             "outlook.office365.com",
             "OUTLOOK.OFFICE365.COM.",
@@ -514,6 +571,15 @@ mod tests {
         let ms = smtp_candidates("outlook.office365.com", "a@b.com");
         assert_eq!(ms[0], "smtp.office365.com");
         assert!(ms.contains(&"smtp-mail.outlook.com".to_string()), "{ms:?}");
+        // Outlook.com's own addresses try Outlook.com's host first, and every
+        // host a Microsoft mailbox is given is Microsoft's: its token goes
+        // nowhere else.
+        let consumer = smtp_candidates("outlook.office365.com", "a@hotmail.co.uk");
+        assert_eq!(consumer[0], "smtp-mail.outlook.com");
+        assert!(consumer.contains(&"smtp.office365.com".to_string()));
+        for h in ms.iter().chain(&consumer) {
+            assert!(is_microsoft(h), "{h}");
+        }
     }
 
     #[test]

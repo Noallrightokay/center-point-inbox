@@ -116,6 +116,120 @@ fn explain(e: keyring::Error) -> String {
     }
 }
 
+// ------------------------------------------------ Microsoft's refresh token
+
+/// What a mailbox's keychain entry holds: an app password, or — for a
+/// mailbox that signs in with Microsoft (C2) — the refresh token Microsoft
+/// issued, in the same place a password would be.
+///
+/// The token is marked so it can never be mistaken for a password: a token
+/// presented as an IMAP password would be sent to the mail server as one,
+/// and a password sent to Microsoft's token endpoint would leave the machine
+/// for a place it was never meant to go. `mailboxes.json` records which kind
+/// a mailbox uses (`auth: "oauth"`); the mark is the second, independent
+/// record, which survives an older RATA rewriting that file without the field.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Secret {
+    Password(String),
+    Refresh(String),
+}
+
+/// Written by hand, like `Credential`'s, so no `{:?}` ever shows either.
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Secret::Password(_) => f.write_str("Password(<hidden>)"),
+            Secret::Refresh(_) => f.write_str("Refresh(<hidden>)"),
+        }
+    }
+}
+
+/// How a refresh token's entry begins: the mark, then how many pieces it is
+/// in, then the first piece — `rata-oauth2:2:<first 1000 characters>`.
+pub const OAUTH_MARK: &str = "rata-oauth2:";
+
+/// Windows' Credential Manager holds at most 2 560 bytes an entry, which is
+/// 1 280 characters as `keyring` stores them, and a work account's refresh
+/// token can be longer than that. So a long one is kept in pieces: the first
+/// in the mailbox's own entry, the rest in `<address>#2`, `<address>#3`…
+pub const PIECE: usize = 1000;
+/// Eight pieces is 8 000 characters, several times any token Microsoft
+/// issues. A longer one is refused rather than half kept.
+pub const PIECES_MAX: usize = 8;
+
+fn piece_name(email: &str, n: usize) -> String {
+    format!("{}#{n}", email.trim().to_ascii_lowercase())
+}
+
+/// Keep a refresh token where the mailbox's password would be. The extra
+/// pieces are written before the entry that names them, so a failure part
+/// way never leaves an entry pointing at pieces that are not there.
+pub fn put_refresh(v: &dyn Vault, email: &str, token: &str) -> Result<(), String> {
+    if token.is_empty() || token.chars().any(|c| c.is_control() || !c.is_ascii()) {
+        return Err("Microsoft sent a sign-in RATA cannot keep. Try signing in again.".into());
+    }
+    let pieces: Vec<&str> = token
+        .as_bytes()
+        .chunks(PIECE)
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect();
+    if pieces.len() > PIECES_MAX {
+        return Err("Microsoft's sign-in is too long for this computer's keychain.".into());
+    }
+    for (i, piece) in pieces.iter().enumerate().skip(1) {
+        v.put(&piece_name(email, i + 1), piece)?;
+    }
+    v.put(
+        email,
+        &format!("{OAUTH_MARK}{}:{}", pieces.len(), pieces[0]),
+    )?;
+    // Pieces a longer, earlier token left behind.
+    for n in pieces.len() + 1..=PIECES_MAX {
+        let _ = v.forget(&piece_name(email, n));
+    }
+    Ok(())
+}
+
+/// Read what a mailbox's entry holds.
+pub fn get_secret(v: &dyn Vault, email: &str) -> Result<Secret, Unreadable> {
+    let held = v.get(email)?;
+    let Some(rest) = held.strip_prefix(OAUTH_MARK) else {
+        return Ok(Secret::Password(held));
+    };
+    let broken = || {
+        Unreadable::Missing(format!(
+            "The Microsoft sign-in for {email} is no longer whole in this computer's keychain. Sign in to Microsoft again."
+        ))
+    };
+    let (count, first) = rest.split_once(':').ok_or_else(broken)?;
+    let count: usize = count.parse().map_err(|_| broken())?;
+    if count == 0 || count > PIECES_MAX {
+        return Err(broken());
+    }
+    let mut token = first.to_string();
+    for n in 2..=count {
+        match v.get(&piece_name(email, n)) {
+            Ok(piece) => token.push_str(&piece),
+            Err(Unreadable::Missing(_)) => return Err(broken()),
+            Err(locked) => return Err(locked),
+        }
+    }
+    if token.is_empty() {
+        return Err(broken());
+    }
+    Ok(Secret::Refresh(token))
+}
+
+/// Forget everything a mailbox has in the keychain: its entry and any
+/// pieces of a refresh token.
+pub fn forget_all(v: &dyn Vault, email: &str) -> Result<(), String> {
+    v.forget(email)?;
+    for n in 2..=PIECES_MAX {
+        v.forget(&piece_name(email, n))?;
+    }
+    Ok(())
+}
+
 /// For tests, and only for tests. Nothing persists, which is the point, and
 /// `cfg(test)` means there is no way to reach it from a shipped build.
 #[cfg(test)]
@@ -191,6 +305,82 @@ mod tests {
         // Forgetting something already gone is not an error: unlinking a
         // mailbox twice must not leave the app stuck.
         assert!(v.forget("owner@example.com").is_ok());
+    }
+
+    #[test]
+    fn a_refresh_token_is_kept_where_the_password_was_and_never_read_as_one() {
+        let v = Memory::default();
+        v.put("me@outlook.com", "an-old-app-password").unwrap();
+        put_refresh(&v, "me@outlook.com", "M.C5_BAY.short-token").unwrap();
+        assert_eq!(
+            get_secret(&v, "Me@Outlook.com").unwrap(),
+            Secret::Refresh("M.C5_BAY.short-token".into())
+        );
+        // What is stored is marked, so nothing reads it as a password.
+        assert!(v.get("me@outlook.com").unwrap().starts_with(OAUTH_MARK));
+        // A password is still a password.
+        v.put("me@example.com", "hunter2").unwrap();
+        assert_eq!(
+            get_secret(&v, "me@example.com").unwrap(),
+            Secret::Password("hunter2".into())
+        );
+    }
+
+    #[test]
+    fn a_long_refresh_token_is_kept_in_pieces_windows_can_hold() {
+        let v = Memory::default();
+        let long: String = (0..2_700)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        put_refresh(&v, "me@company.example", &long).unwrap();
+        // Every entry fits Windows' limit (1 280 characters).
+        for name in [
+            "me@company.example",
+            "me@company.example#2",
+            "me@company.example#3",
+        ] {
+            assert!(v.get(name).unwrap().len() <= 1_280, "{name}");
+        }
+        assert_eq!(
+            get_secret(&v, "me@company.example").unwrap(),
+            Secret::Refresh(long.clone())
+        );
+        // A shorter token later leaves no stale piece behind.
+        put_refresh(&v, "me@company.example", "short").unwrap();
+        assert!(v.get("me@company.example#2").is_err());
+        assert_eq!(
+            get_secret(&v, "me@company.example").unwrap(),
+            Secret::Refresh("short".into())
+        );
+        // A missing piece is a sign-in to repeat, never half a token.
+        put_refresh(&v, "me@company.example", &long).unwrap();
+        v.forget("me@company.example#3").unwrap();
+        assert!(matches!(
+            get_secret(&v, "me@company.example"),
+            Err(Unreadable::Missing(_))
+        ));
+        // Forgetting takes every piece.
+        forget_all(&v, "me@company.example").unwrap();
+        for name in ["me@company.example", "me@company.example#2"] {
+            assert!(v.get(name).is_err(), "{name}");
+        }
+        // Nothing a keychain entry cannot hold, and nothing too long.
+        assert!(put_refresh(&v, "a@b.example", "").is_err());
+        assert!(put_refresh(&v, "a@b.example", "line\nbreak").is_err());
+        assert!(put_refresh(&v, "a@b.example", &"x".repeat(PIECE * PIECES_MAX + 1)).is_err());
+    }
+
+    #[test]
+    fn a_secret_never_shows_in_debug() {
+        let shown = format!(
+            "{:?} {:?}",
+            Secret::Password("hunter2".into()),
+            Secret::Refresh("M.C5-refresh-secret".into())
+        );
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("refresh-secret"),
+            "{shown}"
+        );
     }
 
     #[test]

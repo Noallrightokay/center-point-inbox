@@ -4,5 +4,7 @@ fn main() {
     // stale and nothing is recompiled. The failure is a release signed against
     // a key it cannot verify, discovered by customers.
     println!("cargo:rerun-if-env-changed=RATA_LICENCE_PUBLIC_KEY");
+    // The same for the Microsoft client id (oauth.rs).
+    println!("cargo:rerun-if-env-changed=RATA_MS_CLIENT_ID");
     tauri_build::build()
 }

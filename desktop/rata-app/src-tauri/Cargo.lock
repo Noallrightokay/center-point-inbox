@@ -3593,16 +3593,20 @@ version = "0.1.38"
 dependencies = [
  "ed25519-dalek",
  "futures",
+ "getrandom 0.3.4",
  "keyring",
  "open",
  "rata-mail",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-updater",
  "tokio",
+ "url",
 ]
 
 [[package]]

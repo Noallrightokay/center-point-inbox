@@ -18,6 +18,7 @@ mod core;
 mod licence;
 mod links;
 mod notify;
+mod oauth;
 mod store;
 mod update;
 mod vault;
@@ -165,6 +166,10 @@ fn main() {
             commands::licence_status,
             commands::set_licence,
             commands::link_mailbox,
+            commands::link_microsoft,
+            commands::cancel_microsoft,
+            commands::microsoft_ready,
+            commands::discover_mailbox,
             commands::list_mailboxes,
             commands::unlink_mailbox,
             commands::retry_mailbox,

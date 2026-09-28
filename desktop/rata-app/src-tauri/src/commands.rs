@@ -19,8 +19,8 @@ use tauri::{AppHandle, Manager, State};
 use rata_mail::{Action, File, Folder, Message, OwnFolder};
 
 use crate::core::{
-    Changed, Delivered, Draft, Forwarded, Held, Linked, Opened, Problem, Rata, Refreshed, Saved,
-    Standing,
+    Changed, Delivered, Draft, Forwarded, Found, Held, Linked, Opened, Problem, Rata, Refreshed,
+    Saved, Standing,
 };
 use crate::store::Mailbox;
 
@@ -35,6 +35,36 @@ pub async fn link_mailbox(
 ) -> Result<Linked, String> {
     let host = host.filter(|h| !h.trim().is_empty());
     Ok(app.link(&email, &password, host.as_deref()).await)
+}
+
+/// Link a Microsoft mailbox by signing in with Microsoft in the browser
+/// (`oauth`). Answers when the customer has finished, cancelled, or five
+/// minutes have passed, in the same shape as `link_mailbox`. The page names
+/// the address only; the sign-in page, the listener and the tokens are all
+/// handled here, and no token ever comes back.
+#[tauri::command]
+pub async fn link_microsoft(app: App<'_>, email: String) -> Result<Linked, String> {
+    Ok(app.link_microsoft(&email, crate::oauth::open_sign_in).await)
+}
+
+/// Stop a Microsoft sign-in that is waiting for the browser.
+#[tauri::command]
+pub fn cancel_microsoft(app: App<'_>) -> bool {
+    app.cancel_microsoft()
+}
+
+/// Whether this build can sign in with Microsoft (a client id was compiled
+/// in).
+#[tauri::command]
+pub fn microsoft_ready(app: App<'_>) -> bool {
+    app.microsoft_ready()
+}
+
+/// What an address is before a password is asked for: its provider, and
+/// whether it signs in with Microsoft. DNS only.
+#[tauri::command]
+pub async fn discover_mailbox(app: App<'_>, email: String) -> Result<Found, String> {
+    Ok(app.discover_mailbox(&email).await)
 }
 
 /// Whether this copy is paid for. Checked locally against the key compiled
