@@ -79,7 +79,7 @@ pub enum Linked {
 
 /// What an address is, found before a password is asked for: which
 /// provider, and whether it signs in with Microsoft.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Found {
     pub label: String,
     pub microsoft: bool,
@@ -415,6 +415,13 @@ impl Rata {
     /// forgive.
     pub async fn link(&self, email: &str, password: &str, host_override: Option<&str>) -> Linked {
         let email = email.trim().to_ascii_lowercase();
+        // The address names the mailbox's keychain entry, so nothing that is
+        // not an address is ever stored under one (security review M1).
+        if !plausible(&email) {
+            return Linked::Failed {
+                error: "Enter the full email address.".into(),
+            };
+        }
         if password.is_empty() {
             return Linked::Failed {
                 error: "Enter the app password for this mailbox.".into(),
@@ -432,8 +439,9 @@ impl Rata {
             Verify::Ok(found) => {
                 // The keychain first: a mailbox in the list whose password is
                 // not stored is a mailbox that fails on every refresh with no
-                // way for the customer to tell why.
-                if let Err(error) = self.vault.put(&email, password) {
+                // way for the customer to tell why. Any pieces of an earlier
+                // Microsoft sign-in go with it.
+                if let Err(error) = vault::put_password(self.vault.as_ref(), &email, password) {
                     return Linked::Failed { error };
                 }
                 let mailbox = Mailbox {
@@ -512,8 +520,14 @@ impl Rata {
     /// What an address is, before a password is asked for: the provider its
     /// DNS names, and whether that is Microsoft. DNS only — nothing is
     /// dialled and nothing is sent.
+    ///
+    /// Like linking, it needs a licence and an address: a page cannot use it
+    /// to make RATA look up any name it likes (security review L4).
     pub async fn discover_mailbox(&self, email: &str) -> Found {
         let email = email.trim().to_ascii_lowercase();
+        if !plausible(&email) || self.licensed().is_err() {
+            return Found::default();
+        }
         let configured = self.ms.configured();
         let first = match discover(&self.resolver, &email, None).await {
             Discovery::Candidates { hosts, .. } => hosts.into_iter().next(),
@@ -619,7 +633,8 @@ impl Rata {
             .port();
         let attempt = oauth::Attempt::new(port).map_err(failed)?;
         let link = attempt.authorize_url(&self.ms.authorize_url, client_id, email);
-        let cancel = self.ms.begin();
+        // Nothing may return between `begin` and `finish`.
+        let cancel = self.ms.begin().map_err(failed)?;
         let got = async {
             open(&link).map_err(failed)?;
             let code = oauth::wait_for_code(listener, &attempt, &cancel)
@@ -1197,11 +1212,13 @@ impl Rata {
             Ok(t) => {
                 // Microsoft usually sends a new refresh token too. The old one
                 // keeps working for a while, so a keychain that will not take
-                // the new one costs nothing today.
+                // the new one costs nothing today. One it takes only half of
+                // gets the old one written back whole (security review L5).
                 if let Some(next) = t.refresh.as_deref()
                     && next != refresh
+                    && vault::put_refresh(self.vault.as_ref(), &m.email, next).is_err()
                 {
-                    let _ = vault::put_refresh(self.vault.as_ref(), &m.email, next);
+                    let _ = vault::put_refresh(self.vault.as_ref(), &m.email, refresh);
                 }
                 self.ms.keep(
                     &m.email,
@@ -1416,15 +1433,17 @@ impl Rata {
     pub async fn watch(&self, email: &str) -> Result<Watch, Unwatched> {
         let m = self.usable(email).map_err(|_| Unwatched::NotNow)?;
         // The same sign-in as a refresh, so the watching connection gets a
-        // fresh token too. A network failure renewing it is retried after a
-        // pause; anything else waits for the supervisor's next look.
+        // fresh token too. A network failure renewing it, or a renewal
+        // Microsoft refused without revoking it, is retried after a pause
+        // that grows (never every minute: security review L3); anything else
+        // waits for the supervisor's next look.
         let watched = self
             .signed(&m, |acct| async move {
                 rata_mail::watch(&self.resolver, &acct).await
             })
             .await
             .map_err(|p| {
-                if p.kind == "net" {
+                if p.kind == "net" || p.kind == "oauth" {
                     Unwatched::Failed(p.error)
                 } else {
                     Unwatched::NotNow
@@ -1544,7 +1563,11 @@ fn not_configured(email: &str) -> String {
     }
 }
 
-/// Enough of an address to send to Microsoft as a hint.
+/// Enough of an address to link, look up, or send to Microsoft as a hint.
+///
+/// No `#`: a token's extra pieces are named `<address>#2`…, and although
+/// they now live in a keychain service of their own, nothing named like one
+/// is ever an address either (security review M1).
 fn plausible(email: &str) -> bool {
     let Some((local, domain)) = email.split_once('@') else {
         return false;
@@ -1552,7 +1575,9 @@ fn plausible(email: &str) -> bool {
     !local.is_empty()
         && domain.contains('.')
         && email.len() <= 254
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !email
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '#')
 }
 
 /// Why Microsoft's server would not open a mailbox with a token that
@@ -2878,7 +2903,7 @@ mod tests {
     #[test]
     fn cancel_stops_the_sign_in_and_says_nothing() {
         rt().block_on(async {
-            let app = with_ms(tmpfile("ms-cancel"), &nowhere());
+            let mut app = with_ms(tmpfile("ms-cancel"), &nowhere());
             let got = app
                 .sign_in_microsoft("me@outlook.com", "test-client", |_| {
                     // The customer presses Cancel while the browser is open.
@@ -2888,6 +2913,18 @@ mod tests {
                 .await;
             assert!(matches!(got, Err(Linked::Cancelled)), "{got:?}");
             assert!(!app.cancel_microsoft(), "nothing is left waiting");
+            // Straight away again: refused, and no browser opened (security
+            // review L2).
+            match app
+                .sign_in_microsoft("me@outlook.com", "test-client", |_| {
+                    panic!("no browser for a sign-in refused")
+                })
+                .await
+            {
+                Err(Linked::Failed { error }) => assert!(error.contains("Wait a moment"), "{error}"),
+                other => panic!("{other:?}"),
+            }
+            app.ms.gap = std::time::Duration::ZERO;
             // A browser that could not be opened says why.
             let got = app
                 .sign_in_microsoft("me@outlook.com", "test-client", |_| {
@@ -3176,6 +3213,153 @@ mod tests {
                 })
                 .await;
             assert_eq!(tries.get(), 1);
+        });
+    }
+
+    // ------------------------------------------- security review (F4-2)
+
+    /// M1: the reviewer's reproduction. A mailbox named like a token piece
+    /// (`<address>#2`), then a renewal that rotates to a token long enough
+    /// to be kept in pieces. Piece 2 must never become that mailbox's
+    /// password.
+    #[test]
+    fn a_token_piece_never_becomes_a_mailbox_password() {
+        rt().block_on(async {
+            let long: String = (0..2_500)
+                .map(|i| (b'a' + (i % 26) as u8) as char)
+                .collect();
+            let reply: &'static str = Box::leak(
+                format!(
+                    r#"{{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-rotated","refresh_token":"{long}"}}"#
+                )
+                .into_boxed_str(),
+            );
+            let (url, _sent) = oauth::scripted_token_endpoint(reply, "200 OK").await;
+            let app = with_ms(tmpfile("ms-piece"), &url);
+            linked_ms(&app, "me@company.example", "M.R-short");
+            linked(&app, "me@company.example#2", "imap.evil.example");
+            let ms = app
+                .mailboxes()
+                .into_iter()
+                .find(|m| !m.auth.is_password())
+                .unwrap();
+            app.account(&ms, None).await.unwrap();
+            assert_eq!(
+                vault::get_secret(app.vault.as_ref(), "me@company.example").unwrap(),
+                Secret::Refresh(long.clone())
+            );
+            let evil = app
+                .mailboxes()
+                .into_iter()
+                .find(|m| m.email.ends_with("#2"))
+                .unwrap();
+            let (acct, _) = app.account(&evil, None).await.unwrap();
+            assert_eq!(acct.host, "imap.evil.example");
+            assert_eq!(acct.credential, Credential::Password("app-password".into()));
+        });
+    }
+
+    /// M1, the way in: an address that is not one is never linked, whatever
+    /// server is typed, and before anything is looked up or stored.
+    #[test]
+    fn an_address_that_is_not_one_is_never_linked() {
+        rt().block_on(async {
+            let app = rata(tmpfile("not-an-address"));
+            for email in [
+                "victim@contoso.com#2",
+                "no-at-sign",
+                "a@nodot",
+                "x @y.example",
+            ] {
+                match app.link(email, "x", Some("imap.evil.example")).await {
+                    Linked::Failed { error } => {
+                        assert_eq!(error, "Enter the full email address.", "{email}")
+                    }
+                    other => panic!("{email}: {other:?}"),
+                }
+            }
+            assert!(app.mailboxes().is_empty());
+            assert!(app.vault.get("victim@contoso.com#2").is_err());
+        });
+    }
+
+    /// L3: a renewal Microsoft refuses without revoking the sign-in (a
+    /// changed app registration) backs the watcher off, rather than being
+    /// asked again every minute.
+    #[test]
+    fn a_refused_renewal_backs_the_watcher_off() {
+        rt().block_on(async {
+            let (url, _sent) = oauth::scripted_token_endpoint(
+                r#"{"error":"unauthorized_client","error_description":"AADSTS700016: Application not found."}"#,
+                "400 Bad Request",
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-refused-watch"), &url);
+            linked_ms(&app, "me@outlook.com", "M.R-refresh-secret-7");
+            assert!(matches!(
+                app.watch("me@outlook.com").await.err(),
+                Some(Unwatched::Failed(_))
+            ));
+            // Not parked: this is not the customer's sign-in to repeat.
+            assert!(app.mailboxes()[0].auth_failed_at.is_none());
+        });
+    }
+
+    /// L5: a rotation the keychain will not finish leaves the old sign-in
+    /// whole, never the old first piece with the new token's others.
+    #[test]
+    fn a_rotation_the_keychain_will_not_finish_keeps_the_old_token_whole() {
+        rt().block_on(async {
+            let old: String = (0..2_300)
+                .map(|i| (b'A' + (i % 26) as u8) as char)
+                .collect();
+            let new: String = (0..2_300)
+                .map(|i| (b'a' + (i % 26) as u8) as char)
+                .collect();
+            let reply: &'static str = Box::leak(
+                format!(
+                    r#"{{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-x","refresh_token":"{new}"}}"#
+                )
+                .into_boxed_str(),
+            );
+            let (url, _sent) = oauth::scripted_token_endpoint(reply, "200 OK").await;
+            let mut app = with_ms(tmpfile("ms-half"), &url);
+            let stuck = std::sync::Arc::new(vault::Stuck::default());
+            app.vault = Box::new(stuck.clone());
+            linked_ms(&app, "me@company.example", &old);
+            stuck.stick(true);
+            let m = app.mailboxes().remove(0);
+            app.account(&m, None).await.unwrap();
+            stuck.stick(false);
+            assert_eq!(
+                vault::get_secret(app.vault.as_ref(), "me@company.example").unwrap(),
+                Secret::Refresh(old)
+            );
+        });
+    }
+
+    /// L4: looking an address up needs a licence and an address, like
+    /// linking one.
+    #[test]
+    fn discovery_needs_a_licence_and_an_address() {
+        rt().block_on(async {
+            let mut app = unlicensed(tmpfile("find-unlicensed"));
+            app.ms = Microsoft::new(
+                Some("test-client".into()),
+                "https://x.example/",
+                &nowhere(),
+                false,
+            );
+            let f = app.discover_mailbox("me@outlook.com").await;
+            assert!(
+                !f.microsoft && f.label.is_empty() && f.note.is_none(),
+                "{f:?}"
+            );
+            let app = with_ms(tmpfile("find-junk"), &nowhere());
+            for junk in ["outlook.com", "me@outlook", "me @outlook.com"] {
+                let f = app.discover_mailbox(junk).await;
+                assert!(!f.microsoft && f.label.is_empty(), "{junk}: {f:?}");
+            }
         });
     }
 }

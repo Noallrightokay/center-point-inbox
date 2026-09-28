@@ -62,7 +62,13 @@ pub const WAIT: Duration = Duration::from_secs(5 * 60);
 pub const EARLY: u64 = 120;
 
 const HEAD_MAX: usize = 8 * 1024;
-const HEAD_WAIT: Duration = Duration::from_secs(10);
+/// A browser sends its request line at once. Connections are answered one
+/// at a time, so a program that connects and says nothing holds up the real
+/// answer by this much (security review L1).
+const HEAD_WAIT: Duration = Duration::from_secs(2);
+/// How soon after one sign-in began another may: a page cannot open tab
+/// after tab at Microsoft (security review L2).
+pub const BEGIN_GAP: Duration = Duration::from_secs(3);
 const HTTP_WAIT: Duration = Duration::from_secs(30);
 const BODY_MAX: usize = 64 * 1024;
 
@@ -182,6 +188,10 @@ impl Attempt {
                 ("code_challenge", &challenge(&self.verifier)),
                 ("code_challenge_method", "S256"),
                 ("login_hint", email),
+                // Always a click in the browser: a browser already signed in
+                // to Microsoft, with RATA approved, would otherwise finish
+                // the round trip unseen (security review L2).
+                ("prompt", "select_account"),
             ],
         )
         .map(String::from)
@@ -245,10 +255,10 @@ pub fn heard(target: &str, state: &str) -> Heard {
         if error == "access_denied" {
             return Heard::Ours(Callback::Denied);
         }
-        return Heard::Ours(Callback::Failed(said(
-            error,
-            seen.get("error_description").map(String::as_str),
-        )));
+        // The code only, never `error_description`: anything that learned
+        // `state` could write that, and the form would show it (security
+        // review L6).
+        return Heard::Ours(Callback::Failed(error_code(error)));
     }
     match seen.get("code") {
         Some(code) if !code.is_empty() && code.len() <= 4096 => {
@@ -257,6 +267,22 @@ pub fn heard(target: &str, state: &str) -> Heard {
         _ => Heard::Ours(Callback::Failed(
             "Microsoft sent the browser back without a sign-in code.".into(),
         )),
+    }
+}
+
+/// An OAuth error code as the redirect carried it (`invalid_request`,
+/// `server_error`…) — which is only ever lowercase letters and underscores —
+/// or nothing a stranger could have written.
+fn error_code(code: &str) -> String {
+    if !code.is_empty()
+        && code.len() <= 60
+        && code
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        code.into()
+    } else {
+        "an error it did not name".into()
     }
 }
 
@@ -659,6 +685,9 @@ pub struct Microsoft {
     /// never race each other with the same refresh token.
     pub refreshing: tokio::sync::Mutex<()>,
     pending: Mutex<Option<Arc<Notify>>>,
+    /// When the last sign-in began, and how long before another may.
+    began: Mutex<Option<Instant>>,
+    pub(crate) gap: Duration,
 }
 
 impl Microsoft {
@@ -682,6 +711,8 @@ impl Microsoft {
             access: Mutex::new(HashMap::new()),
             refreshing: tokio::sync::Mutex::new(()),
             pending: Mutex::new(None),
+            began: Mutex::new(None),
+            gap: BEGIN_GAP,
         }
     }
 
@@ -712,16 +743,27 @@ impl Microsoft {
         }
     }
 
-    /// Start a sign-in: any other still waiting is stopped first, so there
-    /// is only ever one listener and one browser tab that counts.
-    pub fn begin(&self) -> Arc<Notify> {
-        let next = Arc::new(Notify::new());
-        if let Ok(mut p) = self.pending.lock()
-            && let Some(old) = p.replace(next.clone())
-        {
-            old.notify_one();
+    /// Start a sign-in. There is only ever one listener and one browser tab
+    /// that counts: another is refused while one waits (the form's Cancel
+    /// ends that one first), and for `gap` after the last began, so a page
+    /// cannot open Microsoft's page in tab after tab (security review L2).
+    pub fn begin(&self) -> Result<Arc<Notify>, String> {
+        let busy = || "RATA could not start signing in with Microsoft.".to_string();
+        let mut pending = self.pending.lock().map_err(|_| busy())?;
+        if pending.is_some() {
+            return Err(
+                "A Microsoft sign-in is already waiting in your browser. Finish it there, or press Cancel first."
+                    .into(),
+            );
         }
-        next
+        let mut began = self.began.lock().map_err(|_| busy())?;
+        if began.is_some_and(|t| t.elapsed() < self.gap) {
+            return Err("Wait a moment, then try signing in with Microsoft again.".into());
+        }
+        *began = Some(Instant::now());
+        let next = Arc::new(Notify::new());
+        *pending = Some(next.clone());
+        Ok(next)
     }
 
     /// Stop the sign-in in progress, if there is one.
@@ -870,6 +912,9 @@ mod tests {
         assert_eq!(q["code_challenge"], challenge(&a.verifier));
         assert_eq!(q["state"], a.state);
         assert_eq!(q["login_hint"], "Me@Outlook.com");
+        // Every sign-in needs a click in the browser, even one already
+        // signed in to Microsoft with RATA approved (security review L2).
+        assert_eq!(q["prompt"], "select_account");
         let scopes: Vec<&str> = q["scope"].split(' ').collect();
         for s in [
             "https://outlook.office.com/IMAP.AccessAsUser.All",
@@ -936,11 +981,18 @@ mod tests {
             ),
             st,
         ) {
+            // Only the code: whoever knows `state` could write the
+            // description, and the form would show it (security review L6).
+            Heard::Ours(Callback::Failed(w)) => assert_eq!(w, "invalid_request"),
+            other => panic!("{other:?}"),
+        }
+        // Nor can the code itself carry words.
+        match heard(
+            &format!("/?error=Call+support+on+0800+123&state={st}"),
+            st,
+        ) {
             Heard::Ours(Callback::Failed(w)) => {
-                assert!(w.contains("AADSTS50011"), "{w}");
-                assert!(w.contains("invalid_request"), "{w}");
-                assert!(!w.contains("Trace ID"), "{w}");
-                assert!(!w.contains('\r') && !w.contains('\n'), "{w}");
+                assert!(!w.contains("0800") && !w.contains("support"), "{w}")
             }
             other => panic!("{other:?}"),
         }
@@ -995,13 +1047,51 @@ mod tests {
         });
     }
 
+    /// Security review L1: connections that open and say nothing cannot
+    /// hold up the browser's answer for long.
+    #[test]
+    fn silent_connections_do_not_hold_up_the_answer() {
+        rt().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let a = Attempt::new(port).unwrap();
+            let state = a.state.clone();
+            let cancel = Notify::new();
+            let started = Instant::now();
+            let others = tokio::spawn(async move {
+                let s1 = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                let s2 = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                s.write_all(
+                    format!("GET /?code=the-code&state={state} HTTP/1.1\r\n\r\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+                let mut got = String::new();
+                s.read_to_string(&mut got).await.unwrap();
+                drop((s1, s2));
+                got
+            });
+            assert_eq!(
+                wait_for_code(listener, &a, &cancel).await,
+                Ok("the-code".into())
+            );
+            assert!(others.await.unwrap().starts_with("HTTP/1.1 200"));
+            assert!(
+                started.elapsed() < Duration::from_secs(6),
+                "{:?}",
+                started.elapsed()
+            );
+        });
+    }
+
     #[test]
     fn cancel_or_the_deadline_stops_the_wait() {
         rt().block_on(async {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let a = Attempt::new(listener.local_addr().unwrap().port()).unwrap();
             let ms = Microsoft::new(None, AUTHORIZE_URL, TOKEN_URL, false);
-            let n = ms.begin();
+            let n = ms.begin().unwrap();
             // Cancelled before the wait began still counts.
             assert!(ms.cancel());
             assert_eq!(wait_for_code(listener, &a, &n).await, Err(Ended::Cancelled));
@@ -1015,18 +1105,26 @@ mod tests {
                 Err(Ended::TimedOut)
             );
 
-            // A second sign-in stops the first.
-            let first = ms.begin();
-            let second = ms.begin();
+            // Security review L2: straight after one began, another is
+            // refused; and while one waits, so is another.
+            let too_soon = ms.begin().unwrap_err();
+            assert!(too_soon.contains("Wait a moment"), "{too_soon}");
+            let mut ms = ms;
+            ms.gap = Duration::ZERO;
+            let first = ms.begin().unwrap();
+            let busy = ms.begin().unwrap_err();
+            assert!(busy.contains("already waiting"), "{busy}");
+            // Finishing it frees the way; so does Cancel.
+            ms.finish(&first);
+            let second = ms.begin().unwrap();
+            assert!(ms.cancel());
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let a = Attempt::new(listener.local_addr().unwrap().port()).unwrap();
             assert_eq!(
-                wait_for_code(listener, &a, &first).await,
+                wait_for_code(listener, &a, &second).await,
                 Err(Ended::Cancelled)
             );
-            ms.finish(&first);
-            assert!(ms.cancel(), "finishing the first leaves the second");
-            let _ = second;
+            assert!(ms.begin().is_ok());
         });
     }
 

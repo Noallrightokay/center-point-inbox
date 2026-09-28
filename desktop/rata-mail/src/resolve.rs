@@ -13,8 +13,8 @@ use std::net::IpAddr;
 use hickory_resolver::{Resolver as HickoryResolver, TokioResolver, proto::rr::RData};
 
 use crate::discover::{
-    Candidate, IMAP_PORT, MS_SIGN_IN, MxRule, Source, conventional, is_microsoft, mx_rule, no_imap,
-    table,
+    Candidate, IMAP_PORT, MS_SIGN_IN, MxRule, Source, conventional, is_microsoft,
+    is_microsoft_consumer, mx_rule, no_imap, table,
 };
 use crate::guard::{HostVerdict, check_literal, check_resolved, normalise};
 use crate::key::domain_of;
@@ -194,13 +194,20 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
         };
         // A Microsoft server is honoured like any other. What differs is how
         // it is signed in to, and `verify` sees to that: a password is never
-        // sent to Microsoft (see `discover::MS_SIGN_IN`).
+        // sent to Microsoft (see `discover::MS_SIGN_IN`). It is named for
+        // Microsoft, not for the address's own domain.
+        let microsoft = is_microsoft(&given);
+        let label = match (microsoft, is_microsoft_consumer(&domain)) {
+            (true, true) => "Outlook".to_string(),
+            (true, false) => "Microsoft 365".to_string(),
+            (false, _) => domain,
+        };
         return Discovery::Candidates {
             hosts: vec![Candidate {
                 host: given,
                 port: IMAP_PORT,
-                label: domain,
-                help: None,
+                label,
+                help: microsoft.then(|| MS_SIGN_IN.to_string()),
                 source: Source::Override,
             }],
             filtered_by: None,

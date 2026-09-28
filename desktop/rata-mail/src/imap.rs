@@ -4159,8 +4159,13 @@ mod tests {
                 Verify::Microsoft(label) => assert_eq!(label, "Outlook"),
                 other => panic!("{other:?}"),
             }
+            // Named for Microsoft, not for the address's own domain.
             match verify(&r, "me@example.com", "pw", Some("outlook.office365.com")).await {
-                Verify::Microsoft(_) => {}
+                Verify::Microsoft(label) => assert_eq!(label, "Microsoft 365"),
+                other => panic!("{other:?}"),
+            }
+            match verify(&r, "me@hotmail.com", "pw", Some("outlook.office365.com")).await {
+                Verify::Microsoft(label) => assert_eq!(label, "Outlook"),
                 other => panic!("{other:?}"),
             }
         });

@@ -30,10 +30,44 @@ use std::sync::Mutex;
 /// filed under a different name than the app itself is one nobody can audit.
 pub const SERVICE: &str = "org.mailrata.desktop";
 
+/// Where the second and later pieces of a long refresh token are kept: a
+/// service of their own, which no mailbox address can name. In the same
+/// service as mailbox entries, a mailbox linked as `<address>#2` shared an
+/// entry with piece 2 of that address's token, and was sent it as its
+/// password (security review F4-2 M1).
+pub const PIECE_SERVICE: &str = "org.mailrata.desktop.oauth-piece";
+
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;
     fn get(&self, email: &str) -> Result<String, Unreadable>;
     fn forget(&self, email: &str) -> Result<(), String>;
+    /// The same three for a refresh token's pieces, in `PIECE_SERVICE`.
+    fn put_piece(&self, name: &str, piece: &str) -> Result<(), String>;
+    fn get_piece(&self, name: &str) -> Result<String, Unreadable>;
+    fn forget_piece(&self, name: &str) -> Result<(), String>;
+}
+
+/// Tests share one vault between the app and the test itself.
+#[cfg(test)]
+impl<V: Vault> Vault for std::sync::Arc<V> {
+    fn put(&self, e: &str, p: &str) -> Result<(), String> {
+        (**self).put(e, p)
+    }
+    fn get(&self, e: &str) -> Result<String, Unreadable> {
+        (**self).get(e)
+    }
+    fn forget(&self, e: &str) -> Result<(), String> {
+        (**self).forget(e)
+    }
+    fn put_piece(&self, n: &str, p: &str) -> Result<(), String> {
+        (**self).put_piece(n, p)
+    }
+    fn get_piece(&self, n: &str) -> Result<String, Unreadable> {
+        (**self).get_piece(n)
+    }
+    fn forget_piece(&self, n: &str) -> Result<(), String> {
+        (**self).forget_piece(n)
+    }
 }
 
 /// Why a stored password could not be read. The two cases need opposite
@@ -70,31 +104,52 @@ impl From<Unreadable> for String {
 pub struct Keychain;
 
 impl Keychain {
-    fn entry(email: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new(SERVICE, &email.trim().to_ascii_lowercase()).map_err(explain)
-    }
-}
-
-impl Vault for Keychain {
-    fn put(&self, email: &str, password: &str) -> Result<(), String> {
-        Self::entry(email)?.set_password(password).map_err(explain)
+    fn entry(service: &str, name: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new(service, &name.trim().to_ascii_lowercase()).map_err(explain)
     }
 
-    fn get(&self, email: &str) -> Result<String, Unreadable> {
-        let entry = Self::entry(email).map_err(Unreadable::Locked)?;
+    fn put_in(service: &str, name: &str, secret: &str) -> Result<(), String> {
+        Self::entry(service, name)?
+            .set_password(secret)
+            .map_err(explain)
+    }
+
+    fn get_in(service: &str, name: &str) -> Result<String, Unreadable> {
+        let entry = Self::entry(service, name).map_err(Unreadable::Locked)?;
         entry.get_password().map_err(|e| match e {
             keyring::Error::NoEntry => Unreadable::Missing(explain(e)),
             other => Unreadable::Locked(explain(other)),
         })
     }
 
-    fn forget(&self, email: &str) -> Result<(), String> {
-        match Self::entry(email)?.delete_credential() {
+    fn forget_in(service: &str, name: &str) -> Result<(), String> {
+        match Self::entry(service, name)?.delete_credential() {
             Ok(()) => Ok(()),
             // Already gone is the outcome we wanted.
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(explain(e)),
         }
+    }
+}
+
+impl Vault for Keychain {
+    fn put(&self, email: &str, password: &str) -> Result<(), String> {
+        Self::put_in(SERVICE, email, password)
+    }
+    fn get(&self, email: &str) -> Result<String, Unreadable> {
+        Self::get_in(SERVICE, email)
+    }
+    fn forget(&self, email: &str) -> Result<(), String> {
+        Self::forget_in(SERVICE, email)
+    }
+    fn put_piece(&self, name: &str, piece: &str) -> Result<(), String> {
+        Self::put_in(PIECE_SERVICE, name, piece)
+    }
+    fn get_piece(&self, name: &str) -> Result<String, Unreadable> {
+        Self::get_in(PIECE_SERVICE, name)
+    }
+    fn forget_piece(&self, name: &str) -> Result<(), String> {
+        Self::forget_in(PIECE_SERVICE, name)
     }
 }
 
@@ -152,6 +207,7 @@ pub const OAUTH_MARK: &str = "rata-oauth2:";
 /// 1 280 characters as `keyring` stores them, and a work account's refresh
 /// token can be longer than that. So a long one is kept in pieces: the first
 /// in the mailbox's own entry, the rest in `<address>#2`, `<address>#3`…
+/// under `PIECE_SERVICE`, never beside mailbox entries.
 pub const PIECE: usize = 1000;
 /// Eight pieces is 8 000 characters, several times any token Microsoft
 /// issues. A longer one is refused rather than half kept.
@@ -177,7 +233,7 @@ pub fn put_refresh(v: &dyn Vault, email: &str, token: &str) -> Result<(), String
         return Err("Microsoft's sign-in is too long for this computer's keychain.".into());
     }
     for (i, piece) in pieces.iter().enumerate().skip(1) {
-        v.put(&piece_name(email, i + 1), piece)?;
+        v.put_piece(&piece_name(email, i + 1), piece)?;
     }
     v.put(
         email,
@@ -185,9 +241,19 @@ pub fn put_refresh(v: &dyn Vault, email: &str, token: &str) -> Result<(), String
     )?;
     // Pieces a longer, earlier token left behind.
     for n in pieces.len() + 1..=PIECES_MAX {
-        let _ = v.forget(&piece_name(email, n));
+        let _ = v.forget_piece(&piece_name(email, n));
     }
     Ok(())
+}
+
+/// Keep an app password for a mailbox, first clearing any pieces a
+/// Microsoft sign-in left behind, so relinking by password leaves nothing
+/// of a token in the keychain.
+pub fn put_password(v: &dyn Vault, email: &str, password: &str) -> Result<(), String> {
+    for n in 2..=PIECES_MAX {
+        v.forget_piece(&piece_name(email, n))?;
+    }
+    v.put(email, password)
 }
 
 /// Read what a mailbox's entry holds.
@@ -208,7 +274,7 @@ pub fn get_secret(v: &dyn Vault, email: &str) -> Result<Secret, Unreadable> {
     }
     let mut token = first.to_string();
     for n in 2..=count {
-        match v.get(&piece_name(email, n)) {
+        match v.get_piece(&piece_name(email, n)) {
             Ok(piece) => token.push_str(&piece),
             Err(Unreadable::Missing(_)) => return Err(broken()),
             Err(locked) => return Err(locked),
@@ -225,46 +291,110 @@ pub fn get_secret(v: &dyn Vault, email: &str) -> Result<Secret, Unreadable> {
 pub fn forget_all(v: &dyn Vault, email: &str) -> Result<(), String> {
     v.forget(email)?;
     for n in 2..=PIECES_MAX {
-        v.forget(&piece_name(email, n))?;
+        v.forget_piece(&piece_name(email, n))?;
     }
     Ok(())
 }
 
 /// For tests, and only for tests. Nothing persists, which is the point, and
-/// `cfg(test)` means there is no way to reach it from a shipped build.
+/// `cfg(test)` means there is no way to reach it from a shipped build. Two
+/// maps, as the keychain has two services.
 #[cfg(test)]
 #[derive(Default)]
-pub struct Memory(Mutex<HashMap<String, String>>);
+pub struct Memory {
+    entries: Mutex<HashMap<String, String>>,
+    pieces: Mutex<HashMap<String, String>>,
+}
+
+#[cfg(test)]
+fn mem_put(map: &Mutex<HashMap<String, String>>, name: &str, secret: &str) -> Result<(), String> {
+    map.lock()
+        .map_err(|_| "vault poisoned".to_string())?
+        .insert(name.trim().to_ascii_lowercase(), secret.to_string());
+    Ok(())
+}
+
+#[cfg(test)]
+fn mem_get(map: &Mutex<HashMap<String, String>>, name: &str) -> Result<String, Unreadable> {
+    map.lock()
+        .map_err(|_| Unreadable::Locked("vault poisoned".into()))?
+        .get(&name.trim().to_ascii_lowercase())
+        .cloned()
+        .ok_or_else(|| {
+            Unreadable::Missing(format!(
+                "{name} has no stored password — relink the account."
+            ))
+        })
+}
+
+#[cfg(test)]
+fn mem_forget(map: &Mutex<HashMap<String, String>>, name: &str) -> Result<(), String> {
+    map.lock()
+        .map_err(|_| "vault poisoned".to_string())?
+        .remove(&name.trim().to_ascii_lowercase());
+    Ok(())
+}
 
 #[cfg(test)]
 impl Vault for Memory {
     fn put(&self, email: &str, password: &str) -> Result<(), String> {
-        self.0
-            .lock()
-            .map_err(|_| "vault poisoned".to_string())?
-            .insert(email.trim().to_ascii_lowercase(), password.to_string());
-        Ok(())
+        mem_put(&self.entries, email, password)
     }
-
     fn get(&self, email: &str) -> Result<String, Unreadable> {
-        self.0
-            .lock()
-            .map_err(|_| Unreadable::Locked("vault poisoned".into()))?
-            .get(&email.trim().to_ascii_lowercase())
-            .cloned()
-            .ok_or_else(|| {
-                Unreadable::Missing(format!(
-                    "{email} has no stored password — relink the account."
-                ))
-            })
+        mem_get(&self.entries, email)
     }
-
     fn forget(&self, email: &str) -> Result<(), String> {
-        self.0
-            .lock()
-            .map_err(|_| "vault poisoned".to_string())?
-            .remove(&email.trim().to_ascii_lowercase());
-        Ok(())
+        mem_forget(&self.entries, email)
+    }
+    fn put_piece(&self, name: &str, piece: &str) -> Result<(), String> {
+        mem_put(&self.pieces, name, piece)
+    }
+    fn get_piece(&self, name: &str) -> Result<String, Unreadable> {
+        mem_get(&self.pieces, name)
+    }
+    fn forget_piece(&self, name: &str) -> Result<(), String> {
+        mem_forget(&self.pieces, name)
+    }
+}
+
+/// A keychain that takes pieces but, once stuck, refuses a mailbox's own
+/// entry: a rotation that fails half way. Test only.
+#[cfg(test)]
+#[derive(Default)]
+pub struct Stuck {
+    mem: Memory,
+    stuck: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl Stuck {
+    pub fn stick(&self, on: bool) {
+        self.stuck.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+impl Vault for Stuck {
+    fn put(&self, e: &str, p: &str) -> Result<(), String> {
+        if self.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("keychain locked".into());
+        }
+        self.mem.put(e, p)
+    }
+    fn get(&self, e: &str) -> Result<String, Unreadable> {
+        self.mem.get(e)
+    }
+    fn forget(&self, e: &str) -> Result<(), String> {
+        self.mem.forget(e)
+    }
+    fn put_piece(&self, n: &str, p: &str) -> Result<(), String> {
+        self.mem.put_piece(n, p)
+    }
+    fn get_piece(&self, n: &str) -> Result<String, Unreadable> {
+        self.mem.get_piece(n)
+    }
+    fn forget_piece(&self, n: &str) -> Result<(), String> {
+        self.mem.forget_piece(n)
     }
 }
 
@@ -284,6 +414,15 @@ impl Vault for Locked {
     }
     fn forget(&self, _: &str) -> Result<(), String> {
         Err("keychain locked".into())
+    }
+    fn put_piece(&self, n: &str, p: &str) -> Result<(), String> {
+        self.put(n, p)
+    }
+    fn get_piece(&self, n: &str) -> Result<String, Unreadable> {
+        self.get(n)
+    }
+    fn forget_piece(&self, n: &str) -> Result<(), String> {
+        self.forget(n)
     }
 }
 
@@ -334,12 +473,9 @@ mod tests {
             .collect();
         put_refresh(&v, "me@company.example", &long).unwrap();
         // Every entry fits Windows' limit (1 280 characters).
-        for name in [
-            "me@company.example",
-            "me@company.example#2",
-            "me@company.example#3",
-        ] {
-            assert!(v.get(name).unwrap().len() <= 1_280, "{name}");
+        assert!(v.get("me@company.example").unwrap().len() <= 1_280);
+        for name in ["me@company.example#2", "me@company.example#3"] {
+            assert!(v.get_piece(name).unwrap().len() <= 1_280, "{name}");
         }
         assert_eq!(
             get_secret(&v, "me@company.example").unwrap(),
@@ -347,27 +483,64 @@ mod tests {
         );
         // A shorter token later leaves no stale piece behind.
         put_refresh(&v, "me@company.example", "short").unwrap();
-        assert!(v.get("me@company.example#2").is_err());
+        assert!(v.get_piece("me@company.example#2").is_err());
         assert_eq!(
             get_secret(&v, "me@company.example").unwrap(),
             Secret::Refresh("short".into())
         );
         // A missing piece is a sign-in to repeat, never half a token.
         put_refresh(&v, "me@company.example", &long).unwrap();
-        v.forget("me@company.example#3").unwrap();
+        v.forget_piece("me@company.example#3").unwrap();
         assert!(matches!(
             get_secret(&v, "me@company.example"),
             Err(Unreadable::Missing(_))
         ));
         // Forgetting takes every piece.
         forget_all(&v, "me@company.example").unwrap();
-        for name in ["me@company.example", "me@company.example#2"] {
-            assert!(v.get(name).is_err(), "{name}");
-        }
+        assert!(v.get("me@company.example").is_err());
+        assert!(v.get_piece("me@company.example#2").is_err());
         // Nothing a keychain entry cannot hold, and nothing too long.
         assert!(put_refresh(&v, "a@b.example", "").is_err());
         assert!(put_refresh(&v, "a@b.example", "line\nbreak").is_err());
         assert!(put_refresh(&v, "a@b.example", &"x".repeat(PIECE * PIECES_MAX + 1)).is_err());
+    }
+
+    /// Security review M1: a mailbox whose address looks like a piece's name
+    /// (`<address>#2`) must never share an entry with a token's piece.
+    #[test]
+    fn a_token_piece_never_shares_an_entry_with_a_mailbox() {
+        let v = Memory::default();
+        v.put("me@company.example#2", "that-mailbox-password")
+            .unwrap();
+        let long = "t".repeat(PIECE * 3);
+        put_refresh(&v, "me@company.example", &long).unwrap();
+        assert_eq!(
+            v.get("me@company.example#2").unwrap(),
+            "that-mailbox-password"
+        );
+        assert!(v.get("me@company.example#3").is_err());
+        // Forgetting the token leaves the other mailbox's entry alone too.
+        forget_all(&v, "me@company.example").unwrap();
+        assert_eq!(
+            v.get("me@company.example#2").unwrap(),
+            "that-mailbox-password"
+        );
+    }
+
+    /// Relinking a Microsoft mailbox with a password (to a server that is
+    /// not Microsoft's) leaves no piece of the old token behind.
+    #[test]
+    fn a_password_replacing_a_sign_in_leaves_no_piece_behind() {
+        let v = Memory::default();
+        put_refresh(&v, "me@company.example", &"t".repeat(PIECE * 3)).unwrap();
+        put_password(&v, "me@company.example", "an-app-password").unwrap();
+        assert_eq!(
+            get_secret(&v, "me@company.example").unwrap(),
+            Secret::Password("an-app-password".into())
+        );
+        for n in 2..=PIECES_MAX {
+            assert!(v.get_piece(&piece_name("me@company.example", n)).is_err());
+        }
     }
 
     #[test]
