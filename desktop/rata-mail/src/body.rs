@@ -14,7 +14,7 @@
 
 use mail_parser::{Message as Parsed, MessageParser, MimeHeaders, PartType};
 
-use crate::{html, words};
+use crate::{html, names, words};
 
 /// How much of a message is fetched: its headers and the first 64 KiB. Enough
 /// for the text of nearly any message, since the text part comes before the
@@ -62,6 +62,12 @@ pub struct Attachment {
     pub mime: String,
     /// Decoded size in bytes; 0 when only part of it was fetched.
     pub size: u64,
+    /// A program named to look like a document (`invoice.pdf.exe`,
+    /// [`names::looks_disguised`]). The page labels it and asks before saving;
+    /// the app refuses to save or hand it over unless the customer said yes.
+    /// Absent from an attachment stored by an older build, which is `false`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub disguised: bool,
 }
 
 /// Decode `raw` — a whole message, or its first `MESSAGE_BYTES` — into text.
@@ -233,6 +239,7 @@ fn describe(
     let whole = !cut || (part.offset_end as usize + 4) < raw_len;
     Attachment {
         index,
+        disguised: names::looks_disguised(&name),
         name,
         mime,
         size: if whole { part.len() as u64 } else { 0 },
@@ -493,6 +500,41 @@ mod tests {
         assert_eq!(bytes, b"%PDF-1.4\n");
         assert!(attachment(&raw, 99).is_none());
         assert!(attachment(b"no headers", 0).is_none());
+    }
+
+    #[test]
+    fn a_program_named_as_a_document_is_flagged_where_it_is_listed() {
+        let part = |name: &str| {
+            format!(
+                "--b1\r\nContent-Type: application/octet-stream; name=\"{name}\"\r\nContent-Disposition: attachment; filename=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\n\r\nTVqQAAMAAAAEAAAA\r\n"
+            )
+        };
+        let raw = msg(
+            "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b1\r\n",
+            &format!(
+                "--b1\r\nContent-Type: text/plain\r\n\r\nYour invoice.\r\n{}{}{}--b1--\r\n",
+                part("invoice.pdf.exe"),
+                part("invoice.pdf"),
+                part("setup.exe"),
+            ),
+        );
+        let flags = |atts: &[Attachment]| {
+            atts.iter()
+                .map(|a| (a.name.clone(), a.disguised))
+                .collect::<Vec<_>>()
+        };
+        let want = vec![
+            ("invoice.pdf.exe".to_string(), true),
+            ("invoice.pdf".to_string(), false),
+            ("setup.exe".to_string(), false),
+        ];
+        // Opened whole, synced (the first 64 KiB) and fetched to save alike.
+        assert_eq!(flags(&read_whole(&raw).attachments), want);
+        assert_eq!(flags(&read(&raw, false).attachments), want);
+        let (info, _) = attachment(&raw, 0).unwrap();
+        assert!(info.disguised);
+        let (info, _) = attachment(&raw, 2).unwrap();
+        assert!(!info.disguised);
     }
 
     #[test]

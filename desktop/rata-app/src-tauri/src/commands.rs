@@ -19,8 +19,8 @@ use tauri::{AppHandle, Manager, State};
 use rata_mail::{Action, File, Folder, Message, OwnFolder};
 
 use crate::core::{
-    Changed, Delivered, Draft, Forwarded, Found, Held, Linked, Opened, Problem, Rata, Refreshed,
-    Saved, Standing,
+    AttachmentAt, Changed, Delivered, Draft, Forwarded, Found, Held, Linked, Opened, Problem, Rata,
+    Refreshed, Saved, Standing,
 };
 use crate::store::Mailbox;
 
@@ -277,8 +277,14 @@ pub async fn open_message(
         .await
 }
 
-/// Save one attachment into the Downloads folder.
+/// Save one attachment into the Downloads folder. `confirmed` is the
+/// customer's answer to "Save it anyway?", which a program named to look like
+/// a document needs (`core::save_attachment`).
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a command's arguments are the page's JSON fields, one each"
+)]
 pub async fn save_attachment(
     handle: AppHandle,
     app: App<'_>,
@@ -287,21 +293,21 @@ pub async fn save_attachment(
     uid: u32,
     uidvalidity: u32,
     index: u32,
+    confirmed: Option<bool>,
 ) -> Result<Saved, Problem> {
     let dir = downloads(&handle).ok_or_else(|| Problem {
         email: email.clone(),
         kind: "disk".into(),
         error: "This computer has no Downloads folder RATA can find.".into(),
     })?;
-    app.save_attachment(
-        &email,
-        folder.unwrap_or_default(),
+    let at = AttachmentAt {
+        folder: folder.unwrap_or_default(),
         uid,
         uidvalidity,
         index,
-        &dir,
-    )
-    .await
+    };
+    app.save_attachment(&email, at, confirmed == Some(true), &dir)
+        .await
 }
 
 /// The Downloads folder. On Linux Tauri only finds it through the desktop's
@@ -316,7 +322,9 @@ fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 /// An attachment's bytes, for the Format Bridge to convert: as base64, since
-/// the bridge carries text. The interface asks by message and index only.
+/// the bridge carries text. The interface asks by message and index only,
+/// and says `confirmed` when the customer answered the question a disguised
+/// program needs.
 #[tauri::command]
 pub async fn read_attachment(
     app: App<'_>,
@@ -325,9 +333,16 @@ pub async fn read_attachment(
     uid: u32,
     uidvalidity: u32,
     index: u32,
+    confirmed: Option<bool>,
 ) -> Result<Handed, Problem> {
+    let at = AttachmentAt {
+        folder: folder.unwrap_or_default(),
+        uid,
+        uidvalidity,
+        index,
+    };
     let got = app
-        .read_attachment(&email, folder.unwrap_or_default(), uid, uidvalidity, index)
+        .read_attachment(&email, at, confirmed == Some(true))
         .await?;
     Ok(Handed {
         name: got.name,

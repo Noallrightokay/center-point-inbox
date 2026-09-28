@@ -30,6 +30,9 @@
 //! * **Making a message readable** (`body`) — MIME, transfer encodings and
 //!   charsets decoded into text, so the reading pane shows the message rather
 //!   than what it looked like on the wire.
+//! * **Judging a file name** (`names`) — a sender's attachment name made safe
+//!   to create, and a program dressed as a document (`invoice.pdf.exe`)
+//!   flagged where the attachment is listed, so the app can ask first.
 
 pub mod body;
 pub mod compose;
@@ -39,6 +42,7 @@ pub mod guard;
 pub mod html;
 pub mod imap;
 pub mod key;
+pub mod names;
 pub mod resolve;
 pub mod smtp;
 pub mod words;
@@ -56,5 +60,6 @@ pub use imap::{
     fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify, verify_with, watch,
 };
 pub use key::{domain_of, mail_key};
+pub use names::{looks_disguised, safe_file_name};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
 pub use smtp::{Sent, send};

@@ -23,13 +23,15 @@
      names, and translating here keeps the mail layer from being shaped by one
      particular screen's field names. */
   /* An attachment as the interface draws it: a short type label, the name,
-     a readable size, and the index a download asks for. */
+     a readable size, the index a download asks for, and whether it is a
+     program named to look like a document (rata_mail::names::looks_disguised),
+     which the page labels and asks about before saving. */
   function asAttachment(a) {
     const ext = (String(a.name || '').match(/\.([A-Za-z0-9]{1,5})$/) || [])[1];
     const kind = (ext || String(a.mime || '').split('/')[1] || 'file').replace(/[^A-Za-z0-9]/g, '').slice(0, 5).toUpperCase() || 'FILE';
     const n = Number(a.size) || 0;
     const size = !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
-    return { i: a.index, n: a.name, f: kind, s: size, mime: a.mime };
+    return { i: a.index, n: a.name, f: kind, s: size, mime: a.mime, disguised: a.disguised === true };
   }
 
   function asMessage(m) {
@@ -323,6 +325,9 @@
           uid: b.uid,
           uidvalidity: b.uidvalidity,
           index: b.index,
+          /* The customer's answer to "Save it anyway?"; Rust refuses a
+             disguised program without it (kind needs-confirmation). */
+          confirmed: b.confirmed === true,
         });
         return { ok: true, path: saved.path, name: saved.name };
       } catch (e) {
@@ -411,7 +416,7 @@
     async '/api/mail/attachment/read'(opts) {
       const b = body(opts);
       try {
-        const got = await invoke('read_attachment', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity, index: b.index });
+        const got = await invoke('read_attachment', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity, index: b.index, confirmed: b.confirmed === true });
         return { ok: true, name: got.name, mime: got.mime, data: got.data };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
