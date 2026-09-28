@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE). Standalone, knows nothing about the app. 175 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE). Standalone, knows nothing about the app. 182 tests. |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail. 63 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, and the AI relay (`/api/ai`). Next.js on Hostinger. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -112,7 +112,7 @@ shows a desktop notification for new mail; v0.1.30 archives, moves home
 and files several messages at once; v0.1.31 shows Drafts and finishes one
 begun elsewhere; v0.1.32 adds Cc and Reply all; v0.1.33 adds Bcc; v0.1.34 brings new mail
 as it arrives (IMAP IDLE); v0.1.35 signs in far less often; v0.1.36 adds signatures; v0.1.37 is the
-redesign to `DESIGN.md`. An
+redesign to `DESIGN.md`; v0.1.38 shows Gmail's archive. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -508,8 +508,9 @@ licence's own sentence ("Licensed for RATA Pro until …").
 attribute, else by exact name (`SENT_NAMES`, `JUNK_NAMES`, `ARCHIVE_NAMES`);
 never the inbox, never one folder for two purposes, never a name that only
 contains the word ("Spam reports", "Old archive stuff"). **Gmail has no
-Archive here:** it declares only `\All` ("All Mail"), which holds the inbox
-and Sent too, so reading it would show every message twice. A refresh reads
+Archive folder:** it declares only `\All` ("All Mail"), which holds the inbox
+and Sent too, so reading it whole would show every message twice (until
+0.1.38 Gmail showed no archive at all; see *Gmail's archive* below). A refresh reads
 the newest mail of each folder the mailbox has; any that fails is left out.
 In the interface `inInbox(m)` (received, in the inbox) replaces `!m.sent`
 wherever "the inbox" was meant — the list, Unread, `#nc-inbox`, the digest,
@@ -678,8 +679,35 @@ browser install, all gone since 0.1.6), with screenshots of the real
 interface in `public/shots` (retake them after a visible change) and no em
 dashes in visible copy. `vendor-fonts.mjs` now keeps a variable font once
 instead of once per weight (460 KB → 167 KB).
-Also not built: saving RATA's drafts to the server; Gmail's archive; no
-code signing.
+**Gmail's archive (v0.1.38).** Where a server has no `\Archive` but
+declares `\All`, `places()` takes that as Archive with `all_mail` set, and
+every read of it goes through Gmail's own search, `UID SEARCH UID lo:hi
+X-GM-RAW "-in:inbox -in:sent -in:drafts"` (`GMAIL_ARCHIVED`). Any server but
+Gmail refuses X-GM-RAW, which leaves Archive out, as before. The catch that
+shaped it: an archived Gmail message keeps the All Mail UID it arrived
+with, so "newer than the newest held" never finds a message archived
+today that arrived last week. So a refresh (`refresh_archived`) downloads
+what is newer as usual, and also lists every archived UID within
+`ARCHIVE_WINDOW` (2 000) of the top of All Mail (`Newest.archived`, per
+mailbox `MailArchive`, `archives` on the wire). The page (`settleArchives`,
+after the refresh's own mail is in) drops held archive mail at or above the
+floor that is not listed (moved back to the inbox or deleted elsewhere; not
+through `S.gone`), and fetches listed UIDs it does not hold, but only at or
+above the oldest one it held before (below that is Load older mail's), 50
+a mailbox a refresh, through `reread_mail`. Load older mail and gaps page
+by the same search (`newest_archived`, widening the block searched until a
+page fills). **Acting on it:** taking a message out of All Mail deletes it
+everywhere in Gmail, so Move to inbox and Move to from Gmail's archive are
+a `UID COPY` (adding the label) and never a MOVE; a message moved into a
+folder is therefore still archived and comes back under Archive on the
+next refresh, which is what Gmail shows too. Trash is still a MOVE to
+Gmail's Trash, and Archive on archived mail does nothing. **Found on the
+way:** async-imap's `uid_search` reads a refusal (NO or BAD) as "found
+nothing", so a server refusing the Drafts listing would have had the page
+drop every draft; `search()` reads the tagged status itself and returns
+nothing on a refusal (tested). Not seen against real Gmail: covered by a
+scripted Gmail server in the engine tests.
+Also not built: saving RATA's drafts to the server; no code signing.
 
 **Never tested: no real mailbox has ever been opened by this code.** The suites
 cover every path up to the socket and stop. When a real connection fails, the

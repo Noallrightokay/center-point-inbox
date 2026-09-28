@@ -93,8 +93,7 @@ Don't spend time reporting these — they are known and planned:
 - From v0.1.22 RATA shows your **Sent** mail too — including what you sent
   from your phone or webmail — in the Sent filter and in each person's
   thread in People. From v0.1.25 **Archive** and **Spam** have filters of
-  their own (Gmail's archive isn't shown — Gmail keeps it inside "All
-  Mail"); a message in Spam can be marked **Not spam**. From v0.1.26 **Folders**
+  their own (Gmail's archive from v0.1.38); a message in Spam can be marked **Not spam**. From v0.1.26 **Folders**
   (in the row of filters) lists your own folders — Gmail labels too — and
   opens one, and **Move to** on a message files it into one. From v0.1.30
   **Select** several messages to **Archive**, **Move to inbox** or **Move
@@ -193,6 +192,14 @@ Don't spend time reporting these — they are known and planned:
   replies and forwards unless you turn that off; changing From swaps it.
   Signatures stay on your computer — they are not part of what RATA keeps
   in your online account.
+- From v0.1.38 **Gmail's archive** shows under Archive. Gmail keeps
+  archived mail inside "All Mail" with everything else, so RATA asks Gmail
+  which of it is archived; mail you archive on your phone should appear
+  within a refresh or two, and mail you move back to the inbox elsewhere
+  should leave. **Move to inbox** and **Move to** on Gmail's archive add
+  the label, as Gmail does, so a message moved into a folder is still in
+  Archive too. If archived mail is missing, doubled, or does not leave,
+  say so and say it was Gmail.
 - v0.1.37 **looks different**: calmer colours, one accent, a new typeface
   (Geist), flatter buttons, and a mail list with badges on the sender's line
   so more of it fits. Nothing moved or was taken away. If something is now

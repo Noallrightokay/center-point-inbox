@@ -92,6 +92,10 @@ pub struct Refreshed {
     /// mailboxes whose Drafts were read. A draft RATA holds that is not
     /// listed was sent, deleted or saved again elsewhere.
     pub drafts: Vec<MailDrafts>,
+    /// Gmail's archive, listed, per mailbox whose archive was read: the
+    /// interface fetches what it does not hold and drops what has left
+    /// (`rata_mail::Archived`).
+    pub archives: Vec<MailArchive>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
     pub problems: Vec<Problem>,
@@ -133,6 +137,14 @@ pub struct MailGap {
 pub struct MailDrafts {
     pub email: String,
     pub ids: Vec<String>,
+}
+
+/// Gmail's archive listing for one mailbox.
+#[derive(Debug, Serialize)]
+pub struct MailArchive {
+    pub email: String,
+    #[serde(flatten)]
+    pub archived: rata_mail::Archived,
 }
 
 /// What the interface already holds of one folder of one mailbox: the newest
@@ -513,6 +525,12 @@ impl Rata {
                             email: email.clone(),
                             gap,
                         }));
+                        if let Some(archived) = found.archived {
+                            out.archives.push(MailArchive {
+                                email: email.clone(),
+                                archived,
+                            });
+                        }
                         if let Some(ids) = found.drafts {
                             out.drafts.push(MailDrafts { email, ids });
                         }
@@ -2112,6 +2130,24 @@ mod tests {
         assert_eq!(
             r["drafts"],
             serde_json::json!([{"email": "a@b.example", "ids": ["k_drafts_4"]}])
+        );
+        // Gmail's archive: which of All Mail's messages are archived, at or
+        // above a floor, for the interface to fetch or drop by.
+        let r = serde_json::to_value(Refreshed {
+            archives: vec![MailArchive {
+                email: "a@gmail.com".into(),
+                archived: rata_mail::Archived {
+                    uidvalidity: 9,
+                    floor: 1,
+                    uids: vec![2, 4],
+                },
+            }],
+            ..Refreshed::default()
+        })
+        .unwrap();
+        assert_eq!(
+            r["archives"],
+            serde_json::json!([{"email": "a@gmail.com", "uidvalidity": 9, "floor": 1, "uids": [2, 4]}])
         );
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),

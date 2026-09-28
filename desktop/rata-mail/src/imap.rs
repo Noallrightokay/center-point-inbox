@@ -79,7 +79,8 @@ pub enum Folder {
     Sent,
     /// Mail archived out of the inbox. Only a folder that is an archive: Gmail
     /// has none — its "All Mail" holds the inbox and Sent too, and reading it
-    /// would show every message twice — so on Gmail there is no Archive here.
+    /// would show every message twice — so on Gmail, Archive is All Mail
+    /// searched for what is archived (see [`Archived`]).
     Archive,
     /// Spam, which is where real mail goes missing.
     Junk,
@@ -594,7 +595,37 @@ pub struct Newest {
     /// changes number each time it is saved elsewhere and goes when it is
     /// sent, so without this the drafts RATA holds only ever grow.
     pub drafts: Option<Vec<String>>,
+    /// Gmail's archive, listed, when it was read: see [`Archived`].
+    pub archived: Option<Archived>,
 }
+
+/// Which messages of Gmail's All Mail are archived, among those whose UID is
+/// at least `floor`.
+///
+/// Gmail has no Archive folder: archiving takes a message out of the inbox
+/// and leaves it in All Mail with the UID it arrived with. "Newer than the
+/// newest held", which finds new mail everywhere else, never finds a message
+/// archived today that arrived last week — so a refresh lists what is
+/// archived near the top of All Mail, and the interface fetches what it does
+/// not hold and drops what is no longer there (moved back to the inbox, or
+/// deleted, on another device).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Archived {
+    pub uidvalidity: u32,
+    pub floor: u32,
+    pub uids: Vec<u32>,
+}
+
+/// Gmail's search, over IMAP, for what is archived: in All Mail and in none
+/// of the places RATA reads on their own. Any server but Gmail refuses it,
+/// which leaves Archive out, as before.
+const GMAIL_ARCHIVED: &str = "X-GM-RAW \"-in:inbox -in:sent -in:drafts\"";
+
+/// How far below the top of All Mail, in UIDs, a refresh lists what is
+/// archived. Roughly the last few weeks of mail for most people: a message
+/// archived now that arrived before that turns up with Load older mail.
+pub const ARCHIVE_WINDOW: u32 = 2000;
 
 /// The most new messages one refresh downloads from one folder. A laptop
 /// closed for a week comes back to hundreds; what is past this arrives with
@@ -676,13 +707,21 @@ where
         let Some(name) = places.name(&folder) else {
             continue;
         };
-        if let Selected::Open(mailbox) = select_name(session, name).await
-            && let Ok(mut more) =
-                refresh_in(session, acct, &folder, &mailbox, limit, held(&folder)).await
-        {
+        let Selected::Open(mailbox) = select_name(session, name).await else {
+            continue;
+        };
+        let read = if folder == Folder::Archive && places.all_mail {
+            refresh_archived(session, acct, &mailbox, limit, held(&folder)).await
+        } else {
+            refresh_in(session, acct, &folder, &mailbox, limit, held(&folder)).await
+        };
+        if let Ok(mut more) = read {
             found.messages.append(&mut more.messages);
             found.flags.append(&mut more.flags);
             found.gaps.append(&mut more.gaps);
+            if more.archived.is_some() {
+                found.archived = more.archived;
+            }
             if folder == Folder::Drafts {
                 found.drafts = all_ids(session, acct, &folder).await;
             }
@@ -690,6 +729,31 @@ where
     }
     found.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
     Ok(found)
+}
+
+/// `UID SEARCH`, believed only when the server says it worked. The library's
+/// own search reads a refusal (NO or BAD) as "found nothing", and "no drafts"
+/// or "nothing archived" has the interface drop everything it holds there.
+async fn search<T>(session: &mut Session<T>, query: &str) -> Option<Vec<u32>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::imap_proto::types::{MailboxDatum, Response, Status};
+    let id = session
+        .run_command(format!("UID SEARCH {query}"))
+        .await
+        .ok()?;
+    let mut found = Vec::new();
+    loop {
+        let data = session.read_response().await.ok()??;
+        match data.parsed() {
+            Response::MailboxData(MailboxDatum::Search(uids)) => found.extend(uids.iter().copied()),
+            Response::Done { tag, status, .. } if *tag == id => {
+                return (*status == Status::Ok).then_some(found);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Every message of the folder just selected, by id — or nothing if the
@@ -702,10 +766,7 @@ async fn all_ids<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    let uids = timeout(COMMAND, session.uid_search("ALL"))
-        .await
-        .ok()?
-        .ok()?;
+    let uids = timeout(COMMAND, search(session, "ALL")).await.ok()??;
     let mut uids: Vec<u32> = uids.into_iter().filter(|u| *u != 0).collect();
     if uids.len() > DRAFTS_MAX {
         return None;
@@ -815,7 +876,195 @@ where
         flags,
         gaps,
         drafts: None,
+        archived: None,
     })
+}
+
+/// Gmail's archive, from All Mail just selected: like [`refresh_in`], but
+/// only for the messages [`GMAIL_ARCHIVED`] finds, and with the listing that
+/// lets the interface catch mail archived since it last looked.
+async fn refresh_archived<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    mailbox: &async_imap::types::Mailbox,
+    limit: u32,
+    known: Option<&Known>,
+) -> Result<Newest, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let folder = Folder::Archive;
+    let generation = mailbox.uid_validity.unwrap_or(0);
+    if mailbox.exists == 0 || limit == 0 || generation == 0 {
+        return Ok(Newest::default());
+    }
+    let unlisted = || Fetched::Net(unreachable_msg(acct, "its archive could not be listed"));
+    let next = mailbox.uid_next.unwrap_or(u32::MAX);
+    let floor = next.saturating_sub(ARCHIVE_WINDOW).max(1);
+    let listed = archived(session, floor, None).await.ok_or_else(unlisted)?;
+
+    let since = known
+        .filter(|k| k.since > 0 && k.uidvalidity == generation)
+        .map(|k| k.since);
+    let (fresh, gaps) = match since {
+        // Never read: the newest `limit` archived, searching further down if
+        // the top of All Mail holds fewer than that.
+        None if listed.len() >= limit as usize || floor == 1 => (tail(&listed, limit), vec![]),
+        None => (
+            newest_archived(session, next, limit)
+                .await
+                .ok_or_else(unlisted)?,
+            vec![],
+        ),
+        Some(since) => {
+            let after: Vec<u32> = listed.iter().copied().filter(|u| *u > since).collect();
+            let kept = tail(&after, NEW_MAX);
+            let gaps = if after.len() > kept.len() {
+                vec![Gap {
+                    folder: folder.clone(),
+                    uidvalidity: generation,
+                    top: kept[0],
+                    floor: since,
+                }]
+            } else {
+                vec![]
+            };
+            (kept, gaps)
+        }
+    };
+
+    // Read and starred for the newest listed that RATA may hold already.
+    let older: Vec<u32> = listed
+        .iter()
+        .copied()
+        .filter(|u| !fresh.contains(u))
+        .collect();
+    let flags = flags_of(session, acct, &folder, &tail(&older, limit)).await?;
+    let messages = by_uid(session, acct, &folder, &fresh, generation).await?;
+    Ok(Newest {
+        messages,
+        flags,
+        gaps,
+        drafts: None,
+        archived: Some(Archived {
+            uidvalidity: generation,
+            floor,
+            uids: listed,
+        }),
+    })
+}
+
+/// The archived UIDs of All Mail (just selected) from `lo` up to `hi`, or to
+/// the top when `hi` is `None`, lowest first — or nothing if the server will
+/// not search that way, which only Gmail does.
+async fn archived<T>(session: &mut Session<T>, lo: u32, hi: Option<u32>) -> Option<Vec<u32>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let range = match hi {
+        Some(hi) => format!("{lo}:{hi}"),
+        None => format!("{lo}:*"),
+    };
+    let found = timeout(
+        COMMAND,
+        search(session, &format!("UID {range} {GMAIL_ARCHIVED}")),
+    )
+    .await
+    .ok()??;
+    // `lo:*` also names the newest message when its UID is below `lo`.
+    let mut uids: Vec<u32> = found
+        .into_iter()
+        .filter(|u| *u >= lo && hi.is_none_or(|hi| *u <= hi))
+        .collect();
+    uids.sort_unstable();
+    Some(uids)
+}
+
+/// The newest `want` archived messages below `below`, lowest first: the block
+/// under it is searched, and a wider one each time that finds too few, so a
+/// sparse archive under a busy inbox still fills a page.
+async fn newest_archived<T>(session: &mut Session<T>, below: u32, want: u32) -> Option<Vec<u32>>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let Some(hi) = below.checked_sub(1).filter(|h| *h > 0) else {
+        return Some(vec![]);
+    };
+    let mut span = ARCHIVE_WINDOW;
+    loop {
+        let lo = hi.saturating_sub(span - 1).max(1);
+        let found = archived(session, lo, Some(hi)).await?;
+        if found.len() >= want as usize || lo == 1 {
+            return Some(tail(&found, want));
+        }
+        span = span.saturating_mul(4);
+    }
+}
+
+/// The last `n` of a list.
+fn tail(list: &[u32], n: u32) -> Vec<u32> {
+    list[list.len().saturating_sub(n as usize)..].to_vec()
+}
+
+/// Read and starred for `uids` of the folder just selected, without text.
+async fn flags_of<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: &Folder,
+    uids: &[u32],
+) -> Result<Vec<Flags>, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if uids.is_empty() {
+        return Ok(vec![]);
+    }
+    let got = match timeout(COMMAND, session.uid_fetch(join(uids), "(UID FLAGS)")).await {
+        Ok(Ok(stream)) => stream.collect::<Vec<_>>().await,
+        _ => return Err(Fetched::Net(unreachable_msg(acct, &cannot_open(folder)))),
+    };
+    Ok(got
+        .iter()
+        .filter_map(|f| f.as_ref().ok())
+        .filter_map(|f| Some((f.uid?, f)))
+        .filter(|(uid, f)| uids.contains(uid) && !f.flags().any(|x| x == Flag::Deleted))
+        .map(|(uid, f)| Flags {
+            id: message_key(acct, folder, uid),
+            unread: !f.flags().any(|x| x == Flag::Seen),
+            starred: f.flags().any(|x| x == Flag::Flagged),
+        })
+        .collect())
+}
+
+/// `uids` of the folder just selected, whole, newest first — only those asked
+/// for, since a server may volunteer others.
+async fn by_uid<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    folder: &Folder,
+    uids: &[u32],
+    generation: u32,
+) -> Result<Vec<Message>, Fetched>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if uids.is_empty() {
+        return Ok(vec![]);
+    }
+    let stream = match timeout(COMMAND, session.uid_fetch(join(uids), items())).await {
+        Ok(Ok(s)) => s,
+        _ => {
+            return Err(Fetched::Net(unreachable_msg(
+                acct,
+                "those messages could not be read",
+            )));
+        }
+    };
+    Ok(collect(stream, acct, folder, generation)
+        .await?
+        .into_iter()
+        .filter(|m| uids.contains(&m.uid))
+        .collect())
 }
 
 /// The newest `limit` messages of a folder just selected.
@@ -902,6 +1151,10 @@ struct Places {
     archive: Option<String>,
     junk: Option<String>,
     drafts: Option<String>,
+    /// Archive is Gmail's All Mail (`\All`, and no `\Archive`), which also
+    /// holds the inbox, Sent and Drafts: only what [`GMAIL_ARCHIVED`] finds
+    /// in it is archived.
+    all_mail: bool,
 }
 
 impl Places {
@@ -983,13 +1236,20 @@ fn places_in(listed: &[async_imap::types::Name]) -> Places {
     };
     let sent = pick(A::Sent, SENT_NAMES);
     let junk = pick(A::Junk, JUNK_NAMES);
-    let archive = pick(A::Archive, ARCHIVE_NAMES);
     let drafts = pick(A::Drafts, DRAFTS_NAMES);
+    let (archive, all_mail) = match pick(A::Archive, ARCHIVE_NAMES) {
+        Some(archive) => (Some(archive), false),
+        None => match pick(A::All, &[]) {
+            Some(all) => (Some(all), true),
+            None => (None, false),
+        },
+    };
     Places {
         sent,
         archive,
         junk,
         drafts,
+        all_mail,
     }
 }
 
@@ -1506,6 +1766,16 @@ where
     if mailbox.exists == 0 || limit == 0 {
         return Fetched::Messages(vec![]);
     }
+    // Gmail's archive is a search of All Mail, not the whole of it.
+    if *folder == Folder::Archive && places(session).await.all_mail {
+        let Some(uids) = newest_archived(session, before_uid, limit).await else {
+            return Fetched::Net(unreachable_msg(acct, "its archive could not be listed"));
+        };
+        return match by_uid(session, acct, folder, &uids, uidvalidity).await {
+            Ok(m) => Fetched::Messages(m),
+            Err(failed) => failed,
+        };
+    }
 
     // How many messages sit at or above the oldest one RATA has.
     let newer = match timeout(COMMAND, session.uid_fetch(format!("{before_uid}:*"), "UID")).await {
@@ -1939,6 +2209,7 @@ where
 
     let already = match action {
         Action::Inbox => *folder == Folder::Inbox,
+        Action::Archive => *folder == Folder::Archive,
         Action::Move(to) => to == folder,
         _ => false,
     };
@@ -1961,6 +2232,22 @@ where
         return Acted::NoPlace(format!("This mailbox does not have {what}."));
     };
 
+    // In Gmail, taking a message out of All Mail deletes it everywhere. Back
+    // to the inbox, or into a folder (a label, to Gmail), is a copy there:
+    // the message gains the label and stays where it is.
+    if *folder == Folder::Archive
+        && matches!(action, Action::Inbox | Action::Move(_))
+        && places(session).await.all_mail
+    {
+        return match timeout(COMMAND, session.uid_copy(&set, &dest)).await {
+            Ok(Ok(())) => Acted::Done {
+                done: present,
+                gone,
+            },
+            Ok(Err(e)) => failed("move the messages", e),
+            Err(_) => Acted::Net("The server did not answer in time.".into()),
+        };
+    }
     let caps = match timeout(COMMAND, session.capabilities()).await {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => return failed("list what it supports", e),
@@ -3675,19 +3962,21 @@ mod tests {
                     sent: Some("Sent Items".into()),
                     archive: Some("Archive".into()),
                     junk: Some("Junk Email".into()),
-                    drafts: None
+                    drafts: None,
+                    all_mail: false,
                 }
             );
             // Gmail's All Mail is every message, inbox and Sent included:
-            // it is not an archive to read, so there is none.
+            // it is the archive only through Gmail's search, and says so.
             let (mut s, _) = scripted_folders(GMAIL_ALL, "x").await;
             assert_eq!(
                 places(&mut s).await,
                 Places {
                     sent: Some("[Gmail]/Sent Mail".into()),
-                    archive: None,
+                    archive: Some("[Gmail]/All Mail".into()),
                     junk: Some("[Gmail]/Spam".into()),
-                    drafts: None
+                    drafts: None,
+                    all_mail: true,
                 }
             );
             let (mut s, _) = scripted_folders(NAMES_ONLY, "x").await;
@@ -3697,7 +3986,8 @@ mod tests {
                     sent: Some("INBOX.Sent".into()),
                     archive: Some("INBOX.Archive".into()),
                     junk: Some("INBOX.spam".into()),
-                    drafts: None
+                    drafts: None,
+                    all_mail: false,
                 }
             );
         });
@@ -4059,6 +4349,355 @@ mod tests {
                 panic!("older mail")
             };
             assert_eq!(sorted_uids(&next), (51..=100).collect::<Vec<_>>());
+        });
+    }
+
+    // ---------------------------------------------------- Gmail's archive
+
+    /// Gmail, with one label of the customer's own.
+    const GMAIL_BOX: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"\r\n* LIST (\\All \\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n* LIST (\\HasNoChildren \\Sent) \"/\" \"[Gmail]/Sent Mail\"\r\n* LIST (\\HasNoChildren \\Junk) \"/\" \"[Gmail]/Spam\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"[Gmail]/Trash\"\r\n* LIST (\\HasNoChildren) \"/\" \"Receipts\"\r\n";
+
+    /// A Gmail mailbox: the inbox holds UIDs 1..=3 (UIDVALIDITY 7); All Mail
+    /// holds 1..=10 (UIDVALIDITY 9, UIDNEXT 11), of which `archived` are
+    /// archived. `searches` is false for a server that is not Gmail and
+    /// refuses X-GM-RAW.
+    async fn scripted_gmail(
+        archived: &'static [u32],
+        searches: bool,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut lines = BufReader::new(r).lines();
+            w.write_all(b"* OK scripted Gmail ready\r\n").await.unwrap();
+            let mut open = String::new();
+            let whole = |seq: usize, uid: u32| {
+                let body = format!(
+                    "From: Ann <ann@example.org>\r\nTo: Me <me@example.com>\r\nSubject: Mail {uid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nText of {uid}\r\n"
+                );
+                format!(
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Mail {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Me\" NIL \"me\" \"example.com\")) NIL NIL NIL \"<m{uid}@example.org>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
+                    uid,
+                    body.len()
+                )
+            };
+            while let Ok(Some(line)) = lines.next_line().await {
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                log.lock().unwrap().push(cmd.to_string());
+                let up = cmd.to_ascii_uppercase();
+                let held: Vec<u32> = match open.as_str() {
+                    "INBOX" => (1..=3).collect(),
+                    "[Gmail]/All Mail" => (1..=10).collect(),
+                    _ => vec![],
+                };
+                let body = if up.starts_with("LIST") {
+                    GMAIL_BOX.to_string()
+                } else if up.starts_with("SELECT") {
+                    open = cmd[6..].trim().trim_matches('"').to_string();
+                    match open.as_str() {
+                        "INBOX" => {
+                            "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n* OK [UIDNEXT 4] ok\r\n"
+                                .to_string()
+                        }
+                        "[Gmail]/All Mail" => {
+                            "* 10 EXISTS\r\n* OK [UIDVALIDITY 9] ok\r\n* OK [UIDNEXT 11] ok\r\n"
+                                .to_string()
+                        }
+                        _ => "* 0 EXISTS\r\n* OK [UIDVALIDITY 8] ok\r\n".to_string(),
+                    }
+                } else if up.starts_with("UID SEARCH") && !searches {
+                    let _ = w
+                        .write_all(format!("{tag} NO Search refused\r\n").as_bytes())
+                        .await;
+                    continue;
+                } else if up.starts_with("UID SEARCH") && up.contains("X-GM-RAW") {
+                    if !searches {
+                        let _ = w
+                            .write_all(format!("{tag} BAD Unknown search criterion\r\n").as_bytes())
+                            .await;
+                        continue;
+                    }
+                    // UID SEARCH UID lo:hi X-GM-RAW "..."
+                    let range = cmd.split_whitespace().nth(3).unwrap_or("1:*");
+                    let (lo, hi) = range.split_once(':').unwrap();
+                    let lo: u32 = lo.parse().unwrap();
+                    let hi: u32 = hi.parse().unwrap_or(u32::MAX);
+                    let found: Vec<String> = archived
+                        .iter()
+                        .filter(|u| **u >= lo && **u <= hi)
+                        .map(u32::to_string)
+                        .collect();
+                    format!("* SEARCH {}\r\n", found.join(" "))
+                } else if up.starts_with("UID FETCH") {
+                    let asked: Vec<u32> = cmd
+                        .split_whitespace()
+                        .nth(2)
+                        .unwrap_or("")
+                        .split(',')
+                        .filter_map(|u| u.parse().ok())
+                        .filter(|u| held.contains(u))
+                        .collect();
+                    asked
+                        .iter()
+                        .enumerate()
+                        .map(|(i, u)| {
+                            if up.contains("BODY") {
+                                whole(i + 1, *u)
+                            } else if up.contains("FLAGS") {
+                                format!("* {} FETCH (UID {u} FLAGS (\\Flagged))\r\n", i + 1)
+                            } else {
+                                format!("* {} FETCH (UID {u})\r\n", i + 1)
+                            }
+                        })
+                        .collect()
+                } else if up.starts_with("FETCH") {
+                    held.iter()
+                        .enumerate()
+                        .map(|(i, u)| whole(i + 1, *u))
+                        .collect()
+                } else if up.starts_with("CAPABILITY") {
+                    "* CAPABILITY IMAP4rev1 MOVE UIDPLUS X-GM-EXT-1\r\n".to_string()
+                } else {
+                    String::new()
+                };
+                if w.write_all(format!("{body}{tag} OK done\r\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut client = async_imap::Client::new(tcp);
+        client.read_response().await.unwrap();
+        let session = client
+            .login("me@example.com", "pw")
+            .await
+            .map_err(|(e, _)| e)
+            .unwrap();
+        (session, seen)
+    }
+
+    fn archive_uids(found: &Newest) -> Vec<u32> {
+        let mut uids: Vec<u32> = found
+            .messages
+            .iter()
+            .filter(|m| m.folder == Folder::Archive)
+            .map(|m| m.uid)
+            .collect();
+        uids.sort_unstable();
+        uids
+    }
+
+    #[test]
+    fn gmail_archive_is_all_mail_searched_for_what_is_archived() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            // Only the archived ones, not the inbox's or Sent's copies.
+            assert_eq!(archive_uids(&found), vec![2, 4, 6, 9]);
+            let key = mail_key("me@example.com");
+            let m = found
+                .messages
+                .iter()
+                .find(|m| m.uid == 9 && m.folder == Folder::Archive)
+                .unwrap();
+            assert_eq!(m.id, format!("{key}_archive_9"));
+            assert_eq!(m.uidvalidity, 9);
+            // The inbox still arrives as itself.
+            assert_eq!(
+                found
+                    .messages
+                    .iter()
+                    .filter(|m| m.folder == Folder::Inbox)
+                    .count(),
+                3
+            );
+            // And the listing the interface uses to catch mail archived later.
+            assert_eq!(
+                found.archived,
+                Some(Archived {
+                    uidvalidity: 9,
+                    floor: 1,
+                    uids: vec![2, 4, 6, 9]
+                })
+            );
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter()
+                    .any(|c| c == "UID SEARCH UID 1:* X-GM-RAW \"-in:inbox -in:sent -in:drafts\""),
+                "{log:?}"
+            );
+            // Nothing but those was downloaded from All Mail.
+            assert!(
+                log.iter().any(|c| c.starts_with("UID FETCH 2,4,6,9 ")),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_gmail_archive_page_is_the_newest_archived() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            let found = newest_everywhere(&mut s, &me(), 2, &[]).await.unwrap();
+            assert_eq!(archive_uids(&found), vec![6, 9]);
+            // The listing is still whole, so the rest can be picked up.
+            assert_eq!(found.archived.unwrap().uids, vec![2, 4, 6, 9]);
+        });
+    }
+
+    #[test]
+    fn a_known_gmail_archive_downloads_only_what_is_newer_and_lists_the_rest() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            let known = [Known {
+                folder: Folder::Archive,
+                uidvalidity: 9,
+                since: 6,
+            }];
+            let found = newest_everywhere(&mut s, &me(), 15, &known).await.unwrap();
+            assert_eq!(archive_uids(&found), vec![9]);
+            // Read and starred for what RATA already has.
+            let key = mail_key("me@example.com");
+            let mut flagged: Vec<&str> = found
+                .flags
+                .iter()
+                .filter(|f| f.id.contains("_archive_"))
+                .map(|f| f.id.as_str())
+                .collect();
+            flagged.sort_unstable();
+            assert_eq!(
+                flagged,
+                vec![
+                    format!("{key}_archive_2"),
+                    format!("{key}_archive_4"),
+                    format!("{key}_archive_6")
+                ]
+            );
+            assert!(found.flags.iter().all(|f| f.starred));
+            // A message archived since, which kept its old UID, is in the
+            // listing even though nothing newer than 6 names it.
+            assert_eq!(found.archived.unwrap().uids, vec![2, 4, 6, 9]);
+        });
+    }
+
+    #[test]
+    fn older_gmail_archive_mail_pages_through_the_search() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            let Fetched::Messages(older) =
+                older_in(&mut s, &me(), &Folder::Archive, 6, 9, 50).await
+            else {
+                panic!("older archived mail")
+            };
+            assert_eq!(sorted_uids(&older), vec![2, 4]);
+        });
+    }
+
+    #[test]
+    fn a_server_that_is_not_gmail_keeps_its_all_folder_out_of_archive() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], false).await;
+            let found = newest_everywhere(&mut s, &me(), 15, &[]).await.unwrap();
+            assert!(archive_uids(&found).is_empty());
+            assert_eq!(found.archived, None);
+            // The inbox is not held hostage by the refusal.
+            assert_eq!(
+                found
+                    .messages
+                    .iter()
+                    .filter(|m| m.folder == Folder::Inbox)
+                    .count(),
+                3
+            );
+            // And nothing at all was read out of All Mail.
+            let log = log.lock().unwrap();
+            let mut in_all = false;
+            for c in log.iter() {
+                if c.starts_with("SELECT") {
+                    in_all = c.contains("All Mail");
+                }
+                assert!(!(in_all && c.contains("FETCH")), "read from All Mail: {c}");
+            }
+        });
+    }
+
+    #[test]
+    fn out_of_gmail_archive_is_a_label_never_a_move_out_of_all_mail() {
+        // Back to the inbox: a copy there, which is Gmail's "move to inbox".
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            assert_eq!(
+                apply(&mut s, &Folder::Archive, &[4], 9, &Action::Inbox).await,
+                done(&[4])
+            );
+            assert_eq!(changed(&log.lock().unwrap()), vec!["UID COPY 4 \"INBOX\""]);
+        });
+        // Into one of the customer's folders: the label, and it stays archived.
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            assert_eq!(
+                apply(
+                    &mut s,
+                    &Folder::Archive,
+                    &[4],
+                    9,
+                    &Action::Move(Folder::Named("Receipts".into()))
+                )
+                .await,
+                done(&[4])
+            );
+            assert_eq!(
+                changed(&log.lock().unwrap()),
+                vec!["UID COPY 4 \"Receipts\""]
+            );
+        });
+        // Delete is still a move to Gmail's Trash, which is how Gmail deletes.
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            assert_eq!(
+                apply(&mut s, &Folder::Archive, &[4], 9, &Action::Trash).await,
+                done(&[4])
+            );
+            assert_eq!(
+                changed(&log.lock().unwrap()),
+                vec!["UID MOVE 4 \"[Gmail]/Trash\""]
+            );
+        });
+        // And archiving what is archived already does nothing at all.
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
+            assert_eq!(
+                apply(&mut s, &Folder::Archive, &[4], 9, &Action::Archive).await,
+                done(&[4])
+            );
+            assert!(changed(&log.lock().unwrap()).is_empty());
+        });
+    }
+
+    #[test]
+    fn a_refused_search_is_never_read_as_nothing_there() {
+        // The library's own search takes NO for "no results"; a draft list
+        // read that way would have the interface drop every draft it holds.
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_gmail(&[], false).await;
+            assert!(matches!(
+                select(&mut s, &Folder::Inbox).await,
+                Selected::Open(_)
+            ));
+            assert_eq!(all_ids(&mut s, &me(), &Folder::Inbox).await, None);
+            // The session is still in step for the next command.
+            assert!(matches!(
+                select(&mut s, &Folder::Inbox).await,
+                Selected::Open(_)
+            ));
         });
     }
 }
