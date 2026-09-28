@@ -20,7 +20,7 @@ async fn main() {
 
     let acct = Account {
         email: email.clone(),
-        pass: pass.clone(),
+        credential: rata_mail::Credential::Password(pass.clone()),
         host: host.clone(),
         port: 993,
         label: String::new(),
@@ -30,6 +30,7 @@ async fn main() {
         "link" => match verify(&r, &email, &pass, (!host.is_empty()).then_some(&host[..])).await {
             Verify::Ok(v) => println!("OK      {}:{} ({:?}) {}", v.host, v.port, v.source, v.label),
             Verify::Refused(w) => println!("REFUSED {w}"),
+            Verify::OAuth(w) => println!("TOKEN   {w}"),
             Verify::NeedsHost(w) => println!("NEEDS   {w}"),
             Verify::Failed(w) => println!("FAILED  {w}"),
         },

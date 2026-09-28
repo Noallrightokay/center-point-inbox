@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use rata_mail::Credential;
 use rata_mail::{
     ATTACH_MAX, Account, Acted, Action, Address, Fetched, File, Flags, Folder, Gap, Known, Listed,
     Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Watch, Watched, Whole, act, body,
@@ -418,7 +419,7 @@ impl Rata {
         match verify(&self.resolver, &email, password, host_override).await {
             Verify::Refused(error) => Linked::Refused { error },
             Verify::NeedsHost(error) => Linked::NeedsHost { error },
-            Verify::Failed(error) => Linked::Failed { error },
+            Verify::Failed(error) | Verify::OAuth(error) => Linked::Failed { error },
             Verify::Ok(found) => {
                 // The keychain first: a mailbox in the list whose password is
                 // not stored is a mailbox that fails on every refresh with no
@@ -565,7 +566,7 @@ impl Rata {
 
         let acct = Account {
             email: m.email.clone(),
-            pass,
+            credential: Credential::Password(pass),
             host: m.host.clone(),
             port: m.port,
             label: m.label.clone(),
@@ -574,6 +575,7 @@ impl Rata {
             Ok(found) => Ok(found),
             Err(Fetched::Messages(_)) => Ok(Newest::default()),
             Err(Fetched::Auth(error)) => Err(problem("auth", error)),
+            Err(Fetched::OAuth(error)) => Err(problem("oauth", error)),
             Err(Fetched::Host(error)) => Err(problem("host", error)),
             Err(Fetched::Net(error) | Fetched::Stale(error)) => Err(problem("net", error)),
         }
@@ -619,6 +621,7 @@ impl Rata {
                 self.note_auth_failure(&acct.email);
                 Err(problem("auth", error))
             }
+            Listed::OAuth(error) => Err(problem("oauth", error)),
             Listed::Host(error) => Err(problem("host", error)),
             Listed::Net(error) => Err(problem("net", error)),
         }
@@ -822,6 +825,7 @@ impl Rata {
                 self.note_auth_failure(&acct.email);
                 Err(problem("auth", error))
             }
+            Whole::OAuth(error) => Err(problem("oauth", error)),
             Whole::Host(error) => Err(problem("host", error)),
             Whole::Net(error) => Err(problem("net", error)),
         }
@@ -860,7 +864,7 @@ impl Rata {
         })?;
         Ok(Account {
             email: m.email.clone(),
-            pass,
+            credential: Credential::Password(pass),
             host: m.host.clone(),
             port: m.port,
             label: m.label.clone(),
@@ -879,6 +883,7 @@ impl Rata {
                 self.note_auth_failure(email);
                 Err(problem("auth", error))
             }
+            Fetched::OAuth(error) => Err(problem("oauth", error)),
             Fetched::Host(error) => Err(problem("host", error)),
             Fetched::Net(error) => Err(problem("net", error)),
             Fetched::Stale(error) => Err(problem("stale", error)),
@@ -953,7 +958,7 @@ impl Rata {
         let pass = self.vault.get(&m.email)?;
         let acct = Account {
             email: m.email.clone(),
-            pass,
+            credential: Credential::Password(pass),
             host: m.host.clone(),
             port: m.port,
             label: m.label.clone(),
@@ -978,7 +983,9 @@ impl Rata {
                 self.note_auth_failure(&m.email);
                 Err(error)
             }
-            Sent::Host(error) | Sent::Rejected(error) | Sent::Net(error) => Err(error),
+            Sent::Host(error) | Sent::OAuth(error) | Sent::Rejected(error) | Sent::Net(error) => {
+                Err(error)
+            }
         }
     }
 
@@ -1016,7 +1023,9 @@ impl Rata {
                 self.note_auth_failure(email);
                 Err(Unwatched::NotNow)
             }
-            Err(Watched::Host(why) | Watched::Net(why)) => Err(Unwatched::Failed(why)),
+            Err(Watched::Host(why) | Watched::Net(why) | Watched::OAuth(why)) => {
+                Err(Unwatched::Failed(why))
+            }
             Err(Watched::Arrived | Watched::Quiet) => Err(Unwatched::Failed(String::new())),
         }
     }
@@ -1064,7 +1073,7 @@ impl Rata {
         };
         let acct = Account {
             email: m.email.clone(),
-            pass,
+            credential: Credential::Password(pass),
             host: m.host.clone(),
             port: m.port,
             label: m.label.clone(),
@@ -1083,6 +1092,7 @@ impl Rata {
                 self.note_auth_failure(&m.email);
                 Changed::failed("auth", why)
             }
+            Acted::OAuth(why) => Changed::failed("oauth", why),
             Acted::Host(why) => Changed::failed("host", why),
             Acted::Net(why) => Changed::failed("net", why),
         }

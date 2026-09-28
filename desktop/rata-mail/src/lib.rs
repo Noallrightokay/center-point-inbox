@@ -18,6 +18,10 @@
 //! * **Reading it** (`imap`) — connect, sign in, fetch, and tell a wrong
 //!   password apart from an unreachable server, because retrying the first is
 //!   how a provider decides to lock an account.
+//! * **Signing in** (`credential`) — a password, or an OAuth access token
+//!   presented with `XOAUTH2` (Microsoft allows nothing else). A refused
+//!   token is its own kind of failure, never a wrong password: the app gets a
+//!   fresh one rather than asking the customer to type anything.
 //! * **Sending** (`smtp`, `compose`) — the protocol spoken directly, because
 //!   every SMTP crate resolves the hostname itself and that would undo the
 //!   guarantee above.
@@ -29,6 +33,7 @@
 
 pub mod body;
 pub mod compose;
+pub mod credential;
 pub mod discover;
 pub mod guard;
 pub mod html;
@@ -39,6 +44,7 @@ pub mod smtp;
 pub mod words;
 
 pub use compose::{ATTACH_MAX, Address, File, Outgoing};
+pub use credential::Credential;
 pub use discover::{
     Candidate, IMAP_PORT, MailHost, MxRule, SMTP_PORTS, Source, conventional, is_auth_failure,
     mx_rule, no_imap, smtp_candidates, table,
@@ -47,7 +53,7 @@ pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
     ARCHIVE_WINDOW, Account, Acted, Action, Archived, Fetched, Flags, Folder, Gap, IDLE_FOR, Known,
     Listed, Message, Newest, OwnFolder, Verified, Verify, Watch, Watched, Whole, act, fetch_folder,
-    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify, watch,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify, verify_with, watch,
 };
 pub use key::{domain_of, mail_key};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
