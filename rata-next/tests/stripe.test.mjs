@@ -9,7 +9,9 @@
    Stripe sends, which is also what lets the replay and tolerance cases be
    tested at all — they depend on controlling the clock. */
 import { createHmac } from 'node:crypto';
-import { startServer, makeChecker } from './helpers.mjs';
+import { createServer } from 'node:http';
+import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
+import * as stripe from '../lib/stripe.js';
 import { verifySignature, planForPrice, rowForEvent, domainAddonsOf, isNewer, LIVE_STATUSES } from '../lib/stripe.js';
 
 const SECRET = 'whsec_test_secret_value';
@@ -33,6 +35,43 @@ const checkoutEvent = (email, price) => ({
     line_items: { data: [{ price: { id: price } }] },
   } },
 });
+
+function listen(handler) {
+  return new Promise((res) => {
+    const srv = createServer(handler);
+    srv.listen(0, '127.0.0.1', () => res({ srv, url: `http://127.0.0.1:${srv.address().port}` }));
+  });
+}
+const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (d) => { b += d; }); req.on('end', () => res(b)); });
+
+/* A stand-in for the subscriptions table, speaking just enough PostgREST for
+   the webhook's email branch: a select by address, and an upsert. Every write
+   is kept, so a test can say "nothing was written", not only "the row looks
+   the same". */
+async function fakeSubscriptions() {
+  const rows = new Map();
+  const writes = [];
+  const server = await listen(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    if (!url.pathname.startsWith('/rest/v1/subscriptions')) { res.writeHead(404); res.end(); return; }
+    if (req.method === 'GET') {
+      const email = (url.searchParams.get('email') || '').replace(/^eq\./, '');
+      const row = rows.get(email);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(row ? [row] : []));
+      return;
+    }
+    if (req.method === 'POST') {
+      const body = JSON.parse(await readBody(req));
+      writes.push(body);
+      rows.set(body.email, { ...(rows.get(body.email) || {}), ...body });
+      res.writeHead(201); res.end();
+      return;
+    }
+    res.writeHead(405); res.end();
+  });
+  return { rows, writes, url: server.url, close: () => new Promise(r => server.srv.close(r)) };
+}
 
 export default async function run(state) {
   const check = makeChecker(state);
@@ -163,6 +202,100 @@ export default async function run(state) {
 
     const checkout = rowForEvent({ ...checkoutEvent('a@b.com', ENV.STRIPE_PRICE_PRO), created: t }, ENV);
     check(!!checkout.event_at, 'checkout events are stamped too — they race the subscription ones');
+  }
+
+  console.log('\n— a checkout never takes over another customer\'s live subscription —');
+  {
+    /* Stripe's checkout lets the buyer type any address. Keyed by address, a
+       checkout from a second Stripe customer would replace a paying
+       customer's plan and customer id; cancelling it would then cancel them,
+       and their own later events would match no row. */
+    const conflict = stripe.checkoutConflict;
+    check(typeof conflict === 'function', 'lib/stripe.js decides it in one place (checkoutConflict)');
+    if (typeof conflict === 'function') {
+      const row = { stripe_customer: 'cus_B' };
+      for (const status of ['active', 'trialing', 'past_due', 'ACTIVE']) {
+        check(conflict({ stripe_customer: 'cus_A', status }, row) === true,
+          `held ${status} under another customer: a conflict`);
+      }
+      check(conflict({ stripe_customer: 'cus_A', status: 'active' }, { stripe_customer: null }) === true,
+        'a checkout with no customer id cannot strip the live one either');
+      check(conflict({ stripe_customer: 'cus_B', status: 'active' }, row) === false,
+        'the same customer updating their own row: no conflict');
+      check(conflict({ stripe_customer: null, status: 'active' }, row) === false,
+        'a row minted by hand (no customer) may be claimed by the first checkout');
+      for (const status of ['canceled', 'unpaid', 'incomplete_expired', null]) {
+        check(conflict({ stripe_customer: 'cus_A', status }, row) === false,
+          `held ${status} under another customer: no longer live, so a new checkout may take it`);
+      }
+      check(conflict(null, row) === false, 'no row at all: nothing to conflict with');
+    }
+  }
+
+  console.log('\n— the same, through the endpoint and a stand-in database —');
+  {
+    const db = await fakeSubscriptions();
+    const s = await startServer({ env: {
+      ...ENV,
+      STRIPE_WEBHOOK_SECRET: SECRET,
+      SUPABASE_URL: db.url,
+      SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
+    } });
+    const t = Math.floor(Date.now() / 1000);
+    const checkout = (email, customer, price, created) => ({
+      type: 'checkout.session.completed', created,
+      data: { object: {
+        customer_details: { email }, customer, payment_status: 'paid', status: 'complete',
+        line_items: { data: [{ price: { id: price } }] },
+      } },
+    });
+    const deliver = async (event) => {
+      const body = JSON.stringify(event);
+      const r = await fetch(s.url + '/api/stripe/webhook', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'stripe-signature': sign(body) }, body,
+      });
+      return { status: r.status, d: await r.json().catch(() => ({})) };
+    };
+    try {
+      const victim = 'victim@example.com';
+      const held = { email: victim, plan: 'pro', status: 'active', stripe_customer: 'cus_A', domain_addons: 0,
+        event_at: new Date((t - 86400) * 1000).toISOString(), updated_at: 'then' };
+      db.rows.set(victim, { ...held });
+
+      const r = await deliver(checkout(victim, 'cus_B', ENV.STRIPE_PRICE_BASE, t));
+      check(r.status === 200, `a second customer's checkout for a live address is answered 200, so Stripe stops: ${r.status}`);
+      check(r.d.conflict === true && r.d.acted === false, `with a conflict outcome: ${JSON.stringify(r.d)}`);
+      check(db.writes.length === 0, `and nothing is written: ${db.writes.length} write(s)`);
+      check(JSON.stringify(db.rows.get(victim)) === JSON.stringify(held),
+        `the paying customer keeps their row: ${JSON.stringify(db.rows.get(victim))}`);
+      await new Promise(res => setTimeout(res, 200));
+      const log = s.log();
+      check(/conflict/i.test(log), 'a status line is logged for the owner to reconcile');
+      check(!log.includes(victim) && !log.includes('cus_A') && !log.includes('cus_B'),
+        'and it names neither the address nor either customer');
+
+      const own = await deliver(checkout(victim, 'cus_A', ENV.STRIPE_PRICE_PRO, t + 10));
+      check(own.status === 200 && own.d.acted === true && db.rows.get(victim).stripe_customer === 'cus_A',
+        `the same customer checking out again still updates their own row: ${JSON.stringify(own.d)}`);
+
+      const minted = 'minted@example.com';
+      db.rows.set(minted, { email: minted, plan: 'pro', status: 'active', stripe_customer: null, event_at: null });
+      const claim = await deliver(checkout(minted, 'cus_C', ENV.STRIPE_PRICE_PRO, t));
+      check(claim.d.acted === true && db.rows.get(minted).stripe_customer === 'cus_C',
+        `a row minted by hand is claimed by the first checkout: ${JSON.stringify(claim.d)}`);
+
+      const lapsed = 'lapsed@example.com';
+      db.rows.set(lapsed, { email: lapsed, plan: null, status: 'canceled', stripe_customer: 'cus_OLD',
+        event_at: new Date((t - 86400) * 1000).toISOString() });
+      const back = await deliver(checkout(lapsed, 'cus_NEW', ENV.STRIPE_PRICE_BASE, t));
+      check(back.d.acted === true && db.rows.get(lapsed).stripe_customer === 'cus_NEW' && db.rows.get(lapsed).status === 'active',
+        `someone whose subscription ended may subscribe again as a new customer: ${JSON.stringify(back.d)}`);
+
+      const before = db.writes.length;
+      const late = await deliver(checkout(victim, 'cus_A', ENV.STRIPE_PRICE_BASE, t - 3600));
+      check(late.d.stale === true && db.writes.length === before,
+        `and a late delivery is still refused as stale: ${JSON.stringify(late.d)}`);
+    } finally { await s.stop(); await db.close(); }
   }
 
   console.log('\n— the live endpoint —');
