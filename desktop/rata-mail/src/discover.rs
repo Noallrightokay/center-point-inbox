@@ -44,8 +44,33 @@ pub const IMAP_PORT: u16 = 993;
 
 const GOOGLE_HELP: &str = "myaccount.google.com/apppasswords — needs 2-Step Verification on";
 const APPLE_HELP: &str = "appleid.apple.com → Sign-In and Security → App-Specific Passwords";
-const MS_HELP: &str =
-    "account.microsoft.com → Security → App passwords (needs two-step verification)";
+/// Microsoft's IMAP host, for Outlook.com, Hotmail, Live, MSN and Microsoft
+/// 365 alike. Discovery still finds it, so the app can say who the mailbox
+/// is with; linking refuses it (see [`is_microsoft`]).
+pub const MS_IMAP: &str = "outlook.office365.com";
+
+/// Microsoft turned off password sign-in to IMAP: Outlook.com in September
+/// 2024, Exchange Online before that. Only OAuth 2.0 gets in now, app
+/// passwords included, and RATA signs in with passwords. So a Microsoft
+/// mailbox is refused before a password is sent anywhere, with the reason,
+/// instead of failing as "password refused" against a password that was right.
+pub const MS_HELP: &str = "Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet. Microsoft only lets other apps into them through its own sign-in page (OAuth), and no longer accepts passwords or app passwords for IMAP. RATA does not have that sign-in yet.";
+pub const MS365_HELP: &str = "That address's mail is at Microsoft 365, which RATA cannot open yet. Microsoft only lets other apps into Microsoft 365 mailboxes through its own sign-in page (OAuth), and no longer accepts passwords for IMAP. RATA does not have that sign-in yet.";
+
+/// Whether a server is Microsoft's, whose IMAP no longer takes a password.
+/// Suffix matching, like [`mx_rule`]: this host, or anything under it.
+pub fn is_microsoft(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    [
+        "outlook.com",
+        "office365.com",
+        "office.com",
+        "hotmail.com",
+        "live.com",
+    ]
+    .iter()
+    .any(|s| h == *s || h.ends_with(&format!(".{s}")))
+}
 const YAHOO_HELP: &str = "login.yahoo.com → Account security → Generate app password";
 
 /// Consumer domains, answered without a lookup.
@@ -54,9 +79,7 @@ pub fn table(domain: &str) -> Option<MailHost> {
     match domain {
         "gmail.com" | "googlemail.com" => h("imap.gmail.com", "Gmail", GOOGLE_HELP),
         "icloud.com" | "me.com" | "mac.com" => h("imap.mail.me.com", "iCloud Mail", APPLE_HELP),
-        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => {
-            h("outlook.office365.com", "Outlook", MS_HELP)
-        }
+        "outlook.com" | "hotmail.com" | "live.com" | "msn.com" => h(MS_IMAP, "Outlook", MS_HELP),
         "yahoo.com" | "ymail.com" => h("imap.mail.yahoo.com", "Yahoo Mail", YAHOO_HELP),
         "aol.com" => h(
             "imap.aol.com",
@@ -153,11 +176,7 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
         );
     }
     if under("outlook.com") || under("office365.com") {
-        return serves(
-            "outlook.office365.com",
-            "Microsoft 365",
-            "Your Microsoft 365 account → Security → App passwords. Some organisations disable these — your IT administrator can tell you.",
-        );
+        return serves(MS_IMAP, "Microsoft 365", MS365_HELP);
     }
     if under("zoho.com") || under("zoho.eu") || under("zoho.in") {
         return serves(
@@ -394,7 +413,7 @@ mod tests {
                     assert_eq!(h.label, label, "{mx}");
                     assert!(
                         !h.help.is_empty(),
-                        "{mx} should say where app passwords live"
+                        "{mx} should say where app passwords live, or why there are none"
                     );
                 }
                 other => panic!("{mx} -> {other:?}"),
@@ -429,6 +448,45 @@ mod tests {
                 "thesherwood.group"
             ]
         );
+    }
+
+    #[test]
+    fn microsoft_says_why_it_cannot_be_linked_yet() {
+        for d in ["outlook.com", "hotmail.com", "live.com", "msn.com"] {
+            let known = table(d).expect(d);
+            assert!(is_microsoft(known.host), "{d}");
+            assert!(known.help.contains("OAuth"), "{d}: {}", known.help);
+            assert!(
+                known.help.contains("cannot be added"),
+                "{d}: {}",
+                known.help
+            );
+        }
+        match mx_rule("acme-com.mail.protection.outlook.com") {
+            Some(MxRule::Serves(h)) => {
+                assert!(is_microsoft(h.host));
+                assert!(h.help.contains("Microsoft 365"), "{}", h.help);
+                assert!(h.help.contains("OAuth"), "{}", h.help);
+            }
+            other => panic!("{other:?}"),
+        }
+        for host in [
+            "outlook.office365.com",
+            "OUTLOOK.OFFICE365.COM.",
+            "imap-mail.outlook.com",
+            "outlook.office.com",
+            "hotmail-com.olc.protection.outlook.com",
+        ] {
+            assert!(is_microsoft(host), "{host}");
+        }
+        for host in [
+            "imap.gmail.com",
+            "notoutlook.com",
+            "outlook.com.example",
+            "",
+        ] {
+            assert!(!is_microsoft(host), "{host}");
+        }
     }
 
     #[test]

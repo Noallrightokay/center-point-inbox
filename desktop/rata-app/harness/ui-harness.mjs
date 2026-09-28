@@ -52,6 +52,9 @@ const MOCK = ({ licensed }) => {
         return older.map((u) => M.mk(u));
       }
       case 'link_mailbox':
+        /* The engine's refusal (a Microsoft 365 domain found by its MX, say):
+           core::link answers `failed` with the reason. */
+        if (M.linkFails) return { outcome: 'failed', error: M.linkFails };
         return { outcome: 'ok', mailbox: { email: args.email, host: 'imap.example.com', port: 993, label: 'Example', source: 'table' } };
       case 'reread_mail':
         if (args.folder === 'archive') {
@@ -538,6 +541,54 @@ console.log('\n— Gmail\'s archive: mail archived later arrives, mail moved out
   check(r.held.join() === '5,45,50' && r.reads.length === 0, `a listing under another UIDVALIDITY changes nothing: ${JSON.stringify(r)}`);
   const toast = (await toasts(pg)).filter((t) => /new message/.test(t));
   check(toast.length === 0, `archived mail never announces itself as new: ${JSON.stringify(toast)}`);
+  await pg.close();
+}
+
+console.log('\n— Microsoft mailboxes are named as not supported, before a password is asked for —');
+{
+  const pg = await open(true);
+  await pg.evaluate(() => { go('set'); openMailForm(); __mock.calls = []; });
+  const form = () => pg.evaluate(() => ({
+    note: $('#lf-ms').textContent,
+    noteShown: getComputedStyle($('#lf-ms')).display !== 'none',
+    passShown: getComputedStyle($('#lf-pass')).display !== 'none',
+    canLink: !$('#lf-save').disabled && getComputedStyle($('#lf-save')).display !== 'none',
+    links: __mock.calls.filter((c) => c[0] === 'link_mailbox').length,
+  }));
+  let f = await form();
+  check(!f.noteShown && f.passShown && f.canLink, `an empty form asks for the password as before: ${JSON.stringify(f)}`);
+  await pg.fill('#lf-input', 'someone@outlook.com');
+  f = await form();
+  check(f.noteShown && /cannot be added to RATA yet/.test(f.note) && /OAuth/.test(f.note) && !f.passShown && !f.canLink,
+    `an @outlook.com address says Microsoft is not supported yet, and why, with no password box: ${JSON.stringify(f)}`);
+  await pg.press('#lf-input', 'Enter');
+  await pg.waitForTimeout(100);
+  f = await form();
+  check(f.links === 0, `Enter on it sends nothing to link: ${f.links} link calls`);
+  await pg.fill('#lf-input', 'Someone@Hotmail.co.uk');
+  f = await form();
+  check(f.noteShown && !f.passShown, `a regional Hotmail address is Microsoft too: ${JSON.stringify(f)}`);
+  await pg.fill('#lf-input', 'someone@gmail.com');
+  f = await form();
+  check(!f.noteShown && f.passShown && f.canLink, `changing to a Gmail address brings the password box back: ${JSON.stringify(f)}`);
+  // A company domain is only known to be at Microsoft 365 by its DNS, which
+  // the engine reads; it refuses before the password goes anywhere, and the
+  // form shows its reason and drops the password it will not use.
+  await pg.evaluate(() => { __mock.linkFails = 'That address’s mail is at Microsoft 365, which RATA cannot open yet. Microsoft only lets other apps into Microsoft 365 mailboxes through its own sign-in page (OAuth), and no longer accepts passwords for IMAP. RATA does not have that sign-in yet.'; });
+  await pg.fill('#lf-input', 'ann@acme.example');
+  await pg.fill('#lf-pass', 'abcd efgh ijkl mnop');
+  await pg.click('#lf-save');
+  await pg.waitForFunction(() => $('#lf-save').textContent === 'Link');
+  f = await form();
+  const pass = await pg.evaluate(() => $('#lf-pass').value);
+  check(f.links === 1 && f.noteShown && /Microsoft 365/.test(f.note) && !f.passShown && pass === '' && !f.canLink,
+    `the engine's Microsoft 365 refusal stays in the form, not a passing toast: ${JSON.stringify(f)}`);
+  check(!(await pg.evaluate(() => S.linked.some((l) => l.label === 'ann@acme.example'))), 'and nothing is linked');
+  await pg.click('#lf-cancel');
+  // Relinking a Microsoft mailbox an older build linked says the same.
+  await pg.evaluate(() => { __mock.linkFails = null; openMailForm('old@live.com', 'That mailbox refused the sign-in.'); });
+  f = await form();
+  check(f.noteShown && /OAuth/.test(f.note) && !f.passShown && !f.canLink, `Relink on an old @live.com mailbox says why instead of asking again: ${JSON.stringify(f)}`);
   await pg.close();
 }
 
