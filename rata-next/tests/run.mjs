@@ -11,6 +11,7 @@ const SUITES = [
   ['licences',           './licence.test.mjs'],
   ['licence page',       './account.test.mjs'],
   ['AI relay',           './ai.test.mjs'],
+  ['help page',          './help.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 
