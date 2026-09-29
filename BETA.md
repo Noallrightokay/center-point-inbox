@@ -128,6 +128,18 @@ Don't spend time reporting these; they are known and planned:
   it pile up there (or show under Archive in RATA), tell us. Once
   mailrata.org runs its new version, a licence that expired more than 90
   days ago says to sign in there for a new one instead of trying to renew.
+- **v0.1.42:** on Gmail, each time RATA saves a draft again its older copy
+  now goes to Gmail's **Trash** rather than staying in **All Mail**; the
+  All Mail check above still applies (one copy is right). A program named
+  to look like a document is now also caught when an invisible character
+  or a dot-like character hides its real extension, and names ending in a
+  document type such as `.csv`, `.rtf` or `.html` followed by `.iso`,
+  `.url`, `.reg`, `.cpl` or `.one` are asked about too. When a server
+  refuses your password, its message no longer repeats the password.
+  Once mailrata.org runs its new version: a Pro purchase is recorded as
+  Pro (it had been recorded as Base), your account page may say "not yet"
+  for a short while after paying, and deleting your account waits 30 days
+  after a subscription ends (the page gives the date).
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.

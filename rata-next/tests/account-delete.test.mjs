@@ -8,6 +8,7 @@
    keyed to the person is emptied, ai_usage included, even on a deploy that
    has not created it yet. */
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
 import { blocksDeletion, DELETION_REMOVES, DELETION_KEEPS } from '../lib/account.js';
 
@@ -89,6 +90,17 @@ export default async function run(state) {
       'and is honest that the mail is not RATA\'s to delete');
     check(DELETION_KEEPS.some(k => /Stripe/.test(k)),
       "nor Stripe's billing records");
+
+    /* The Delete account row in the app's settings says the same before
+       anyone presses it: every item deletion removes (without the
+       parenthesis), and no mailbox password, which RATA never held. */
+    const page = readFileSync(new URL('../public/app.html', import.meta.url), 'utf8');
+    const row = (page.match(/<span id="del-what">([^<]*)<\/span>/) || [])[1] || '';
+    const named = DELETION_REMOVES.map(r => r.replace(/\s*\(.*\)\s*$/, '').replace(/^your\s+/i, ''));
+    const missing = named.filter(n => !row.toLowerCase().includes(n.toLowerCase()));
+    check(row && !missing.length, `the page's Delete account row names every item deletion removes: ${missing.join(', ') || 'all there'}`);
+    check(!/encrypted password|password for every mailbox/i.test(row),
+      'and does not claim RATA holds a mailbox password');
   }
 
   console.log('\n— the endpoint itself —');

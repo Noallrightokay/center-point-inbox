@@ -891,7 +891,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Reset workspace</b><span>Wipes this workspace back to a blank slate</span></div><button class="btn danger" id="btn-reset">Reset</button></div>
           <div class="set-row" style="flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>Delete account</b><span id="del-what">Removes your login, your preferences, and the encrypted password for every mailbox you connected. Your mail stays at your provider.</span></div>
+            <div class="grow"><b>Delete account</b><span id="del-what">Removes your login, your preferences and folder names, your subscription record and your AI usage record. Your mail stays at your provider, and your mailbox passwords stay in your computer’s keychain.</span></div>
             <button class="btn danger" id="btn-delete">Delete account</button>
           </div>
           <div class="set-row" id="del-confirm" style="display:none;flex-wrap:wrap;gap:8px">
@@ -1567,7 +1567,7 @@ async function openWhole(m){
    and Rust refuses either without `confirmed` (kind needs-confirmation), so
    skipping the question here saves nothing. Only disguised names are asked
    about; a program that says what it is (setup.exe) is not. */
-const DISGUISED_AS={pdf:'a PDF',doc:'a Word document',docx:'a Word document',xls:'a spreadsheet',xlsx:'a spreadsheet',ppt:'a presentation',pptx:'a presentation',jpg:'a picture',jpeg:'a picture',png:'a picture',gif:'a picture',txt:'a text file',zip:'a zip file'};
+const DISGUISED_AS={pdf:'a PDF',doc:'a Word document',docx:'a Word document',xls:'a spreadsheet',xlsx:'a spreadsheet',ppt:'a presentation',pptx:'a presentation',jpg:'a picture',jpeg:'a picture',png:'a picture',gif:'a picture',txt:'a text file',zip:'a zip file',csv:'a CSV file',rtf:'an RTF document',html:'a web page',htm:'a web page'};
 function disguiseOf(name){
   const parts=String(name||'').replace(/[\s.]+$/,'').split('.').map(x=>x.trim().toLowerCase());
   const ext=parts.length>2?parts[parts.length-1].replace(/[^a-z0-9]/g,'').slice(0,10):'';

@@ -67,7 +67,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 246 tests, no network required
+cargo test --all-targets   # 256 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -92,8 +92,9 @@ sudo tests/loopback/servers.sh stop /tmp/rata-lb
 ```
 
 The `loopback-tests` feature lets the outbound guard connect to 127.0.0.1,
-so it refuses to compile without debug assertions. Never enable it in
-`rata-app`.
+so it refuses to compile without debug assertions, and `build.rs` refuses
+it in any release-profile build even with debug assertions forced on.
+Never enable it in `rata-app`.
 
 ### The desktop app
 
@@ -119,7 +120,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (117 checks). CI runs it as *Desktop interface, driven*. From the
+policy (118 checks). CI runs it as *Desktop interface, driven*. From the
 repository root:
 
 ```bash
@@ -137,9 +138,15 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test            # 501 checks, no network, no database required
+npm test            # 546 checks, no network, no database required
 npm run dev
 ```
+
+After a deploy, `scripts/live-check.sh [https://mailrata.org]` checks the
+live site from outside, with no credentials: the current routes answer, the
+app's preflight is allowed and a stranger's refused, `/api/config` publishes
+no service-role key, the security headers are sent, and the landing page is
+the current one (`LAUNCH.md` §6).
 
 Fonts are vendored under `public/fonts` (Geist, Geist Mono, and Fredoka for the
 wordmark only) by `node scripts/vendor-fonts.mjs`. Never link a font CDN: the
@@ -304,8 +311,9 @@ it, new versions are a download from the releases page.
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
   RATA. The engine's `names.rs` cleans the name and spots a program named to
-  look like a document (`invoice.pdf.exe`), which is labelled, and RATA asks
-  before saving it; on Windows and macOS every saved file is marked as
+  look like a document (`invoice.pdf.exe`, also with an invisible character
+  or a look-alike dot hiding the real extension), which is labelled, and
+  RATA asks before saving it; on Windows and macOS every saved file is marked as
   downloaded from the internet (`mark.rs`), so the system checks it (neither
   mark has been seen on a real Windows or Mac yet). Files can be attached when sending, up to 18 MB in all, and a
   forwarded message carries its attachments. HTML mail is shown formatted
