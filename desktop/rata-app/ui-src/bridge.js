@@ -404,6 +404,17 @@
       }
     },
 
+    /* Settings → Copy diagnostics (H8): one plain-text block for a bug
+       report, made in Rust (diagnostics.rs) with no address, password,
+       token or key in it. */
+    async '/api/diagnostics'() {
+      try {
+        return { text: String(await invoke('diagnostics')) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e) };
+      }
+    },
+
     /* A web address the customer chose to open. Rust checks it is one. */
     async '/api/link/open'(opts) {
       const b = body(opts);

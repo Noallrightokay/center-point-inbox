@@ -299,12 +299,17 @@ Running the full check on real mailboxes, provider by provider? Follow
 
 What makes a report fixable in minutes rather than days:
 
-1. **The exact error text**, copied, not paraphrased. RATA's errors are written
+1. **Settings → Copy diagnostics** (releases after 0.1.42), pasted into the
+   report. It gives your version, your OS, and for each mailbox its servers,
+   how it signs in and its last error, with no addresses, passwords, licence
+   key or message text (you see the whole block before you paste it).
+   Settings → **Report a bug** opens this template.
+2. **The exact error text**, copied, not paraphrased. RATA's errors are written
    to be diagnostic: they name the servers it tried and what each one said.
-2. **Your provider** (Gmail, iCloud, a work domain on Google Workspace…).
-3. **Version** from the title bar, and your OS.
-4. **What you did, what you expected, what happened.**
-5. A screenshot if the problem is something you see rather than an error.
+3. **Your provider** (Gmail, iCloud, a work domain on Google Workspace…).
+4. **Version** from the title bar, and your OS.
+5. **What you did, what you expected, what happened.**
+6. A screenshot if the problem is something you see rather than an error.
 
 ---
 

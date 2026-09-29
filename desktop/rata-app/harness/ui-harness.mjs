@@ -140,6 +140,10 @@ const MOCK = ({ licensed, ms, old }) => {
         M.installs = (M.installs || 0) + 1;
         if (M.installFails) throw M.installFails;
         return null;
+      /* H8: what core::diagnostics builds, in its shape. */
+      case 'diagnostics':
+        if (M.diagFails) throw 'the mailbox list is busy';
+        return M.diag || 'RATA diagnostics\nVersion: 0.1.42 (release build)\nSystem: linux x86_64\nMailboxes: 1\n\nMailbox 1: Example\n  IMAP: imap.example.com:993 (TLS from the start), found by table\n  Last error: none since RATA started';
       case 'open_link':
         M.opened = (M.opened || []).concat([args.url]);
         if (!/^https?:\/\//i.test(args.url)) throw 'RATA only opens web addresses (http and https).';
@@ -1099,6 +1103,73 @@ console.log('\n— the website banner never shows in the app —');
       `${licensed ? 'licensed' : 'unlicensed'}: the banner is not drawn, though it was never dismissed: ${JSON.stringify(seen)}`);
     await pg.close();
   }
+}
+
+console.log('\n— Settings → Help & diagnostics —');
+{
+  /* H8: Copy diagnostics shows the block Rust made and puts it on the
+     clipboard; where the webview refuses the clipboard, the block is shown
+     selected with how to copy it. Help and Report a bug go to the browser
+     through open_link, with exactly their addresses. */
+  const pg = await open(true);
+  await pg.evaluate(() => {
+    go('set'); renderSettings(); __mock.calls = []; __mock.opened = [];
+    window.__clip = null;
+    const ok = async (t) => { window.__clip = t; };
+    try { navigator.clipboard.writeText = ok; } catch { Object.defineProperty(navigator, 'clipboard', { value: { writeText: ok }, configurable: true }); }
+  });
+  const shown = await pg.evaluate(() => getComputedStyle(document.querySelector('#diag-row')).display !== 'none');
+  await pg.click('#diag-copy');
+  await pg.waitForFunction(() => window.__clip !== null, null, { timeout: 3000 }).catch(() => {});
+  let d = await pg.evaluate(() => ({ calls: __mock.calls.filter(([c]) => c === 'diagnostics').length, clip: window.__clip, text: document.querySelector('#diag-text').value,
+    visible: getComputedStyle(document.querySelector('#diag-text')).display !== 'none', hint: document.querySelector('#diag-hint').textContent }));
+  const want = await pg.evaluate(() => __mock.diag || null) || 'RATA diagnostics';
+  check(shown && d.calls === 1 && d.visible && d.text.startsWith(want) && d.clip === d.text && /Paste this into your bug report/.test(d.hint),
+    `Copy diagnostics copies the block Rust made and shows it: ${JSON.stringify({ shown, calls: d.calls, visible: d.visible, hint: d.hint })}`);
+  check(!d.text.includes('@') && !d.clip.includes('@'), 'no @ appears in the block shown or copied');
+  /* A webview that refuses the clipboard: the block is there, selected. */
+  await pg.evaluate(() => {
+    __mock.diag = 'RATA diagnostics\nVersion: 0.1.42 (release build)\nMailboxes: 2\n\nMailbox 1: Gmail\n  Last error: 29 September 2026 14:03 UTC, 2 min ago (refresh, net): Mailbox 1 did not sync';
+    const no = async () => { throw new DOMException('Write permission denied.', 'NotAllowedError'); };
+    try { navigator.clipboard.writeText = no; } catch { Object.defineProperty(navigator, 'clipboard', { value: { writeText: no }, configurable: true }); }
+    document.querySelector('#diag-text').value = '';
+  });
+  await pg.click('#diag-copy');
+  await pg.waitForFunction(() => document.querySelector('#diag-text').value !== '', null, { timeout: 3000 }).catch(() => {});
+  d = await pg.evaluate(() => {
+    const ta = document.querySelector('#diag-text');
+    return { text: ta.value, focused: document.activeElement === ta, selected: ta.selectionStart === 0 && ta.selectionEnd === ta.value.length && ta.value.length > 0,
+      readOnly: ta.readOnly, hint: document.querySelector('#diag-hint').textContent };
+  });
+  check(d.text === await pg.evaluate(() => __mock.diag) && d.focused && d.selected && d.readOnly && /Copy it with Ctrl\+C or Cmd\+C/.test(d.hint) && !d.text.includes('@'),
+    `a refused clipboard shows the block read-only and selected, saying how to copy it: ${JSON.stringify({ focused: d.focused, selected: d.selected, readOnly: d.readOnly, hint: d.hint })}`);
+  /* Help and Report a bug. */
+  await pg.click('#help-link');
+  await pg.waitForFunction(() => (__mock.opened || []).length === 1, null, { timeout: 3000 }).catch(() => {});
+  await pg.click('#bug-link');
+  await pg.waitForFunction(() => (__mock.opened || []).length === 2, null, { timeout: 3000 }).catch(() => {});
+  const opened = await pg.evaluate(() => __mock.opened);
+  check(opened[0] === 'https://mailrata.org/help', `Help asks open_link for exactly https://mailrata.org/help: ${JSON.stringify(opened)}`);
+  check(opened[1] === 'https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md' && opened.length === 2,
+    `Report a bug opens the Beta bug template, once: ${JSON.stringify(opened)}`);
+  await pg.close();
+}
+{
+  /* On the website there is nothing to diagnose: Help and Report a bug only. */
+  const pg = await browser.newPage();
+  pg.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  await pg.addInitScript(() => { localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' })); });
+  await pg.goto(B + '/app.html');
+  await pg.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+  const web = await pg.evaluate(() => {
+    go('set'); renderSettings();
+    const vis = (s) => { const el = document.querySelector(s); return !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0; };
+    return { native: !!window.__RATA_NATIVE__, diag: vis('#diag-row'), help: vis('#help-link'), bug: vis('#bug-link'),
+      helpHref: document.querySelector('#help-link').getAttribute('href') };
+  });
+  check(!web.native && !web.diag && web.help && web.bug && web.helpHref === 'https://mailrata.org/help',
+    `on the website the section shows Help and Report a bug, and no Copy diagnostics: ${JSON.stringify(web)}`);
+  await pg.close();
 }
 
 await browser.close();

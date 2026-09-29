@@ -6,6 +6,7 @@
 //! skipped, what happens to a password when a mailbox is unlinked, whether a
 //! rejected sign-in is retried — has nothing to do with windows or webviews.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -21,6 +22,7 @@ use rata_mail::{
 };
 use serde::Serialize;
 
+use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Noted, Trouble};
 use crate::licence::{self, Licence, Plan, Reason};
 use crate::oauth::{self, Ended, Microsoft, TokenError};
 use crate::store::{Auth, Mailbox, Store, now};
@@ -48,6 +50,12 @@ pub struct Rata {
     /// Signing in with Microsoft: this build's client id, the access tokens
     /// (in memory only), and the sign-in in progress. See `oauth`.
     ms: Microsoft,
+    /// What each mailbox has done since RATA started, by address: its last
+    /// error, last good refresh, the special folders seen, the submission
+    /// server used. Memory only, for Copy diagnostics (`diagnostics`).
+    notes: Mutex<HashMap<String, Noted>>,
+    /// When the last refresh finished, for Copy diagnostics.
+    last_refresh: Mutex<Option<u64>>,
 }
 
 /// What linking a mailbox produced.
@@ -354,6 +362,8 @@ impl Rata {
             resolver,
             public_key,
             ms: Microsoft::from_build(),
+            notes: Mutex::new(HashMap::new()),
+            last_refresh: Mutex::new(None),
         }
     }
 
@@ -797,6 +807,10 @@ impl Rata {
             for done in futures::future::join_all(running).await {
                 match done {
                     Ok((email, mut found)) => {
+                        self.note(&email, |n| {
+                            n.last_good = Some(now());
+                            seen_folders(&email, &found, n);
+                        });
                         out.messages.append(&mut found.messages);
                         out.flags.append(&mut found.flags);
                         out.gaps.extend(found.gaps.into_iter().map(|gap| MailGap {
@@ -817,12 +831,16 @@ impl Rata {
                         if p.kind == "auth" {
                             self.note_auth_failure(&p.email);
                         }
+                        self.note_error(&p.email, "refresh", &p.kind, &p.error);
                         out.problems.push(p);
                     }
                 }
             }
         }
 
+        if let Ok(mut last) = self.last_refresh.lock() {
+            *last = Some(now());
+        }
         out.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
         out
     }
@@ -1314,25 +1332,37 @@ impl Rata {
         let msg = &msg;
         // A refused token is refused at AUTH, before the message is handed
         // over, so trying again with a fresh one cannot send it twice.
-        let sent = self
+        let sent = match self
             .signed(
                 &m,
                 |acct| async move { send(&self.resolver, &acct, msg).await },
             )
             .await
-            .map_err(|p| p.error)?;
-        match sent {
+        {
+            Ok(sent) => sent,
+            Err(p) => {
+                self.note_error(&m.email, "send", &p.kind, &p.error);
+                return Err(p.error);
+            }
+        };
+        let (kind, error) = match sent {
             Sent::Ok {
                 via, message_id, ..
-            } => Ok(Delivered { via, message_id }),
+            } => {
+                self.note(&m.email, |n| n.smtp_used = Some(via.clone()));
+                return Ok(Delivered { via, message_id });
+            }
             Sent::Auth(error) => {
                 self.note_auth_failure(&m.email);
-                Err(error)
+                ("auth", error)
             }
-            Sent::Host(error) | Sent::OAuth(error) | Sent::Rejected(error) | Sent::Net(error) => {
-                Err(error)
-            }
-        }
+            Sent::Host(error) => ("host", error),
+            Sent::OAuth(error) => ("oauth", error),
+            Sent::Rejected(error) => ("rejected", error),
+            Sent::Net(error) => ("net", error),
+        };
+        self.note_error(&m.email, "send", kind, &error);
+        Err(error)
     }
 
     /// Save the composer's draft to its mailbox's Drafts folder (F1),
@@ -1528,6 +1558,124 @@ impl Rata {
         }
     }
 
+    /// Change what is kept about one mailbox for Copy diagnostics.
+    fn note(&self, email: &str, change: impl FnOnce(&mut Noted)) {
+        if let Ok(mut notes) = self.notes.lock() {
+            change(notes.entry(email.trim().to_ascii_lowercase()).or_default());
+        }
+    }
+
+    /// Keep a mailbox's latest error, as the customer was shown it.
+    fn note_error(&self, email: &str, doing: &'static str, kind: &str, said: &str) {
+        let trouble = Trouble {
+            at: now(),
+            doing,
+            kind: kind.to_string(),
+            said: said.to_string(),
+        };
+        self.note(email, |n| n.last_error = Some(trouble));
+    }
+
+    /// Settings → Copy diagnostics: one plain-text block for a bug report,
+    /// built from what the app already holds; nothing is dialled. `live` is
+    /// the mailboxes with a watching connection up now (`watch::Watching`).
+    /// The keychain is read only for a mailbox with an error to show, and
+    /// only to take its password or token out of that error: no secret is
+    /// ever part of the block (`diagnostics::clean`).
+    pub fn diagnostics(&self, updater_key: bool, live: &[String]) -> String {
+        let build = Build::this(updater_key, self.public_key.is_some(), self.ms.configured());
+        let standing = self.standing();
+        let licence = match (&standing.plan, &standing.licence) {
+            (Some(plan), Some(l)) => Licensed::Yes {
+                plan: plan.label.to_string(),
+                until: l.exp,
+            },
+            _ => Licensed::No {
+                // The reason's own name, as the page hears it: "expired",
+                // "bad-signature", "no-public-key"…
+                why: standing
+                    .reason
+                    .and_then(|r| serde_json::to_value(r).ok())
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| "unknown".into()),
+                until: standing.licence.as_ref().map(|l| l.exp),
+            },
+        };
+        let (on_disk, boxes) = match self.store.lock() {
+            Ok(s) => (s.on_disk(), s.list().to_vec()),
+            Err(_) => (None, Vec::new()),
+        };
+        let notes = self.notes.lock().map(|n| n.clone()).unwrap_or_default();
+        let mailboxes = boxes
+            .into_iter()
+            .map(|m| {
+                let noted = notes
+                    .get(&m.email.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or_default();
+                let secrets = if noted.last_error.is_some() {
+                    self.secrets_of(&m)
+                } else {
+                    Vec::new()
+                };
+                MailboxFacts {
+                    smtp_hosts: rata_mail::discover::smtp_candidates(&m.host, &m.email),
+                    live: live.iter().any(|l| l.eq_ignore_ascii_case(&m.email)),
+                    label: m.label,
+                    imap_host: m.host,
+                    imap_port: if m.port == 0 { IMAP_PORT } else { m.port },
+                    found_by: m.source,
+                    oauth: m.auth.is_oauth(),
+                    parked_since: m.auth_failed_at,
+                    email: m.email,
+                    noted,
+                    secrets,
+                }
+            })
+            .collect();
+        diagnostics::render(&diagnostics::Facts {
+            build,
+            licence,
+            mailboxes,
+            last_refresh: self.last_refresh.lock().ok().and_then(|t| *t),
+            schema: crate::store::SCHEMA,
+            on_disk,
+            now: now(),
+        })
+    }
+
+    /// What a mailbox signs in with, in every form it travels in, for
+    /// taking out of an error before it is shown in diagnostics. Never
+    /// kept, never written.
+    fn secrets_of(&self, m: &Mailbox) -> Vec<String> {
+        let b64 = |s: &str| rata_mail::words::base64_encode(s.as_bytes());
+        let mut out = Vec::new();
+        match vault::get_secret(self.vault.as_ref(), &m.email) {
+            Ok(Secret::Password(p)) => {
+                out.push(b64(&p));
+                // AUTH PLAIN's string, and IMAP LOGIN's quoted form.
+                out.push(b64(&format!("\0{}\0{p}", m.email)));
+                out.push(format!(
+                    "\"{}\"",
+                    p.replace('\\', "\\\\").replace('"', "\\\"")
+                ));
+                out.push(p);
+            }
+            Ok(Secret::Refresh(r)) => {
+                out.push(b64(&r));
+                out.push(r);
+            }
+            Err(_) => {}
+        }
+        if let Some(held) = self.ms.cached(&m.email) {
+            if let Some(sasl) = rata_mail::credential::xoauth2(&m.email, &held.token) {
+                out.push(rata_mail::words::base64_encode(&sasl));
+            }
+            out.push(held.token);
+        }
+        out
+    }
+
     fn note_auth_failure(&self, email: &str) {
         if let Ok(mut store) = self.store.lock() {
             store.mark_auth(email, Some(now()));
@@ -1590,6 +1738,40 @@ impl Rata {
             store.mark_auth(email, None);
             let _ = store.save();
         }
+    }
+}
+
+/// The special folders one refresh of `email` shows exist, added to what
+/// is noted: from the mail, the read/starred and the gaps it brought, and
+/// the Drafts and Gmail archive listings.
+fn seen_folders(email: &str, found: &Newest, n: &mut Noted) {
+    let tag = |f: &Folder| match f {
+        Folder::Sent => Some("sent"),
+        Folder::Junk => Some("junk"),
+        Folder::Archive => Some("archive"),
+        Folder::Drafts => Some("drafts"),
+        Folder::Inbox | Folder::Named(_) => None,
+    };
+    let key = format!("{}_", rata_mail::mail_key(email));
+    let by_id = |id: &str| {
+        let (tag, _) = id.strip_prefix(&key)?.split_once('_')?;
+        ["sent", "junk", "archive", "drafts"]
+            .into_iter()
+            .find(|t| *t == tag)
+    };
+    let seen = found
+        .messages
+        .iter()
+        .filter_map(|m| tag(&m.folder))
+        .chain(found.gaps.iter().filter_map(|g| tag(&g.folder)))
+        .chain(found.flags.iter().filter_map(|f| by_id(&f.id)));
+    n.folders.extend(seen);
+    if found.drafts.is_some() {
+        n.folders.insert("drafts");
+    }
+    if found.archived.is_some() {
+        n.folders.insert("archive");
+        n.all_mail = true;
     }
 }
 
@@ -3636,5 +3818,127 @@ mod tests {
                 assert!(!f.microsoft && f.label.is_empty(), "{junk}: {f:?}");
             }
         });
+    }
+
+    /// H8: the diagnostics block goes into a public bug report, so a
+    /// password a server repeated into an error, in the clear or in base64,
+    /// never reaches it, and nor does any address.
+    #[test]
+    fn diagnostics_never_carry_a_password_or_an_address() {
+        let app = rata(tmpfile("diag"));
+        let pass = "Hunter2-Correct-Horse";
+        app.vault.put("owner@example.com", pass).unwrap();
+        app.remember(Mailbox {
+            email: "owner@example.com".into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Example Mail".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::Password,
+        })
+        .unwrap();
+        linked(&app, "second@example.org", "mail.example.org");
+        app.note_auth_failure("second@example.org");
+
+        let b64 = rata_mail::words::base64_encode(pass.as_bytes());
+        let plain =
+            rata_mail::words::base64_encode(format!("\0owner@example.com\0{pass}").as_bytes());
+        app.note_error(
+            "owner@example.com",
+            "refresh",
+            "net",
+            &format!(
+                "OWNER@example.com did not sync — imap.example.com could not be reached: imap.example.com said: LOGIN OWNER@example.com \"{pass}\" ({b64}) {plain}; write to postmaster@example.com. It will be tried again on the next refresh."
+            ),
+        );
+        app.note(&"owner@example.com".to_uppercase(), |n| {
+            n.folders.insert("sent");
+            n.smtp_used = Some("smtp.example.com:587".into());
+        });
+        let block = app.diagnostics(false, &["owner@example.com".into()]);
+
+        for gone in [pass, b64.as_str(), plain.as_str(), "@", "owner", "Hunter2"] {
+            assert!(!block.contains(gone), "{gone:?} in:\n{block}");
+        }
+        // Base64 of the password in any case is gone too.
+        assert!(
+            !block
+                .to_ascii_lowercase()
+                .contains(&b64.to_ascii_lowercase())
+        );
+        for kept in [
+            "Version: ",
+            "Build keys: licence key yes, updater key no, Microsoft sign-in no",
+            "Licence: RATA Pro, until ",
+            "Mailboxes: 2",
+            "Mailbox 1: Example Mail",
+            "IMAP: imap.example.com:993 (TLS from the start), found by mx",
+            "SMTP: last sent through smtp.example.com:587 (STARTTLS)",
+            "Signs in with: an app password",
+            "Parked: no",
+            "Last error: ",
+            "(refresh, net): Mailbox 1 did not sync",
+            "imap.example.com said: LOGIN Mailbox 1",
+            // Longer than a server's 200 characters, and kept whole.
+            "write to [address]. It will be tried again on the next refresh.",
+            "Special folders seen: Sent",
+            "Live connection (new mail as it arrives): up",
+            "Mailbox 2: Work",
+            "SMTP: not used yet; tries mail.example.org on 465",
+            "Parked: yes, since ",
+            "the server refused the app password",
+            "Store: schema 1",
+        ] {
+            assert!(block.contains(kept), "{kept:?} not in:\n{block}");
+        }
+        // The second mailbox is not live, and the licence token is nowhere.
+        assert!(block.ends_with("Live connection (new mail as it arrives): down"));
+        assert!(!block.contains(PRO) && !block.contains("v1."));
+    }
+
+    /// Without a licence the block says why by name; a parked Microsoft
+    /// mailbox says what renews it; a refused token is taken out of its
+    /// error like a password.
+    #[test]
+    fn diagnostics_name_a_missing_licence_and_a_microsoft_sign_in() {
+        let app = with_ms(tmpfile("diag-ms"), &nowhere());
+        app.set_licence(None).unwrap();
+        let token = "EwBwA8l6BAAUbDba3x2OMJElkF7gJ4z/VbCPEss";
+        linked_ms(
+            &app,
+            "someone@outlook.com",
+            "refresh-token-value-0123456789",
+        );
+        app.ms.keep(
+            "someone@outlook.com",
+            oauth::Access {
+                token: token.into(),
+                expires_at: now() + 3600,
+            },
+        );
+        app.note_auth_failure("someone@outlook.com");
+        app.note_error(
+            "someone@outlook.com",
+            "send",
+            "oauth",
+            &format!("smtp.office365.com said: 535 {token} refused for someone@outlook.com"),
+        );
+        let block = app.diagnostics(true, &[]);
+        for gone in [token, "EwBwA8l6", "refresh-token-value", "@", "someone"] {
+            assert!(!block.contains(gone), "{gone:?} in:\n{block}");
+        }
+        for kept in [
+            "Licence: not in use (missing)",
+            "updater key yes, Microsoft sign-in yes",
+            "Signs in with: Microsoft (OAuth)",
+            "Sign in to Microsoft again",
+            "(send, oauth): smtp.office365.com said: 535 [hidden] refused for Mailbox 1",
+            "tries smtp-mail.outlook.com, then smtp.office365.com",
+        ] {
+            assert!(block.contains(kept), "{kept:?} not in:\n{block}");
+        }
     }
 }
