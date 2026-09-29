@@ -106,11 +106,15 @@ Full detail in `STRIPE-SETUP.md`. In order:
    waits for the webhook when it sees `?checkout=success` (STRIPE-SETUP.md §2
    says why).
 4. **Webhook** → `https://mailrata.org/api/stripe/webhook`, subscribed to
-   exactly `checkout.session.completed`,
+   exactly these five: `checkout.session.completed`,
    `checkout.session.async_payment_succeeded` (a delayed payment, such as a
-   bank transfer, that has cleared; STRIPE-SETUP.md §3),
+   bank transfer, that has cleared), `customer.subscription.created`,
    `customer.subscription.updated`, `customer.subscription.deleted`. Copy
-   the `whsec_…`.
+   the `whsec_…`. **`customer.subscription.created` is not optional:**
+   checkout events never say which plan was bought, so the subscription
+   events name it, and without `created` a card checkout stays not
+   entitled (STRIPE-SETUP.md §3 says why). An endpoint made before
+   2026-09-29 lacks it: add it.
 5. **Customer portal** — activate it, allow plan changes and cancellation, copy
    the login link.
 

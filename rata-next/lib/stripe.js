@@ -16,6 +16,15 @@ import { LIVE_STATUSES } from './plan.js';
    Nothing here calls the Stripe API. Every field these events need is carried
    in the event itself, which also means a webhook cannot be turned into a
    request loop against Stripe by a malformed payload.
+
+   Which event knows what. A Checkout Session names the buyer's address, the
+   customer and whether the money is in, but not what was bought: its
+   line_items come only when the session is retrieved with
+   expand[]=line_items, and a webhook event is never expanded (and RATA holds
+   no secret key to retrieve it with). The subscription events carry the
+   prices, on items.data[].price. So the plan and the add-ons come from
+   customer.subscription.created/updated, and a checkout event writes them
+   only when it does carry line items, which a real delivery never does.
    --------------------------------------------------------------------------- */
 
 /* Stripe signs `${timestamp}.${raw body}` with the endpoint's signing secret
@@ -91,10 +100,19 @@ export const PENDING = 'incomplete';
    customer (minted by hand) is claimed by the first checkout; a row whose
    subscription has ended may be taken by a new one. A checkout with no
    customer id at all counts as another customer: it would strip the live
-   one's id. */
+   one's id.
+
+   A row still waiting for a bank transfer (PENDING) is held too (review
+   P3-5): taken over by another customer's card checkout, the transfer
+   clearing would be refused as a conflict and the first customer's
+   subscription events would match no row, so they would have paid for
+   nothing. An abandoned transfer does not lock the address for good: Stripe
+   ends the subscription as incomplete_expired, keyed by customer, which is
+   not held. */
 export function checkoutConflict(held, row) {
   if (!held || !held.stripe_customer) return false;
-  if (!LIVE_STATUSES.includes(String(held.status || '').toLowerCase())) return false;
+  const status = String(held.status || '').toLowerCase();
+  if (!LIVE_STATUSES.includes(status) && status !== PENDING) return false;
   return held.stripe_customer !== (row && row.stripe_customer);
 }
 
@@ -119,6 +137,10 @@ export function rowForEvent(event, env = process.env) {
   const at = Number.isFinite(event?.created)
     ? new Date(event.created * 1000).toISOString()
     : null;
+  /* Whether this object carries any lines at all. Without them an event
+     knows nothing about the plan or the add-ons, and says nothing (null)
+     rather than "Base" and "none". */
+  const lined = linesOf(o).length > 0;
 
   if (type === 'checkout.session.completed' || type === 'checkout.session.async_payment_succeeded') {
     /* The only events that reliably carry the buyer's email, which is the key
@@ -137,10 +159,23 @@ export function rowForEvent(event, env = process.env) {
       by: 'email',
       email,
       stripe_customer: typeof o.customer === 'string' ? o.customer : (o.customer?.id || null),
-      plan: planForPrice(priceOf(o, env), env) || 'base',
-      domain_addons: domainAddonsOf(o, env),
+      /* A delivery carries no line_items (see the top of this file), so this
+         is null and the route leaves the plan to the subscription events.
+         Writing 'base' here recorded every Pro checkout as Base, and
+         async_payment_succeeded, days later, turned a Pro customer back into
+         Base (review part 3). */
+      plan: planForPrice(priceOf(o, env), env),
+      domain_addons: lined ? domainAddonsOf(o, env) : null,
       status: paid ? 'active' : PENDING,
       event_at: at,
+      /* What the row is stamped with: when the buyer opened this checkout
+         (the session's own `created`), not when the event was raised. Every
+         subscription event of this purchase happens after that, so none is
+         refused as stale because its checkout event, or the payment clearing
+         days later, happened to be raised after it; and that is what
+         brought the plan in. The event's time still decides whether this
+         event is stale itself. */
+      stamp_at: Number.isFinite(o.created) ? new Date(o.created * 1000).toISOString() : at,
     };
   }
 
@@ -153,7 +188,7 @@ export function rowForEvent(event, env = process.env) {
       by: 'customer',
       stripe_customer: customer,
       plan: planForPrice(priceOf(o, env), env),
-      domain_addons: domainAddonsOf(o, env),
+      domain_addons: lined ? domainAddonsOf(o, env) : null,
       status: LIVE_STATUSES.includes(o.status) ? o.status : (o.status || 'canceled'),
       event_at: at,
     };
@@ -209,4 +244,55 @@ export function isNewer(eventAt, storedAt) {
   if (!storedAt) return true;
   if (!eventAt) return true;
   return new Date(eventAt).getTime() >= new Date(storedAt).getTime();
+}
+
+/* What a checkout event writes to its row.
+
+   `held` is the row as read (stripe_customer, status, event_at); `row` is
+   rowForEvent's answer. The route has already refused a stale event and a
+   conflict; it refuses a PENDING write over a live row after this.
+
+   The plan and the add-ons are written only when the event names them (line
+   items, which a delivery never has), so nothing without price information
+   ever lowers a plan a subscription event set. Otherwise:
+
+   - The plan is known when this customer's row has been written by an event
+     raised after the buyer opened this checkout (held.event_at later than
+     stamp_at): only a subscription event of this purchase can be, and it
+     named the plan. The row keeps plan and add-ons, and the checkout sets
+     only whether the money is in.
+   - Otherwise (a new row, another customer's ended row, or this customer's
+     row from an earlier subscription) the plan is not known yet. The row
+     starts from 'base' and no add-ons, what the table defaults to, and is
+     PENDING even when paid: not entitled until the subscription event names
+     the plan and makes it live. A live row with the default plan would get
+     a Base licence from /account, good for 30 days, if the subscription
+     event landed a few seconds later (it is raised first, so it often finds
+     no row and waits for Stripe's retry). Waiting says "not yet"; the Base
+     licence would have been wrong for a month.
+
+   The row's stamp never moves backwards, and moves forward only to when the
+   buyer opened the checkout (stamp_at). */
+export function checkoutWrite(held, row, now = new Date().toISOString()) {
+  const stamp = row.stamp_at === undefined ? row.event_at : row.stamp_at;
+  const same = !!(held && held.stripe_customer && held.stripe_customer === row.stripe_customer);
+  const named = !!(same && held.event_at && stamp && Date.parse(held.event_at) > Date.parse(stamp));
+  const write = {
+    email: row.email,
+    status: row.status,
+    stripe_customer: row.stripe_customer,
+    event_at: later(held && held.event_at, stamp),
+    updated_at: now,
+  };
+  if (row.plan) write.plan = row.plan;
+  else if (!named) { write.plan = 'base'; write.status = PENDING; }
+  if (typeof row.domain_addons === 'number') write.domain_addons = row.domain_addons;
+  else if (!named) write.domain_addons = 0;
+  return write;
+}
+
+function later(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return new Date(b).getTime() > new Date(a).getTime() ? b : a;
 }

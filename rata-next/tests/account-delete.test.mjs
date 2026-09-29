@@ -34,6 +34,42 @@ export default async function run(state) {
     check(/keeps charging/i.test(why), `and says what would otherwise happen: "${why}"`);
   }
 
+  console.log('\n— a payment still clearing stops it too (review part 3) —');
+  {
+    /* A bank transfer still clearing: the row is `incomplete`. Deleted now,
+       the transfer clearing would write the row back as active (checkout
+       events are keyed by address) and Stripe would bill an address with no
+       login. */
+    const why = blocksDeletion({ status: 'incomplete', plan: 'pro' });
+    check(!!why && /bank transfer clears/i.test(why) && /keeps charging/i.test(why),
+      `incomplete: refused, and says why: "${why}"`);
+    check(!!blocksDeletion({ status: 'INCOMPLETE' }), 'in any case');
+  }
+
+  console.log('\n— nor can deletion reset the AI allowance while a licence still works (P3-6) —');
+  {
+    /* A licence is issued only while the subscription is live and lasts 30
+       days, and the AI relay's only credential is that licence. Deleting the
+       account removes the month's AI usage, so deleting straight after the
+       subscription ended let the licence spend the month's cap a second
+       time. So an ended subscription blocks deletion until every licence it
+       could have issued has run out: 30 days after the row last changed. */
+    const now = Date.parse('2026-09-29T12:00:00Z');
+    const daysAgo = (n) => new Date(now - n * 86400000).toISOString();
+    const recent = blocksDeletion({ status: 'canceled', plan: 'pro', event_at: daysAgo(5), updated_at: daysAgo(5) }, now);
+    check(!!recent && /2026-10-24/.test(recent) && /licen[cs]e/i.test(recent),
+      `ended 5 days ago: refused until its last licence runs out, with the date: "${recent}"`);
+    check(!!blocksDeletion({ status: 'unpaid', updated_at: daysAgo(29) }, now), 'unpaid 29 days ago: still refused');
+    check(!!blocksDeletion({ status: 'canceled', event_at: daysAgo(40), updated_at: daysAgo(2) }, now),
+      'the later of when Stripe said it and when it was written counts (a late delivery)');
+    check(blocksDeletion({ status: 'canceled', updated_at: daysAgo(31) }, now) === null,
+      'ended 31 days ago: every licence it issued has run out, nothing in the way');
+    check(blocksDeletion({ status: 'incomplete_expired', updated_at: daysAgo(1) }, now) === null,
+      'a first payment that never cleared issued no licence: nothing in the way');
+    check(blocksDeletion({ status: 'canceled', updated_at: 'not a date' }, now) === null,
+      'a row with no readable time is left to the rules above, as before');
+  }
+
   console.log('\n— the warning is generated, not written twice —');
   {
     check(DELETION_REMOVES.some(r => /login/i.test(r)) && DELETION_REMOVES.some(r => /subscription/i.test(r)),
@@ -91,7 +127,7 @@ function listen(handler) {
    (Postgres's 42P01 from an older PostgREST) or 'broken' (any other failure). */
 async function everythingGoes(check) {
   const USER = { id: '0b5c1f7e-8a8b-4b8e-9c55-3f1d2a6b7c80', email: 'Leaver@Example.com', aud: 'authenticated' };
-  const fake = { aiUsage: 'rows', calls: [] };
+  const fake = { aiUsage: 'rows', sub: null, calls: [] };
   const supabase = await listen((req, res) => {
     const url = new URL(req.url, 'http://x');
     fake.calls.push(`${req.method} ${url.pathname}${url.search}`);
@@ -100,7 +136,7 @@ async function everythingGoes(check) {
     req.on('end', () => {
       if (req.method === 'GET' && url.pathname === '/auth/v1/user') return json(200, USER);
       if (req.method === 'DELETE' && url.pathname === `/auth/v1/admin/users/${USER.id}`) return json(200, USER);
-      if (req.method === 'GET' && url.pathname === '/rest/v1/subscriptions') return json(200, []);
+      if (req.method === 'GET' && url.pathname === '/rest/v1/subscriptions') return json(200, fake.sub ? [fake.sub] : []);
       if (req.method === 'DELETE' && url.pathname === '/rest/v1/workspaces') return json(200, [{ id: USER.id }]);
       if (req.method === 'DELETE' && url.pathname === '/rest/v1/subscriptions') return json(200, []);
       if (req.method === 'DELETE' && url.pathname === '/rest/v1/ai_usage') {
@@ -151,6 +187,28 @@ async function everythingGoes(check) {
       check(loginGone(calls), 'the login is deleted too');
       check(!/schema cache|does not exist|PGRST|42P01/.test(JSON.stringify(d)),
         "and the database's own words about the missing table do not reach the reply");
+    }
+
+    console.log('\n— the endpoint refuses while a payment clears or a licence still works —');
+    {
+      fake.aiUsage = 'rows';
+      for (const [what, sub] of [
+        ['a payment still clearing', { plan: 'pro', status: 'incomplete', event_at: null, updated_at: new Date().toISOString() }],
+        ['a subscription ended yesterday', { plan: 'pro', status: 'canceled', event_at: new Date(Date.now() - 86400000).toISOString(),
+          updated_at: new Date(Date.now() - 86400000).toISOString() }],
+      ]) {
+        fake.sub = sub;
+        const { status, d, calls } = await del();
+        check(status === 409 && typeof d.error === 'string' && d.error.length > 0, `${what}: refused, ${status} "${d.error}"`);
+        check(!calls.some(c => c.startsWith('DELETE ')), `${what}: and nothing is deleted, ai_usage included`);
+        check(calls.some(c => c.startsWith('GET /rest/v1/subscriptions') && /event_at/.test(c) && /updated_at/.test(c)),
+          `${what}: the route reads when the row last changed`);
+      }
+      fake.sub = { plan: 'pro', status: 'canceled', event_at: new Date(Date.now() - 40 * 86400000).toISOString(),
+        updated_at: new Date(Date.now() - 40 * 86400000).toISOString() };
+      const { status, d } = await del();
+      check(status === 200 && d.ok === true, `ended 40 days ago: deleted, ${status}`);
+      fake.sub = null;
     }
 
     console.log('\n— any other failure on ai_usage stops before the login, as for the other tables —');

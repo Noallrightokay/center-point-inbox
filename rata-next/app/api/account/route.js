@@ -44,8 +44,10 @@ export async function DELETE(req) {
     return NextResponse.json({ error: `Type ${email} to confirm.` }, { status: 400 });
   }
 
+  /* event_at and updated_at: when an ended subscription ended, which bounds
+     how long a licence it issued still works (blocksDeletion). */
   const { data: sub } = await sb.from('subscriptions')
-    .select('plan,status').eq('email', email).maybeSingle();
+    .select('plan,status,event_at,updated_at').eq('email', email).maybeSingle();
   const blocked = blocksDeletion(sub);
   if (blocked) return NextResponse.json({ error: blocked, subscription: sub?.status }, { status: 409 });
 
@@ -92,7 +94,7 @@ export async function GET(req) {
   if (error) return NextResponse.json({ error });
   const email = (user.email || '').toLowerCase();
 
-  const { data: sub } = await sb.from('subscriptions').select('plan,status').eq('email', email).maybeSingle();
+  const { data: sub } = await sb.from('subscriptions').select('plan,status,event_at,updated_at').eq('email', email).maybeSingle();
   return NextResponse.json({
     email,
     subscription: sub ? { plan: sub.plan, status: sub.status } : null,
