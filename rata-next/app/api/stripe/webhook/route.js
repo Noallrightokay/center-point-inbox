@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
-import { verifySignature, rowForEvent, isNewer, checkoutConflict, LIVE_STATUSES, PENDING } from '../../../../lib/stripe';
+import { verifySignature, rowForEvent, isNewer, checkoutConflict, checkoutWrite, LIVE_STATUSES, PENDING } from '../../../../lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,25 +64,23 @@ export async function POST(req) {
         console.warn('stripe: checkout conflict: an address with a live subscription under another customer; row left alone');
         return NextResponse.json({ received: true, acted: false, conflict: true, type: event.type });
       }
-      if (row.status === PENDING && held && LIVE_STATUSES.includes(String(held.status || '').toLowerCase())) {
-        /* A checkout still waiting for its money (a bank transfer) never
-           takes away a subscription that is live now: the row stays as it
-           is until the payment clears (async_payment_succeeded) or the
+      /* A checkout event does not know the plan (lib/stripe.js): the
+         subscription events name it, and checkoutWrite leaves out any
+         column this event cannot vouch for, so the upsert keeps what the
+         row holds there. Until a subscription event has named the plan, the
+         row is PENDING even when paid. */
+      const write = checkoutWrite(held, row, now);
+      if (write.status === PENDING && held && LIVE_STATUSES.includes(String(held.status || '').toLowerCase())) {
+        /* A checkout still waiting for its money (a bank transfer), or for
+           its subscription to name the plan, never takes away a
+           subscription that is live now: the row stays as it is until the
            subscription events say otherwise. */
         return NextResponse.json({ received: true, acted: false, pending: true, type: event.type });
       }
 
-      const { error } = await sb.from('subscriptions').upsert({
-        email: row.email,
-        plan: row.plan,
-        status: row.status,
-        stripe_customer: row.stripe_customer,
-        domain_addons: row.domain_addons || 0,
-        event_at: row.event_at,
-        updated_at: now,
-      });
+      const { error } = await sb.from('subscriptions').upsert(write);
       if (error) throw new Error(error.message);
-      return NextResponse.json({ received: true, acted: true, email: row.email, plan: row.plan, status: row.status });
+      return NextResponse.json({ received: true, acted: true, email: row.email, plan: write.plan || null, status: write.status });
     }
 
     /* Keyed by customer. The row was created by the checkout event, so if

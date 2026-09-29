@@ -74,15 +74,26 @@ Endpoint URL:
 https://mailrata.org/api/stripe/webhook
 ```
 
-Select these events and no others:
+Select exactly these five events and no others:
 
 - `checkout.session.completed` — the only one that carries the buyer's email,
-  and what creates their row. A checkout paid by a delayed method (a bank
-  debit) completes before the money arrives; its row is written as
-  `incomplete`, which is not entitled, until the next event
+  and what creates their row. It does **not** say which plan was bought: a
+  Checkout Session carries `line_items` only when it is retrieved with
+  `expand[]=line_items`, and a webhook delivery is never expanded (RATA holds
+  no secret key to retrieve it with). So the row is written as `incomplete`,
+  which is not entitled, until the subscription event below names the plan.
+  A checkout paid by a delayed method (a bank debit) completes before the
+  money arrives and stays `incomplete` until that clears too
 - `checkout.session.async_payment_succeeded` — that delayed payment cleared:
-  the row becomes `active`
-- `customer.subscription.updated` — upgrades, downgrades, failed payments
+  the row becomes `active`, keeping the plan the subscription named
+- `customer.subscription.created` — **the event that names the plan.** It
+  carries the subscription's prices (`items.data[].price`), which is where
+  the plan and any add-on come from, and it makes a new customer's row live.
+  Leave it out and a card checkout that Stripe creates already active is
+  never followed by another subscription event, so that customer's row stays
+  `incomplete` and they get no licence
+- `customer.subscription.updated` — upgrades, downgrades, failed payments,
+  and a subscription turning `active` when its first payment clears
 - `customer.subscription.deleted` — cancellations
 
 Copy the **signing secret** (`whsec_…`).
@@ -126,25 +137,36 @@ have to build any of it.
 ## What happens, in order
 
 1. Someone clicks a plan in Settings and pays on Stripe's page.
-2. Stripe POSTs `checkout.session.completed` to the webhook, signed.
-3. The webhook verifies the signature, finds the plan line among the
-   subscription's lines, counts any custom-domain add-on quantity (always
-   zero, since `STRIPE_PRICE_DOMAIN` stays unset), and writes
-   `subscriptions`: email, plan, status `active` (`incomplete` while a
-   delayed payment has not cleared; it never replaces a live row), the
-   Stripe customer id and `domain_addons`.
+2. Stripe raises `customer.subscription.created` and then
+   `checkout.session.completed`, and POSTs both to the webhook, signed, in
+   no promised order.
+3. The checkout event creates the row: email, the Stripe customer id, and
+   status `incomplete` (not entitled), with the table's default plan `base`
+   and no add-ons as placeholders. It never writes a plan it was not told,
+   so it can never lower one a subscription event set; and it never replaces
+   a live row with an `incomplete` one. The row is stamped with when the
+   buyer opened the checkout, so no subscription event of this purchase is
+   refused as older than it.
+4. The subscription event, matched on the customer id (it carries no
+   email), writes the plan, any custom-domain add-on quantity (always zero,
+   since `STRIPE_PRICE_DOMAIN` stays unset) and Stripe's status, which makes
+   the row live. If it arrived before the checkout event, it found no row,
+   got a `409`, and lands on Stripe's retry; until then the licence page
+   waits ("not yet"), rather than handing a Pro buyer a Base licence good
+   for 30 days.
 
    The plan is found by scanning every line rather than reading the first. A
    subscription carrying both Pro and the domain add-on can arrive in either
    order, and reading line one would have cleared the plan of a customer whose
    only mistake was buying something extra.
-4. The licence routes read that row (`entitlementsForUser` in `lib/plan.js`)
+5. The licence routes read that row (`entitlementsForUser` in `lib/plan.js`)
    and sign its plan into the licence key that `/account` shows and the app
    renews. The desktop app enforces the plan from that signed key (Base's
    two-mailbox limit included), so entitlement does not depend on the
    browser being honest, and a row that is no longer live gets no new key.
-5. Later changes arrive as subscription events. Those carry no email, so they
-   are matched on the customer id stored in step 3.
+6. Later changes arrive as subscription events, matched on the customer id
+   stored in step 3. A delayed payment clearing sends
+   `checkout.session.async_payment_succeeded`, which sets the status only.
 
 **Dropping the add-on is recorded, not ignored.** A customer who removes their
 extra domain sends a subscription with no add-on line, and that writes zero —
@@ -164,8 +186,12 @@ Stripe test mode has its own products, links, price IDs and signing secret, so
 set the test values, then:
 
 1. Pay with `4242 4242 4242 4242`, any future expiry, any CVC.
-2. Dashboard → Webhooks → your endpoint shows the delivery and a `200`.
-3. The `subscriptions` row appears with the right plan.
+2. Dashboard → Webhooks → your endpoint shows the deliveries:
+   `checkout.session.completed` and `customer.subscription.created` each
+   with a `200` (one `409` first is normal: the subscription event arrived
+   before its row existed, and Stripe's retry lands it).
+3. The `subscriptions` row appears, `active`, with the plan that was bought
+   (Pro for the Pro link, not Base).
 4. Reload the app — the plan shows in Settings, and the gates for that tier open.
 
 If the delivery shows `400`, the signing secret does not match the one in the

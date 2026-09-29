@@ -45,32 +45,108 @@ function listen(handler) {
 const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (d) => { b += d; }); req.on('end', () => res(b)); });
 
 /* A stand-in for the subscriptions table, speaking just enough PostgREST for
-   the webhook's email branch: a select by address, and an upsert. Every write
-   is kept, so a test can say "nothing was written", not only "the row looks
-   the same". */
+   the webhook: a select by address or by customer, an upsert (which, like
+   PostgREST's merge-duplicates, leaves a column the body does not name as it
+   was, and like the table gives a new row plan 'base' and no add-ons), and
+   the subscription branch's update by customer with its `or=(event_at.is.null,
+   event_at.lte.…)` guard. Every write is kept, so a test can say "nothing was
+   written", not only "the row looks the same". */
 async function fakeSubscriptions() {
   const rows = new Map();
   const writes = [];
+  const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   const server = await listen(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     if (!url.pathname.startsWith('/rest/v1/subscriptions')) { res.writeHead(404); res.end(); return; }
+    const eq = (k) => (url.searchParams.get(k) || '').replace(/^eq\./, '');
     if (req.method === 'GET') {
-      const email = (url.searchParams.get('email') || '').replace(/^eq\./, '');
-      const row = rows.get(email);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(row ? [row] : []));
-      return;
+      if (url.searchParams.has('stripe_customer')) {
+        const c = eq('stripe_customer');
+        return json(res, 200, [...rows.values()].filter(r => r.stripe_customer === c));
+      }
+      const row = rows.get(eq('email'));
+      return json(res, 200, row ? [row] : []);
     }
     if (req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       writes.push(body);
-      rows.set(body.email, { ...(rows.get(body.email) || {}), ...body });
+      const was = rows.get(body.email) || { plan: 'base', domain_addons: 0 };
+      rows.set(body.email, { ...was, ...body });
       res.writeHead(201); res.end();
       return;
+    }
+    if (req.method === 'PATCH') {
+      const patch = JSON.parse(await readBody(req));
+      const c = eq('stripe_customer');
+      const guard = url.searchParams.get('or') || '';
+      const lte = /event_at\.lte\.([^,)]+)/.exec(guard);
+      const hit = [...rows.values()].filter(r => r.stripe_customer === c
+        && (!lte || !r.event_at || new Date(r.event_at) <= new Date(lte[1])));
+      for (const r of hit) { writes.push({ email: r.email, ...patch }); Object.assign(r, patch); }
+      return json(res, 200, hit.map(r => ({ email: r.email })));
     }
     res.writeHead(405); res.end();
   });
   return { rows, writes, url: server.url, close: () => new Promise(r => server.srv.close(r)) };
+}
+
+/* Events in the shape Stripe really sends them. A Checkout Session carries
+   `line_items` only when it is retrieved with expand[]=line_items, and a
+   webhook event is never expanded, so these have none: the field list is the
+   Checkout Session object's (API reference, "The Checkout Session object")
+   with line_items left out, as a delivery leaves it out. `created` on the
+   session is when the buyer opened the checkout page; `created` on the event
+   is when Stripe raised the event. */
+function realCheckout({ type = 'checkout.session.completed', email, customer, paid = true, sessionAt, eventAt }) {
+  return {
+    id: 'evt_' + type.length + '_' + eventAt, object: 'event', api_version: '2025-03-31.basil',
+    created: eventAt, livemode: false, pending_webhooks: 1,
+    request: { id: null, idempotency_key: null }, type,
+    data: { object: {
+      id: 'cs_test_' + customer, object: 'checkout.session',
+      adaptive_pricing: { enabled: false }, after_expiration: null, allow_promotion_codes: false,
+      amount_subtotal: 2399, amount_total: 2399,
+      automatic_tax: { enabled: false, liability: null, status: null },
+      billing_address_collection: 'auto', cancel_url: null, client_reference_id: null,
+      collected_information: null, consent: null, consent_collection: null,
+      created: sessionAt, currency: 'usd', currency_conversion: null,
+      custom_fields: [], custom_text: { after_submit: null, shipping_address: null, submit: null, terms_of_service_acceptance: null },
+      customer, customer_creation: 'always',
+      customer_details: { address: { city: null, country: 'DE', line1: null, line2: null, postal_code: null, state: null },
+        email, name: 'A Buyer', phone: null, tax_exempt: 'none', tax_ids: [] },
+      customer_email: null, discounts: [], expires_at: sessionAt + 86400,
+      invoice: 'in_test_1', invoice_creation: null, livemode: false, locale: 'auto', metadata: {},
+      mode: 'subscription', payment_intent: null, payment_link: 'plink_test_pro',
+      payment_method_collection: 'always', payment_method_configuration_details: null,
+      payment_method_options: {}, payment_method_types: paid ? ['card'] : ['sepa_debit'],
+      payment_status: paid ? 'paid' : 'unpaid', phone_number_collection: { enabled: false },
+      recovered_from: null, saved_payment_method_options: null, setup_intent: null,
+      shipping_address_collection: null, shipping_cost: null, shipping_details: null, shipping_options: [],
+      status: 'complete', submit_type: null, subscription: 'sub_test_' + customer,
+      success_url: 'https://mailrata.org/welcome', total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 },
+      ui_mode: 'hosted', url: null,
+    } },
+  };
+}
+/* customer.subscription.created / .updated: these do carry the price, on
+   items.data[].price. */
+function realSubscription({ type = 'customer.subscription.created', customer, price, status, eventAt }) {
+  return {
+    id: 'evt_sub_' + eventAt, object: 'event', api_version: '2025-03-31.basil',
+    created: eventAt, livemode: false, pending_webhooks: 1,
+    request: { id: null, idempotency_key: null }, type,
+    data: { object: {
+      id: 'sub_test_' + customer, object: 'subscription', cancel_at: null, cancel_at_period_end: false,
+      canceled_at: null, collection_method: 'charge_automatically', created: eventAt, currency: 'usd',
+      customer, default_payment_method: null, ended_at: null, latest_invoice: 'in_test_1', livemode: false,
+      metadata: {}, start_date: eventAt, status,
+      items: { object: 'list', has_more: false, url: '/v1/subscription_items?subscription=sub_test_' + customer,
+        data: [{ id: 'si_test_1', object: 'subscription_item', created: eventAt, quantity: 1,
+          subscription: 'sub_test_' + customer,
+          price: { id: price, object: 'price', active: true, currency: 'usd', product: 'prod_test',
+            recurring: { interval: 'month', interval_count: 1 }, type: 'recurring', unit_amount: 2399 } }] },
+    } },
+  };
 }
 
 export default async function run(state) {
@@ -177,6 +253,30 @@ export default async function run(state) {
       'and a checkout with no email is not turned into a row keyed by nothing');
   }
 
+  console.log('\n— a checkout event as Stripe sends it names no plan —');
+  {
+    /* Found in review part 3: Stripe leaves line_items out of every webhook,
+       so reading the plan from them recorded every checkout as Base, and the
+       payment clearing days later turned a Pro customer back into Base. */
+    const t = 1780000000;
+    for (const type of ['checkout.session.completed', 'checkout.session.async_payment_succeeded']) {
+      const ev = realCheckout({ type, email: 'Pro@Example.com', customer: 'cus_PRO', sessionAt: t - 120, eventAt: t });
+      check(!('line_items' in ev.data.object), `${type}: the fixture has no line_items, as a delivery has none`);
+      const r = rowForEvent(ev, ENV);
+      check(!!r && r.by === 'email' && r.email === 'pro@example.com' && r.stripe_customer === 'cus_PRO' && r.status === 'active',
+        `${type}: still records who paid and whether the money is in: ${JSON.stringify(r)}`);
+      check(!!r && r.plan === null, `${type}: and claims no plan it was not told (was 'base'): ${r && r.plan}`);
+      check(!!r && r.domain_addons === null, `${type}: nor a number of domains (was 0): ${r && r.domain_addons}`);
+    }
+    const sub = rowForEvent(realSubscription({ customer: 'cus_PRO', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t }), ENV);
+    check(sub.plan === 'pro' && sub.domain_addons === 0,
+      `the subscription event, which carries items, is what names the plan: ${sub.plan}`);
+    const bare = rowForEvent({ type: 'customer.subscription.updated', created: t,
+      data: { object: { customer: 'cus_PRO', status: 'active' } } }, ENV);
+    check(bare.plan === null && bare.domain_addons === null,
+      'and a subscription event with no items claims neither a plan nor zero domains');
+  }
+
   console.log('\n— a late delivery cannot undo a newer one —');
   {
     /* Stripe does not order deliveries and retries for days, so an upgrade and
@@ -224,6 +324,13 @@ export default async function run(state) {
         'the same customer updating their own row: no conflict');
       check(conflict({ stripe_customer: null, status: 'active' }, row) === false,
         'a row minted by hand (no customer) may be claimed by the first checkout');
+      /* Review P3-5: a row waiting for a bank transfer is held too. Taken
+         over by a card checkout, the transfer clearing would then be refused
+         as a conflict and its subscription events would match no row. */
+      check(conflict({ stripe_customer: 'cus_V', status: 'incomplete' }, { stripe_customer: 'cus_A' }) === true,
+        'held incomplete (a bank transfer still clearing) under another customer: a conflict');
+      check(conflict({ stripe_customer: 'cus_V', status: 'incomplete' }, { stripe_customer: 'cus_V' }) === false,
+        'while the same customer\'s payment clearing still lands on it');
       for (const status of ['canceled', 'unpaid', 'incomplete_expired', null]) {
         check(conflict({ stripe_customer: 'cus_A', status }, row) === false,
           `held ${status} under another customer: no longer live, so a new checkout may take it`);
@@ -348,6 +455,98 @@ export default async function run(state) {
       check(kept.status === 200 && kept.d.acted === false && db.writes.length === before2
         && db.rows.get(victim).status === 'active',
         `a pending checkout never downgrades a live row: ${JSON.stringify(kept.d)} ${JSON.stringify(db.rows.get(victim))}`);
+
+      /* Review P3-5, through the endpoint: a card checkout under another
+         customer cannot take over a row whose bank transfer is still
+         clearing. */
+      const waiting = 'waiting@example.com';
+      const heldWaiting = { email: waiting, plan: 'pro', status: 'incomplete', stripe_customer: 'cus_V', domain_addons: 0,
+        event_at: new Date((t - 600) * 1000).toISOString() };
+      db.rows.set(waiting, { ...heldWaiting });
+      const before3 = db.writes.length;
+      const grab = await deliver(checkout(waiting, 'cus_ATTACKER', ENV.STRIPE_PRICE_BASE, t));
+      check(grab.status === 200 && grab.d.conflict === true && db.writes.length === before3
+        && JSON.stringify(db.rows.get(waiting)) === JSON.stringify(heldWaiting),
+        `a paid checkout by another customer over an incomplete row writes nothing: ${JSON.stringify(grab.d)}`);
+      const cleared2 = await deliver({ ...checkout(waiting, 'cus_V', ENV.STRIPE_PRICE_PRO, t + 60),
+        type: 'checkout.session.async_payment_succeeded' });
+      check(cleared2.d.acted === true && db.rows.get(waiting).status === 'active' && db.rows.get(waiting).stripe_customer === 'cus_V',
+        `and the owner's transfer clearing still makes it theirs and active: ${JSON.stringify(db.rows.get(waiting))}`);
+
+      /* The found-on-the-way bug, as Stripe really delivers it: no line_items
+         on either checkout event. Bank transfer: the checkout completes
+         unpaid, the subscription (Pro) is created a moment before the
+         checkout event is raised, and the money clears three days later. */
+      const pro = 'pro-buyer@example.com';
+      const opened = t - 300;
+      const c1 = await deliver(realCheckout({ email: pro, customer: 'cus_PRO', paid: false, sessionAt: opened, eventAt: t }));
+      check(c1.d.acted === true && db.rows.get(pro)?.status === 'incomplete',
+        `a Pro checkout paid by transfer is recorded, not live: ${JSON.stringify(db.rows.get(pro))}`);
+      const s1 = await deliver(realSubscription({ customer: 'cus_PRO', price: ENV.STRIPE_PRICE_PRO, status: 'incomplete', eventAt: t - 1 }));
+      check(s1.d.acted === true && db.rows.get(pro).plan === 'pro',
+        `its subscription event, raised a second before the checkout event, still lands and names the plan: ${JSON.stringify(s1.d)} ${db.rows.get(pro).plan}`);
+      const d3 = t + 3 * 86400;
+      const writesBefore = db.writes.length;
+      const a1 = await deliver(realCheckout({ type: 'checkout.session.async_payment_succeeded', email: pro, customer: 'cus_PRO',
+        paid: true, sessionAt: opened, eventAt: d3 }));
+      check(a1.status === 200 && db.rows.get(pro).status === 'active',
+        `the payment clearing makes it active: ${JSON.stringify(a1.d)} ${JSON.stringify(db.rows.get(pro))}`);
+      check(db.rows.get(pro).plan === 'pro',
+        `and the row ends Pro, not turned back into Base: ${db.rows.get(pro).plan}`);
+      check(db.writes.slice(writesBefore).every(w => !('plan' in w) && !('domain_addons' in w)),
+        'the checkout event wrote neither plan nor domains, since it knew neither');
+      const s2 = await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_PRO',
+        price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: d3 - 2 }));
+      check(s2.d.acted === true && db.rows.get(pro).plan === 'pro' && db.rows.get(pro).status === 'active',
+        `and the subscription turning active, raised just before it, is not refused as stale: ${JSON.stringify(s2.d)}`);
+
+      /* Card, with the subscription event delivered first: there is no row
+         yet (409, Stripe retries), the checkout event makes one, and the
+         retry lands although it was raised before the checkout event. */
+      const card = 'card-buyer@example.com';
+      const early = realSubscription({ customer: 'cus_CARD', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 2 });
+      const e1 = await deliver(early);
+      check(e1.status === 409, `a subscription event before its checkout finds no row and is retried: ${e1.status}`);
+      await deliver(realCheckout({ email: card, customer: 'cus_CARD', paid: true, sessionAt: t - 90, eventAt: t }));
+      check(db.rows.get(card)?.status === 'incomplete' && !LIVE_STATUSES.includes(db.rows.get(card).status),
+        `the checkout, paid but naming no plan, records the row but not as live, so /account issues no Base licence to a Pro buyer: ${JSON.stringify(db.rows.get(card))}`);
+      const e2 = await deliver(early);
+      check(e2.d.acted === true && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active',
+        `the retry then names the plan and makes it live: ${JSON.stringify(e2.d)} ${JSON.stringify(db.rows.get(card))}`);
+      const again2 = await deliver(realCheckout({ email: card, customer: 'cus_CARD', paid: true, sessionAt: t - 90, eventAt: t + 5 }));
+      check(again2.d.acted === true && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active',
+        `and a redelivered checkout, which names no plan, leaves Pro, and live, alone: ${JSON.stringify(db.rows.get(card))}`);
+
+      /* The ordering guard still holds: a subscription event from before the
+         buyer opened this checkout (an old subscription of the same
+         customer) cannot land over it. */
+      const stale = await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_CARD',
+        price: ENV.STRIPE_PRICE_BASE, status: 'canceled', eventAt: t - 3600 }));
+      check(stale.d.stale === true && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active',
+        `an older subscription event is still refused as stale: ${JSON.stringify(stale.d)}`);
+
+      /* A new customer taking over an ended row does not inherit its plan. */
+      const reused = 'reused@example.com';
+      db.rows.set(reused, { email: reused, plan: 'pro', status: 'canceled', stripe_customer: 'cus_GONE', domain_addons: 2,
+        event_at: new Date((t - 86400) * 1000).toISOString() });
+      await deliver(realCheckout({ email: reused, customer: 'cus_FRESH', paid: true, sessionAt: t - 60, eventAt: t }));
+      check(db.rows.get(reused).stripe_customer === 'cus_FRESH' && db.rows.get(reused).plan === 'base'
+        && db.rows.get(reused).domain_addons === 0 && db.rows.get(reused).status === 'incomplete',
+        `a new customer on an ended row inherits neither its plan nor its domains, and waits for its subscription: ${JSON.stringify(db.rows.get(reused))}`);
+      await deliver(realSubscription({ customer: 'cus_FRESH', price: ENV.STRIPE_PRICE_BASE, status: 'active', eventAt: t + 1 }));
+      check(db.rows.get(reused).plan === 'base' && db.rows.get(reused).status === 'active',
+        `which then makes it live on the plan bought: ${JSON.stringify(db.rows.get(reused))}`);
+
+      /* A live customer checking out again (a second subscription) is not
+         taken off their live plan while the new one's plan is unknown. */
+      const twice = 'twice@example.com';
+      const heldTwice = { email: twice, plan: 'pro', status: 'active', stripe_customer: 'cus_TWICE', domain_addons: 0,
+        event_at: new Date((t - 86400) * 1000).toISOString() };
+      db.rows.set(twice, { ...heldTwice });
+      const before4 = db.writes.length;
+      const t2 = await deliver(realCheckout({ email: twice, customer: 'cus_TWICE', paid: true, sessionAt: t - 60, eventAt: t }));
+      check(t2.d.pending === true && db.writes.length === before4 && JSON.stringify(db.rows.get(twice)) === JSON.stringify(heldTwice),
+        `a second checkout naming no plan leaves a live row as it is: ${JSON.stringify(t2.d)}`);
     } finally { await s.stop(); await db.close(); }
   }
 
