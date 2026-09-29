@@ -109,6 +109,141 @@ pub fn redact(text: &str, credential: &Credential) -> String {
     out
 }
 
+/// What a sign-in failure says in place of a secret a server repeated.
+const SAID_HIDDEN: &str = "[hidden]";
+
+/// The shortest start of a secret that is taken out on its own: what is left
+/// when a server repeats a line it cut short. Shorter than this, a start
+/// could be an ordinary word.
+const CUT_MIN: usize = 8;
+
+/// A server's words, fit to put in front of the customer, who may paste them
+/// into a bug report: the first line, without control or bidi-control
+/// characters, at most 200 of them. One rule for both protocols: every SMTP
+/// reply and every IMAP NO or BAD that reaches an error goes through here.
+///
+/// While signing in, `secrets` are what RATA sent (the password, the token,
+/// the base64 each travelled as, IMAP's LOGIN line). Each is taken out
+/// wherever it appears, in any case; so is any start of one at least
+/// `CUT_MIN` characters long, which is what a line cut short leaves of a
+/// secret sent in the clear; and then so is every run of 16 or more base64
+/// characters, which is how a base64 line cut short would still carry most
+/// of one. An IMAP response code in brackets (`[AUTHENTICATIONFAILED]`) is
+/// the server's verdict, not a secret, and stays. All of that happens
+/// before the line is shortened, or a cut could leave part of a secret that
+/// no longer matches.
+pub(crate) fn said(text: &str, secrets: &[String]) -> String {
+    let mut text = text.to_string();
+    if !secrets.is_empty() {
+        for secret in secrets.iter().filter(|s| !s.is_empty()) {
+            text = hide(&text, secret);
+        }
+        for secret in secrets {
+            text = hide_cut(&text, secret);
+        }
+        text = hide_base64_runs(&text);
+    }
+    let line: String = text
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_control(*c))
+        .take(200)
+        .collect();
+    line.trim().to_string()
+}
+
+/// `text` with every occurrence of `secret` replaced, ignoring ASCII case.
+/// Lower-casing ASCII never changes a string's length, so a match's place in
+/// the lower-cased copy is its place in the original.
+fn hide(text: &str, secret: &str) -> String {
+    let (hay, needle) = (text.to_ascii_lowercase(), secret.to_ascii_lowercase());
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    while let Some(at) = hay[from..].find(&needle) {
+        out.push_str(&text[from..from + at]);
+        out.push_str(SAID_HIDDEN);
+        from += at + needle.len();
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// `text` with every start of `secret` at least `CUT_MIN` characters long
+/// replaced, ignoring ASCII case, each as far as it matches. A match is found
+/// by the secret's first `CUT_MIN` characters and only then followed, so a
+/// server's long line cannot make this slow.
+fn hide_cut(text: &str, secret: &str) -> String {
+    let (hay, needle) = (text.to_ascii_lowercase(), secret.to_ascii_lowercase());
+    // A secret no longer than CUT_MIN was taken out whole or not at all.
+    let Some((head, _)) = needle.char_indices().nth(CUT_MIN) else {
+        return text.to_string();
+    };
+    let head = &needle[..head];
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    while let Some(at) = hay[from..].find(head) {
+        let start = from + at;
+        let mut len = hay.as_bytes()[start..]
+            .iter()
+            .zip(needle.as_bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        // Never into the middle of a character. `head` ends on a boundary,
+        // so this stops at `head.len()` at the latest.
+        while !text.is_char_boundary(start + len) {
+            len -= 1;
+        }
+        out.push_str(&text[from..start]);
+        out.push_str(SAID_HIDDEN);
+        from = start + len;
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// `text` with every run of 16 or more base64 characters (and its padding)
+/// replaced. Words that long are rare in what a server says while refusing a
+/// sign-in; a credential in base64 is never shorter. The one exception is a
+/// run of capital letters alone in square brackets: an IMAP response code
+/// such as `[AUTHENTICATIONFAILED]`, which base64 is never.
+fn hide_base64_runs(text: &str) -> String {
+    fn flush(run: &mut String, out: &mut String, next: Option<char>) {
+        let code =
+            next == Some(']') && out.ends_with('[') && run.bytes().all(|b| b.is_ascii_uppercase());
+        if run.trim_end_matches('=').len() >= 16 && !code {
+            out.push_str(SAID_HIDDEN);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    }
+    let is_b64 = |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/';
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for c in text.chars() {
+        if (is_b64(c) && !run.ends_with('=')) || (c == '=' && !run.is_empty()) {
+            run.push(c);
+        } else if is_b64(c) {
+            // Padding ends a run; this starts the next.
+            flush(&mut run, &mut out, Some(c));
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out, Some(c));
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out, None);
+    out
+}
+
+/// The characters that reorder text on screen (U+200E, U+200F,
+/// U+202A–U+202E, U+2066–U+2069).
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// The `status` a server put in its `XOAUTH2` error challenge — the base64
 /// JSON Google and others send before the final refusal, such as
 /// `{"status":"401","schemes":"bearer","scope":"…"}`. Only a short run of
@@ -202,6 +337,39 @@ mod tests {
         assert_eq!(
             challenge_status(br#"{"status":"4<script>"}"#).as_deref(),
             Some("4")
+        );
+    }
+
+    #[test]
+    fn a_secret_cut_short_goes_and_a_response_code_stays() {
+        let secrets = ["correct-horse-battery".to_string()];
+        // Eight characters or more of its start, in any case, go.
+        assert_eq!(
+            said("NO bad CORRECT-HORSE-b, try again", &secrets),
+            "NO bad [hidden], try again"
+        );
+        // Fewer could be an ordinary word, and stay.
+        assert_eq!(said("NO correct? no", &secrets), "NO correct? no");
+        // An IMAP response code is not base64, however long.
+        assert_eq!(
+            said("[AUTHENTICATIONFAILED] Invalid", &secrets),
+            "[AUTHENTICATIONFAILED] Invalid"
+        );
+        assert_eq!(
+            said("[AUTHENTICATIONFAILEDx] no", &secrets),
+            "[[hidden]] no"
+        );
+        // A long line full of near misses is quick, not quadratic.
+        let long = "correct-horse-X ".repeat(20_000);
+        let started = std::time::Instant::now();
+        let shown = said(&long, &secrets);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!shown.contains("correct-h"), "{shown}");
+        // With no secrets, nothing is hidden: that is every reply outside a
+        // sign-in.
+        assert_eq!(
+            said("see AUTHENTICATIONFAILEDTWICE", &[]),
+            "see AUTHENTICATIONFAILEDTWICE"
         );
     }
 }

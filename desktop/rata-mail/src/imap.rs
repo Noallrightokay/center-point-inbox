@@ -399,7 +399,9 @@ pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<T
 }
 
 /// Sign in with whatever the mailbox signs in with. Whatever goes wrong is
-/// said without the secret in it.
+/// said without the secret in it: every server sentence goes through
+/// [`credential::said`], SMTP's rule, with what RATA sent as the secrets
+/// (SEC-5).
 async fn sign_in<T>(
     client: Client<T>,
     email: &str,
@@ -408,12 +410,53 @@ async fn sign_in<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
+    let secrets = sign_in_secrets(email, credential);
+    // `redact` first, so an exact echo of a token still says so in its own
+    // words; then the rule, which takes out everything else.
+    let clean = |why: &str| credential::said(&credential::redact(why, credential), &secrets);
     match credential {
-        Credential::Password(pass) => login(client, email, pass).await,
-        Credential::OAuth { user, access_token } => xoauth2(client, user, access_token)
+        Credential::Password(pass) => login(client, email, pass, &clean).await,
+        Credential::OAuth { user, access_token } => xoauth2(client, user, access_token, &clean)
             .await
             .map_err(|t| t.redacted(credential)),
     }
+}
+
+/// What RATA sends to sign in, in every form a server's words could carry it
+/// back. A password goes on the LOGIN line in the clear, quoted as
+/// async-imap quotes it (`\` and `"` escaped); a token goes as the XOAUTH2
+/// string in base64. And async-imap reports a NO or BAD as a `Debug` of the
+/// server's text, which escapes `\` and `"` again — so each is also listed
+/// as that `Debug` writes it. Longest first, so a whole LOGIN line goes as
+/// one.
+fn sign_in_secrets(email: &str, credential: &Credential) -> Vec<String> {
+    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let sent = match credential {
+        Credential::Password(pass) => vec![
+            format!("LOGIN \"{}\" \"{}\"", quote(email), quote(pass)),
+            quote(pass),
+            pass.clone(),
+            words::base64_encode(pass.as_bytes()),
+        ],
+        Credential::OAuth { user, access_token } => {
+            let mut sent = Vec::new();
+            if let Some(sasl) = credential::xoauth2(user, access_token) {
+                sent.push(words::base64_encode(&sasl));
+            }
+            sent.push(access_token.clone());
+            sent
+        }
+    };
+    let mut all = Vec::with_capacity(sent.len() * 2);
+    for secret in sent {
+        let debug = format!("{secret:?}");
+        let debug = &debug[1..debug.len() - 1];
+        if debug != secret {
+            all.push(debug.to_string());
+        }
+        all.push(secret);
+    }
+    all
 }
 
 /// `XOAUTH2` as IMAP carries it: `AUTHENTICATE XOAUTH2`, the server's empty
@@ -451,7 +494,14 @@ impl Authenticator for &mut XOAuth2 {
 /// Present an OAuth access token. A refusal is [`Trouble::OAuth`] — never
 /// [`Trouble::Auth`], whatever words it comes in: the fix is a fresh token,
 /// which the app can get by itself, not a new password from the customer.
-async fn xoauth2<T>(client: Client<T>, user: &str, token: &str) -> Result<Session<T>, Trouble>
+///
+/// `clean` makes a server's words fit to show (see [`sign_in`]).
+async fn xoauth2<T>(
+    client: Client<T>,
+    user: &str,
+    token: &str,
+    clean: &impl Fn(&str) -> String,
+) -> Result<Session<T>, Trouble>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
@@ -469,24 +519,30 @@ where
         .refused
         .as_deref()
         .and_then(credential::challenge_status);
-    let said = |why: String| match &status {
+    // The status is at most eight letters and digits (`challenge_status`).
+    let with_status = |why: String| match &status {
         Some(s) => format!("{why} (status {s})"),
         None => why,
     };
     match outcome {
         Ok(Ok(session)) => Ok(session),
         // "Come back later" is the server, not the token — as with a password.
-        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => Err(Trouble::Net(why)),
-        Ok(Err((ImapError::No(why), _))) => Err(Trouble::OAuth(said(why))),
+        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => {
+            Err(Trouble::Net(clean(&why)))
+        }
+        Ok(Err((ImapError::No(why), _))) => Err(Trouble::OAuth(with_status(clean(&why)))),
         // The server's error report came first: that is its verdict, however
         // the exchange then ended.
-        Ok(Err((e, _))) if auth.refused.is_some() => Err(Trouble::OAuth(said(reason(&e)))),
+        Ok(Err((e, _))) if auth.refused.is_some() => {
+            Err(Trouble::OAuth(with_status(clean(&reason(&e)))))
+        }
         // BAD is about the conversation — most likely a server that does not
         // know XOAUTH2 at all. Nothing was said about the token.
         Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
-            "the server did not understand the sign-in: {why}"
+            "the server did not understand the sign-in: {}",
+            clean(&why)
         ))),
-        Ok(Err((e, _))) => Err(Trouble::Net(reason(&e))),
+        Ok(Err((e, _))) => Err(Trouble::Net(clean(&reason(&e)))),
         Err(_) => Err(Trouble::Net("the sign-in did not finish in time".into())),
     }
 }
@@ -494,7 +550,14 @@ where
 /// Sign in with a password. A `NO` from the server during LOGIN is the server
 /// refusing the credentials, whatever words it chooses to refuse them in —
 /// more reliable than reading the message, which is why it is checked first.
-async fn login<T>(client: Client<T>, email: &str, pass: &str) -> Result<Session<T>, Trouble>
+/// The server's words are judged as sent and shown only through `clean`
+/// (see [`sign_in`]).
+async fn login<T>(
+    client: Client<T>,
+    email: &str,
+    pass: &str,
+    clean: &impl Fn(&str) -> String,
+) -> Result<Session<T>, Trouble>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
@@ -504,17 +567,20 @@ where
         // right now — RFC 5530's UNAVAILABLE, INUSE and LIMIT, or a plain
         // "try again later". Reading those as a wrong password parks the
         // mailbox behind a relink the customer does not need.
-        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => Err(Trouble::Net(why)),
-        Ok(Err((ImapError::No(why), _))) => Err(Trouble::Auth(why)),
+        Ok(Err((ImapError::No(why), _))) if is_temporary_refusal(&why) => {
+            Err(Trouble::Net(clean(&why)))
+        }
+        Ok(Err((ImapError::No(why), _))) => Err(Trouble::Auth(clean(&why))),
         // BAD is a complaint about the conversation, not the credentials: the
         // server did not understand what was sent. It says nothing about the
         // password, so it must not be read as a verdict on it.
         Ok(Err((ImapError::Bad(why), _))) => Err(Trouble::Net(format!(
-            "the server did not understand the sign-in: {why}"
+            "the server did not understand the sign-in: {}",
+            clean(&why)
         ))),
         // Judged on everything the library said, reported in a line of RATA's.
         Ok(Err((e, _))) => {
-            let msg = reason(&e);
+            let msg = clean(&reason(&e));
             if !unreadable(&e) && is_auth_failure(&e.to_string()) {
                 Err(Trouble::Auth(msg))
             } else {
@@ -2151,17 +2217,11 @@ fn io_reason(e: &std::io::Error) -> String {
     }
 }
 
-/// The first line of `s`, without control characters, at most 200 of them.
+/// The first line of `s`, without control or bidi-control characters, at
+/// most 200 of them: [`credential::said`] with no secrets, the rule SMTP
+/// keeps for every reply.
 fn one_line(s: &str) -> String {
-    let line: String = s
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(200)
-        .collect();
-    line.trim().to_string()
+    credential::said(s, &[])
 }
 
 /// "the inbox", "the Sent folder"…: where something happened, for a sentence.
@@ -2915,7 +2975,9 @@ pub enum Prior {
     /// None was named.
     None,
     /// It carried this draft's own id and was removed for good — the one
-    /// thing RATA ever deletes permanently.
+    /// thing RATA ever deletes permanently. On Gmail (`X-GM-EXT-1`) it was
+    /// moved to Gmail's Trash instead, since an expunge there only removes
+    /// the Drafts label; either way it has left Drafts.
     Replaced,
     /// It carried this draft's id and is flagged `\Deleted`, but the server
     /// has no UIDPLUS, so it was not expunged: a plain EXPUNGE would also
@@ -3071,22 +3133,24 @@ where
         Some((validity, uid)) if validity == generation && uid != 0 => Some(uid),
         // No APPENDUID: the newest copy carrying this id, which is the one
         // just saved — never the one before it.
-        _ => timeout(
-            COMMAND,
-            search(
-                session,
-                &format!("UNDELETED HEADER X-RATA-Draft \"{draft_id}\""),
-            ),
-        )
-        .await
-        .ok()
-        .flatten()
-        .and_then(|found| {
-            found
+        _ => {
+            let found = timeout(
+                COMMAND,
+                search(
+                    session,
+                    &format!("UNDELETED HEADER X-RATA-Draft \"{draft_id}\""),
+                ),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+            let found: Vec<u32> = found
                 .into_iter()
                 .filter(|u| *u != 0 && Some(*u) != before)
-                .max()
-        }),
+                .collect();
+            newest_carrying(session, &found, draft_id).await
+        }
     };
     let Some(uid) = uid.filter(|_| generation != 0) else {
         return not_saved("the server took it but RATA could not find it again");
@@ -3104,6 +3168,31 @@ where
         id: message_key(acct, &Folder::Drafts, uid),
         prior,
     }
+}
+
+/// Of `uids` in the Drafts folder just selected, the newest whose message
+/// carries exactly one `X-RATA-Draft` header and it is `draft_id` — the
+/// check [`replace`] makes. IMAP's HEADER search matches a substring
+/// (P3-3), so a search hit alone could be another message whose header
+/// merely contains the id, which Send or Discard would then put in the
+/// Trash.
+async fn newest_carrying<T>(session: &mut Session<T>, uids: &[u32], draft_id: &str) -> Option<u32>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if uids.is_empty() {
+        return None;
+    }
+    let found =
+        answered(session.uid_fetch(join(uids), "(UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])"))
+            .await
+            .ok()?;
+    found
+        .iter()
+        .filter(|f| header_values(f.header().unwrap_or_default(), "X-RATA-Draft") == [draft_id])
+        .filter_map(|f| f.uid)
+        .filter(|u| uids.contains(u))
+        .max()
 }
 
 /// Remove `prior` from the Drafts folder just selected — only if it is
@@ -3141,6 +3230,21 @@ where
         Ok(Ok(c)) => c,
         _ => return Prior::Failed,
     };
+    // Gmail (P3-2): expunging from [Gmail]/Drafts only takes the Drafts
+    // label off, and the copy stays in All Mail — in the customer's quota,
+    // and under RATA's own Archive. Moving it to Gmail's Trash takes it out
+    // of All Mail, and Gmail empties the Trash after 30 days. The proof above
+    // still decides what is moved. `destination` only LISTs, so Drafts stays
+    // selected.
+    if caps.has_str("X-GM-EXT-1") {
+        let Some(trash) = destination(session, &Action::Trash).await else {
+            return Prior::Failed;
+        };
+        return match timeout(COMMAND, session.uid_mv(&set, &trash)).await {
+            Ok(Ok(())) => Prior::Replaced,
+            _ => Prior::Failed,
+        };
+    }
     if !matches!(
         timeout(COMMAND, store(session, &set, "+FLAGS.SILENT (\\Deleted)")).await,
         Ok(Ok(()))
@@ -6381,6 +6485,183 @@ mod tests {
         });
     }
 
+    // --------------------------------------- what a sign-in failure may say
+    //
+    // SEC-5: the IMAP half of what SEC-4 did for SMTP. A server's NO or BAD
+    // to a sign-in reaches the customer, who may paste it into a bug report,
+    // so it is one short plain line and never carries what RATA sent.
+
+    /// A password with a quote and a backslash in it, so LOGIN has to escape
+    /// it and the server's words, as async-imap reports them, escape it again.
+    const PASS: &str = "not-a-real\"pass\\word";
+
+    fn password() -> Credential {
+        Credential::Password(PASS.into())
+    }
+
+    /// What a failed sign-in says, whatever kind of failure it is.
+    fn why_of(signed: Result<Session<TcpStream>, Trouble>) -> String {
+        match signed {
+            Err(
+                Trouble::Auth(why) | Trouble::OAuth(why) | Trouble::Net(why) | Trouble::Host(why),
+            ) => why,
+            Ok(_) => panic!("signed in"),
+        }
+    }
+
+    /// Every form the password could still be in: as typed, as a Debug of the
+    /// server's words writes it, and in base64 — whole, or eight characters
+    /// of it in a row, in any case.
+    fn assert_no_password(why: &str) {
+        let lower = why.to_ascii_lowercase();
+        let escaped = format!("{PASS:?}");
+        let escaped = &escaped[1..escaped.len() - 1];
+        for form in [PASS, escaped, &words::base64_encode(PASS.as_bytes())] {
+            let form = form.to_ascii_lowercase();
+            for at in 0..form.len().saturating_sub(8) {
+                assert!(!lower.contains(&form[at..at + 8]), "{why}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_password_the_server_repeats_is_never_in_what_signing_in_says() {
+        rt_act().block_on(async {
+            let echoes = [
+                // Refused, with the command and the password read back.
+                format!("{{tag}} NO LOGIN \"me@example.com\" \"{PASS}\" refused for {PASS}"),
+                // The same, shouted.
+                format!("{{tag}} NO password {} is wrong", PASS.to_ascii_uppercase()),
+                // Not a verdict on the password, but still repeated.
+                format!("{{tag}} NO [UNAVAILABLE] try again later, {PASS}"),
+                format!("{{tag}} BAD cannot parse {PASS}"),
+                // In base64, which LOGIN never sends, but a server might.
+                format!(
+                    "{{tag}} NO {} not accepted",
+                    words::base64_encode(PASS.as_bytes())
+                ),
+            ];
+            for echo in echoes {
+                let (client, _) = scripted_sign_in(vec![echo.clone()]).await;
+                let why = why_of(sign_in(client, "me@example.com", &password()).await);
+                assert_no_password(&why);
+            }
+        });
+    }
+
+    #[test]
+    fn a_password_the_server_repeats_cut_short_is_still_hidden() {
+        rt_act().block_on(async {
+            // The LOGIN line cut five characters into the password, as a
+            // server with a short buffer might.
+            let (client, _) = scripted_sign_in(lines(&[
+                "{tag} NO command too long: LOGIN \"me@example.com\" \"not-a",
+            ]))
+            .await;
+            let why = why_of(sign_in(client, "me@example.com", &password()).await);
+            assert!(!why.contains("not-a"), "{why}");
+
+            // The password alone, cut short.
+            let (client, _) =
+                scripted_sign_in(lines(&["{tag} NO password not-a-real\"pa is wrong"])).await;
+            let why = why_of(sign_in(client, "me@example.com", &password()).await);
+            assert!(!why.contains("not-a-real"), "{why}");
+            assert!(why.contains("is wrong"), "{why}");
+        });
+    }
+
+    #[test]
+    fn a_token_the_server_repeats_cut_short_or_in_another_case_is_still_hidden() {
+        rt_act().block_on(async {
+            let wire = token_on_the_wire();
+            let (client, _) = scripted_sign_in(vec![
+                "+ ".into(),
+                format!("{{tag}} NO line too long: {}", &wire[..wire.len() - 7]),
+            ])
+            .await;
+            let why = why_of(sign_in(client, "me@outlook.com", &token()).await);
+            for at in 0..wire.len().saturating_sub(16) {
+                assert!(!why.contains(&wire[at..at + 16]), "{why}");
+            }
+
+            let (client, _) = scripted_sign_in(vec![
+                "+ ".into(),
+                format!("{{tag}} NO token {} refused", TOKEN.to_ascii_lowercase()),
+            ])
+            .await;
+            let why = why_of(sign_in(client, "me@outlook.com", &token()).await);
+            assert!(!why.to_ascii_lowercase().contains("-secret"), "{why}");
+            assert!(!why.to_ascii_lowercase().contains("ewbia8l6"), "{why}");
+        });
+    }
+
+    #[test]
+    fn an_over_long_sign_in_refusal_is_one_short_line() {
+        rt_act().block_on(async {
+            let long = format!(
+                "[AUTHENTICATIONFAILED] Invalid credentials{}",
+                " very".repeat(150)
+            );
+            // A password refused, a password not understood, a token refused.
+            for (reply, cred) in [
+                (format!("{{tag}} NO {long}"), password()),
+                (format!("{{tag}} BAD {long}"), password()),
+                (format!("{{tag}} NO {long}"), token()),
+            ] {
+                let mut replies = vec![reply];
+                if cred.is_oauth() {
+                    replies.insert(0, "+ ".into());
+                }
+                let (client, _) = scripted_sign_in(replies).await;
+                let why = why_of(sign_in(client, "me@example.com", &cred).await);
+                // RATA's own words may come first; the server's are at most 200.
+                let said = why.split_once("sign-in: ").map(|(_, s)| s).unwrap_or(&why);
+                assert!(
+                    said.chars().count() <= 200,
+                    "{} chars: {said}",
+                    said.chars().count()
+                );
+                // A response code is the server's verdict, not a secret.
+                assert!(
+                    said.contains("[AUTHENTICATIONFAILED] Invalid credentials"),
+                    "{said}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_sign_in_refusal_with_bidi_controls_shows_none() {
+        let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+        // What RATA makes of a NO or BAD, whatever brought it.
+        for e in [
+            ImapError::No("bad \u{202e}drowssap\u{2066} \u{200f}here".into()),
+            ImapError::Bad("\u{202e}exe.fdp".into()),
+        ] {
+            let said = reason(&e);
+            assert!(!said.chars().any(bidi), "{said:?}");
+            assert!(
+                said.contains("drowssap") || said.contains("exe.fdp"),
+                "{said:?}"
+            );
+        }
+        // Over the wire, imap-proto reads only ASCII in a NO's text, so the
+        // controls never arrive as words: the reply is unreadable, and RATA
+        // says so in its own.
+        rt_act().block_on(async {
+            for cred in [password(), token()] {
+                let mut replies = lines(&["{tag} NO bad \u{202e}drowssap\u{2066} \u{200f}here"]);
+                if cred.is_oauth() {
+                    replies.insert(0, "+ ".into());
+                }
+                let (client, _) = scripted_sign_in(replies).await;
+                let why = why_of(sign_in(client, "me@example.com", &cred).await);
+                assert!(!why.chars().any(bidi), "{why:?}");
+                assert_eq!(why, UNPARSED);
+            }
+        });
+    }
+
     // ----------------------------------------------------------- draft tests
     //
     // A scripted Drafts folder that takes APPEND literals, keeps what it was
@@ -6403,6 +6684,10 @@ mod tests {
         /// Already in Drafts: UID and whole message.
         held: Vec<(u32, String)>,
         next_uid: u32,
+        /// Match `UID SEARCH … HEADER X-RATA-Draft "<id>"` anywhere in the
+        /// header's value, as IMAP's HEADER search does (RFC 3501: a
+        /// substring), rather than only the exact line.
+        substring: bool,
     }
 
     impl DraftScript {
@@ -6415,6 +6700,16 @@ mod tests {
                 refuse: false,
                 held,
                 next_uid: 20,
+                substring: false,
+            }
+        }
+
+        /// Gmail's Drafts: its folder names and its own extension.
+        fn gmail(held: Vec<(u32, String)>) -> Self {
+            DraftScript {
+                caps: "UIDPLUS MOVE X-GM-EXT-1",
+                list: GMAIL_DRAFTS,
+                ..DraftScript::dovecot(held)
             }
         }
     }
@@ -6426,6 +6721,8 @@ mod tests {
         /// UID, message, flagged \Deleted.
         held: Vec<(u32, String, bool)>,
         expunged: Vec<u32>,
+        /// UID and the folder it was moved to.
+        moved: Vec<(u32, String)>,
     }
 
     /// A draft as some client saved it, with `ids` as its X-RATA-Draft headers.
@@ -6554,7 +6851,16 @@ mod tests {
                         .held
                         .iter()
                         .filter(|(_, raw, deleted)| {
-                            !deleted && raw.contains(&format!("X-RATA-Draft: {want}\r\n"))
+                            let head = raw.split("\r\n\r\n").next().unwrap_or_default();
+                            !deleted
+                                && if script.substring {
+                                    head.split("\r\n").any(|l| {
+                                        l.to_ascii_lowercase().starts_with("x-rata-draft:")
+                                            && l.contains(&want)
+                                    })
+                                } else {
+                                    raw.contains(&format!("X-RATA-Draft: {want}\r\n"))
+                                }
                         })
                         .map(|(u, _, _)| u.to_string())
                         .collect();
@@ -6600,6 +6906,13 @@ mod tests {
                             m.2 = true;
                         }
                     }
+                    String::new()
+                } else if up.starts_with("UID MOVE") {
+                    let uid = uid_arg(&cmd);
+                    let to = cmd.split('"').nth(1).unwrap_or_default().to_string();
+                    let mut b = shared.lock().unwrap();
+                    b.held.retain(|m| m.0 != uid);
+                    b.moved.push((uid, to));
                     String::new()
                 } else if up.starts_with("UID EXPUNGE") && !script.caps.contains("UIDPLUS") {
                     done = format!("{tag} BAD unknown command\r\n");
@@ -6889,6 +7202,79 @@ mod tests {
                 "{:?}",
                 b.log
             );
+        });
+    }
+
+    #[test]
+    fn on_gmail_the_copy_before_goes_to_the_trash_not_into_all_mail() {
+        // P3-2: expunging from [Gmail]/Drafts only takes the Drafts label
+        // off, and the copy stays in All Mail. Gmail's Trash takes it out.
+        rt_act().block_on(async {
+            let (mut s, state) =
+                scripted_drafts(DraftScript::gmail(vec![(3, stored_draft(&[DRAFT_ID]))])).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!((at.uid, prior), (20, Prior::Replaced));
+            let b = state.lock().unwrap();
+            // Proven first, exactly as anywhere else.
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c == "UID FETCH 3 (UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])"),
+                "{:?}",
+                b.log
+            );
+            assert_eq!(b.moved, vec![(3, "[Gmail]/Trash".to_string())]);
+            assert!(
+                b.log.iter().any(|c| c == "UID MOVE 3 \"[Gmail]/Trash\""),
+                "{:?}",
+                b.log
+            );
+            // Neither flagged nor expunged.
+            assert!(
+                !b.log.iter().any(|c| {
+                    let u = c.to_ascii_uppercase();
+                    u.starts_with("UID STORE") || u.contains("EXPUNGE")
+                }),
+                "{:?}",
+                b.log
+            );
+            assert!(b.expunged.is_empty());
+        });
+
+        // And a copy that is not provably RATA's is not moved either.
+        rt_act().block_on(async {
+            let (mut s, state) =
+                scripted_drafts(DraftScript::gmail(vec![(3, stored_draft(&[OTHER_ID]))])).await;
+            let (_, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(prior, Prior::NotOurs);
+            let b = state.lock().unwrap();
+            assert!(changed(&b.log).is_empty(), "{:?}", b.log);
+            assert!(b.moved.is_empty());
+        });
+    }
+
+    #[test]
+    fn without_appenduid_a_message_whose_header_only_contains_the_id_is_not_taken() {
+        // P3-3: IMAP's HEADER search matches a substring, so the newest
+        // match can be another message whose X-RATA-Draft merely contains
+        // this draft's id. RATA must not take that one as its copy.
+        rt_act().block_on(async {
+            let near_miss = stored_draft(&[&format!("x{DRAFT_ID}")]);
+            let mut script =
+                DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID])), (30, near_miss)]);
+            script.appenduid = false;
+            script.substring = true;
+            let (mut s, state) = scripted_drafts(script).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(at, ours(20));
+            assert_eq!(prior, Prior::Replaced);
+            let b = state.lock().unwrap();
+            assert_eq!(b.expunged, vec![3]);
+            // The near miss is where it was, untouched.
+            assert!(b.held.iter().any(|m| m.0 == 30 && !m.2), "{:?}", b.held);
         });
     }
 

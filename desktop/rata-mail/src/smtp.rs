@@ -34,7 +34,7 @@ use tokio::time::timeout;
 use tokio_rustls::client::TlsStream;
 
 use crate::compose::{Outgoing, message_id, render};
-use crate::credential::{self, Credential};
+use crate::credential::{self, Credential, said};
 use crate::discover::{SMTP_PORTS, smtp_candidates};
 use crate::guard::HostVerdict;
 use crate::imap::Account;
@@ -47,92 +47,6 @@ const DATA: Duration = Duration::from_secs(60);
 
 /// The longest reply line RATA reads: twice what RFC 5321 allows.
 const LINE_MAX: usize = 1024;
-
-/// What a failure says in place of a secret a server repeated.
-const HIDDEN: &str = "[hidden]";
-
-/// A server's words, fit to put in front of the customer, who may paste them
-/// into a bug report: the first line, without control or bidi-control
-/// characters, at most 200 of them — the rule `imap.rs` keeps for NO and BAD
-/// (`one_line`).
-///
-/// While signing in, `secrets` are what RATA sent (the password, the token
-/// and the base64 each travelled as). Each is taken out wherever it appears,
-/// in any case, and then so is every run of 16 or more base64 characters,
-/// which is how a sign-in line cut short would still carry most of one. All
-/// of that happens before the line is shortened, or a cut could leave part
-/// of a secret that no longer matches.
-fn said(text: &str, secrets: &[String]) -> String {
-    let mut text = text.to_string();
-    if !secrets.is_empty() {
-        for secret in secrets.iter().filter(|s| !s.is_empty()) {
-            text = hide(&text, secret);
-        }
-        text = hide_base64_runs(&text);
-    }
-    let line: String = text
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .filter(|c| !c.is_control() && !is_bidi_control(*c))
-        .take(200)
-        .collect();
-    line.trim().to_string()
-}
-
-/// `text` with every occurrence of `secret` replaced, ignoring ASCII case.
-/// Lower-casing ASCII never changes a string's length, so a match's place in
-/// the lower-cased copy is its place in the original.
-fn hide(text: &str, secret: &str) -> String {
-    let (hay, needle) = (text.to_ascii_lowercase(), secret.to_ascii_lowercase());
-    let mut out = String::with_capacity(text.len());
-    let mut from = 0;
-    while let Some(at) = hay[from..].find(&needle) {
-        out.push_str(&text[from..from + at]);
-        out.push_str(HIDDEN);
-        from += at + needle.len();
-    }
-    out.push_str(&text[from..]);
-    out
-}
-
-/// `text` with every run of 16 or more base64 characters (and its padding)
-/// replaced. Words that long are rare in what a server says while refusing a
-/// sign-in; a credential in base64 is never shorter.
-fn hide_base64_runs(text: &str) -> String {
-    fn flush(run: &mut String, out: &mut String) {
-        if run.trim_end_matches('=').len() >= 16 {
-            out.push_str(HIDDEN);
-        } else {
-            out.push_str(run);
-        }
-        run.clear();
-    }
-    let is_b64 = |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/';
-    let mut out = String::with_capacity(text.len());
-    let mut run = String::new();
-    for c in text.chars() {
-        if (is_b64(c) && !run.ends_with('=')) || (c == '=' && !run.is_empty()) {
-            run.push(c);
-        } else if is_b64(c) {
-            // Padding ends a run; this starts the next.
-            flush(&mut run, &mut out);
-            run.push(c);
-        } else {
-            flush(&mut run, &mut out);
-            out.push(c);
-        }
-    }
-    flush(&mut run, &mut out);
-    out
-}
-
-/// The characters that reorder text on screen (U+200E, U+200F,
-/// U+202A–U+202E, U+2066–U+2069).
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-}
 
 /// How long a message of `len` bytes may take to upload, and then to be
 /// accepted. A minute for any message, plus a second per 64 KiB: a 24 MB
