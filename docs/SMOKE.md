@@ -32,7 +32,7 @@ steps, so the only mail you describe is mail you wrote for this test.
 1. Open https://github.com/Noallrightokay/center-point-inbox/releases
 2. Take the newest release. This checklist is written for **v0.1.38**
    (task [A1](MVP-PLAN.md#a1)). On v0.1.37, Gmail shows no Archive chip,
-   which is expected there.
+   which is expected there. Rows X5 to X7 need v0.1.41 or later.
 3. Install as in BETA.md §1:
    - Windows: `RATA_<version>_x64-setup.exe`. Install it with the setup
      program and start RATA from the Start menu. Row 16 needs the
@@ -125,6 +125,9 @@ column at a time.
 | X2 | Reply all, Cc and Bcc (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | X3 | Continue a draft (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | X4 | Not spam (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| X5 | A draft saved in RATA reaches the phone (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| X6 | Saved twice, one copy (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| X7 | Gmail's All Mail after two saves (if time) | ☐ | | | | | |
 
 Where a step says **refresh**, press **⟳ Sync linked inboxes** above the
 mail list, or **Sync now** on the mailbox's row in Settings, Linked
@@ -414,6 +417,31 @@ from Drafts to Trash.
 open it. **Pass:** a warning "This was in your Spam folder." Press **Not
 spam**: a message starting "Marked not spam". **Webmail:** it is back in
 Inbox.
+
+**X5. A draft saved in RATA reaches the phone** (v0.1.41). In RATA press
+**Compose**, choose this mailbox in From, address it to yourself, type the
+subject `RATA smoke X5 <column>` and a line of text, then close the
+composer. **Pass:** a message "Saved to Drafts", and the draft is under
+**Drafts** in RATA. **Phone:** within a few minutes the draft is in the
+phone's Drafts (the provider's app, or webmail on the phone), with the
+same subject and text. If the mailbox has no Drafts folder, RATA says it
+keeps the draft on this computer: write that down instead of a tick.
+
+**X6. Saved twice, one copy** (v0.1.41). In RATA open **Drafts**, open
+`RATA smoke X5 <column>`, press **Continue**, add a second line and close
+the composer; wait for "Saved to Drafts". Refresh. **Pass:** RATA's
+Drafts holds one copy, with both lines. **Webmail:** Drafts holds one
+copy of it, with both lines, and nothing else in Drafts has changed.
+On Gmail, do X7 now. Then open it in RATA, press **Continue** and **Discard**: it is asked
+about first, and **webmail** shows it in Trash.
+
+**X7. Gmail's All Mail after two saves** (v0.1.41, Gmail only). In X6,
+before **Discard**, open **All Mail** in Gmail's webmail and search
+`subject:"RATA smoke X5"`. **Pass:** one message. **Fail:** two or more,
+the older with only the first line: Gmail kept the copy RATA removed
+from Drafts. Also check RATA's **Archive** after a refresh: an old copy
+of the draft must not be there. Screenshot either way; this decides how
+RATA saves drafts on Gmail.
 
 ---
 

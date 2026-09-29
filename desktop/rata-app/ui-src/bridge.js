@@ -568,9 +568,12 @@
       const d = await r.json();
       if (d.licensed && d.licence) return invoke('set_licence', { licence: d.licence });
       /* A cancelled subscription is a real answer and the app should stop
-         asking. A server having a bad morning is not — the licence still has
-         days left on it, so nothing is touched and it tries again tomorrow. */
-      if (d.reason === 'no-subscription') return { licensed: false, message: d.message };
+         asking. So is a licence that expired too long ago to renew itself
+         (RENEW_GRACE_DAYS on the website): only signing in gets a new one,
+         and the server's sentence says so. A server having a bad morning is
+         not — the licence still has days left on it, so nothing is touched
+         and it tries again tomorrow. */
+      if (d.reason === 'no-subscription' || d.reason === 'too-old') return { licensed: false, message: d.message };
       return null;
     } catch {
       /* Offline. Exactly the case the whole design exists for. */
@@ -645,6 +648,12 @@
     if (standing.token && (standing.renewSoon || !standing.licensed)) {
       const after = await renew(standing.token);
       if (after) standing = after.licensed ? after : await invoke('licence_status');
+      /* Still not licensed after a real refusal: the licence box says why in
+         the server's words ("Sign in at mailrata.org to get a new one"),
+         not only that the licence has expired. */
+      if (after && !after.licensed && !standing.licensed && after.message) {
+        standing = Object.assign({}, standing, { message: after.message });
+      }
     }
     if (!standing.licensed) askForKey(standing);
     /* The interface asked at start too; a renewal just now may have changed
