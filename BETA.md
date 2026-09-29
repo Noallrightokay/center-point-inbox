@@ -111,6 +111,12 @@ Don't spend time reporting these — they are known and planned:
   you type your server's address yourself and it fails, RATA now says why,
   for example that the server's certificate could not be trusted. Copy any
   such sentence exactly into your report, with the provider.
+- **v0.1.40:** attachments you save and files you convert are marked as
+  downloaded from the internet, the way a browser marks them, so Windows
+  and macOS may warn before opening one; that is intended. A program named
+  to look like a document (like `invoice.pdf.exe`) is labelled, and RATA
+  asks before saving it. The website's app page now says that mail is read
+  in the desktop app.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
@@ -184,6 +190,11 @@ Don't spend time reporting these — they are known and planned:
   formatted — with its sender — as well as any that shows raw code. From v0.1.8, opening a long
   message loads all of it, and **attachments** are listed on the message —
   click one to save it to your Downloads folder (RATA never opens it for you).
+  From v0.1.40, on Windows a saved attachment or converted file may say it
+  came from the internet (SmartScreen, or Office's Protected View), and on a
+  Mac Gatekeeper may ask before opening it. That is intended: RATA marks what
+  it saves the way a browser does. A program named to look like a document
+  is labelled and RATA asks before saving it; Cancel is the default.
   From v0.1.9 you can **attach files** when writing, with 📎 Attach — up to
   18 MB in all, since most providers refuse mail over 25 MB once encoded.
   From v0.1.11 **Forward** on a message sends its attachments along too.

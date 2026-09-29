@@ -3380,8 +3380,8 @@ async function refreshQuota(){
        the licence the app checks, and saying "could not check just now" would
        promise a later answer that is never coming. A device-only account has
        nothing to ask either, which is not an error. */
-    if(e.message==='needs-the-app')line.textContent='Your plan applies in the RATA app — open it to see what is in use.';
-    else if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now — your allowance still applies.';
+    if(e.message==='needs-the-app')line.textContent='Your plan applies in the RATA app. Open it to see what is in use.';
+    else if(SESSION&&SESSION.mode==='supabase')line.textContent='Could not check your plan just now. Your allowance still applies.';
   }
 }
 
