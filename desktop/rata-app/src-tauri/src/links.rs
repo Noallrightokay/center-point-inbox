@@ -111,8 +111,9 @@ pub fn open_in_browser(url: &Url) -> Result<(), String> {
 /// Where the app's own window may go.
 #[derive(Debug, PartialEq)]
 pub enum Navigation {
-    /// The app's own pages, the frames inside them, and the files it makes
-    /// for the customer to save (`blob:`, an export or a converted document).
+    /// The app's own pages and the frames inside them (`about:srcdoc`, a
+    /// formatted message). Not `blob:`: the files the app makes are saved
+    /// through `save_file`, never navigated to.
     Stay,
     /// A link of RATA's own — the licence page, say — that belongs in the
     /// browser rather than in place of the app.
@@ -120,13 +121,37 @@ pub enum Navigation {
     Refuse,
 }
 
-/// The app is served from `tauri://localhost` on macOS and Linux and
-/// `http(s)://tauri.localhost` on Windows. Anything else would put an outside
-/// page where the app was, with the bridge still attached to the window.
+/// Where Tauri serves the app from.
+#[derive(Clone, Copy)]
+enum Served {
+    /// `tauri://localhost`: macOS and Linux.
+    CustomScheme,
+    /// `http://tauri.localhost` (or `https` with `useHttpsScheme`): Windows
+    /// and Android.
+    Localhost,
+}
+
+const SERVED: Served = if cfg!(any(windows, target_os = "android")) {
+    Served::Localhost
+} else {
+    Served::CustomScheme
+};
+
+/// Whether the window may go to `url`. Only to where this platform serves
+/// the app from — that scheme, that host, the default port, no user name —
+/// or to a blank page or a message's frame. Anything else would put another
+/// page where the app was, with the bridge still attached to the window; on
+/// Linux and macOS even `http://tauri.localhost` is a real request to this
+/// computer.
 pub fn navigation(url: &Url) -> Navigation {
+    navigation_on(url, SERVED)
+}
+
+fn navigation_on(url: &Url, served: Served) -> Navigation {
+    if is_app(url, served) || matches!(url.as_str(), "about:blank" | "about:srcdoc") {
+        return Navigation::Stay;
+    }
     match (url.scheme(), url.host_str()) {
-        ("tauri" | "about" | "blob", _) => Navigation::Stay,
-        ("http" | "https", Some("tauri.localhost")) => Navigation::Stay,
         ("http" | "https", Some("mailrata.org" | "www.mailrata.org")) => {
             match classify(url.as_str()) {
                 Some(Link::Web(u)) => Navigation::Browser(u),
@@ -134,6 +159,20 @@ pub fn navigation(url: &Url) -> Navigation {
             }
         }
         _ => Navigation::Refuse,
+    }
+}
+
+/// The app's own address on this platform. `port()` is `None` for no port
+/// and for the scheme's default one alike.
+fn is_app(url: &Url, served: Served) -> bool {
+    if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+        return false;
+    }
+    match served {
+        Served::CustomScheme => url.scheme() == "tauri" && url.host_str() == Some("localhost"),
+        Served::Localhost => {
+            matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost")
+        }
     }
 }
 
@@ -249,15 +288,16 @@ mod tests {
     #[test]
     fn the_window_stays_on_the_app() {
         let nav = |s: &str| navigation(&Url::parse(s).unwrap());
-        assert_eq!(nav("tauri://localhost/app.html"), Navigation::Stay);
-        assert_eq!(nav("http://tauri.localhost/app.html"), Navigation::Stay);
-        assert_eq!(nav("https://tauri.localhost/auth.html"), Navigation::Stay);
+        // Where this platform serves the app from (see the next test for
+        // both).
+        let home = if cfg!(any(windows, target_os = "android")) {
+            "http://tauri.localhost/app.html"
+        } else {
+            "tauri://localhost/app.html"
+        };
+        assert_eq!(nav(home), Navigation::Stay);
         assert_eq!(nav("about:srcdoc"), Navigation::Stay);
         assert_eq!(nav("about:blank"), Navigation::Stay);
-        assert_eq!(
-            nav("blob:tauri://localhost/6f1c1d7e-0b6e-4a47-9d0a-2f1d3c4b5a69"),
-            Navigation::Stay
-        );
         assert!(matches!(
             nav("https://mailrata.org/account"),
             Navigation::Browser(_)
@@ -272,6 +312,67 @@ mod tests {
             "javascript:alert(1)",
         ] {
             assert_eq!(nav(s), Navigation::Refuse, "{s}");
+        }
+    }
+
+    #[test]
+    fn the_app_is_only_where_its_platform_serves_it() {
+        let on = |s: &str, served: Served| navigation_on(&Url::parse(s).unwrap(), served);
+        // macOS and Linux: tauri://localhost, and nothing else.
+        for s in [
+            "tauri://localhost/app.html",
+            "tauri://localhost/auth.html?mode=signup",
+            "tauri://localhost",
+        ] {
+            assert_eq!(on(s, Served::CustomScheme), Navigation::Stay, "{s}");
+        }
+        // Windows: http(s)://tauri.localhost, on the default port only.
+        for s in [
+            "http://tauri.localhost/app.html",
+            "https://tauri.localhost/auth.html",
+            "http://tauri.localhost:80/app.html",
+            "https://tauri.localhost:443/app.html",
+        ] {
+            assert_eq!(on(s, Served::Localhost), Navigation::Stay, "{s}");
+        }
+        // Each refuses the other's address: on Linux and macOS
+        // http://tauri.localhost is a real request to this computer.
+        assert_eq!(
+            on("http://tauri.localhost/app.html", Served::CustomScheme),
+            Navigation::Refuse
+        );
+        assert_eq!(
+            on("tauri://localhost/app.html", Served::Localhost),
+            Navigation::Refuse
+        );
+        for served in [Served::CustomScheme, Served::Localhost] {
+            for s in [
+                // Another tauri host, a port, a user name.
+                "tauri://evil.example/x",
+                "tauri://localhost.evil.example/",
+                "tauri://localhost:8080/app.html",
+                "tauri://user@localhost/app.html",
+                "http://tauri.localhost:8080/",
+                "https://tauri.localhost:8443/",
+                "http://user:pw@tauri.localhost/",
+                // blob: of any origin, the app's own too: the app saves the
+                // files it makes through save_file and never navigates to one.
+                "blob:https://evil.example/6f1c1d7e-0b6e-4a47-9d0a-2f1d3c4b5a69",
+                "blob:tauri://localhost/6f1c1d7e-0b6e-4a47-9d0a-2f1d3c4b5a69",
+                "blob:http://tauri.localhost/6f1c1d7e-0b6e-4a47-9d0a-2f1d3c4b5a69",
+                // about: is the blank page and a formatted message's frame.
+                "about:config",
+                "about:blank#x",
+                "about:srcdoc?x",
+            ] {
+                assert_eq!(on(s, served), Navigation::Refuse, "{s}");
+            }
+            assert_eq!(on("about:srcdoc", served), Navigation::Stay);
+            assert_eq!(on("about:blank", served), Navigation::Stay);
+            assert!(matches!(
+                on("https://mailrata.org/account", served),
+                Navigation::Browser(_)
+            ));
         }
     }
 }
