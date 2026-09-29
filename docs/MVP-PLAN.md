@@ -877,8 +877,7 @@ writes the row) instead of relying on the retry; signed-out links carry
 `next=account` and the just-paid state; every buy link built for a
 signed-in person carries both parameters; a live plan's Settings shows
 only the portal for switching; `created` uses a strict guard; the two
-sentences say what is true. Rewrite LAUNCH.md §6 check 6 and D3 below to
-match (five events). Tests for each in `rata-next/tests`. Done when:
+sentences say what is true. Rewrite LAUNCH.md §6 check 6 to match. Tests for each in `rata-next/tests`. Done when:
 those pass and a checkout whose subscription event arrives first shows
 the key within the page's wait, with no Stripe retry.
 
