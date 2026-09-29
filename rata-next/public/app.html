@@ -5060,13 +5060,14 @@ function aiOk(){
 /* What goes to the relay is cut here first. The relay reads 12 000
    characters of one message (LIMITS.text in lib/ai.js) and refuses a request
    over 80 000 outright, and a message opened in full runs to 400 000. So the
-   page sends a little more than the relay reads, enough for it to see the
-   message was longer and say only the start was translated, and never
-   enough to be refused. The characters the relay drops anyway (control and
-   bidi-control characters) go first, since JSON spells each as six. */
-const AI_TEXT=13000,AI_SUBJ=300,AI_FROM=200,AI_BRIEF_EACH=1500,AI_BRIEF_JSON=70000;
+   page sends exactly what the relay reads and no more, which is also what
+   the privacy page promises, and knows for itself when it cut (aiLonger).
+   The characters the relay drops anyway (control and bidi-control
+   characters) go first, since JSON spells each as six. */
+const AI_TEXT=12000,AI_SUBJ=300,AI_FROM=200,AI_BRIEF_EACH=1500,AI_BRIEF_JSON=70000;
 const AI_DROP=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 function aiCut(s,max){return String(s??'').replace(AI_DROP,'').slice(0,max)}
+function aiLonger(s,max){return String(s??'').replace(AI_DROP,'').length>max}
 async function askAI(body){
   let r;
   try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
@@ -5090,9 +5091,10 @@ async function translateMessage(id){
   const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
   const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
   const whole=OPENED.get(id),to=userLang();
-  const r=await askAI({task:'translate',subject:aiCut(m.subj,AI_SUBJ),text:aiCut((whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev,AI_TEXT),to});
+  const src=(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev;
+  const r=await askAI({task:'translate',subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT),to});
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
-  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut,to,hidden:false,used:r.used});
+  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut||aiLonger(src,AI_TEXT),to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
   await audit('msg.translate',(m.subj||m.prev.slice(0,40))+' \u2192 '+to);
   if(selMail===id)openMail(id);

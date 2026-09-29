@@ -170,7 +170,7 @@ export default async function run(state) {
     const long = await ai({ licence: pro, task: 'translate', text: 'a'.repeat(30_000), to: 'de' });
     check(long.status === 200 && long.d.cut === true && model.calls.at(-1).body.messages[0].content.length < 12_200, 'a very long email is cut to its start, and the app is told');
     const most = await ai({ licence: pro, task: 'translate', text: 'a'.repeat(13_000), subject: 's'.repeat(300), to: 'de' });
-    check(most.status === 200 && most.d.cut === true, `the most the app sends of one email (13 000 characters: it cuts before sending) is read, and still said to be cut: ${most.status}`);
+    check(most.status === 200 && most.d.cut === true, `an email a little over what the app sends (the app cuts to 12 000 first) is read, and said to be cut: ${most.status}`);
     check((await ai('{"licence":"' + pro + '","task":"translate","to":"fr","text":"' + 'a'.repeat(90_000) + '"}')).status === 413, 'a request far bigger than the app ever sends is refused outright');
 
     model.stop = 'max_tokens'; model.said = 'Bonjour. La fusion se conclut';

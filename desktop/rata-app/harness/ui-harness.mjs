@@ -1098,8 +1098,9 @@ console.log('\n— the AI relay is sent the start of a long message, never all o
 {
   /* BUG-A: an opened message runs to 400 000 characters, and the relay
      refuses any request over 80 000 (LIMITS.body) before it cuts the text to
-     12 000. The page cuts to 13 000 first, so the relay still says "cut". */
-  const RELAY_BODY = 80_000, PAGE_TEXT = 13_000;
+     12 000. The page cuts to exactly 12 000 first (what the privacy page
+     promises) and knows for itself that it cut. */
+  const RELAY_BODY = 80_000, PAGE_TEXT = 12_000;
   let answer = { body: { text: 'A short summary.', cut: true, used: 0.1 } };
   const pg = await open(true, { ai: () => answer });
   const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
@@ -1124,14 +1125,14 @@ console.log('\n— the AI relay is sent the start of a long message, never all o
   });
   let s = sent();
   const summary = await pg.evaluate(() => document.querySelector('#md-summary .md-ai-text')?.textContent);
-  check(s.task === 'summarize' && s.text <= PAGE_TEXT && s.text > 12_000 && s.len < RELAY_BODY && summary === 'A short summary.',
+  check(s.task === 'summarize' && s.text === PAGE_TEXT && s.len < RELAY_BODY && summary === 'A short summary.',
     `Summarize on a 100 000-character message sends ${s.text} characters (${s.len} in all, under ${RELAY_BODY}), and shows the answer: ${JSON.stringify(summary)}`);
-  answer = { body: { text: 'Liebe Leser', cut: true, used: 0.1 } };
+  answer = { body: { text: 'Liebe Leser', cut: false, used: 0.1 } };
   await pg.evaluate(() => translateMessage('me@example.com_1'));
   s = sent();
   const bar = await pg.evaluate(() => document.querySelector('.md-trbar span')?.textContent);
-  check(s.task === 'translate' && s.text <= PAGE_TEXT && s.len < RELAY_BODY && /only the start of this long message/.test(bar || ''),
-    `Translate sends ${s.text} characters (${s.len} in all) and says only the start was translated: ${JSON.stringify(bar)}`);
+  check(s.task === 'translate' && s.text === PAGE_TEXT && s.len < RELAY_BODY && /only the start of this long message/.test(bar || ''),
+    `Translate sends ${s.text} characters (${s.len} in all) and says only the start was translated, though the relay did not: ${JSON.stringify(bar)}`);
 
   /* A briefing the relay could not finish keeps every flag, and says why.
      Twenty-five messages of quotes would be over 80 000 characters as JSON;
