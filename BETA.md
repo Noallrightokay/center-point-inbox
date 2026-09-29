@@ -4,6 +4,10 @@ Thanks for testing. This page is everything you need: how to install, what to
 expect, and, most importantly, how to report what breaks so it can be fixed
 the same day.
 
+**Help page:** https://mailrata.org/help has the install steps, each
+provider's own app-password page, what every message RATA shows when a link
+fails means, and how to report a bug.
+
 **The single most useful thing you can do is connect a real mailbox.** No
 customer's mailbox has been opened by this code yet: it is tested against
 real mail servers set up for testing, but not against Gmail, Outlook or any
