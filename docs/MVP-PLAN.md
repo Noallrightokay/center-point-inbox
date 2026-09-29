@@ -109,7 +109,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
   asking before a disguised program is saved), and 4 is [D8](#d8).
 - **Tests.** Engine (256, plus 13 against real Dovecot and GreenMail),
-  shell (111) and website (546) suites run in CI (`desktop-ci.yml`,
+  shell (111) and website (545) suites run in CI (`desktop-ci.yml`,
   `rata-next-ci.yml`). The **desktop UI harness** (118 checks that drive
   the real interface against a fake backend, in `desktop/rata-app/harness/`)
   runs in CI as *Desktop interface, driven* ([A3](#a3),

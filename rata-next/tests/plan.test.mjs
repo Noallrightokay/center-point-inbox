@@ -7,7 +7,7 @@
 import { makeChecker } from './helpers.mjs';
 import {
   PLANS, SELLABLE, DOMAIN_ADDON, NO_DOMAIN_HOSTING,
-  money, domainRefusal, domainAddonOnSale, entitlementsForUser, planForUser,
+  money, domainRefusal, domainAddonOnSale, entitlementsForUser,
 } from '../lib/plan.js';
 import { LIVE_STATUSES } from '../lib/stripe.js';
 
@@ -74,8 +74,6 @@ export default async function run(state) {
        licence. */
     const pastDue = await entitlementsForUser(holding({ plan: 'pro', status: 'past_due', domain_addons: 0 }), 'a@b.com');
     check(pastDue.plan === 'pro', `past_due keeps its plan while Stripe retries: ${pastDue.plan}`);
-    check(await planForUser(holding({ plan: 'pro', status: 'past_due' }), 'a@b.com') === 'pro',
-      'planForUser reads it the same way');
     for (const status of ['active', 'trialing', 'past_due', 'canceled', 'unpaid', 'incomplete', 'incomplete_expired', 'paused', '']) {
       const { plan } = await entitlementsForUser(holding({ plan: 'base', status, domain_addons: 0 }), 'a@b.com');
       check(!!plan === LIVE_STATUSES.includes(status),

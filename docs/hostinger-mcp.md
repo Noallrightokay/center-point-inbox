@@ -1,8 +1,8 @@
 # Hostinger MCP Servers
 
-Center Point Inbox is deployed on Hostinger. These MCP servers let Claude Code
-manage that infrastructure — hosting, domains, DNS, billing, VPS, and store —
-directly from the repo, instead of clicking through hPanel.
+RATA's website, mailrata.org, is deployed on Hostinger. These MCP servers let
+Claude Code manage that infrastructure — hosting, domains, DNS, billing, VPS,
+and store — directly from the repo, instead of clicking through hPanel.
 
 All six servers ship in a single npm package,
 [`hostinger-api-mcp`](https://github.com/hostinger/api-mcp-server). Each one is
