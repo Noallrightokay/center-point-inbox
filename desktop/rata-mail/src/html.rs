@@ -656,6 +656,12 @@ fn cleaner() -> ammonia::Builder<'static> {
         if element == "a" && attribute == "href" {
             return link_target(value).then_some(value.into());
         }
+        // ammonia does not count `background` as a URL, so none of its URL
+        // rules reach it: keep only a picture, https or carried in the
+        // message (a `cid:` already made `data:image/…` above).
+        if attribute == "background" {
+            return background_picture(value).then_some(value.into());
+        }
         Some(value.into())
     })
     .rm_tags(["area", "map"])
@@ -674,6 +680,17 @@ fn link_target(href: &str) -> bool {
     ["http://", "https://", "mailto:"]
         .iter()
         .any(|p| lower.starts_with(p))
+}
+
+/// Whether a `background` attribute names a picture the frame may show: an
+/// https one (after Load images) or one of the message's own. The frame's
+/// CSP would refuse anything else; this keeps it out of the page as well.
+fn background_picture(value: &str) -> bool {
+    let lower = value.trim().to_ascii_lowercase();
+    lower.starts_with("https://")
+        || ["png", "jpeg", "gif", "webp"]
+            .iter()
+            .any(|kind| lower.starts_with(&format!("data:image/{kind};base64,")))
 }
 
 /// The CSS allowed in a `style` attribute: what lays out and colours a
@@ -1042,6 +1059,51 @@ pub(crate) mod tests {
             out.html
         );
         assert!(!out.remote_images);
+    }
+
+    #[test]
+    fn a_background_attribute_keeps_only_a_picture_address() {
+        // ammonia does not treat `background` as a URL, so its scheme and
+        // relative-URL rules never reach it. The frame's CSP stops what
+        // gets through; this is the sanitiser's own lock on it.
+        for hostile in [
+            "<table background=\"javascript:alert(1)\"><tr><td>x</td></tr></table>",
+            "<table background=\" JaVaScRiPt:alert(1)\"><tr><td>x</td></tr></table>",
+            "<table><tr><td background=\"/relative.png\">x</td></tr></table>",
+            "<table><tr><td background=\"//evil.example/x.png\">x</td></tr></table>",
+            "<div background=\"file:///etc/passwd\">x</div>",
+            "<div background=\"data:text/html,<script>alert(1)</script>\">x</div>",
+            "<div background=\"http://t.example/bg.png\">x</div>",
+            "<div background=\"tauri://localhost/app.html\">x</div>",
+        ] {
+            let out = clean(hostile).html;
+            assert!(!out.contains("background="), "{hostile:?} gave {out:?}");
+            assert!(out.contains('x'), "the words stay: {out:?}");
+        }
+
+        // An https picture stays (and asks for Load images), as does a
+        // picture the message carries.
+        let remote =
+            clean("<table background=\"https://t.example/bg.png\"><tr><td>x</td></tr></table>");
+        assert!(
+            remote
+                .html
+                .contains("background=\"https://t.example/bg.png\""),
+            "{}",
+            remote.html
+        );
+        assert!(remote.remote_images);
+        let carried = safe(
+            "<table><tr><td background=\"cid:bg@x\">x</td></tr></table>",
+            &[("bg@x".into(), "image/png".into(), vec![137, 80, 78, 71])],
+        );
+        assert!(
+            carried
+                .html
+                .contains("background=\"data:image/png;base64,iVBORw==\""),
+            "{}",
+            carried.html
+        );
     }
 
     /// A picture the message carries, as `safe` is handed it.

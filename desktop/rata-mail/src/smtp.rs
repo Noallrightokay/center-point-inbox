@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::client::TlsStream;
@@ -44,6 +44,95 @@ use crate::words;
 const COMMAND: Duration = Duration::from_secs(20);
 /// The body can be large and the server may be slow to accept it.
 const DATA: Duration = Duration::from_secs(60);
+
+/// The longest reply line RATA reads: twice what RFC 5321 allows.
+const LINE_MAX: usize = 1024;
+
+/// What a failure says in place of a secret a server repeated.
+const HIDDEN: &str = "[hidden]";
+
+/// A server's words, fit to put in front of the customer, who may paste them
+/// into a bug report: the first line, without control or bidi-control
+/// characters, at most 200 of them — the rule `imap.rs` keeps for NO and BAD
+/// (`one_line`).
+///
+/// While signing in, `secrets` are what RATA sent (the password, the token
+/// and the base64 each travelled as). Each is taken out wherever it appears,
+/// in any case, and then so is every run of 16 or more base64 characters,
+/// which is how a sign-in line cut short would still carry most of one. All
+/// of that happens before the line is shortened, or a cut could leave part
+/// of a secret that no longer matches.
+fn said(text: &str, secrets: &[String]) -> String {
+    let mut text = text.to_string();
+    if !secrets.is_empty() {
+        for secret in secrets.iter().filter(|s| !s.is_empty()) {
+            text = hide(&text, secret);
+        }
+        text = hide_base64_runs(&text);
+    }
+    let line: String = text
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control() && !is_bidi_control(*c))
+        .take(200)
+        .collect();
+    line.trim().to_string()
+}
+
+/// `text` with every occurrence of `secret` replaced, ignoring ASCII case.
+/// Lower-casing ASCII never changes a string's length, so a match's place in
+/// the lower-cased copy is its place in the original.
+fn hide(text: &str, secret: &str) -> String {
+    let (hay, needle) = (text.to_ascii_lowercase(), secret.to_ascii_lowercase());
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    while let Some(at) = hay[from..].find(&needle) {
+        out.push_str(&text[from..from + at]);
+        out.push_str(HIDDEN);
+        from += at + needle.len();
+    }
+    out.push_str(&text[from..]);
+    out
+}
+
+/// `text` with every run of 16 or more base64 characters (and its padding)
+/// replaced. Words that long are rare in what a server says while refusing a
+/// sign-in; a credential in base64 is never shorter.
+fn hide_base64_runs(text: &str) -> String {
+    fn flush(run: &mut String, out: &mut String) {
+        if run.trim_end_matches('=').len() >= 16 {
+            out.push_str(HIDDEN);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    }
+    let is_b64 = |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/';
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for c in text.chars() {
+        if (is_b64(c) && !run.ends_with('=')) || (c == '=' && !run.is_empty()) {
+            run.push(c);
+        } else if is_b64(c) {
+            // Padding ends a run; this starts the next.
+            flush(&mut run, &mut out);
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+/// The characters that reorder text on screen (U+200E, U+200F,
+/// U+202A–U+202E, U+2066–U+2069).
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
 
 /// How long a message of `len` bytes may take to upload, and then to be
 /// accepted. A minute for any message, plus a second per 64 KiB: a 24 MB
@@ -145,18 +234,34 @@ impl Wire {
 
     /// Read one complete reply. SMTP continues a reply across lines with
     /// `250-` and ends it with `250 `, so a single read is not enough.
+    ///
+    /// A line is read up to [`LINE_MAX`] bytes and no further: RFC 5321 caps
+    /// one at 512, and a server that goes on is refused rather than waited
+    /// on. An error may quote the line; whoever shows it passes it through
+    /// [`said`].
     async fn hear(&mut self) -> Result<Reply, String> {
         let mut text = String::new();
         loop {
-            let mut line = String::new();
-            let read = on_wire!(self, io => io.read_line(&mut line).await);
+            let mut raw = Vec::new();
+            let read = on_wire!(self, io => {
+                (&mut *io).take(LINE_MAX as u64).read_until(b'\n', &mut raw).await
+            });
             match read {
                 Ok(0) => return Err("the server closed the connection".into()),
                 Ok(_) => {}
                 Err(e) => return Err(e.to_string()),
             }
+            if raw.last() != Some(&b'\n') && raw.len() >= LINE_MAX {
+                return Err(format!(
+                    "the server sent a line longer than the {LINE_MAX} bytes RATA reads"
+                ));
+            }
+            let line = String::from_utf8_lossy(&raw);
             let line = line.trim_end_matches(['\r', '\n']);
-            if line.len() < 3 {
+            // Three ASCII digits, checked as bytes: slicing a string at 3
+            // panics when a character straddles it.
+            let digits = line.as_bytes().get(..3);
+            if !digits.is_some_and(|d| d.iter().all(u8::is_ascii_digit)) {
                 return Err(format!("the server said something unexpected: {line}"));
             }
             let code = line[..3]
@@ -282,8 +387,13 @@ async fn attempt(
     // The greeting comes first, unasked.
     match timeout(COMMAND, wire.hear()).await {
         Ok(Ok(r)) if r.ok() => {}
-        Ok(Ok(r)) => return Sent::Net(format!("{host} would not accept mail: {}", r.text)),
-        Ok(Err(e)) => return Sent::Net(format!("{host}: {e}")),
+        Ok(Ok(r)) => {
+            return Sent::Net(format!(
+                "{host} would not accept mail: {}",
+                said(&r.text, &[])
+            ));
+        }
+        Ok(Err(e)) => return Sent::Net(format!("{host}: {}", said(&e, &[]))),
         Err(_) => return Sent::Net(format!("{host} did not answer in time.")),
     }
 
@@ -324,7 +434,10 @@ async fn attempt(
 
     match step(&mut wire, "DATA", host).await {
         Ok(r) if r.code != 354 => {
-            return Sent::Rejected(format!("{host} would not take the message: {}", r.text));
+            return Sent::Rejected(format!(
+                "{host} would not take the message: {}",
+                said(&r.text, &[])
+            ));
         }
         Ok(_) => {}
         Err(sent) => return sent,
@@ -335,11 +448,11 @@ async fn attempt(
         .await
         .unwrap_or(Err("timed out".into()))
     {
-        return Sent::Net(format!("{host}: {e}"));
+        return Sent::Net(format!("{host}: {}", said(&e, &[])));
     }
     let accepted = match timeout(allowed, wire.ask(".")).await {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Sent::Net(format!("{host}: {e}")),
+        Ok(Err(e)) => return Sent::Net(format!("{host}: {}", said(&e, &[]))),
         Err(_) => return Sent::Net(format!("{host} did not confirm the message in time.")),
     };
     let _ = timeout(COMMAND, wire.ask("QUIT")).await;
@@ -347,41 +460,58 @@ async fn attempt(
     if !accepted.ok() {
         return Sent::Rejected(format!(
             "{host} did not accept the message: {}",
-            accepted.text
+            said(&accepted.text, &[])
         ));
     }
     Sent::Ok {
         via: format!("{host}:{port}"),
-        id: accepted.text.clone(),
+        id: said(&accepted.text, &[]),
         message_id: String::new(),
     }
 }
 
 /// Send a command and turn an unhappy answer into the right kind of failure.
 async fn step(wire: &mut Wire, command: &str, host: &str) -> Result<Reply, Sent> {
-    exchange(wire, command, host, false).await
+    exchange(wire, command, host, None).await
 }
 
 /// The same, for the commands that carry the credentials — the only place a
 /// refusal's wording is allowed to decide that the password was wrong.
-async fn sign_in_step(wire: &mut Wire, command: &str, host: &str) -> Result<Reply, Sent> {
-    exchange(wire, command, host, true).await
+/// `secrets` never appear in what a failure says (see [`said`]).
+async fn sign_in_step(
+    wire: &mut Wire,
+    command: &str,
+    host: &str,
+    secrets: &[String],
+) -> Result<Reply, Sent> {
+    exchange(wire, command, host, Some(secrets)).await
 }
 
+/// `signing_in` carries what was sent to sign in, when that is what this is.
 async fn exchange(
     wire: &mut Wire,
     command: &str,
     host: &str,
-    signing_in: bool,
+    signing_in: Option<&[String]>,
 ) -> Result<Reply, Sent> {
+    let secrets = signing_in.unwrap_or_default();
+    let clean = |text: &str| said(text, secrets);
     match timeout(COMMAND, wire.ask(command)).await {
         Ok(Ok(r)) if r.ok() => Ok(r),
-        Ok(Ok(r)) if r.is_auth(signing_in) => Err(Sent::Auth(refused(host, &r.text))),
-        Ok(Ok(r)) if r.permanent() => Err(Sent::Rejected(format!("{host} refused: {}", r.text))),
+        Ok(Ok(r)) if r.is_auth(signing_in.is_some()) => {
+            Err(Sent::Auth(refused(host, &clean(&r.text))))
+        }
+        Ok(Ok(r)) if r.permanent() => Err(Sent::Rejected(format!(
+            "{host} refused: {}",
+            clean(&r.text)
+        ))),
         // 4xx is the server asking to be tried again later, so the next
         // candidate is worth a go.
-        Ok(Ok(r)) => Err(Sent::Net(format!("{host} was not ready: {}", r.text))),
-        Ok(Err(e)) => Err(Sent::Net(format!("{host}: {e}"))),
+        Ok(Ok(r)) => Err(Sent::Net(format!(
+            "{host} was not ready: {}",
+            clean(&r.text)
+        ))),
+        Ok(Err(e)) => Err(Sent::Net(format!("{host}: {}", clean(&e)))),
         Err(_) => Err(Sent::Net(format!("{host} did not answer in time."))),
     }
 }
@@ -408,13 +538,13 @@ async fn starttls(wire: Wire, name: &str, host: &str) -> Result<Wire, Sent> {
     let mut wire = wire;
     let ready = match timeout(COMMAND, wire.ask("STARTTLS")).await {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(Sent::Net(format!("{host}: {e}"))),
+        Ok(Err(e)) => return Err(Sent::Net(format!("{host}: {}", said(&e, &[])))),
         Err(_) => return Err(Sent::Net(format!("{host} did not answer in time."))),
     };
     if !ready.ok() {
         return Err(Sent::Net(format!(
             "{host} will not encrypt the connection, and RATA will not send a password without one: {}",
-            ready.text
+            said(&ready.text, &[])
         )));
     }
 
@@ -448,22 +578,29 @@ async fn authenticate(wire: &mut Wire, acct: &Account, caps: &str, host: &str) -
         }
     };
 
+    // \0user\0pass, base64, for AUTH PLAIN.
+    let mut plain = Vec::new();
+    plain.push(0);
+    plain.extend_from_slice(user.as_bytes());
+    plain.push(0);
+    plain.extend_from_slice(pass.as_bytes());
+    let plain = words::base64_encode(&plain);
+    let pass64 = words::base64_encode(pass.as_bytes());
+    // Whatever a server repeats of these, a failure never says.
+    let secrets = [pass.clone(), pass64.clone(), plain.clone()];
+
     if upper.contains("AUTH") && upper.contains("PLAIN") {
-        // \0user\0pass, base64. One round trip, so it is preferred.
-        let mut secret = Vec::new();
-        secret.push(0);
-        secret.extend_from_slice(user.as_bytes());
-        secret.push(0);
-        secret.extend_from_slice(pass.as_bytes());
-        let command = format!("AUTH PLAIN {}", words::base64_encode(&secret));
-        sign_in_step(wire, &command, host).await?;
+        // One round trip, so it is preferred.
+        let command = format!("AUTH PLAIN {plain}");
+        sign_in_step(wire, &command, host, &secrets).await?;
         return Ok(());
     }
 
     if upper.contains("AUTH") && upper.contains("LOGIN") {
-        sign_in_step(wire, "AUTH LOGIN", host).await?;
-        sign_in_step(wire, &words::base64_encode(user.as_bytes()), host).await?;
-        sign_in_step(wire, &words::base64_encode(pass.as_bytes()), host).await?;
+        sign_in_step(wire, "AUTH LOGIN", host, &secrets).await?;
+        let user64 = words::base64_encode(user.as_bytes());
+        sign_in_step(wire, &user64, host, &secrets).await?;
+        sign_in_step(wire, &pass64, host, &secrets).await?;
         return Ok(());
     }
 
@@ -508,21 +645,25 @@ async fn xoauth2(
         )));
     };
 
-    let ready = talk(wire, "AUTH XOAUTH2", host).await?;
+    let sasl = words::base64_encode(&sasl);
+    // Whatever a server repeats of these, a failure never says.
+    let secrets = [token.to_string(), sasl.clone()];
+
+    let ready = talk(wire, "AUTH XOAUTH2", host, &secrets).await?;
     if ready.code != 334 {
         // Only the mechanism's name has been sent, so whatever this is, it is
         // not a verdict on the token.
         return Err(Sent::Net(format!(
             "{host} would not take a token sign-in: {}",
-            ready.text
+            said(&ready.text, &secrets)
         )));
     }
 
-    let mut answer = talk(wire, &words::base64_encode(&sasl), host).await?;
+    let mut answer = talk(wire, &sasl, host, &secrets).await?;
     let mut status = None;
     if answer.code == 334 {
         status = credential::challenge_status(&words::base64(answer.text.as_bytes()));
-        answer = talk(wire, "", host).await?;
+        answer = talk(wire, "", host, &secrets).await?;
     }
 
     if (200..300).contains(&answer.code) {
@@ -532,20 +673,23 @@ async fn xoauth2(
         let status = status.map(|s| format!(" (status {s})")).unwrap_or_default();
         return Err(Sent::OAuth(format!(
             "{host} did not accept RATA's sign-in token for sending — it has expired or been withdrawn{status}. The server said: {}",
-            answer.text.trim()
+            said(&answer.text, &secrets)
         )));
     }
     // 4xx — Gmail's "too many login attempts" among them — is the server
     // asking for time, as it is for a password.
-    Err(Sent::Net(format!("{host} was not ready: {}", answer.text)))
+    Err(Sent::Net(format!(
+        "{host} was not ready: {}",
+        said(&answer.text, &secrets)
+    )))
 }
 
 /// One command and its reply, whatever the reply says. Only a broken or
-/// silent connection is a failure here.
-async fn talk(wire: &mut Wire, line: &str, host: &str) -> Result<Reply, Sent> {
+/// silent connection is a failure here, and it never repeats `secrets`.
+async fn talk(wire: &mut Wire, line: &str, host: &str, secrets: &[String]) -> Result<Reply, Sent> {
     match timeout(COMMAND, wire.ask(line)).await {
         Ok(Ok(r)) => Ok(r),
-        Ok(Err(e)) => Err(Sent::Net(format!("{host}: {e}"))),
+        Ok(Err(e)) => Err(Sent::Net(format!("{host}: {}", said(&e, secrets)))),
         Err(_) => Err(Sent::Net(format!("{host} did not answer in time."))),
     }
 }
@@ -1256,6 +1400,170 @@ mod tests {
                 authenticate(&mut wire, &acct("imap.gmail.com"), caps, "smtp.gmail.com").await,
                 Err(Sent::Auth(_))
             ));
+        });
+    }
+
+    // ----------------------------------------------- what a server may make RATA say
+
+    /// A server that says `bytes` at once and then keeps the connection open
+    /// without another word, as a hostile one would.
+    async fn saying(bytes: Vec<u8>) -> Wire {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let _ = sock.write_all(&bytes).await;
+            let _ = sock.flush().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        Wire::Plain(BufReader::new(TcpStream::connect(addr).await.unwrap()))
+    }
+
+    const PASS: &str = "not-a-real-password";
+
+    fn plain_wire() -> String {
+        words::base64_encode(format!("\0owner@example.com\0{PASS}").as_bytes())
+    }
+
+    /// Every way a failure could still carry the password, whole or in part.
+    fn assert_no_password(said: &str) {
+        let pass64 = words::base64_encode(PASS.as_bytes());
+        let wire = plain_wire();
+        assert!(!said.to_ascii_lowercase().contains(PASS), "{said}");
+        assert!(!said.contains(&pass64), "{said}");
+        // No run of 12 characters from the wire, which is how a cut-short
+        // echo would still give it away.
+        for at in 0..wire.len().saturating_sub(12) {
+            assert!(!said.contains(&wire[at..at + 12]), "{said}");
+        }
+    }
+
+    #[test]
+    fn a_reply_line_longer_than_rata_reads_is_refused_not_kept() {
+        rt().block_on(async {
+            let mut wire = saying(format!("250 {}\r\n", "A".repeat(5000)).into_bytes()).await;
+            let err = wire.hear().await.expect_err("a 5 000-byte line was read");
+            assert!(err.len() < 300, "{} bytes: {err}", err.len());
+
+            // And one that never ends is not waited on until the timeout.
+            let mut wire = saying(vec![b'2'; 64 * 1024]).await;
+            let heard = timeout(Duration::from_secs(5), wire.hear()).await;
+            let err = heard
+                .expect("RATA waited for the end of an endless line")
+                .expect_err("an endless line was read");
+            assert!(err.len() < 300, "{} bytes: {err}", err.len());
+        });
+    }
+
+    #[test]
+    fn a_reply_that_is_not_ascii_where_the_code_goes_is_an_error_not_a_crash() {
+        rt().block_on(async {
+            for said in [
+                "2\u{20ac}0 hello\r\n",
+                "ab\u{20ac} hello\r\n",
+                "\u{e9}\u{e9} hi\r\n",
+            ] {
+                let mut wire = saying(said.as_bytes().to_vec()).await;
+                assert!(wire.hear().await.is_err(), "{said:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn what_a_server_said_is_one_short_plain_line() {
+        rt().block_on(async {
+            let long = format!(
+                "550 5.1.1 \u{1b}[31mno\u{7} such \u{202e}user{}",
+                " very".repeat(150)
+            );
+            let (mut wire, _) = scripted_sign_in(vec![long]).await;
+            let Err(Sent::Rejected(why)) =
+                step(&mut wire, "RCPT TO:<a@example.org>", "smtp.example.com").await
+            else {
+                panic!("not a refusal");
+            };
+            let said = why.split_once("refused: ").map(|(_, s)| s).unwrap_or(&why);
+            assert!(
+                said.chars().count() <= 200,
+                "{} chars: {said}",
+                said.chars().count()
+            );
+            assert!(said.starts_with("5.1.1 [31mno such user"), "{said}");
+            assert!(
+                !why.chars().any(|c| c.is_control() || c == '\u{202e}'),
+                "{why:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_password_the_server_repeats_is_never_in_what_sending_says() {
+        rt().block_on(async {
+            let caps = "mail.example.com AUTH PLAIN LOGIN";
+            let echoes = [
+                // Refused, with the command and the password read back.
+                format!("535 5.7.8 AUTH PLAIN {} refused for {PASS}", plain_wire()),
+                // The same, shouted.
+                format!("535 5.7.8 password {} is wrong", PASS.to_ascii_uppercase()),
+                // The command cut short, as a server with a short buffer might.
+                format!(
+                    "535 5.7.8 line too long: AUTH PLAIN {}",
+                    &plain_wire()[..30]
+                ),
+                // Not a verdict on the password, but still repeated.
+                format!("454 4.7.0 try later, {PASS}"),
+                format!("554 5.7.0 {PASS} refused"),
+                // Not even a reply.
+                format!("oops AUTH PLAIN {} {PASS}", plain_wire()),
+            ];
+            for echo in echoes {
+                let (mut wire, _) = scripted_sign_in(vec![echo.clone()]).await;
+                let failed = authenticate(
+                    &mut wire,
+                    &acct("mail.example.com"),
+                    caps,
+                    "mail.example.com",
+                )
+                .await;
+                assert!(failed.is_err(), "{echo}");
+                assert_no_password(&format!("{failed:?}"));
+            }
+
+            // AUTH LOGIN sends the password on a line of its own.
+            let login_only = "mail.example.com AUTH LOGIN";
+            let pass64 = words::base64_encode(PASS.as_bytes());
+            let (mut wire, _) = scripted_sign_in(vec![
+                "334 VXNlcm5hbWU6".into(),
+                "334 UGFzc3dvcmQ6".into(),
+                format!("535 5.7.8 {pass64} ({PASS}) not accepted"),
+            ])
+            .await;
+            let failed = authenticate(
+                &mut wire,
+                &acct("mail.example.com"),
+                login_only,
+                "mail.example.com",
+            )
+            .await;
+            assert!(matches!(failed, Err(Sent::Auth(_))), "{failed:?}");
+            assert_no_password(&format!("{failed:?}"));
+        });
+    }
+
+    #[test]
+    fn a_token_the_server_repeats_cut_short_is_still_hidden() {
+        rt().block_on(async {
+            let wire = token_on_the_wire();
+            let (mut w, _) = scripted_sign_in(vec![
+                "334 ".into(),
+                format!("535 5.7.3 line too long: {}", &wire[..wire.len() - 7]),
+            ])
+            .await;
+            let failed = authenticate(&mut w, &oauth_acct(), CAPS, "smtp.office365.com").await;
+            let said = format!("{failed:?}");
+            for at in 0..wire.len().saturating_sub(16) {
+                assert!(!said.contains(&wire[at..at + 16]), "{said}");
+            }
         });
     }
 }
