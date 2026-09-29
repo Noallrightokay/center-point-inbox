@@ -25,15 +25,29 @@ use crate::key::domain_of;
 use crate::words;
 
 /// One address, already checked. There is no way to build one that is not.
+///
+/// It may carry the name it was given with (`"Smith, Ann" <ann@example.org>`,
+/// as the composer's suggestions write it), cleaned so that it can go into a
+/// header as it is: see [`display_name`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Address(String);
+pub struct Address {
+    addr: String,
+    name: Option<String>,
+}
+
+/// The longest display name kept, in characters. Enough for any real name,
+/// and short enough that one address with its name, encoded, stays far
+/// inside a header line's 998 bytes.
+pub const NAME_MAX: usize = 64;
 
 impl Address {
     /// Parse an address as typed. `None` when it is not one — which includes
     /// every attempt to smuggle a second header into it.
     pub fn parse(raw: &str) -> Option<Self> {
         let mut addr = raw.trim();
-        // "Name <a@b.c>" is what people paste. Take the angle brackets.
+        let mut name = None;
+        // "Name <a@b.c>" is what people paste. Take the angle brackets, and
+        // keep the name in front of them if it is one a header can carry.
         if let Some(open) = addr.rfind('<') {
             let close = addr.rfind('>')?;
             if close < open {
@@ -48,6 +62,7 @@ impl Address {
             if !addr[close + 1..].trim().is_empty() {
                 return None;
             }
+            name = display_name(&addr[..open])?;
             addr = addr[open + 1..close].trim();
         }
         let addr = addr.trim();
@@ -69,7 +84,10 @@ impl Address {
         }) {
             return None;
         }
-        Some(Address(addr.to_ascii_lowercase()))
+        Some(Address {
+            addr: addr.to_ascii_lowercase(),
+            name,
+        })
     }
 
     /// A list as a person would type it: `a@b.com, c@d.com`.
@@ -78,9 +96,13 @@ impl Address {
     /// rather than sent to the addresses that happened to parse, because a
     /// reply that reached three of its four recipients is a worse outcome than
     /// one that reached none and said so.
+    ///
+    /// A comma inside a quoted name (`"Smith, Ann" <ann@example.org>`) or
+    /// inside the angle brackets belongs to that address, not between two;
+    /// a quote left open refuses the list.
     pub fn parse_list(raw: &str) -> Option<Vec<Self>> {
         let mut out = Vec::new();
-        for piece in raw.split(',') {
+        for piece in split_list(raw)? {
             if piece.trim().is_empty() {
                 continue;
             }
@@ -90,12 +112,97 @@ impl Address {
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.addr
+    }
+
+    /// The name it was given with, cleaned, if there was one.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     pub fn domain(&self) -> String {
-        domain_of(&self.0)
+        domain_of(&self.addr)
     }
+}
+
+/// A typed list cut at the commas that separate addresses: not one inside
+/// double quotes (where a backslash escapes the next character) or inside
+/// angle brackets. `None` when a quote is never closed, since what the
+/// customer meant cannot then be known.
+fn split_list(raw: &str) -> Option<Vec<&str>> {
+    let mut out = Vec::new();
+    let (mut quoted, mut angle, mut escaped, mut start) = (false, false, false, 0);
+    for (i, c) in raw.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' if !angle => quoted = true,
+            '<' => angle = true,
+            '>' => angle = false,
+            ',' if !angle => {
+                out.push(&raw[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted {
+        return None;
+    }
+    out.push(&raw[start..]);
+    Some(out)
+}
+
+/// The name in front of `<a@b.c>`, as a header may carry it. `Some(None)`
+/// when there is none worth keeping; `None` refuses the whole address.
+///
+/// A quoted name loses its quotes and its backslash escapes. A line break or
+/// any other control character refuses the address: it is how a second
+/// header is smuggled in, and no name has one. What would reorder text on
+/// screen (bidi controls) goes, and so do `"`, `\`, `<` and `>`, so the name
+/// can be written between quotes without escaping and never looks like an
+/// address to anything reading the header back. Runs of blank space become
+/// one, and the name is cut to [`NAME_MAX`] characters.
+fn display_name(raw: &str) -> Option<Option<String>> {
+    let raw = raw.trim();
+    let inner = match raw.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        Some(inner) => {
+            let (mut out, mut escaped) = (String::new(), false);
+            for c in inner.chars() {
+                if escaped || c != '\\' {
+                    out.push(c);
+                    escaped = false;
+                } else {
+                    escaped = true;
+                }
+            }
+            out
+        }
+        None => raw.to_string(),
+    };
+    if inner.chars().any(char::is_control) {
+        return None;
+    }
+    let kept: String = inner
+        .chars()
+        .filter(|&c| !crate::credential::is_bidi_control(c) && !matches!(c, '"' | '\\' | '<' | '>'))
+        .collect();
+    let name: String = kept
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(NAME_MAX)
+        .collect();
+    let name = name.trim();
+    Some((!name.is_empty()).then(|| name.to_string()))
 }
 
 /// A message on its way out.
@@ -265,13 +372,23 @@ fn render_as(
 }
 
 /// An address header, folded between addresses so that no line passes the
-/// 998-byte limit however many there are. An address has no whitespace or
-/// comma in it (see [`Address::parse`]), so a fold never splits one.
+/// 998-byte limit however many there are. A fold only ever comes between two
+/// addresses, never inside one.
+///
+/// A name goes in front of its address: between quotes when it is plain
+/// ASCII (it holds no `"` or `\\`, see [`display_name`]), as RFC 2047
+/// encoded-words otherwise, which have no quotes, commas or brackets in them.
+/// Either way the only `<` and `>` in the header are around addresses, which
+/// is what [`crate::smtp`] reads the envelope back out by.
 fn addresses(out: &mut String, name: &str, list: &[Address]) {
     let mut line = name.len() + 1;
     let _ = write!(out, "{name}:");
     for (i, a) in list.iter().enumerate() {
-        let piece = format!("<{}>", a.as_str());
+        let piece = match a.name() {
+            Some(shown) if shown.is_ascii() => format!("\"{shown}\" <{}>", a.as_str()),
+            Some(shown) => format!("{} <{}>", words::encode_header(shown), a.as_str()),
+            None => format!("<{}>", a.as_str()),
+        };
         if i > 0 {
             out.push(',');
             line += 1;
@@ -629,6 +746,104 @@ mod tests {
         assert!(Address::parse_list("").is_none());
         // A trailing comma is a typo, not a failure.
         assert_eq!(Address::parse_list("a@b.com,").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_quoted_name_with_a_comma_is_one_address() {
+        // What the composer writes when a suggestion is chosen (H3).
+        let a = addr("\"Smith, Ann\" <Ann@Example.org>");
+        assert_eq!(a.as_str(), "ann@example.org");
+        assert_eq!(a.name(), Some("Smith, Ann"));
+
+        let list = Address::parse_list(
+            "\"Smith, Ann\" <ann@example.org>, Bob <bob@example.org>,dee@example.org",
+        )
+        .unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|a| (a.as_str(), a.name()))
+                .collect::<Vec<_>>(),
+            [
+                ("ann@example.org", Some("Smith, Ann")),
+                ("bob@example.org", Some("Bob")),
+                ("dee@example.org", None)
+            ]
+        );
+        // An escaped quote stays inside the name (as a plain character, since
+        // the render writes the name between quotes), and the comma after it.
+        let list = Address::parse_list(r#""Ann \"A, B\" Lee" <a@b.com>, c@d.com"#).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name(), Some("Ann A, B Lee"));
+        // A quote never closed: what was meant cannot be known.
+        assert!(Address::parse_list("\"Smith, Ann <ann@example.org>, b@c.com").is_none());
+        // An unclosed bracket does not quietly swallow the next address.
+        assert!(Address::parse_list("Ann <ann@example.org, b@c.com").is_none());
+        // Empty quotes are no name, not a refusal.
+        assert_eq!(addr("\"\" <a@b.com>").name(), None);
+    }
+
+    #[test]
+    fn a_name_cannot_carry_a_header_or_disguise_itself() {
+        for attack in [
+            "\"Ann\r\nBcc: everyone@example.com\" <a@b.com>",
+            "Ann\nBcc: everyone@example.com <a@b.com>",
+            "\"Ann\u{0}\" <a@b.com>",
+        ] {
+            assert!(
+                Address::parse(attack).is_none(),
+                "{attack:?} should not parse"
+            );
+        }
+        // Bidi controls, brackets and backslashes go; blank runs become one;
+        // a long name is cut.
+        assert_eq!(
+            addr("\"\u{202e}Ann  <x> \\ Lee\" <a@b.com>").name(),
+            Some("Ann x Lee")
+        );
+        let long = format!("\"{}\" <a@b.com>", "é".repeat(500));
+        assert_eq!(addr(&long).name().unwrap().chars().count(), NAME_MAX);
+    }
+
+    #[test]
+    fn names_are_written_in_front_of_their_addresses() {
+        let mut m = msg("Hi", "Hello");
+        m.to =
+            Address::parse_list("\"Smith, Ann\" <ann@example.org>, Zoë <z@example.org>").unwrap();
+        m.cc = vec![addr("cc@example.org")];
+        let out = render(&m, "Wed, 16 Sep 2026 12:00:00 +0000", "abc");
+        let to = out.split("\r\n").find(|l| l.starts_with("To:")).unwrap();
+        // Plain ASCII is quoted as it is; anything else is encoded, so no
+        // quote, comma or bracket of its own ever reaches the header.
+        assert!(
+            to.starts_with("To: \"Smith, Ann\" <ann@example.org>,"),
+            "{out}"
+        );
+        assert!(
+            out.contains(" =?UTF-8?B?Wm/Dqw==?= <z@example.org>"),
+            "{out}"
+        );
+        assert!(out.contains("Cc: <cc@example.org>\r\n"), "{out}");
+
+        // However many long names, no line passes 998 bytes, and every
+        // address is still there.
+        m.to = (0..100)
+            .map(|i| {
+                addr(&format!(
+                    "\"{}\" <p{i}.{}@example.org>",
+                    "名".repeat(80),
+                    "x".repeat(200)
+                ))
+            })
+            .collect();
+        let out = render(&m, "d", "u");
+        let head = out.split("\r\n\r\n").next().unwrap();
+        assert!(
+            head.split("\r\n").all(|l| l.len() <= 998),
+            "a line is too long"
+        );
+        for i in 0..100 {
+            assert!(head.contains(&format!("<p{i}.")), "p{i} is missing");
+        }
     }
 
     #[test]

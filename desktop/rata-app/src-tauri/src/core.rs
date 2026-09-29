@@ -2580,6 +2580,24 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(e.contains("more than 100"), "{e}");
+            // What the composer's suggestions write (H3): a quoted name with a
+            // comma in it is one person, not two and not a bad address. 101
+            // of them reach the count, so every one of them parsed.
+            let named: Vec<String> = (0..101)
+                .map(|i| format!("\"Smith, Ann {i}\" <p{i}@example.org>"))
+                .collect();
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: named[..51].join(", "),
+                    cc: named[51..].join(","),
+                    subject: "Hi".into(),
+                    body: "x".into(),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(e.contains("more than 100"), "{e}");
         });
     }
 

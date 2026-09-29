@@ -631,6 +631,10 @@ fn ehlo_name(email: &str) -> String {
 
 /// The recipients, read back out of the rendered message: To and Cc, each
 /// address once. Folded lines are joined back to their header first.
+///
+/// Every address is rendered between `<` and `>`, and a name in front of it
+/// never holds either (`compose::addresses`), so what is between each pair
+/// is an address; a name with a comma in it (`"Smith, Ann"`) is not cut.
 fn recipients(rendered: &str) -> Vec<String> {
     let head = rendered.split("\r\n\r\n").next().unwrap_or_default();
     let mut headers: Vec<String> = Vec::new();
@@ -648,11 +652,16 @@ fn recipients(rendered: &str) -> Vec<String> {
         else {
             continue;
         };
-        for piece in rest.split(',') {
-            let addr = piece.trim().trim_start_matches('<').trim_end_matches('>');
+        let mut rest = rest;
+        while let Some(open) = rest.find('<') {
+            let Some(len) = rest[open + 1..].find('>') else {
+                break;
+            };
+            let addr = rest[open + 1..open + 1 + len].trim();
             if !addr.is_empty() && !out.iter().any(|a| a == addr) {
                 out.push(addr.to_string());
             }
+            rest = &rest[open + 2 + len..];
         }
     }
     out
@@ -832,6 +841,33 @@ mod tests {
         assert_eq!(
             recipients(&render(&m, "d", "i")),
             ["a@example.com", "b@example.org"]
+        );
+    }
+
+    #[test]
+    fn a_name_with_a_comma_in_it_is_one_recipient_not_two() {
+        // The composer's suggestions write `"Name" <addr>` (H3). A name is
+        // written in front of its address; the envelope is still exactly the
+        // addresses, and a comma or a quote in a name never splits one.
+        let mut m = msg();
+        m.to = Address::parse_list(
+            "\"Smith, Ann\" <ann@example.org>, Björn Ö <b@example.net>, plain@example.com",
+        )
+        .unwrap();
+        m.cc = Address::parse_list("\"Lee, Dee (ops)\" <dee@example.org>").unwrap();
+        let rendered = render(&m, "d", "i");
+        assert!(
+            rendered.contains("To: \"Smith, Ann\" <ann@example.org>,"),
+            "{rendered}"
+        );
+        assert_eq!(
+            envelope(&rendered, &[]),
+            [
+                "ann@example.org",
+                "b@example.net",
+                "plain@example.com",
+                "dee@example.org"
+            ]
         );
     }
 
