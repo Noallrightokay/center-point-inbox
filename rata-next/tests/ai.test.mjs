@@ -27,7 +27,9 @@ export default async function run(state) {
   /* A stand-in for Anthropic: answers by task, reports token use, and keeps
      every request it was sent. */
   const seq = [];   // the order the relay's calls arrive in, across both stand-ins
-  const model = { calls: [], fail: false, hold: null };
+  /* `stop` is the stop_reason of the next answers ('max_tokens' when the
+     answer ran out of room), and `said` what they say instead of the usual. */
+  const model = { calls: [], fail: false, hold: null, stop: 'end_turn', said: null };
   const anthropic = await listen(async (req, res) => {
     const body = JSON.parse(await readBody(req));
     model.calls.push({ headers: req.headers, body });
@@ -35,11 +37,11 @@ export default async function run(state) {
     if (model.hold) await model.hold;
     if (model.fail) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"type":"error","error":{"type":"api_error"}}'); return; }
     const sys = body.system;
-    const text = /translate/.test(sys) ? 'Bonjour — la fusion se conclut vendredi.'
+    const text = model.said !== null ? model.said : /translate/.test(sys) ? 'Bonjour — la fusion se conclut vendredi.'
       : /pick out/.test(sys) ? 'Here you go: [{"id":"m1","task":"Sign the contract","due":"2026-10-02","important":true},{"id":"not-given","task":"x"},{"id":"m2","task":"","due":null},{"id":"m3","task":"Reply to Ann","due":"soon","important":"yes"}]'
       : 'The sender says a merger closes on Friday and asks you to keep it quiet.';
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ content: [{ type: 'text', text }], usage: { input_tokens: 1000, output_tokens: 200 } }));
+    res.end(JSON.stringify({ content: [{ type: 'text', text }], stop_reason: model.stop, usage: { input_tokens: 1000, output_tokens: 200 } }));
   });
 
   /* A stand-in for Supabase's two functions, ai_reserve and ai_settle, as
@@ -162,12 +164,20 @@ export default async function run(state) {
 
     console.log('\n— translation —');
     const tr = await ai({ licence: base, task: 'translate', text: SECRET, to: 'fr' });
-    check(tr.status === 200 && /Bonjour/.test(tr.d.text), `Base can translate: "${tr.d.text}"`);
+    check(tr.status === 200 && /Bonjour/.test(tr.d.text) && tr.d.cut === false, `Base can translate, and a whole answer is not called cut: "${tr.d.text}" (cut ${tr.d.cut})`);
     check(/French/.test(model.calls.at(-1).body.system), 'into the language asked for, by name');
     check((await ai({ licence: base, task: 'translate', text: 'x', to: 'klingon; drop table' })).status === 400, 'an unknown language is refused');
     const long = await ai({ licence: pro, task: 'translate', text: 'a'.repeat(30_000), to: 'de' });
     check(long.status === 200 && long.d.cut === true && model.calls.at(-1).body.messages[0].content.length < 12_200, 'a very long email is cut to its start, and the app is told');
-    check((await ai('{"licence":"' + pro + '","task":"translate","to":"fr","text":"' + 'a'.repeat(90_000) + '"}')).status === 413, 'a request bigger than any email is refused outright');
+    const most = await ai({ licence: pro, task: 'translate', text: 'a'.repeat(13_000), subject: 's'.repeat(300), to: 'de' });
+    check(most.status === 200 && most.d.cut === true, `the most the app sends of one email (13 000 characters: it cuts before sending) is read, and still said to be cut: ${most.status}`);
+    check((await ai('{"licence":"' + pro + '","task":"translate","to":"fr","text":"' + 'a'.repeat(90_000) + '"}')).status === 413, 'a request far bigger than the app ever sends is refused outright');
+
+    model.stop = 'max_tokens'; model.said = 'Bonjour. La fusion se conclut';
+    const ranOut = await ai({ licence: base, task: 'translate', text: SECRET, to: 'fr' });
+    model.stop = 'end_turn'; model.said = null;
+    check(ranOut.status === 200 && ranOut.d.text === 'Bonjour. La fusion se conclut' && ranOut.d.cut === true,
+      `a translation that ran out of room is said to be cut, so the app says it is only the start: ${JSON.stringify(ranOut.d)}`);
 
     console.log('\n— flagging what needs doing —');
     const tasks = await ai({ licence: pro, task: 'tasks', messages: [
@@ -180,6 +190,23 @@ export default async function run(state) {
       { id: 'm3', task: 'Reply to Ann', due: null, important: false },
     ]), `only answers about emails it was given, in the expected shape: ${JSON.stringify(tasks.d.tasks)}`);
     check((await ai({ licence: base, task: 'tasks', messages: [{ id: 'm1', text: 'x' }] })).status === 403, 'and Base does not get it');
+
+    {
+      /* The hold follows max_tokens, so raising the briefing's room raises
+         what it reserves, by exactly the prompt the model is sent. */
+      const brief = [{ id: 'm1', from: 'Ann', subject: 'Contract', text: 'Please sign by Oct 2.' }];
+      db.calls.length = 0;
+      model.stop = 'max_tokens'; model.said = '[{"id":"m1","task":"Sign the contr';
+      const cut = await ai({ licence: pro, task: 'tasks', messages: brief });
+      model.stop = 'end_turn'; model.said = null;
+      check(cut.status === 502 && cut.d.error === 'The briefing was cut short. Try again.' && cut.d.reason === 'cut' && !('tasks' in cut.d),
+        `a briefing that ran out of room is an error, never "nothing needs doing": ${cut.status} ${JSON.stringify(cut.d)}`);
+      const p = prompt('tasks', { messages: brief });
+      const sentMax = model.calls.at(-1).body.max_tokens;
+      const reserved = db.calls.find(c => c.fn === 'ai_reserve');
+      check(sentMax === p.max_tokens && sentMax >= 2500 && reserved && reserved.body.p_micro === worstCaseMicro(p),
+        `the briefing has room for 25 answers (${sentMax} tokens), and what is held is that prompt's worst case (${reserved && reserved.body.p_micro} µ$)`);
+    }
 
     console.log('\n— the month’s allowance —');
     const month = new Date().toISOString().slice(0, 7);
@@ -259,6 +286,17 @@ export default async function run(state) {
     check(!/merger|555-0100|Bonjour|contract/i.test(s.log()), 'and no email text appears in the server’s log');
 
     console.log('\n— switched off until it is set up —');
+    const keyless = await startServer({ env: { ...env, LICENCE_PUBLIC_KEY: '' } });
+    try {
+      const n = model.calls.length;
+      const r = await fetch(keyless.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ licence: pro, task: 'summarize', text: SECRET }) });
+      const d = await r.json();
+      check(r.status === 503 && d.error === 'AI is not switched on for RATA yet.' && d.reason === 'not-configured' && model.calls.length === n,
+        `a deploy without LICENCE_PUBLIC_KEY does not tell a licensed customer they are unlicensed: ${r.status} ${JSON.stringify(d)}`);
+      const log = keyless.log();
+      check(/LICENCE_PUBLIC_KEY is not set/.test(log) && !log.includes(pro) && !/merger|555-0100/.test(log), 'and the server log names the variable, and nothing the customer sent');
+    } finally { await keyless.stop(); }
+
     const bare = await startServer({ env: { LICENCE_PUBLIC_KEY: keys.publicKey } });
     try {
       const r = await fetch(bare.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ licence: pro, task: 'summarize', text: 'x' }) });

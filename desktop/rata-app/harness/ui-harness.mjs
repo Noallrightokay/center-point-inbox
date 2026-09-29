@@ -200,6 +200,19 @@ async function open(licensed, opts = {}) {
       return route.fulfill({ status: opts.renew.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(opts.renew.body) });
     });
   }
+  /* What mailrata.org's AI relay answers (bridge.js '/api/ai'); every
+     request body it is sent is kept, as sent, in page.__ai. */
+  if (opts.ai) {
+    page.__ai = [];
+    await page.route('https://mailrata.org/api/ai', (route) => {
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST' };
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      const raw = route.request().postData() || '';
+      page.__ai.push(raw);
+      const a = opts.ai(JSON.parse(raw));
+      return route.fulfill({ status: a.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(a.body) });
+    });
+  }
   await page.addInitScript(MOCK, { licensed, ms: !!opts.ms, old: !!opts.old });
   await page.goto(B + '/app.html');
   await page.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
@@ -1078,6 +1091,67 @@ console.log('\n— a licence too old to renew itself says what to do —');
   pg = await open(false, { old: true, renew: { status: 500, body: { error: 'The licence service is not configured.' } } });
   said = await why(pg);
   check(pg.__renewals === 1 && said === 'This licence expired on 1 March 2026.', `a server error keeps the app's own words: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
+  await pg.close();
+}
+
+console.log('\n— the AI relay is sent the start of a long message, never all of it —');
+{
+  /* BUG-A: an opened message runs to 400 000 characters, and the relay
+     refuses any request over 80 000 (LIMITS.body) before it cuts the text to
+     12 000. The page cuts to 13 000 first, so the relay still says "cut". */
+  const RELAY_BODY = 80_000, PAGE_TEXT = 13_000;
+  let answer = { body: { text: 'A short summary.', cut: true, used: 0.1 } };
+  const pg = await open(true, { ai: () => answer });
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Newsletter ' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - uid * 60_000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'ai' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => {
+    S.settings.aiOk = true;
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    __mock.refresh = null;
+  }, [mk(1)]);
+  const sent = () => { const raw = pg.__ai.at(-1) || '{}'; return { len: raw.length, text: (JSON.parse(raw).text || '').length, task: JSON.parse(raw).task }; };
+  /* The message opened in full: what OPENED holds is what Summarize and
+     Translate send. 100 000 characters, a long newsletter, with quotes and
+     line breaks that JSON spells as two and control characters as six. */
+  await pg.evaluate(async () => {
+    const id = 'me@example.com_1';
+    go('inbox'); openMail(id);
+    await new Promise((r) => setTimeout(r, 300));
+    OPENED.set(id, { text: ('Dear reader, "news" of the week.\n\u0001\u0002 ').repeat(3000).slice(0, 100_000), truncated: false, attachments: [] });
+    await summarizeMessage(id);
+  });
+  let s = sent();
+  const summary = await pg.evaluate(() => document.querySelector('#md-summary .md-ai-text')?.textContent);
+  check(s.task === 'summarize' && s.text <= PAGE_TEXT && s.text > 12_000 && s.len < RELAY_BODY && summary === 'A short summary.',
+    `Summarize on a 100 000-character message sends ${s.text} characters (${s.len} in all, under ${RELAY_BODY}), and shows the answer: ${JSON.stringify(summary)}`);
+  answer = { body: { text: 'Liebe Leser', cut: true, used: 0.1 } };
+  await pg.evaluate(() => translateMessage('me@example.com_1'));
+  s = sent();
+  const bar = await pg.evaluate(() => document.querySelector('.md-trbar span')?.textContent);
+  check(s.task === 'translate' && s.text <= PAGE_TEXT && s.len < RELAY_BODY && /only the start of this long message/.test(bar || ''),
+    `Translate sends ${s.text} characters (${s.len} in all) and says only the start was translated: ${JSON.stringify(bar)}`);
+
+  /* A briefing the relay could not finish keeps every flag, and says why.
+     Twenty-five messages of quotes would be over 80 000 characters as JSON;
+     the oldest are left out until the request fits. */
+  const many = Array.from({ length: 25 }, (_, i) => mk(10 + i, { body: '"'.repeat(3000), subject: '"'.repeat(400), preview: '"' }));
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    __mock.refresh = null;
+    for (const m of S.messages) if (m.uid >= 10) m.flag = { task: 'Old flag ' + m.uid, due: null, important: false, at: 1 };
+  }, many);
+  answer = { status: 502, body: { error: 'The briefing was cut short. Try again.', reason: 'cut', used: 0.1 } };
+  await pg.evaluate(async () => { openAssist(); await runAIBrief(); });
+  const raw = pg.__ai.at(-1) || '{}', asked = JSON.parse(raw);
+  const after = await pg.evaluate(() => ({ flags: S.messages.filter((m) => m.uid >= 10 && m.flag && /^Old flag/.test(m.flag.task)).length,
+    said: document.querySelector('#as-out')?.textContent || '' }));
+  check(asked.task === 'tasks' && raw.length < RELAY_BODY && asked.messages.length >= 15 && asked.messages.length < 26 && asked.messages.every((m) => m.text.length <= 1500),
+    `the briefing request fits (${raw.length} characters, ${asked.messages.length} messages)`);
+  check(after.flags === 25 && /The briefing was cut short\. Try again\./.test(after.said) && /Flags from earlier briefings are kept/.test(after.said),
+    `a briefing cut short keeps all 25 flags and says so: ${JSON.stringify({ flags: after.flags, said: after.said.slice(0, 160) })}`);
   await pg.close();
 }
 
