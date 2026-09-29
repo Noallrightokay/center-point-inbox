@@ -269,19 +269,9 @@ export const LIVE_STATUSES = ['active', 'trialing', 'past_due'];
 
 const entitled = (status) => LIVE_STATUSES.includes(String(status || '').toLowerCase());
 
-/* The user's plan, read from the subscriptions table the Stripe webhook
-   maintains. No live subscription is no plan — not a lesser one. */
-export async function planForUser(sb, email) {
-  if (!sb || !email) return null;
-  const { data } = await sb.from('subscriptions')
-    .select('plan,status').eq('email', String(email).toLowerCase()).maybeSingle();
-  if (!data) return null;
-  if (!entitled(data.status)) return null;
-  return PLANS[data.plan] ? data.plan : 'base';
-}
-
-/* The plan and everything bought alongside it. Separate from planForUser so the
-   existing callers, which only ask "which tier", keep their shape. */
+/* The plan and everything bought alongside it, read from the subscriptions
+   table the Stripe webhook maintains. No live subscription is no plan — not a
+   lesser one. */
 export async function entitlementsForUser(sb, email) {
   if (!sb || !email) return { plan: null, domainAddons: 0 };
   const { data } = await sb.from('subscriptions')
