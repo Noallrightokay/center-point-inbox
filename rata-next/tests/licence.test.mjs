@@ -8,7 +8,10 @@
    paying customer their licence is fake is a support call you do not recover
    from. */
 import { startServer, makeChecker } from './helpers.mjs';
+import * as licence from '../lib/licence.js';
 import { generateKeys, issue, check, explain, LICENCE_DAYS } from '../lib/licence.js';
+
+const { RENEW_GRACE_DAYS, renewable } = licence;
 
 export default async function run(state) {
   const check_ = makeChecker(state);
@@ -80,6 +83,19 @@ export default async function run(state) {
 
     check_(check(t, keys.publicKey, now + 29 * 86400 * 1000).ok,
       'a day before expiry it still works, offline, with no server involved');
+
+    /* Renewable while expired no more than RENEW_GRACE_DAYS: the boundary
+       itself still renews, a second past it does not. */
+    check_(typeof renewable === 'function', 'lib/licence.js decides it in one place (renewable)');
+    if (typeof renewable === 'function') {
+      const exp = check(t, keys.publicKey, now).licence.exp * 1000;
+      const at = (ms) => renewable(check(t, keys.publicKey, ms), ms);
+      check_(at(now), 'a current licence is renewable');
+      check_(at(exp + 1000), 'one that expired a second ago is');
+      check_(at(exp + RENEW_GRACE_DAYS * 86400e3), `one that expired exactly ${RENEW_GRACE_DAYS} days ago is`);
+      check_(!at(exp + RENEW_GRACE_DAYS * 86400e3 + 1000), `one that expired ${RENEW_GRACE_DAYS} days and a second ago is not`);
+      check_(!renewable(check(junk, keys.publicKey, later), later), 'and a forged one never is');
+    }
   }
 
   console.log('\n— issuing needs a key, and a plan —');
@@ -129,10 +145,29 @@ export default async function run(state) {
          would mean the only licences that can be renewed are the ones that did
          not need it. Without a database configured the answer stops at "not
          configured", which still proves the signature check let it through. */
-      const mine = issue({ email: 'buyer@example.com', plan: 'pro', days: 30, now: Date.UTC(2020, 0, 1) }, keys.privateKey);
+      const DAY = 86400e3;
+      const lapsed = (daysAgo, slack) => issue({ email: 'buyer@example.com', plan: 'pro', days: 30,
+        now: Date.now() - (daysAgo + 30) * DAY + slack }, keys.privateKey);
+      const mine = lapsed(10, 0);
       const expired = await post(mine);
       check_(!/could not be read/.test(expired.message || ''),
         `an expired licence is accepted for renewal rather than dismissed: ${JSON.stringify(expired.error || expired.message)}`);
+
+      /* But not one of any age: a token copied off a machine, or shared,
+         would otherwise renew for as long as the subscription lives. Past
+         RENEW_GRACE_DAYS the customer signs in at mailrata.org for a new
+         one, and the database is never asked. */
+      check_(RENEW_GRACE_DAYS === 90, `renewal takes a licence expired up to ${RENEW_GRACE_DAYS} days ago`);
+      const inside = await post(lapsed(RENEW_GRACE_DAYS, 60e3));
+      check_(!inside.reason && /not configured/.test(inside.error || ''),
+        `expired ${RENEW_GRACE_DAYS} days less a minute ago: still renewed (reaches the database): ${JSON.stringify(inside)}`);
+      const outside = await post(lapsed(RENEW_GRACE_DAYS, -60e3));
+      check_(outside.licensed === false && outside.reason === 'too-old' && !outside.licence,
+        `expired ${RENEW_GRACE_DAYS} days and a minute ago: refused: ${JSON.stringify(outside)}`);
+      check_(/sign in at mailrata\.org/i.test(outside.message || ''),
+        `saying where to get a new one: ${JSON.stringify(outside.message)}`);
+      const ancient = await post(issue({ email: 'buyer@example.com', plan: 'pro', days: 30, now: Date.UTC(2020, 0, 1) }, keys.privateKey));
+      check_(ancient.reason === 'too-old', `a licence from 2020 is refused: ${JSON.stringify(ancient.reason)}`);
     } finally { await s.stop(); }
   }
 

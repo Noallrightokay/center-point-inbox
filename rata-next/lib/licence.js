@@ -38,6 +38,25 @@ const un64 = s => Buffer.from(s, 'base64url');
    cancellation stops mattering within a billing cycle or two. */
 export const LICENCE_DAYS = 30;
 
+/* How long after it expired a licence may still renew itself.
+
+   Renewal takes the old licence as the credential, so without a limit a
+   token that leaked long ago (an old backup, a pasted screenshot) would
+   renew for as long as the subscription lives. Ninety days covers a laptop
+   left in a drawer over a summer; past that the customer signs in at
+   mailrata.org for a new key. A copy that keeps renewing inside the window
+   is not stopped by this: nothing can revoke a licence yet. */
+export const RENEW_GRACE_DAYS = 90;
+
+/* Whether what `check` returned may be renewed: a genuine licence, current or
+   expired no more than RENEW_GRACE_DAYS ago (the boundary itself included). */
+export function renewable(seen, now = Date.now()) {
+  if (!seen || !seen.licence) return false;
+  if (seen.ok) return true;
+  if (seen.reason !== 'expired' || typeof seen.expiredAt !== 'number') return false;
+  return now - seen.expiredAt * 1000 <= RENEW_GRACE_DAYS * 86400 * 1000;
+}
+
 export function generateKeys() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   return {

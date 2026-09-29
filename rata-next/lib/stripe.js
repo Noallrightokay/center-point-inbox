@@ -71,6 +71,15 @@ export function planForPrice(priceId, env = process.env) {
    can never disagree about who has paid. */
 export { LIVE_STATUSES };
 
+/* A checkout's payment_status that means the money is in: "paid", or
+   "no_payment_required" (a full discount, a free trial). An absent one is
+   treated as unpaid. */
+const PAID = ['paid', 'no_payment_required'];
+
+/* What a checkout still waiting for its money is recorded as: Stripe's word
+   for a subscription whose first payment has not cleared. Not live. */
+export const PENDING = 'incomplete';
+
 /* Whether a checkout, keyed by address, would take over a live subscription
    that belongs to a different Stripe customer.
 
@@ -111,19 +120,26 @@ export function rowForEvent(event, env = process.env) {
     ? new Date(event.created * 1000).toISOString()
     : null;
 
-  if (type === 'checkout.session.completed') {
-    /* The only event that reliably carries the buyer's email, which is the key
+  if (type === 'checkout.session.completed' || type === 'checkout.session.async_payment_succeeded') {
+    /* The only events that reliably carry the buyer's email, which is the key
        the app looks them up by. */
     const email = (o.customer_details?.email || o.customer_email || '').trim().toLowerCase();
     if (!email) return null;
-    if (o.payment_status && o.payment_status !== 'paid' && o.status !== 'complete') return null;
+    if (o.status && o.status !== 'complete') return null;
+    /* A checkout paid by a delayed method (SEPA, ACH, Boleto) completes
+       before the money arrives, with payment_status "unpaid". It is recorded,
+       so the customer's later subscription events find their row, but as
+       Stripe's own "incomplete", which is not entitled (LIVE_STATUSES):
+       async_payment_succeeded, or the subscription turning active, makes it
+       live. async_payment_failed needs nothing, since it never was. */
+    const paid = PAID.includes(o.payment_status);
     return {
       by: 'email',
       email,
       stripe_customer: typeof o.customer === 'string' ? o.customer : (o.customer?.id || null),
       plan: planForPrice(priceOf(o, env), env) || 'base',
       domain_addons: domainAddonsOf(o, env),
-      status: 'active',
+      status: paid ? 'active' : PENDING,
       event_at: at,
     };
   }
