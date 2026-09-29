@@ -460,7 +460,7 @@ editor (safe to re-run). Check that `ai_usage` exists and that
 **[owner] Stripe in test mode.** Follow STRIPE-SETUP.md: Base $12.99 and
 Pro $23.99 monthly, payment links redirecting to
 `https://mailrata.org/account?checkout=success`, a webhook with exactly the
-three events, and the customer portal. **No domain add-on.**
+five events in STRIPE-SETUP.md §3, and the customer portal. **No domain add-on.**
 
 #### D4
 **Deploy rata-next.** Who: [owner], or an agent through the Hostinger
@@ -821,12 +821,153 @@ URLs in the Text view are cut for display but open whole. Nothing
 changes in the formatted (HTML) view. Harness checks with a reply that
 has all three. Done when: they pass. Hot file: `app.html` (text view).
 
+#### Bug cards from the pre-launch audit (2026-09-29)
+Ten finders read the MVP journey at 0.1.42 and reported 47 findings. The
+PM checked each group below against the code before writing it here;
+finder text is in the PM's notes, not the repository. Each card is one
+branch and one PR, with a failing test first where the code allows.
+
+##### BUG-L
+**The licence renews while RATA is open, and a bad paste never costs a
+good licence.** Who: agent (bridge + shell + interface) · Needs: H7 and
+H8 merged (same files) · Found: `renew()` runs only from
+`settleLicence()`, once at launch (`bridge.js`), and the page never reads
+a refresh's `unlicensed` answer, so a copy started more than a week
+before expiry and left open past it stops fetching mail in silence, and
+its IDLE connections close (`watchable`). Also: the licence box says RATA
+"will renew itself" but never tries; a renewal the app cannot verify
+replaces a still-valid token on disk (`renew()` stores it before
+checking); a key pasted with a line break inside is "could not be read";
+a junk paste replaces an expired but renewable token; the AI relay's
+`expired` answer is shown instead of renewing. Do: run the renewal path
+on a timer (every six hours, beside the update check) and whenever a
+refresh or the relay answers `unlicensed`/`expired`, then fire
+`rata-standing`; keep a new token only if it verifies and keep the old
+one otherwise (in Rust, `set_licence`); strip all whitespace from a
+pasted or presented key (app, and `/api/licence/renew` on the site);
+refuse to replace a renewable stored token with a malformed or forged
+one; the box retries on `online` and has **Try again**. Harness checks
+for each, with the fake backend's clock. Done when: those pass and a
+licence left open across its expiry renews with no relaunch.
+
+##### BUG-S
+**From paying to the key on `/account`, without a dead end.** Who:
+agent (website) · Needs: H1 merged (same pages) · Found: in the common
+event order (`customer.subscription.created` before the checkout) the
+subscription event gets 409 and the plan lands only on Stripe's retry,
+hours later in test mode, while `/account` waits 20 s and then says the
+payment "has not reached us yet" beside two buy buttons; `/api/licence`
+cannot tell a paid `incomplete` row from none. The signed-out
+"Create an account" link on `/account` drops `next=account` and
+`checkout=success`. The home page's and `/account`'s buy links carry no
+`prefilled_email`/`client_reference_id` although the licence is keyed on
+the email. Settings offers a live Base customer "Switch to Pro" through
+the Pro Payment Link, which makes a second Stripe customer that the
+webhook refuses as a conflict: a double charge that never applies.
+`customer.subscription.created` at the same second as an `updated`
+passes the ordering guard on equality and can lower a live row to
+`incomplete`. Copy: auth.html promises "connect your email straight
+after"; `/account` says changing plan or a reissue stops a leaked key,
+which nothing does (review row 15). Do: `/api/licence` answers `pending`
+for an `incomplete` row that has a customer, and `/account` keeps
+"Setting up your licence" (no buy buttons) for it, polling longer; the
+webhook stores a subscription event that finds no row (a
+`pending_subscriptions` row keyed by customer, applied when the checkout
+writes the row) instead of relying on the retry; signed-out links carry
+`next=account` and the just-paid state; every buy link built for a
+signed-in person carries both parameters; a live plan's Settings shows
+only the portal for switching; `created` uses a strict guard; the two
+sentences say what is true. Rewrite LAUNCH.md §6 check 6 to match. Tests for each in `rata-next/tests`. Done when:
+those pass and a checkout whose subscription event arrives first shows
+the key within the page's wait, with no Stripe retry.
+
+##### BUG-M
+**Delete, sign-in errors and sending on real providers.** Who: agent
+(engine) · Needs: H7 merged (`imap.rs`) · Found: Trash is found only by
+the `\Trash` attribute, with no name fallback as Sent, Spam, Drafts and
+Archive have, so on a server that declares nothing Delete is refused
+while the page has already hidden the message for good (`S.gone`); a
+refused password at link time drops the server's own sentence (Gmail's
+"IMAP access is disabled for your domain" becomes "use an app
+password"); any network failure at a known provider (no DNS, blocked
+port, "too many simultaneous connections") asks a Gmail customer for a
+server address (`NeedsHost`); sending tries 465 first with 10 s per
+address, so a Microsoft or iCloud send waits a minute before 587; a
+Zoho EU or India custom domain is sent to `imap.zoho.com`. Do: a
+`TRASH_NAMES` exact-name fallback ("Trash", "Deleted Items", "Deleted
+Messages", "Bin", "INBOX.Trash"), and the page restores a message when
+its trash is refused; `refusal` appends "The server said: …" (already
+through `said`); a table or known-MX provider that could not be reached
+says so and never asks for a host; known submission hosts get their
+documented port first, and the port that worked is remembered per
+mailbox; Zoho's regional hosts from the MX. Tests on the scripted
+server, loopback for Trash by name on GreenMail. Done when: those pass.
+
+##### BUG-A
+**The AI relay on long mail and long answers.** Who: agent (website +
+interface) · Needs: nothing · Found: Summarize and Translate send an
+opened message whole, and the route refuses any body over 80 000
+characters before it cuts the text, so the longest mail (a newsletter
+runs to 100 000) gets "more text than RATA sends at once"; a translation
+stopped at `max_tokens` is returned as complete; a briefing stopped at
+`max_tokens` parses as no tasks, so the page clears every flag and says
+all is clear; a deploy without `LICENCE_PUBLIC_KEY` tells licensed
+customers they are not licensed. Do: the page cuts to a little over
+`LIMITS.text` before sending; the route reads `stop_reason` and sets
+`cut` for a translation and answers an error for a cut briefing, and
+the page keeps existing flags then; `no-public-key` answers "AI is not
+switched on for RATA yet." with a server log line. Tests in
+`rata-next/tests/ai.test.mjs` and a harness check. Done when: those pass.
+
+##### BUG-R
+**Release pipeline and update feed.** Who: agent (CI + shell) · Needs:
+nothing · Found: `release.yml` builds and publishes with no test having
+passed, and `main` has no branch protection; the update feed is rebuilt
+from this release's assets only, and the plugin answers
+`TargetsNotFound` for a platform missing from it, which `update.rs`
+shows as "cannot update itself"; `verify-release.sh` expects "beta" in
+every title, wrong for 1.x; Desktop CI does not run when
+`rata-next/package*.json` changes (the harness uses its Playwright), and
+neither workflow runs when only its own file changes. Do: a `gate` job
+in `release.yml` (engine and shell tests, `sync-ui.sh`, the harness)
+that `create-release` and `installers` need; the feed keeps a platform's
+previous entry when this release has none for it; `TargetsNotFound` is
+"no update for this computer yet"; the title check follows the
+version; the path filters. Done when: the workflow lints (`actionlint`),
+the shell tests pass, and a dry run of the feed step on a fixture keeps a
+missing platform.
+
+##### BUG-D
+**Words that are not true yet, on the site and in the docs.** Who:
+agent (website copy + docs) · Needs: H1 and H2 merged (`index.html`,
+BETA.md) · Found: `manifest.json` (the install dialog's name) still
+sells texts, Slack, Discord and an audit trail with em dashes and the
+old colours; `app/layout.js` metadata is the old pitch; `plan.js` still
+promises Pro "your own @mailrata.org addresses", which do not exist;
+the home page's privacy column says only one message reaches the relay
+(the briefing sends up to 25) and that the site keeps only email, plan
+and key (it keeps synced preferences too); "Cancel any time from your
+account" points at a page with no cancel; the site's Linux note omits
+making the AppImage executable; the macOS first-open ("right-click,
+Open") no longer works on macOS 15 for an unsigned app (System Settings,
+Privacy & Security, Open Anyway); `desktop/rata-app/README.md` says
+there is no OAuth and lists six commands; STRIPE-SETUP names the wrong
+file for `LIVE_STATUSES`; VPS-MIGRATION installs Node 20; SMOKE.md is
+written for 0.1.41; `database.sql` names an "Edge Function" writer.
+Do: make each true, with a test for the manifest and the plan blurb
+beside `app.test.mjs`'s old-feature checks. Done when: the suite is
+green and each named line reads true.
+
+Not yet read by a finder that finished: the page-to-Rust contract for
+every mail action (the finder stopped at the usage limit). It runs again
+as an audit card after wave 5b.
+
 #### Waves
 - **5a** (in parallel, no `app.html` region shared): H1, H2, H7, H8.
 - **5b**: H3, then H6 and H9 (H6 first); H12 after H9.
 - **5c**: H4, then H5 and H11; H10 last, alone.
-- BUG cards from the 2026-09-29 pre-launch audit slot in wherever their
-  region is free. [G2](#g2) releases 0.1.43 after 5a and 5b, and 0.1.44
+- BUG cards: BUG-A and BUG-R now, beside 5a; BUG-L and BUG-M after H7
+  and H8; BUG-S after H1; BUG-D after H1 and H2. [G2](#g2) releases 0.1.43 after 5a and 5b, and 0.1.44
   after 5c, retaking the screenshots (the composer and reading pane
   change visibly).
 
