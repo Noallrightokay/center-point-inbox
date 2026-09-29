@@ -150,6 +150,14 @@ const MOCK = ({ licensed, ms }) => {
           throw { email: args.email, kind: 'needs-confirmation', error: name + ' is a program (.exe) named to look like a document. RATA saves it only after you say so.' };
         return name ? { path: '/home/me/Downloads/' + name, name, size: 4 } : { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760 };
       }
+      /* F1: as core::save_draft. A new UID for every save; the copy before
+         is "replaced" whenever the page names one. */
+      case 'save_draft': {
+        if (M.draftNoPlace) return { outcome: 'no-place', error: args.draft.from + ' has no Drafts folder, so RATA keeps this draft on this computer only.' };
+        if (M.draftFails) throw { email: args.draft.from, kind: 'net', error: 'The draft was not saved to Drafts in ' + args.draft.from + ' — imap.example.com could not be reached. It is kept here and will be saved again.' };
+        M.draftUid = (M.draftUid || 100) + 1;
+        return { outcome: 'saved', id: args.draft.from + '_drafts_' + M.draftUid, uid: M.draftUid, uidvalidity: 7, draftId: args.draftId, prior: args.prior ? 'replaced' : 'none' };
+      }
       case 'send_mail':
         M.sent = M.sent || [];
         M.sent.push(args.draft);
@@ -365,6 +373,197 @@ console.log('\n— drafts begun elsewhere are finished here —');
   const after = await pg.evaluate(() => ({ ids: S.messages.filter((m) => m.draft).map((m) => m.id), gone: !!(S.gone || {})['me@example.com_drafts_23'], open: document.querySelector('#mail-detail').classList.contains('open'), sel: selMail }));
   check(before.join() === 'me@example.com_drafts_23,me@example.com_drafts_24', `a refresh without the Drafts list removes nothing: ${JSON.stringify(before)}`);
   check(after.ids.join() === 'me@example.com_drafts_24' && !after.gone && !after.open && after.sel === null, `a draft no longer in Drafts leaves, and its open pane closes: ${JSON.stringify(after)}`);
+  await pg.close();
+}
+
+console.log('\n— drafts written here are saved to the mailbox (F1) —');
+{
+  const pg = await open(true);
+  const dialogs = [];
+  pg.on('dialog', (d) => dialogs.push(d.message()));
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const saves = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'save_draft').map(([, a]) => a));
+  const acts = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => ({ folder: a.folder, uids: a.uids, action: a.action })));
+  const drafts = () => pg.evaluate(() => S.messages.filter((m) => m.draft).map((m) => m.id).sort());
+  const reset = () => pg.evaluate(() => { __mock.calls = []; window.__toasts = []; });
+  const settle = () => pg.waitForTimeout(300);
+  /* A long interval while the close checks run, so the timer stays out of them. */
+  await pg.evaluate(() => { window.__RATA_DRAFT_EVERY = 60e3; newDraft(); openCompose(); });
+  await pg.fill('#cmp-to', 'bo@example.org');
+  await pg.fill('#cmp-subj', 'Plan');
+  await pg.fill('#cmp-body', 'Half a thought');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  let s = await saves();
+  let t = await toasts(pg);
+  check(s.length === 1 && s[0].draft.from === 'me@example.com' && s[0].draft.to === 'bo@example.org' && s[0].draft.subject === 'Plan' && s[0].draft.body === 'Half a thought'
+    && UUID.test(s[0].draftId) && s[0].rev === 1 && s[0].prior === null, `closing a draft with something in it saves it to Drafts once: ${JSON.stringify(s)}`);
+  check(t.filter((x) => x === 'Saved to Drafts').length === 1, `and says so once: ${JSON.stringify(t)}`);
+  const id1 = s[0].draftId;
+  const listed = await pg.evaluate(() => {
+    go('inbox'); mailFilter = 'drafts'; renderMailFilters(); renderMail();
+    const m = S.messages.find((x) => x.id === 'me@example.com_drafts_101');
+    return { rows: [...document.querySelectorAll('#mail-scroll .mail-row .m-from')].map((e) => e.textContent), m: m && { draft: m.draft, uid: m.uid, draftId: m.draftId, subj: m.subj } };
+  });
+  check(listed.m && listed.m.draft && listed.m.uid === 101 && listed.m.draftId === id1 && listed.rows.includes('Draft to bo@example.org'),
+    `it is listed under Drafts as the mailbox now has it: ${JSON.stringify(listed)}`);
+
+  await reset();
+  await pg.click('#compose-btn');
+  await pg.click('#cmp-close');
+  await settle();
+  check((await saves()).length === 0 && (await toasts(pg)).length === 0, 'closing again with nothing new saves nothing and says nothing');
+
+  await pg.click('#compose-btn');
+  await pg.fill('#cmp-body', 'Half a thought, and the rest of it');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  s = await saves();
+  let d = await drafts();
+  check(s.length === 1 && s[0].draftId === id1 && s[0].rev === 2 && s[0].prior && s[0].prior.uid === 101 && s[0].prior.uidvalidity === 7 && s[0].prior.draft_id === id1,
+    `saving again names the copy before, to replace it: ${JSON.stringify(s)}`);
+  check(d.join() === 'me@example.com_drafts_102' && !(await pg.evaluate(() => !!(S.gone || {})['me@example.com_drafts_101'])),
+    `the copy before leaves the list, not as a deletion: ${JSON.stringify(d)}`);
+
+  /* A refresh does not count RATA's own save as read yet, and takes it in as
+     the same draft when it comes back. */
+  const known = await pg.evaluate(async () => {
+    __mock.calls = [];
+    __mock.refresh = { messages: [{ id: 'me@example.com_drafts_102', folder: 'drafts', acct: 'me@example.com', acct_label: 'Example', from_name: '', from_addr: 'me@example.com',
+      to_name: 'bo@example.org', to_addr: 'bo@example.org', to_all: ['bo@example.org'], cc: [], bcc: [], in_reply_to: '', subject: 'Plan', preview: 'p', body: 'Half a thought, and the rest of it',
+      ts: Date.now(), unread: false, starred: false, uid: 102, uidvalidity: 7, message_id: '', reply_to: '', truncated: false, attachments: [], html: false, draft_id: S.messages.find((m) => m.uid === 102).draftId }],
+      flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: ['me@example.com_drafts_102'] }] };
+    await serverSync('mail', true);
+    const k = __mock.calls.find(([c]) => c === 'refresh_mail')[1].known || [];
+    const m = S.messages.filter((x) => x.id === 'me@example.com_drafts_102');
+    return { drafts: k.filter((x) => x.folder === 'drafts'), n: m.length, own: m[0] && !!m[0].ownDraft };
+  });
+  check(known.drafts.length === 0 && known.n === 1 && !known.own, `a refresh asks for it, and it stays one draft: ${JSON.stringify(known)}`);
+
+  /* Every two minutes while it is being written, when it has changed. */
+  await pg.evaluate(() => { window.__RATA_DRAFT_EVERY = 250; });
+  await pg.click('#compose-btn');
+  await reset();
+  await pg.waitForTimeout(700);
+  check((await saves()).length === 0, 'the timer saves nothing that has not changed');
+  await pg.fill('#cmp-body', 'Half a thought, and the rest of it. And a PS.');
+  await pg.waitForTimeout(700);
+  s = await saves();
+  t = await toasts(pg);
+  check(s.length === 1 && s[0].prior && s[0].prior.uid === 102 && s[0].draft.body.endsWith('PS.') && t.length === 0,
+    `while writing, the timer saves the change once, without a word: ${JSON.stringify({ s: s.length, t })}`);
+
+  /* Sent: the copy in Drafts goes to the Trash. */
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(400);
+  let a = await acts();
+  d = await drafts();
+  check((await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').length)) === 1 && a.length === 1 && a[0].folder === 'drafts' && a[0].uids.join() === '103' && a[0].action === 'trash' && d.length === 0,
+    `once it is sent, its copy in Drafts goes to the Trash: ${JSON.stringify({ a, d })}`);
+  check((await saves()).length === 0, 'and nothing is saved after the send');
+
+  /* Discarded: the copy in Drafts goes to the Trash too. */
+  await pg.evaluate(() => { window.__RATA_DRAFT_EVERY = 60e3; newDraft(); openCompose(); });
+  await pg.fill('#cmp-to', 'cy@example.org');
+  await pg.fill('#cmp-subj', 'Maybe');
+  await pg.click('#cmp-close');
+  await settle();
+  await pg.click('#compose-btn');
+  await reset();
+  dialogs.length = 0;
+  await pg.click('#cmp-discard');
+  await settle();
+  a = await acts();
+  d = await drafts();
+  check(/moved to the Trash/.test(dialogs[0] || '') && a.length === 1 && a[0].folder === 'drafts' && a[0].uids.join() === '104' && a[0].action === 'trash' && d.length === 0,
+    `Discard asks, and moves RATA's copy to the Trash: ${JSON.stringify({ dialogs, a, d })}`);
+  await pg.click('#cmp-close');
+
+  /* Finishing a draft RATA saved (on this or another computer) saves over it. */
+  const other = '6b1f0c2d-8e3a-4f5b-9c7d-0a1b2c3d4e5f';
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_drafts_' + uid, folder: 'drafts', acct: 'me@example.com', acct_label: 'Example', from_name: 'Me', from_addr: 'me@example.com',
+    to_name: 'Bo Li', to_addr: 'bo@example.org', to_all: ['bo@example.org'], cc: [], bcc: [], in_reply_to: '', subject: 'S' + uid, preview: 'p', body: 'Draft ' + uid,
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: '', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: msgs.map((m) => m.id) }] };
+    await serverSync('mail', true);
+  }, [mk(50, { draft_id: other }), mk(51)]);
+  await pg.evaluate(() => openMail('me@example.com_drafts_50'));
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(200);
+  await pg.fill('#cmp-body', 'Draft 50, finished here');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  s = await saves();
+  a = await acts();
+  d = await drafts();
+  check(s.length === 1 && s[0].draftId === other && s[0].prior && s[0].prior.uid === 50 && s[0].prior.draft_id === other && a.length === 0 && !d.includes('me@example.com_drafts_50'),
+    `continuing a draft RATA saved restores its reference, and the next save replaces it: ${JSON.stringify({ s, a, d })}`);
+
+  /* A draft from another device, finished here: saved as RATA's own, and the
+     one it came from goes to the Trash, not deleted for good. */
+  await pg.evaluate(() => openMail('me@example.com_drafts_51'));
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(200);
+  await pg.fill('#cmp-body', 'Draft 51, finished here');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  s = await saves();
+  a = await acts();
+  d = await drafts();
+  check(s.length === 1 && UUID.test(s[0].draftId) && s[0].draftId !== other && s[0].prior === null && a.length === 1 && a[0].folder === 'drafts' && a[0].uids.join() === '51' && a[0].action === 'trash' && !d.includes('me@example.com_drafts_51'),
+    `a draft from elsewhere is saved as RATA's own and its old copy goes to the Trash: ${JSON.stringify({ s, a, d })}`);
+
+  /* A draft carrying files from its copy in Drafts: the save carries them,
+     and from then on they come from the copy just saved, since the one they
+     came from is gone. */
+  await pg.evaluate(async (m) => {
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: S.messages.filter((x) => x.draft).map((x) => x.id).concat([m.id]) }] };
+    await serverSync('mail', true);
+    openMail(m.id);
+  }, mk(52, { attachments: [{ index: 1, name: 'Q3 figures.pdf', mime: 'application/pdf', size: 245760 }] }));
+  await pg.waitForTimeout(200);
+  await pg.click('#md-continue');
+  await pg.waitForTimeout(300);
+  await pg.fill('#cmp-body', 'Figures attached');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  s = await saves();
+  const fwdNow = await pg.evaluate(() => CMP_FWD && { folder: CMP_FWD.folder, uid: CMP_FWD.uid, i: CMP_FWD.atts.map((a) => a.i) });
+  const newUid = await pg.evaluate(() => __mock.draftUid);
+  check(s.length === 1 && s[0].draft.forward && s[0].draft.forward.folder === 'drafts' && s[0].draft.forward.uid === 52 && s[0].draft.forward.indexes.join() === '1,2'
+    && fwdNow && fwdNow.folder === 'drafts' && fwdNow.uid === newUid && fwdNow.i.join() === '0,1',
+    `a draft's files are carried into the saved copy, and taken from it after: ${JSON.stringify({ fwd: s[0] && s[0].draft.forward, fwdNow })}`);
+  await pg.click('#compose-btn');
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(400);
+  const sentFwd = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => a.draft.forward)[0]);
+  check(sentFwd && sentFwd.uid === newUid && sentFwd.indexes.join() === '0,1', `and sent from there: ${JSON.stringify(sentFwd)}`);
+
+  /* No Drafts folder: kept here, said once, never asked again this session. */
+  await pg.evaluate(() => { __mock.draftNoPlace = true; newDraft(); openCompose(); });
+  await pg.fill('#cmp-subj', 'Nowhere to put it');
+  await reset();
+  await pg.click('#cmp-close');
+  await settle();
+  s = await saves();
+  t = await toasts(pg);
+  await pg.evaluate(() => { window.__RATA_DRAFT_EVERY = 200; });
+  await pg.click('#compose-btn');
+  await pg.fill('#cmp-body', 'Still nowhere');
+  await pg.waitForTimeout(600);
+  await pg.click('#cmp-close');
+  await settle();
+  const again = await saves();
+  check(s.length === 1 && t.some((x) => /no Drafts folder/.test(x)) && again.length === 1,
+    `a mailbox with no Drafts folder is asked once, and never again by the timer or a close: ${JSON.stringify({ n: again.length, t })}`);
   await pg.close();
 }
 

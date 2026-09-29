@@ -29,10 +29,10 @@ use async_imap::types::Flag;
 use futures::StreamExt;
 use mail_parser::MimeHeaders;
 use rata_mail::{
-    Account, Acted, Action, Address, Credential, Fetched, File, Folder, HostVerdict, Known, Listed,
-    Outgoing, Resolver, Sent, Source, Verify, Watched, act, check_literal, check_resolved,
-    fetch_newest, fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders, send, verify,
-    watch,
+    Account, Acted, Action, Address, Credential, DraftSaved, Fetched, File, Folder, HostVerdict,
+    Known, Listed, Outgoing, Prior, Resolver, Sent, Source, Verify, Watched, act, check_literal,
+    check_resolved, fetch_newest, fetch_older, fetch_uids, fetch_whole, imap::Whole, list_folders,
+    save_draft, send, verify, watch,
 };
 use tokio::net::TcpStream;
 
@@ -640,6 +640,96 @@ async fn send_with_an_attachment_cc_and_bcc_leaves_no_bcc_header() {
         assert_eq!(file.attachment_name(), Some("figures.bin"));
         assert_eq!(file.contents(), &data[..], "the file arrived intact");
     }
+}
+
+// ------------------------------------------------------------------- drafts
+
+/// A draft RATA saves twice leaves exactly one copy of it in Drafts, the
+/// newer, with its Bcc and RATA's own id — and a draft another client saved
+/// beside it is never touched.
+#[tokio::test]
+async fn a_draft_saved_again_leaves_one_copy_the_newer_and_nobody_else_s_is_touched() {
+    let r = resolver();
+    let me = user("draft");
+    let acct = account(&me);
+    let mut s = seed(&me).await;
+    s.append(
+        "Drafts",
+        Some("(\\Seen \\Draft)"),
+        Some(&date(0)),
+        message(&me, "bob@rata.test", "Someone else's draft", ""),
+    )
+    .await
+    .unwrap();
+    let (_, before) = uids(&mut s, "Drafts").await;
+    assert_eq!(before.len(), 1);
+
+    let id = "0f8b6a52-3c1e-4d7a-9b2e-5a4c3d2e1f00";
+    let mut msg = Outgoing {
+        from: Address::parse(&me).unwrap(),
+        from_name: None,
+        to: vec![Address::parse("bob@rata.test").unwrap()],
+        cc: vec![Address::parse("carol@rata.test").unwrap()],
+        bcc: vec![Address::parse("dave@rata.test").unwrap()],
+        subject: "Plan".into(),
+        body: "First go".into(),
+        in_reply_to: None,
+        attachments: vec![],
+    };
+    let first = match save_draft(&r, &acct, &msg, id, 1, None).await {
+        DraftSaved::Saved { saved, prior, .. } => {
+            assert_eq!(prior, Prior::None);
+            saved
+        }
+        other => panic!("first save failed: {other:?}"),
+    };
+    msg.body = "Second go".into();
+    let (second, key) = match save_draft(&r, &acct, &msg, id, 2, Some(&first)).await {
+        DraftSaved::Saved { saved, prior, id } => {
+            // Dovecot has UIDPLUS: removed for good, by UID alone.
+            assert_eq!(prior, Prior::Replaced);
+            (saved, id)
+        }
+        other => panic!("second save failed: {other:?}"),
+    };
+    assert!(second.uid > first.uid);
+    assert_eq!(second.uidvalidity, first.uidvalidity);
+    assert_eq!(second.draft_id, id);
+
+    // In Drafts now: the other client's draft and the newer copy, nothing else.
+    let (validity, now) = uids(&mut s, "Drafts").await;
+    assert_eq!(validity, second.uidvalidity);
+    assert_eq!(now, vec![before[0], second.uid]);
+    let got: Vec<_> = s
+        .uid_fetch(second.uid.to_string(), "BODY.PEEK[]")
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let raw = got[0].as_ref().unwrap().body().unwrap().to_vec();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(text.contains("X-RATA-Draft-Rev: 2\r\n"), "{text}");
+    assert!(text.contains(&format!("X-RATA-Draft: {id}\r\n")), "{text}");
+    assert!(text.contains("Second go"), "{text}");
+    let f = flags(&mut s, "Drafts", second.uid).await;
+    assert!(f.iter().any(|x| x.contains("Draft")), "{f:?}");
+    s.logout().await.unwrap();
+
+    // A refresh reads it back as RATA's own, under the id the save gave.
+    let fresh = fetch_newest(&r, &acct, 50, &[]).await.expect("sync");
+    let drafts: Vec<_> = fresh
+        .messages
+        .iter()
+        .filter(|m| m.folder == Folder::Drafts)
+        .collect();
+    assert_eq!(drafts.len(), 2, "{drafts:#?}");
+    let mine = drafts.iter().find(|m| m.uid == second.uid).unwrap();
+    assert_eq!(mine.id, key);
+    assert_eq!(mine.draft_id.as_deref(), Some(id));
+    assert_eq!(mine.bcc, ["dave@rata.test"]);
+    assert_eq!(mine.body.trim(), "Second go");
+    let theirs = drafts.iter().find(|m| m.uid == before[0]).unwrap();
+    assert_eq!(theirs.draft_id, None);
 }
 
 /// What the SMTP sink delivered to `who`, whole — waiting a little, since the

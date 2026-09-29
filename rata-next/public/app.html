@@ -3621,6 +3621,114 @@ function sigOf(acctId){
   return t?'-- \n'+t:'';
 }
 const sigForReply=acctId=>S.settings.sigReplies===false?'':sigOf(acctId);
+/* Drafts saved to the mailbox (F1). In the app, the composer's draft is
+   saved to its mailbox's Drafts folder when the composer is closed with
+   something new in it, and every two minutes while it is being written and
+   has changed (never on each keystroke), so a draft begun here is there on
+   the phone too. A draft gets an id of its own once (X-RATA-Draft, a UUID),
+   and each save replaces RATA's own copy before it: Rust removes that copy
+   for good only after proving it carries this id, and leaves anything else
+   where it is. A draft from another device that is finished here, or RATA's
+   copy in the mailbox a draft was moved away from, goes to the Trash once
+   the new copy is saved, as a sent draft does. A mailbox with no Drafts
+   folder keeps its drafts here, as before, and is not asked again this
+   session. CMP_SRV is one draft's side of this: a save that ends after the
+   composer has moved on still files its copy under the draft it was for. */
+const newSrv=()=>({draftId:null,ref:null,rec:null,rev:0,edits:0,saved:0,other:null,discarded:false});
+let CMP_SRV=newSrv();
+let DRAFT_SAVING=Promise.resolve(),SENDING=false,DRAFT_TIMER=null;
+const DRAFT_NOPLACE=new Set();
+const draftEvery=()=>Number(window.__RATA_DRAFT_EVERY)||2*60e3;
+function draftEdited(){CMP_SRV.edits++}
+/* A random UUID, lowercase: the only shape Rust takes as a draft's id. */
+function newDraftId(){
+  if(crypto.randomUUID)return crypto.randomUUID().toLowerCase();
+  const b=crypto.getRandomValues(new Uint8Array(16));b[6]=b[6]&15|64;b[8]=b[8]&63|128;
+  const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+const addrList=v=>[...new Set(String(v||'').split(',').map(a=>a.trim().toLowerCase()).filter(Boolean))];
+/* What the composer holds, taken at once: a save queued behind another
+   saves exactly this, whatever the composer holds by the time it runs. */
+function draftNow(){
+  const acct=S.linked.find(l=>l.id===$('#cmp-from').value);
+  return {srv:CMP_SRV,edits:CMP_SRV.edits,acct:acct&&acct.type==='mail'?acct:null,any:draftHasAnything(),
+    to:$('#cmp-to').value.trim(),cc:$('#cmp-cc').value.trim(),bcc:$('#cmp-bcc').value.trim(),subj:$('#cmp-subj').value,body:$('#cmp-body').value,
+    replying:(REPLYING&&REPLYING.messageId)||null,files:CMP_FILES.slice(),
+    fwd:CMP_FWD&&CMP_FWD.atts.length?Object.assign({},CMP_FWD,{atts:CMP_FWD.atts.slice()}):null};
+}
+/* Save the draft to Drafts if there is something new to save. `why` is
+   'close' (which may say so) or 'timer' (which never does). */
+function queueDraftSave(why){
+  if(!window.__RATA_NATIVE__||SENDING)return DRAFT_SAVING;
+  const d=draftNow();
+  if(!d.any||!d.acct||d.edits===d.srv.saved)return DRAFT_SAVING;
+  const email=String(d.acct.label).toLowerCase();
+  if(DRAFT_NOPLACE.has(email))return DRAFT_SAVING;
+  if(!d.srv.draftId)d.srv.draftId=newDraftId();
+  DRAFT_SAVING=DRAFT_SAVING.then(()=>saveDraft(d,email,why)).catch(()=>{});
+  return DRAFT_SAVING;
+}
+async function saveDraft(d,email,why){
+  const srv=d.srv;
+  if(srv.discarded||d.edits<=srv.saved||DRAFT_NOPLACE.has(email))return;
+  if(d.files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX)return;
+  const recOf=x=>x&&S.messages.find(m=>folderOf(m)==='drafts'&&mailEmailOf(m)===x.email&&m.uid===x.uid&&m.uidvalidity===x.uidvalidity);
+  /* RATA's copy in this mailbox is replaced; one in another (From changed)
+     is not this mailbox's to remove, so it goes to the Trash after. */
+  const ref=srv.ref&&srv.ref.email===email?srv.ref:null;
+  const moved=srv.ref&&!ref?recOf(srv.ref):null;
+  const rev=srv.rev+1;
+  let r;
+  try{
+    const attachments=[];
+    for(const f of d.files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
+    r=await apiFetch('/api/mail/draft/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      from:d.acct.label,to:d.to,cc:d.cc,bcc:d.bcc,subject:d.subj,body:d.body,inReplyTo:d.replying,attachments,
+      forward:d.fwd?{email:d.fwd.email,folder:d.fwd.folder||'inbox',uid:d.fwd.uid,uidvalidity:d.fwd.uidvalidity,indexes:d.fwd.atts.map(a=>a.i)}:null,
+      draftId:srv.draftId,rev,prior:ref?{uid:ref.uid,uidvalidity:ref.uidvalidity,draftId:ref.draftId}:null})});
+  }catch(e){r={ok:false,error:String(e&&e.message||e)}}
+  if(r&&r.noPlace){DRAFT_NOPLACE.add(email);if(why==='close')toast(r.error||'This mailbox has no Drafts folder, so the draft is kept here.');return}
+  if(!r||!r.ok){
+    const why2=(r&&r.error)||'no answer';
+    if(why==='close')toast(/Drafts/.test(why2)?why2:'Not saved to Drafts: '+why2+' It is kept here.');
+    return;
+  }
+  srv.rev=rev;srv.saved=Math.max(srv.saved,d.edits);
+  /* The copy before this one leaves the list once the server says it has
+     gone. Not through S.gone: the customer deleted nothing. */
+  if(ref&&['replaced','left-flagged','gone'].includes(r.prior)){const old=recOf(ref);if(old)S.messages=S.messages.filter(m=>m!==old)}
+  const toAll=addrList(d.to),cc=addrList(d.cc).filter(a=>!toAll.includes(a)),bcc=addrList(d.bcc);
+  const nFiles=d.files.length+(d.fwd?d.fwd.atts.length:0);
+  /* Filed as a refresh would file it, so it shows under Drafts at once;
+     ownDraft until a refresh has seen it there (heldKnown, absorbMail). */
+  const rec=mailRecord({id:r.id,folder:'drafts',draft:true,ch:'email',prov:'imap',acct:email,acctLabel:d.acct.label,fromName:'',fromAddr:email,
+    toName:toAll[0]||'',toAddr:toAll[0]||'',toAll,cc,bcc,inReplyTo:d.replying||'',subj:d.subj.trim()||'(no subject)',
+    prev:d.body.replace(/\s+/g,' ').trim().slice(0,90),body:d.body,ts:Date.now(),unread:false,starred:false,uid:r.uid,uidvalidity:r.uidvalidity,
+    messageId:'',replyTo:'',bodyV:2,truncated:nFiles>0,html:false,draftId:r.draftId,ownDraft:true,savedAt:Date.now()});
+  S.messages=S.messages.filter(m=>m.id!==rec.id);S.messages.push(rec);
+  srv.ref={email,uid:r.uid,uidvalidity:r.uidvalidity,draftId:r.draftId};srv.rec=rec;
+  const replaced=[srv.other,moved].filter(Boolean);srv.other=null;
+  if(CMP_SRV===srv){
+    CMP_DRAFT=rec;
+    /* Files carried from a copy in Drafts are in the one just saved now,
+       after the files picked here: the copy they came from may be gone. */
+    if(CMP_FWD&&CMP_FWD.folder==='drafts'&&d.fwd){
+      const atts=CMP_FWD.atts.map(a=>{const j=d.fwd.atts.indexOf(a);return j<0?null:Object.assign({},a,{i:d.files.length+j})}).filter(Boolean);
+      CMP_FWD={email,folder:'drafts',uid:r.uid,uidvalidity:r.uidvalidity,atts};
+    }
+    renderDraftHead();
+  }
+  if(replaced.length)dropMessages(replaced.map(m=>m.id));
+  save();renderMailFilters();renderMail();
+  if(why==='close')toast('Saved to Drafts');
+  if(replaced.length)await serverAct(replaced,'trash');
+}
+function startDraftTimer(){
+  if(!window.__RATA_NATIVE__||DRAFT_TIMER)return;
+  DRAFT_TIMER=setInterval(()=>{if(ov.classList.contains('open'))queueDraftSave('timer')},draftEvery());
+}
+function stopDraftTimer(){clearInterval(DRAFT_TIMER);DRAFT_TIMER=null}
 /* Everyone a draft is for, To and Cc together, for showing. */
 function draftTo(m){
   const all=[...(m.toAll||[]),...(m.cc||[])].map(a=>String(a).toLowerCase()).filter(Boolean);
@@ -3652,6 +3760,10 @@ async function continueDraft(m){
   if(atts.length)CMP_FWD={email:mailEmailOf(m),folder:'drafts',uid:m.uid,uidvalidity:m.uidvalidity,atts:atts.slice()};
   if(m.inReplyTo)REPLYING={id:null,messageId:m.inReplyTo};
   CMP_DRAFT=Object.assign({},m);
+  /* One RATA saved (F1) is saved over; one from elsewhere goes to the Trash
+     once this draft's own copy is saved. */
+  if(m.draftId){CMP_SRV.draftId=m.draftId;CMP_SRV.ref={email:mailEmailOf(m),uid:m.uid,uidvalidity:m.uidvalidity,draftId:m.draftId};CMP_SRV.rec=m}
+  else CMP_SRV.other=m;
   DRAFT={kind:'draft'};renderDraftHead();
   renderCmpFiles();liveScan();
   const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
@@ -3684,8 +3796,8 @@ function renderCmpFiles(){
   const fwd=CMP_FWD?CMP_FWD.atts:[];
   el.innerHTML=fwd.map((a,i)=>`<span class="cmp-file" title="From the message being forwarded"><span>↪ ${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><button type="button" data-rmfwd="${i}" aria-label="Remove ${esc(a.n)}">✕</button></span>`).join('')+CMP_FILES.map((f,i)=>`<span class="cmp-file"><span>${esc(f.name)}</span><span class="sz">${kb(f.size)}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
     +(total>ATTACH_MAX?`<span class="cmp-file" style="color:var(--red,#c33)">${kb(total)} in all — over the ${kb(ATTACH_MAX)} most providers accept</span>`:'');
-  el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);renderCmpFiles()});
-  el.querySelectorAll('[data-rmfwd]').forEach(b=>b.onclick=()=>{CMP_FWD.atts.splice(+b.dataset.rmfwd,1);renderCmpFiles()});
+  el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);draftEdited();renderCmpFiles()});
+  el.querySelectorAll('[data-rmfwd]').forEach(b=>b.onclick=()=>{CMP_FWD.atts.splice(+b.dataset.rmfwd,1);draftEdited();renderCmpFiles()});
   renderDraftHead();
 }
 async function fileBase64(f){
@@ -3694,7 +3806,7 @@ async function fileBase64(f){
   for(let i=0;i<u8.length;i+=0x8000)bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
   return btoa(bin);
 }
-$('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.target.files]);e.target.value='';renderCmpFiles()});
+$('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.target.files]);e.target.value='';draftEdited();renderCmpFiles()});
 /* The composer holds one draft: who it is from and to, its words, the files
    picked for it, the message it answers and the one it forwards. They belong
    together, so they are kept and dropped together. Closing the composer keeps
@@ -3704,7 +3816,7 @@ $('#cmp-file')&&($('#cmp-file').onchange=e=>{CMP_FILES=CMP_FILES.concat([...e.ta
    "Forwarded message" without the files, a reply without its thread, and a
    message to someone new with the last draft's subject and text. */
 function newDraft(){
-  REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;CMP_SIG=null;DRAFT={kind:'new'};
+  REPLYING=null;CMP_FILES=[];CMP_FWD=null;CMP_DRAFT=null;CMP_SIG=null;DRAFT={kind:'new'};CMP_SRV=newSrv();
   ['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).value='');showCc(false);showBcc(false);
   $('#cmp-from').value='';
   renderCmpFiles();
@@ -3718,11 +3830,18 @@ function openCompose(){
   if(sig){b.value='\n\n'+sig;CMP_SIG=sig}
   renderCmpFiles();liveScan();renderDraftHead();
   ov.classList.add('open');
+  startDraftTimer();
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
   $($('#cmp-to').value?'#cmp-body':'#cmp-to').focus();
   if(sig)b.setSelectionRange(0,0);
 }
-function closeCompose(){ov.classList.remove('open')}
+/* Closing keeps the draft here and, in the app, saves it to Drafts when
+   something in it is new (F1). Escape calls this with nothing open. */
+function closeCompose(){
+  const was=ov.classList.contains('open');
+  ov.classList.remove('open');stopDraftTimer();
+  if(was)queueDraftSave('close');
+}
 const withoutSig=v=>CMP_SIG?String(v).replace(CMP_SIG,''):String(v);
 function draftHasAnything(){
   return !!(REPLYING||CMP_FWD||CMP_DRAFT||CMP_FILES.length||DRAFT.kind!=='new'||['cmp-to','cmp-cc','cmp-bcc','cmp-subj'].some(id=>$('#'+id).value.trim())||!!withoutSig($('#cmp-body').value).trim());
@@ -3732,11 +3851,24 @@ function renderDraftHead(){
   $('#cmp-discard').hidden=!draftHasAnything();
 }
 /* Throws the draft away — its words, files and what it answers or forwards —
-   and leaves a blank message. */
-$('#cmp-discard').onclick=()=>{
-  if(!confirm(CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
+   and leaves a blank message. A copy RATA saved to Drafts (F1) goes to the
+   Trash with it; a draft from another device being finished here stays in
+   Drafts, as before. */
+$('#cmp-discard').onclick=async()=>{
+  const srv=CMP_SRV,saved=!!srv.rec;
+  if(!confirm(saved?'Discard this draft? It will be moved to the Trash, with anything attached to it.'
+    :CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
     :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
+  srv.discarded=true;
   newDraft();openCompose();
+  /* A save of it may still be on its way; its copy goes too. */
+  await DRAFT_SAVING;
+  const rec=srv.rec;if(!rec)return;
+  dropMessages([rec.id]);save();
+  if(selMail===rec.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
+  renderMailFilters();renderMail();
+  const problems=await serverAct([rec],'trash');
+  if(problems.length)toast('The draft is still in your Drafts folder — '+problems[0]);
 };
 /* Who a reply to everyone goes to (0.1.32): the sender (or where they asked
    replies to go) in To, and everyone else the message went to in Cc — but
@@ -3811,11 +3943,12 @@ function liveScan(){
   }
 }
 ['cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{clearTimeout(dlpTimer);dlpTimer=setTimeout(liveScan,220)}));
-['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',renderDraftHead));
+['cmp-to','cmp-cc','cmp-bcc','cmp-subj','cmp-body'].forEach(id=>$('#'+id).addEventListener('input',()=>{draftEdited();renderDraftHead()}));
 /* Changing From changes the signature to that mailbox's — only while the
    one RATA put there is still there as it was; words the customer changed
    are theirs. A draft being finished keeps its own. */
 $('#cmp-from').addEventListener('change',()=>{
+  draftEdited();
   if(DRAFT.kind==='draft')return;
   const b=$('#cmp-body'),acct=$('#cmp-from').value;
   const next=DRAFT.kind==='new'?sigOf(acct):sigForReply(acct);
@@ -3844,6 +3977,12 @@ $('#cmp-send').onclick=async()=>{
     return;
   }
   if(lastFindings.length){S.counters.warned++;await audit('dlp.warn',`Email to ${to} sent with ${lastFindings.length} warning(s)`)}
+  /* A save of this draft to Drafts may be on its way (F1). It lands first,
+     so the copy that goes to the Trash below is the latest, and no save
+     starts while this is sending. */
+  SENDING=true;
+  await DRAFT_SAVING;
+  try{
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===to.toLowerCase());
   const acctSel=prov;
   const acct=S.linked.find(l=>l.id===acctSel);
@@ -3891,6 +4030,7 @@ $('#cmp-send').onclick=async()=>{
     const problems=await serverAct([finished],'trash');
     if(problems.length)toast('Sent from '+mAcct.label+', but the draft is still in your Drafts folder \u2014 '+problems[0]);
   }
+  }finally{SENDING=false}
 };
 
 /* ---------------- CLOUD SYNC (Supabase) ---------------- */
@@ -4132,6 +4272,9 @@ function heldKnown(){
   const best=new Map();
   for(const m of S.messages){
     if(!m||m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
+    /* A draft RATA saved (F1) and no refresh has seen yet: counting it would
+       skip a draft another device saved just before it. */
+    if(m.ownDraft)continue;
     const folder=folderOf(m);if(!FOLDERS.includes(folder))continue;
     const email=mailEmailOf(m),k=email+'|'+folder,b=best.get(k);
     if(!b||m.uid>b.since)best.set(k,{email,folder,uidvalidity:m.uidvalidity,since:m.uid});
@@ -4221,10 +4364,13 @@ function localTwin(m){
    on another device (which arrives as a new draft), so it goes. Not through
    S.gone: nothing was deleted here. */
 function dropVanishedDrafts(list){
+  /* One RATA saved in the last few minutes (F1) may be newer than the
+     listing, which a refresh running meanwhile took before it was there. */
+  const fresh=m=>m.ownDraft&&Date.now()-(m.savedAt||0)<10*60e3;
   for(const d of (list||[])){
     if(!d||!d.email||!Array.isArray(d.ids))continue;
     const email=String(d.email).toLowerCase(),keep=new Set(d.ids);
-    S.messages=S.messages.filter(m=>!(folderOf(m)==='drafts'&&mailEmailOf(m)===email&&!keep.has(m.id)));
+    S.messages=S.messages.filter(m=>!(folderOf(m)==='drafts'&&mailEmailOf(m)===email&&!keep.has(m.id)&&!fresh(m)));
   }
   if(selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
 }
@@ -4304,6 +4450,9 @@ async function absorbMail(res,quiet){
        real mailbox, and another device may have changed it — and pick up the
        server reference that messages saved before v0.1.4 do not have. */
     const have=S.messages.find(x=>x.id===m.id);
+    /* A draft RATA saved (F1), now seen in Drafts: an ordinary draft from here on. */
+    if(have&&have.ownDraft){delete have.ownDraft;delete have.savedAt}
+    if(have&&m.draftId)have.draftId=m.draftId;
     if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));
     if(inInbox(m))added++;

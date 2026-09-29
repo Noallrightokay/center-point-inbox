@@ -51,8 +51,11 @@
       folder: named ? 'named' : m.folder || 'inbox',
       ...(named ? { box: m.folder.named } : {}),
       ...(sent ? { sent: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '' } : {}),
+      /* draftId (F1): the X-RATA-Draft id of a draft RATA itself saved, so
+         finishing it here saves over that copy rather than beside it. */
       ...(draft
-        ? { draft: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '', inReplyTo: m.in_reply_to || '', bcc: m.bcc || [] }
+        ? { draft: true, toName: m.to_name || m.to_addr || '', toAddr: m.to_addr || '', inReplyTo: m.in_reply_to || '', bcc: m.bcc || [],
+            ...(m.draft_id ? { draftId: m.draft_id } : {}) }
         : {}),
       /* Everyone it went to, which Reply all needs (0.1.32) and finishing a
          draft starts from. */
@@ -480,6 +483,37 @@
         return { ok: true, via: sent.via, messageId: sent.messageId || '' };
       } catch (e) {
         return { ok: false, error: String(e) };
+      }
+    },
+
+    /* The composer's draft into the mailbox's Drafts folder (F1), replacing
+       RATA's own copy saved before it (`prior`: uid, uidvalidity, draftId),
+       which Rust removes only once it has proved that copy carries this
+       draft's id. `noPlace`: the mailbox has no Drafts folder. */
+    async '/api/mail/draft/save'(opts) {
+      const b = body(opts);
+      const p = b.prior;
+      try {
+        const r = await invoke('save_draft', {
+          draft: {
+            from: b.from,
+            to: b.to || '',
+            cc: b.cc || '',
+            bcc: b.bcc || '',
+            subject: b.subject || '',
+            body: b.body || '',
+            inReplyTo: b.inReplyTo || null,
+            attachments: b.attachments || [],
+            forward: b.forward || null,
+          },
+          draftId: String(b.draftId || ''),
+          rev: Number(b.rev) || 1,
+          prior: p && p.uid && p.uidvalidity ? { uid: p.uid, uidvalidity: p.uidvalidity, draft_id: String(p.draftId || '') } : null,
+        });
+        if (r.outcome === 'no-place') return { ok: false, noPlace: true, error: r.error };
+        return { ok: true, id: r.id, uid: r.uid, uidvalidity: r.uidvalidity, draftId: r.draftId, prior: r.prior };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }
     },
 

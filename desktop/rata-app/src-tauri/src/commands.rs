@@ -16,11 +16,11 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
 
-use rata_mail::{Action, File, Folder, Message, OwnFolder};
+use rata_mail::{Action, DraftRef, File, Folder, Message, OwnFolder};
 
 use crate::core::{
-    AttachmentAt, Changed, Delivered, Draft, Forwarded, Found, Held, Linked, Opened, Problem, Rata,
-    Refreshed, Saved, Standing,
+    AttachmentAt, Changed, Delivered, Draft, Drafted, Forwarded, Found, Held, Linked, Opened,
+    Problem, Rata, Refreshed, Saved, Standing,
 };
 use crate::store::Mailbox;
 
@@ -122,27 +122,47 @@ pub fn watching(live: tauri::State<'_, crate::watch::Watching>) -> Vec<String> {
 /// Send one message. Everything the composer has comes as one draft.
 #[tauri::command]
 pub async fn send_mail(app: App<'_>, draft: Outbound) -> Result<Delivered, String> {
-    let attachments = draft
-        .attachments
-        .into_iter()
-        .map(|u| File {
-            name: u.name,
-            mime: u.mime,
-            data: rata_mail::words::base64(u.data.as_bytes()),
-        })
-        .collect();
-    app.send(Draft {
-        from: draft.from,
-        to: draft.to,
-        cc: draft.cc,
-        bcc: draft.bcc,
-        subject: draft.subject,
-        body: draft.body,
-        in_reply_to: draft.in_reply_to,
-        attachments,
-        forward: draft.forward,
-    })
-    .await
+    app.send(draft.into_draft()).await
+}
+
+/// Save the composer's draft to its mailbox's Drafts folder, replacing
+/// RATA's own copy saved before it (`prior`), which the engine removes only
+/// once it has proved it carries this `draft_id` (F1).
+#[tauri::command]
+pub async fn save_draft(
+    app: App<'_>,
+    draft: Outbound,
+    draft_id: String,
+    rev: u32,
+    prior: Option<DraftRef>,
+) -> Result<Drafted, Problem> {
+    app.save_draft(draft.into_draft(), &draft_id, rev, prior)
+        .await
+}
+
+impl Outbound {
+    fn into_draft(self) -> Draft {
+        let attachments = self
+            .attachments
+            .into_iter()
+            .map(|u| File {
+                name: u.name,
+                mime: u.mime,
+                data: rata_mail::words::base64(u.data.as_bytes()),
+            })
+            .collect();
+        Draft {
+            from: self.from,
+            to: self.to,
+            cc: self.cc,
+            bcc: self.bcc,
+            subject: self.subject,
+            body: self.body,
+            in_reply_to: self.in_reply_to,
+            attachments,
+            forward: self.forward,
+        }
+    }
 }
 
 /// The composer's message, as the page sends it.
