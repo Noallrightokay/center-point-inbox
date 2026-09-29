@@ -204,6 +204,36 @@ of them until it is redeployed. Check with
 Submitting the domain for the HSTS preload list is your call: it is hard to
 undo, and nothing here asks for it.
 
+### Before the go-live check: fill in the privacy policy and terms
+
+`public/privacy.html` and `public/terms.html` say what the code does, and
+leave out what only you know. Each unknown is written in exactly one of four
+forms; replace every one with the real value, in both pages, before the
+deploy you go live with:
+
+| Placeholder | What goes there |
+|---|---|
+| `[OWNER: legal entity name]` | the person or company that runs RATA |
+| `[OWNER: postal address]` | its postal address |
+| `[OWNER: contact email]` | the address customers write to about privacy and charges |
+| `[OWNER: governing law]` | whose law the terms are under, e.g. "the laws of England and Wales" |
+
+Check with `grep -n 'OWNER:' public/privacy.html public/terms.html`: no
+output. `scripts/live-check.sh` fails while either live page still shows
+`[OWNER:`, and `npm test` fails on any `[OWNER:` other than these four.
+
+Read both pages through before this, and have them reviewed if you can:
+they are written to be true, not as legal advice. Three statements rest on
+things only you can confirm. The privacy policy says backups are deleted
+90 days after they are made (the lifecycle rule in
+`infrastructure/backup/README.md`, step 1), and names Hostinger as the host
+and Anthropic and Stripe as the other companies that handle data. It says
+what RATA keeps of an AI request (nothing but the count) and points to
+Anthropic's own terms for what Anthropic keeps; if you have a
+zero-retention agreement with Anthropic, say so there. Refunds, price
+changes and a limit on liability are not in the terms: add them if you
+want them.
+
 ## 6. Smoke test on the live site
 
 Run `rata-next/scripts/live-check.sh` first (no credentials; it checks
