@@ -60,8 +60,12 @@ PEM either with real newlines or with them written as `\n`.
 The desktop app checks licences against a key compiled into it:
 
 ```bash
-RATA_LICENCE_PUBLIC_KEY="$(cat licence.pub)" cargo build --release
+cd desktop/rata-app && ./sync-ui.sh && cd src-tauri
+RATA_LICENCE_PUBLIC_KEY="$(cat licence.pub)" cargo build --release --features tauri/custom-protocol
 ```
+
+Releases get it from the GitHub secret `RATA_LICENCE_PUBLIC_KEY`, and
+`release.yml` stops before building if that secret is empty.
 
 A build without it refuses every licence. That is the safe direction to fail in
 — the alternative, treating a missing key as "no checking needed", turns a build
@@ -90,7 +94,11 @@ address.
 Because the old licence is the credential. It is signed with a key only the
 server holds, so presenting one proves it was issued here, and the address
 inside it is the address the subscription is keyed on. An expired licence is
-accepted deliberately: renewing an expired licence is the entire job.
+accepted deliberately, because renewing an expired licence is the entire job,
+but only up to `RENEW_GRACE_DAYS` (90, `lib/licence.js`) after it expired.
+An older one is refused with `reason: 'too-old'` before the database is
+asked, and the app shows the server's sentence: sign in at mailrata.org to
+get a new one. So a token that leaked long ago cannot be revived.
 
 The worst somebody with a stolen token can do is obtain a copy of a token they
 already have — the endpoint returns a licence for the address inside the licence
@@ -129,8 +137,13 @@ A determined customer can patch the binary. Every offline licence check can be
 removed by someone willing to edit the app, and no amount of cryptography
 changes that — the code runs on their computer.
 
-What this stops is the easy thing: sharing a token, editing `"plan":"base"` to
-`"pro"`, or setting the clock back. Those all fail. Someone prepared to patch
+What this stops is the easy thing: editing `"plan":"base"` to `"pro"`, or
+forging a token for another address. Those fail. Sharing a token does not:
+a copy works until it expires and renews like the original while the
+subscription is live (security review row 15, left as a business decision).
+Nor does setting the computer's clock back: the app checks the expiry
+against the system clock (`standing` in `core.rs`) and keeps no record of the latest
+time it has seen. Someone prepared to patch
 a binary was never going to pay, and defending against them costs real money
 and punishes the people who did.
 

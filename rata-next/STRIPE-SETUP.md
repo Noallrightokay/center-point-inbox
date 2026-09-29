@@ -138,9 +138,11 @@ have to build any of it.
    subscription carrying both Pro and the domain add-on can arrive in either
    order, and reading line one would have cleared the plan of a customer whose
    only mistake was buying something extra.
-4. The app reads that row. The **server** reads it too, through `planForUser`,
-   and that is what refuses an over-limit mailbox — so entitlement does not
-   depend on the browser being honest.
+4. The licence routes read that row (`entitlementsForUser` in `lib/plan.js`)
+   and sign its plan into the licence key that `/account` shows and the app
+   renews. The desktop app enforces the plan from that signed key (Base's
+   two-mailbox limit included), so entitlement does not depend on the
+   browser being honest, and a row that is no longer live gets no new key.
 5. Later changes arrive as subscription events. Those carry no email, so they
    are matched on the customer id stored in step 3.
 
@@ -149,8 +151,8 @@ extra domain sends a subscription with no add-on line, and that writes zero —
 skipping it would leave them entitled to a domain they stopped paying for.
 
 **A cancellation does not delete anyone's data.** Status goes to `canceled`,
-the plan clears, and linking a new mailbox stops. Mail already synced stays
-where it is.
+the plan clears, and the licence is not renewed, so the app stops at the end
+of its current 30 days. Mail already synced stays where it is.
 
 **A failed payment does not lock anyone out.** `past_due` is still entitled —
 a card that failed this morning should not cut off someone's mail while Stripe
@@ -179,7 +181,10 @@ the record, and that the live endpoint refuses a forged POST.
 
 ## Adding a plan later
 
-Add the product and price in Stripe, add `STRIPE_<NAME>` and
-`STRIPE_PRICE_<NAME>`, and add the tier to `PLANS` in `lib/plan.js` and `TIERS`
-in `app.html`. The webhook needs no change — it maps whatever price IDs the
-environment names.
+Add the product and price in Stripe and set `STRIPE_<NAME>` and
+`STRIPE_PRICE_<NAME>`. Then, in code: the tier in `PLANS` in `lib/plan.js`
+and `TIERS` in `app.html`; the price in `planForPrice` in `lib/stripe.js`,
+which compares each `STRIPE_PRICE_*` variable by name; the payment link in
+`PUBLIC_CONFIG` in `app/api/config/route.js`; and the plan in `plan_def` in
+`desktop/rata-app/src-tauri/src/licence.rs` (an app that does not know a
+plan treats it as unlimited, so ship that before selling it).

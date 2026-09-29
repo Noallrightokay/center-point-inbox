@@ -550,3 +550,166 @@ status 200, which is untidy, not unsafe.)
 - Not done: a packaged WebKit build. The frame was checked in Chromium, and
   CLAUDE.md records the same checks passing in the packaged WebKit build for
   0.1.12 and 0.1.14.
+
+## Part 3 (2026-09-29): code added since part 1
+
+Reviewer: a fresh agent session with no part in writing the code (card F4,
+part 3). Scope: what merged after part 1 (#68) and was not reviewed with it
+or with C2 (#67). That is drafts saved to the server (#78), disguised
+programs and marking downloads (#71, #74, #75), exact navigation, the store
+and SMTP replies (#77), and the website's checkout, renewal, AI cap,
+account deletion and browser banner (#65, #69, #72, #73, #77). Checked on
+`main` at `3f110ff`, then merged up to `01d40a7` (#80 and #81 touch none of
+it).
+
+**Result: no High.** Two Medium, five Low. No invariant in Part 4 of
+`docs/MVP-PLAN.md` is broken. A draft goes only to the customer's own IMAP
+server, the one permanent delete is held to RATA's own copy, and nothing
+new reaches mailrata.org. Nothing is fixed here. Every Medium and Low has a
+proposed patch below.
+
+| # | Area | Finding | Severity | Evidence | Proposed fix |
+|---|---|---|---|---|---|
+| P3-1 | Disguised programs (`names.rs`) | An invisible character or a look-alike dot defeats both `safe_file_name` and `looks_disguised`. `invoice.pdf<U+200B>.exe` is saved under that name with no question, and Explorer, hiding known extensions, shows it as `invoice.pdf`. U+2060, U+FEFF, U+00AD, U+180E and a tag character (U+E0020) do the same, and so do `invoice<U+2024>pdf.exe`, U+FF0E and U+FE52. Rust's `is_control` covers only category Cc, so format characters (Cf) are kept. The Mark of the Web is still written, so SmartScreen still checks the file. What is lost is BUG-4's clean name and UI-1's question, and one character is enough to lose both. | Medium | A throwaway test through the public API. All ten names above came back `disguised=false`, with the invisible character still in the name. | Patch in [P3-1](#p3-1-invisible-characters-in-file-names). Tried here: with it, the ten names come back `disguised=true` with the invisible characters removed, and the 10 existing `names` tests still pass. |
+| P3-2 | Drafts on Gmail (`imap::replace`) | On Gmail, `UID STORE \Deleted` then `UID EXPUNGE` in `[Gmail]/Drafts` very likely just removes the Drafts label (Gmail's default setting is to archive the message). Each earlier revision would then stay in All Mail with its Bcc line and attachments. A draft being edited is saved every two minutes, so a 10 MB draft edited for half an hour leaves about 150 MB in the customer's quota. Every copy also shows under RATA's own Archive, because `-in:inbox -in:sent -in:drafts` matches it. Discard moves only the latest copy to the Trash, so text the customer threw away stays in the mailbox. | Medium (not seen on real Gmail) | `replace` has no Gmail case. RATA's own `GMAIL_ARCHIVED` query excludes `in:drafts` because Gmail lists drafts in All Mail. Gmail's IMAP settings say an expunge from a folder that is not the message's last visible one only removes that label. CLAUDE.md already lists this as a B2 check. | Patch in [P3-2](#p3-2-gmail-drafts). For B2: save a draft twice on a real Gmail account, then look in All Mail. |
+| P3-3 | Drafts, header search fallback (`save_in`) | Without `APPENDUID`, the new copy's UID is the newest match for `UID SEARCH UNDELETED HEADER X-RATA-Draft "<id>"`, and IMAP HEADER search matches substrings. A message whose header merely *contains* the id is then taken as RATA's copy. It is recorded in `CMP_SRV`, listed as the draft, and moved to the Trash when the draft is sent or discarded, while RATA's real copy is left behind. Nothing is expunged by mistake: on the next save, `replace`'s exact header check refuses the adopted UID (`NotOurs`). So the Trash move is the only harm. It needs a server that sends no APPENDUID (one advertising UIDPLUS must send it) and a stranger's message in Drafts carrying this draft's random UUID. | Low | A throwaway test on the scripted Drafts server, changed to match SEARCH by substring. The first save recorded UID 30 (another message) as its copy and correctly replaced 3. The second save left 30 alone (`NotOurs`). Held afterwards: 30, 20 (orphaned) and 21. | After the search, fetch the chosen UID's `X-RATA-Draft` header (the same fetch `replace` does) and accept the UID only if the header is exactly `[draft_id]`. Also consider only UIDs at or above the `UIDNEXT` read before the APPEND. |
+| P3-4 | Disguise lists (`names.rs`) | The lists are the owner's choice, but common pairs are missing. Documents: `csv`, `rtf`, `odt`, `html`, `mp4`. Programs: `cpl`, `msc`, `reg`, `iso`, `img`, `vhd`, `one`, `chm`, `appx`/`msix`, `url`, `xll`. So `invoice.pdf.iso` and `report.csv.exe` save without a question. | Low | The same throwaway test: every one came back `disguised=false`. | The owner decides. Suggested additions to DOCUMENT: `csv rtf odt ods odp html htm mp3 mp4 mov wav heic webp svg eml 7z rar`. To PROGRAM: `cpl msc msp mst reg iso img vhd vhdx one chm appx appxbundle msix msixbundle application appref-ms url scf inf xll psm1 wsc sct settingcontent-ms library-ms py pyw`. |
+| P3-5 | Stripe webhook, `incomplete` rows | `checkoutConflict` protects only live rows. Suppose customer V is paying by bank transfer, so V's row is `incomplete` under `cus_V`. Anyone can then pay by card with V's address, and that paid checkout under `cus_A` replaces the row. When V's money arrives, `async_payment_succeeded` is refused as a conflict. V's subscription events match no row: each gets a 409, is retried, and is dropped after three days. If A then cancels, V has paid but is not entitled until the owner reconciles from the conflict log line. The attacker has to pay for a subscription, and the window lasts only as long as the transfer. | Low | `lib/stripe.js` `checkoutConflict`: `if (!LIVE_STATUSES.includes(status)) return false`. | Treat a pending row as taken: `const s = String(held.status \|\| '').toLowerCase(); if (!LIVE_STATUSES.includes(s) && s !== PENDING) return false;`. An abandoned transfer does not lock the address for good: Stripe sends `customer.subscription.updated` with `incomplete_expired`, keyed by customer, which frees the row. Test: a paid checkout by another customer over an `incomplete` row writes nothing. |
+| P3-6 | Account deletion and the AI cap | Deleting an account also deletes `ai_usage`, the month's running total. The relay's only credential is the licence, which stays valid for up to 30 days. So a customer can cancel, delete the account, and spend the cap a second time that month. That is at most `AI_MONTHLY_CAP_USD` extra per paid subscription, since deletion is refused while the subscription is live. | Low | `app/api/account/route.js` calls `wipe('ai_usage', …)`, and `app/api/ai/route.js` checks only the licence. | Keep the current month's row at deletion (it holds only an address, a month and a number) and remove past months for deleted logins in a monthly cleanup. Or key `ai_usage` by `sha256(email)`, which makes keeping the row less of a privacy cost. The owner decides. |
+| P3-7 | IMAP error text (row 8, still open) | The IMAP half of row 8 was waiting because F1 held `imap.rs`. F1 has merged, so it can go ahead now. The new draft code adds no raw server text beyond `one_line` of an APPEND refusal. | Low (row 8) | `append` returns `Appended::Refused(one_line(…))`. | As row 8. SEC-5 is on it. |
+| - | Drafts: the permanent delete | The `replace` rule holds, and each of these is refused and tested: UID 0, the UID of the copy just saved (also when a server's `APPENDUID` names the old UID), another UIDVALIDITY, a `prior.draft_id` other than the id being saved, a copy with another id, no id or two ids, and a copy that is gone. `UID STORE` goes by UID (`uid_store`). The only expunge is `UID EXPUNGE <uid>`, never a bare `EXPUNGE`. Without UIDPLUS the copy is left flagged. `act` still never expunges. A hostile message cannot set a draft id: `Message.draft_id` is filled only for the Drafts folder and only through `draft_id_ok`, and otherwise the page makes its own with `crypto.randomUUID`. | None | Read `save_in`, `replace`, `rata_draft_id` and `store`. The scripted-server tests `a_copy_that_is_not_provably_rata_s_is_never_touched` and `a_rebuilt_drafts_folder_or_a_mismatched_reference_leaves_the_copy_alone` cover these cases, and the loopback test runs the same rule against Dovecot. | - |
+| - | Drafts: header injection and Bcc | A throwaway render of a draft with CR/LF and `X-RATA-Draft:` in the subject, the In-Reply-To, the attachment name and its MIME type. None of them became a header of its own. The subject lost its line breaks and stayed one `Subject:` line, In-Reply-To stayed one line, the name went inside `name="…"`, and the bad MIME type became `application/octet-stream`. `Address::parse` refuses CR/LF. The draft id must be 16 to 64 characters of lowercase hex and `-`, checked in both the app and the engine. Bcc never reaches a sent message: `render` has no Bcc path, a forward quotes only From, Date and Subject, Reply all reads `toAll` and `cc` but never `bcc`, and `Message.bcc` is filled only for Drafts. When another client sends the draft, handling its Bcc line is that client's job, as with drafts Thunderbird and Apple Mail save (RFC 5322 §3.6.3). | None | The throwaway test's output. Read `render_as`, `forwardMessage` and `replyAllOf`. | - |
+| - | Drafts: the page and the gates | Only the composer starts a save. It counts edits from input events on its own fields, and the mail frame runs no script. `Rata::save_draft` checks `usable` (licensed, linked, not parked) before anything else and `draft_id_ok` before rendering. `outgoing()` applies the same checks as sending (addresses, 18 MB, 100 people), and the engine refuses a From that is not the mailbox. An auth failure parks the mailbox, so the timer never sends a refused password again. `X-RATA-Draft-Rev` is written but never read, so starting it again at 1 does no harm. | None | Read `queueDraftSave`, `saveDraft`, `continueDraft`, `core::save_draft` and `outgoing`. Harness: 118 checks passed, the F1 ones among them. | - |
+| - | Saving: consent is judged in Rust | The page may send `confirmed`. That is by design: the page is trusted for the click. The name judged is the one Rust fetched itself (`attachment_of`, by folder, UID, UIDVALIDITY and index), and `save_fetched` and `hand_fetched` then use those same bytes. So another index or folder is judged for what it really is. | None | Read `consented`, `attachment_of`, `save_fetched` and `hand_fetched`. | - |
+| - | Marking (`mark.rs`) | Both callers pass `write_new` only `safe_file_name` output, which removes `:`, so no stream name can be injected into `file:Zone.Identifier`. The quarantine value `0081;<hex>;RATA;` has the same form Chrome and Mail write. The mark is added just after the file is closed, so the file sits unmarked for a few milliseconds. Neither mark has been seen yet on a real Windows or Mac. | None | Read `mark.rs`, `write_new`, `save_fetched` and `save_file`. | - |
+| - | Navigation (`links::navigation`) | Exact for each platform. A user name, a password or a non-default port is refused, and hosts must match exactly (`tauri://LOCALHOST` and `tauri.localhost.` are refused, which fails safe). On Windows `https://tauri.localhost` is also kept, although the app is served over `http` (no `useHttpsScheme`). That address could reach only a local server holding a certificate trusted for that name, and only a script in the app's own page can navigate the window. | None | Read `navigation_on`, `is_app` and their tests. | - |
+| - | Store (`store.rs`) | The temporary file's name is predictable (`mailboxes.json.tmp`). But it is removed and then opened with `create_new` (`O_EXCL`), which never follows a symlink, in a folder made `0700`. A race would need write access to the customer's own app folder. | None | Read `save`, `open` and `make_dir`. | - |
+| - | SMTP replies (`hear`, `said`) | Each line is capped at 1 KiB before it is kept, the reply code is checked as bytes, and a multi-line reply is capped at 8 KiB. Every error string, connection errors included, goes through `said`. `hide` lower-cases only ASCII, so match offsets stay on character boundaries. | None | Read `smtp.rs` lines 49–125, 242–283 and 478–520. | - |
+| - | Webhook, async payments | Every event is signed by Stripe. `async_payment_succeeded` passes the same stale check (`isNewer` against the row's `event_at`, which subscription events also stamp), so it cannot bring back a row that a later `customer.subscription.deleted` ended. A pending checkout never overwrites a live row, and another customer's checkout cannot take over a live one. | None (see P3-5) | Read `rowForEvent`, `checkoutConflict` and the route's email branch. `npm test`: 500 passed. | - |
+| - | Renewal `too-old` | The holder can already read `exp` from the token, so the reason reveals nothing new. A signed token without a numeric `exp` cannot be renewed (it fails closed). | None | Read `check`, `renewable` and `renew/route.js`. | - |
+| - | `ai_reserve` / `ai_settle` | Both are `security definer` with `search_path = public` pinned and the table named in full. Execute is revoked from `public`, `anon` and `authenticated` and granted only to `service_role`, and RLS is on with no policy. A negative delta cannot take a total below 0, and a settle with no row changes nothing and returns NULL. A positive delta could pass the cap only if the real cost were higher than the worst case, which counts every prompt byte as a token. | None | Read `database.sql` §5 and `app/api/ai/route.js`. | - |
+| - | Browser banner | The `localStorage` read and write are wrapped in try/catch, the markup starts hidden, and the app never shows it (harness, licensed and unlicensed). | None | `webNote()`, and the harness. | - |
+
+### P3-1. Invisible characters in file names
+
+With this patch, the ten names below come back `disguised=true` with the
+invisible characters gone. All 10 existing `names` tests still pass (tried
+here, not committed). Removing U+200C and U+200D also takes them out of
+Persian names and emoji sequences. That is acceptable in a file name.
+
+```diff
+--- a/desktop/rata-mail/src/names.rs
++++ b/desktop/rata-mail/src/names.rs
+@@ pub fn safe_file_name(name: &str) -> String {
+         !c.is_control()
+             && !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+             && !matches!(*c as u32, 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069 | 0x061c)
++            && !invisible(*c)
+     }) {
+@@ pub fn looks_disguised(name: &str) -> bool {
+     let clean = safe_file_name(name);
+-    let mut parts = clean.rsplit('.');
++    let mut parts = clean.rsplit(|c: char| c == '.' || looks_like_a_dot(c));
+@@
++/// Characters that draw nothing (Unicode Default_Ignorable_Code_Point, less
++/// the Hangul fillers, which `blank` already turns into a space).
++fn invisible(c: char) -> bool {
++    matches!(c as u32,
++        0x00ad | 0x034f | 0x17b4 | 0x17b5 | 0x180b..=0x180f | 0x200b..=0x200d
++        | 0x2060..=0x2065 | 0x206a..=0x206f | 0xfe00..=0xfe0f | 0xfeff
++        | 0xfff0..=0xfff8 | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0000..=0xe0fff)
++}
++
++/// Characters drawn as a full stop that Windows does not read as one.
++fn looks_like_a_dot(c: char) -> bool {
++    matches!(c, '\u{2024}' | '\u{fe52}' | '\u{ff0e}' | '\u{0701}' | '\u{0702}'
++        | '\u{a4f8}' | '\u{10a50}' | '\u{2e31}' | '\u{00b7}' | '\u{2027}' | '\u{0387}')
++}
+```
+
+The test to add first, in `names.rs`:
+
+```rust
+#[test]
+fn nothing_invisible_or_dot_shaped_hides_a_program() {
+    for name in [
+        "invoice.pdf\u{200b}.exe", "invoice.pd\u{200b}f.exe", "invoice.pdf\u{2060}.exe",
+        "invoice.pdf\u{feff}.exe", "invoice.pdf\u{ad}.exe", "invoice.pdf\u{180e}.exe",
+        "invoice.pdf\u{e0020}.exe", "invoice\u{2024}pdf.exe", "invoice\u{ff0e}pdf.exe",
+        "invoice\u{fe52}pdf.exe",
+    ] {
+        assert!(looks_disguised(name), "{name:?}");
+    }
+    assert_eq!(safe_file_name("invoice.pdf\u{200b}.exe"), "invoice.pdf.exe");
+}
+```
+
+### P3-2. Gmail drafts
+
+In `replace`, after the header check and the capability read, and before
+the `STORE`:
+
+```rust
+    // Gmail: expunging from [Gmail]/Drafts only removes the Drafts label,
+    // and the copy stays in All Mail (where RATA's archive would show it).
+    // Moving it to Gmail's Trash takes it out of All Mail, and Gmail empties
+    // the Trash after 30 days. The check above still decides what is moved.
+    if caps.has_str("X-GM-EXT-1") {
+        let Some(trash) = destination(session, &Action::Trash).await else {
+            return Prior::Failed;
+        };
+        return match timeout(COMMAND, session.uid_mv(&set, &trash)).await {
+            Ok(Ok(())) => Prior::Replaced,
+            _ => Prior::Failed,
+        };
+    }
+```
+
+`destination` only runs LIST, so Drafts stays selected. Write the test
+first, on the scripted Gmail server (the script of
+`gmail_keeps_drafts_in_its_own_drafts_folder`): the earlier copy is moved to
+`[Gmail]/Trash`, and `UID EXPUNGE` is never sent. Whether Gmail really
+keeps the copy in All Mail is for B2 to check. If it does not, the patch
+costs only one Trash entry per save.
+
+### Found on the way (not security)
+
+- **Every Stripe checkout is recorded as Base.** The Stripe API reference
+  says a Checkout Session includes `line_items` only when it is expanded
+  ("includable (not returned by default)"), and a webhook event is never
+  expanded. So `rowForEvent` finds no price in `checkout.session.completed`
+  or `…async_payment_succeeded` and writes `plan: 'base'` and
+  `domain_addons: 0`. The tests miss this because their fixtures include
+  `line_items`. Checked by calling `rowForEvent` with a Pro session that has
+  none: it returned `plan: 'base'`. The subscription events do carry
+  `items` and set the right plan, but only one that lands after the
+  checkout counts, because the stale check refuses an earlier one. Until
+  then a Pro buyer is Base. And the new `async_payment_succeeded` arrives
+  days after those events, so it turns a paying Pro customer back into
+  Base. Fix: a checkout event writes `plan` and `domain_addons` only when
+  it carries line items. In the route, write `plan: row.plan ?? held?.plan
+  ?? 'base'`, and have `rowForEvent` return `plan: null` when it finds no
+  price. Add a test fixture without `line_items`. This needs fixing before
+  D6 (Stripe live).
+- An `incomplete` subscription does not block deleting the account. If the
+  account is deleted while a bank transfer is pending, the row comes back
+  as `active` when the transfer clears, and Stripe keeps billing an address
+  that has no login. `blocksDeletion` could count `incomplete` as well.
+
+### How this was checked
+
+- `cargo test --all-targets` in `desktop/rata-mail`: 246 passed.
+- `./sync-ui.sh`, then `cargo test` in `desktop/rata-app/src-tauri`: 111
+  passed.
+- `npm ci && npm run build && npm test` in `rata-next`: 500 passed, 0
+  failed. `npm audit --omit=dev`: 0 vulnerabilities.
+- The interface, driven (`ui-harness.mjs` against `desktop/rata-app/ui` on
+  port 3207): 118 checks, all passed.
+- Throwaway probes, none committed: a `names` test through the public API
+  (P3-1, P3-4), a `render_draft` header-injection test, a scripted-server
+  test in `imap.rs` with substring SEARCH (P3-3, reverted), the P3-1 patch
+  applied and tested (reverted), and a Node call of `rowForEvent` on a
+  session without `line_items`.
+- Not done: real Gmail (P3-2 is for B2), a real Windows or Mac for the
+  marks, and a packaged build. No page code was changed, and no claim here
+  depends on the page beyond what the harness checks.

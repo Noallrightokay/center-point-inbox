@@ -6,7 +6,7 @@ issue (`/api/licence`) and renewal (`/api/licence/renew`), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (479 checks).
+the website's test suites pass with `npm test` after it (501 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -14,7 +14,7 @@ on from one that has not.
 
 **Roughly 45 minutes**, most of it in the Stripe dashboard.
 
-What is live right now (checked 2026-09-28): an old deploy. The landing page
+What is live right now (checked 2026-09-28, and again 2026-09-29): an old deploy. The landing page
 still says **$8 / $79** and sells texts, Slack and Discord, and
 `/api/health`, `/api/licence/renew`, `/api/ai` and the screenshots in
 `/shots/` all answer 404. So licence renewal and AI have never worked for
@@ -131,6 +131,7 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `ANTHROPIC_API_KEY` | an API key from console.anthropic.com, for the AI relay. Paste it into hPanel only — never into a chat, an issue or a commit |
 | `AI_MONTHLY_CAP_USD` | optional; what AI may cost per customer per month. Default `2`. Keep it well above one request's worst case, about `0.06` (a long translation): each request holds its worst case against the cap before it is sent, so at `0.05` or less the longest translations (12 000 characters of Chinese, Japanese or Korean) are always refused |
 | `AI_MODEL` | optional; default `claude-haiku-4-5-20251001` |
+| `AI_PRICE_IN_PER_MTOK`, `AI_PRICE_OUT_PER_MTOK` | optional; the model's list price in dollars per million tokens, input and output, which the cap is counted in. Default `1` and `5` (Haiku 4.5). Set them only if you change `AI_MODEL` or the price changes |
 | `STRIPE_WEBHOOK_SECRET` | the `whsec_…` |
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
@@ -151,7 +152,10 @@ and logs why. That refusal is covered by a test, but check the browser console
 after deploying anyway.
 
 Leave unset unless you mean them: `STRIPE_ENTERPRISE` /
-`STRIPE_PRICE_ENTERPRISE` (Enterprise is not for sale). Nothing reads
+`STRIPE_PRICE_ENTERPRISE` (Enterprise is not for sale), and `REDIRECT_TO`,
+which sends every request on this deployment to another origin with a 308
+(`proxy.js`; for a second domain pointing at mailrata.org, never on
+mailrata.org itself). Nothing reads
 `GOOGLE_CLIENT_ID` or `APP_URL` any more, and `/api/config` no longer
 publishes a Google client id to the browser; delete both from hPanel if
 they are there. The Microsoft and Slack variables are gone from the
@@ -198,6 +202,10 @@ undo, and nothing here asks for it.
 
 ## 6. Smoke test on the live site
 
+Run `rata-next/scripts/live-check.sh` first (no credentials; it checks
+`https://mailrata.org` unless given another address) and fix anything it
+reports as FAIL before the manual steps below.
+
 The website links no mailboxes any more, so this tests what it does do: hand
 out and renew licences, take payment and relay AI. The first block needs no
 credentials; the second needs you.
@@ -242,7 +250,7 @@ credentials; the second needs you.
    check 6 (`/etc/rata/mint.sh <that address> pro 6`), paste it into the app,
    then quit and reopen RATA: Settings → Current plan now runs about 30 days
    out, not 6. Renewal from the app has never worked before this deploy.
-10. **Delete the account** (on the website, Settings → Delete). It should
+10. **Delete the account** (on the website, Settings → **Delete account**). It should
     refuse while the subscription is live — that refusal is the feature.
 
 ## 7. Two things to know about signups before you open the doors
@@ -313,7 +321,8 @@ build's installers for updates", and afterwards a release called *Update
 feed (not an installer)* has a `latest.json` naming that version. Copies
 installed before that release have no key and cannot update themselves: each
 tester installs that one release by hand, and from then on RATA offers every
-new version itself ("RATA x.y.z is ready — Restart to update").
+new version itself (a bar saying "RATA x.y.z is ready." with a
+**Restart to update** button).
 
 ## 10. Microsoft sign-in (so Outlook and Microsoft 365 mailboxes can be added)
 

@@ -85,7 +85,6 @@ cat > "$out/config.js" <<'JS'
 window.RATA_CONFIG = {
   supabaseUrl: '',
   supabaseKey: '',
-  googleClientId: '',
   stripeBase: 'https://mailrata.org/#pricing',
   stripePro: 'https://mailrata.org/#pricing',
   stripePortal: 'https://mailrata.org/account',
