@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
-import { check, issue, LICENCE_DAYS } from '../../../../lib/licence';
+import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,9 @@ export const dynamic = 'force-dynamic';
    So the old licence is the credential. It is signed with a key only this
    server holds, so presenting one proves it was issued here — and the address
    inside it is the address the subscription is keyed on. An expired licence is
-   accepted, deliberately: renewing an expired licence is the entire job.
+   accepted, deliberately: renewing an expired licence is the entire job. But
+   only for RENEW_GRACE_DAYS after it expired, so a token that leaked long ago
+   (an old backup, a pasted screenshot) cannot come back to life.
 
    What this is not: a way to look up somebody else's plan. The only thing that
    comes back is a licence for the address inside the licence presented, so the
@@ -58,6 +60,17 @@ async function renew(req) {
         ? 'This deployment cannot check licences — LICENCE_PUBLIC_KEY is not set. See LICENSING.md.'
         : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
     }, seen.reason === 'no-public-key' ? { status: 500 } : undefined);
+  }
+
+  if (!renewable(seen)) {
+    /* Genuine, but expired too long ago to renew itself (lib/licence.js):
+       asked before the database, like a forgery. The customer still gets a
+       new one by signing in. */
+    return NextResponse.json({
+      licensed: false,
+      reason: 'too-old',
+      message: `This licence expired more than ${RENEW_GRACE_DAYS} days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.`,
+    });
   }
 
   const email = String(licence.sub || '').toLowerCase();

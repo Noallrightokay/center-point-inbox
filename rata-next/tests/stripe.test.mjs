@@ -232,6 +232,36 @@ export default async function run(state) {
     }
   }
 
+  console.log('\n— a checkout that has not been paid for yet grants nothing —');
+  {
+    /* Delayed payment methods (SEPA, ACH, Boleto) complete the checkout
+       before the money arrives: status "complete", payment_status "unpaid".
+       Stripe says later, with checkout.session.async_payment_succeeded or
+       _failed. Recording the first as active gave a licence to a payment that
+       could still fail. */
+    const withPayment = (payment_status, type = 'checkout.session.completed') => {
+      const e = checkoutEvent('Later@Example.com', ENV.STRIPE_PRICE_PRO);
+      return { ...e, type, data: { object: { ...e.data.object, payment_status } } };
+    };
+    const unpaid = rowForEvent(withPayment('unpaid'), ENV);
+    check(!!unpaid && unpaid.by === 'email' && unpaid.email === 'later@example.com',
+      `an unpaid checkout is still recorded, so the customer's later events find their row: ${JSON.stringify(unpaid)}`);
+    check(!!unpaid && unpaid.status === 'incomplete' && !LIVE_STATUSES.includes(unpaid.status),
+      `as incomplete, which is not entitled: ${unpaid && unpaid.status}`);
+    check(!!unpaid && unpaid.stripe_customer === 'cus_ABC123' && unpaid.plan === 'pro',
+      'keeping the customer and the plan it is for');
+
+    const free = rowForEvent(withPayment('no_payment_required'), ENV);
+    check(free.status === 'active', `a checkout that needs no payment (a 100% coupon, a free trial) is active: ${free.status}`);
+    check(rowForEvent(withPayment('paid'), ENV).status === 'active', 'a paid one is active, as before');
+
+    const cleared = rowForEvent(withPayment('paid', 'checkout.session.async_payment_succeeded'), ENV);
+    check(!!cleared && cleared.by === 'email' && cleared.status === 'active' && cleared.plan === 'pro',
+      `the payment clearing later makes it active: ${JSON.stringify(cleared)}`);
+    check(rowForEvent(withPayment('unpaid', 'checkout.session.async_payment_failed'), ENV) === null,
+      'and failing later changes nothing: the row was never live');
+  }
+
   console.log('\n— the same, through the endpoint and a stand-in database —');
   {
     const db = await fakeSubscriptions();
@@ -295,6 +325,29 @@ export default async function run(state) {
       const late = await deliver(checkout(victim, 'cus_A', ENV.STRIPE_PRICE_BASE, t - 3600));
       check(late.d.stale === true && db.writes.length === before,
         `and a late delivery is still refused as stale: ${JSON.stringify(late.d)}`);
+
+      /* Paid by bank transfer: recorded, not live, until the money arrives. */
+      const slow = 'slow@example.com';
+      const unpaid = checkout(slow, 'cus_SLOW', ENV.STRIPE_PRICE_PRO, t);
+      unpaid.data.object.payment_status = 'unpaid';
+      const pending = await deliver(unpaid);
+      check(pending.status === 200 && db.rows.get(slow)?.status === 'incomplete',
+        `an unpaid checkout is recorded as incomplete: ${JSON.stringify(pending.d)} ${JSON.stringify(db.rows.get(slow))}`);
+      const paidLater = { ...checkout(slow, 'cus_SLOW', ENV.STRIPE_PRICE_PRO, t + 60),
+        type: 'checkout.session.async_payment_succeeded' };
+      const settled = await deliver(paidLater);
+      check(settled.d.acted === true && db.rows.get(slow).status === 'active',
+        `and made active when the payment clears: ${JSON.stringify(settled.d)} ${JSON.stringify(db.rows.get(slow))}`);
+
+      /* The same customer checking out again by bank transfer must not take
+         away what they already pay for while the new payment is pending. */
+      const again = checkout(victim, 'cus_A', ENV.STRIPE_PRICE_BASE, t + 20);
+      again.data.object.payment_status = 'unpaid';
+      const before2 = db.writes.length;
+      const kept = await deliver(again);
+      check(kept.status === 200 && kept.d.acted === false && db.writes.length === before2
+        && db.rows.get(victim).status === 'active',
+        `a pending checkout never downgrades a live row: ${JSON.stringify(kept.d)} ${JSON.stringify(db.rows.get(victim))}`);
     } finally { await s.stop(); await db.close(); }
   }
 

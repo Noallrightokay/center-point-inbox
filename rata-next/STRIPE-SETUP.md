@@ -77,7 +77,11 @@ https://mailrata.org/api/stripe/webhook
 Select these events and no others:
 
 - `checkout.session.completed` — the only one that carries the buyer's email,
-  and what creates their row
+  and what creates their row. A checkout paid by a delayed method (a bank
+  debit) completes before the money arrives; its row is written as
+  `incomplete`, which is not entitled, until the next event
+- `checkout.session.async_payment_succeeded` — that delayed payment cleared:
+  the row becomes `active`
 - `customer.subscription.updated` — upgrades, downgrades, failed payments
 - `customer.subscription.deleted` — cancellations
 
@@ -126,8 +130,9 @@ have to build any of it.
 3. The webhook verifies the signature, finds the plan line among the
    subscription's lines, counts any custom-domain add-on quantity (always
    zero, since `STRIPE_PRICE_DOMAIN` stays unset), and writes
-   `subscriptions`: email, plan, status `active`, the Stripe customer id and
-   `domain_addons`.
+   `subscriptions`: email, plan, status `active` (`incomplete` while a
+   delayed payment has not cleared; it never replaces a live row), the
+   Stripe customer id and `domain_addons`.
 
    The plan is found by scanning every line rather than reading the first. A
    subscription carrying both Pro and the domain add-on can arrive in either
