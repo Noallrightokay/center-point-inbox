@@ -432,6 +432,18 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .cmp-cc-btn{margin-right:16px;font-size:12.5px;font-weight:600;color:var(--slate);padding:3px 9px;border-radius:6px;background:var(--fill)}
 #compose #cmp-cc[hidden],#compose #cmp-bcc[hidden],.cmp-cc-btn[hidden]{display:none}
 .cmp-cc-btn+.cmp-cc-btn{margin-left:-10px}
+/* Address suggestions (H3): a menu under the address line being typed in. */
+#compose{position:relative}
+.cmp-sugg{position:absolute;left:12px;right:12px;z-index:5;background:var(--card);border-radius:var(--r);box-shadow:var(--edge),var(--shadow-lg);padding:6px;max-height:min(328px,50vh);overflow-y:auto;animation:sugg .16s ease-out}
+.cmp-sugg[hidden]{display:none}
+@keyframes sugg{from{transform:translateY(-4px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.cmp-sugg{animation:none}}
+.cmp-sugg [role=option]{display:flex;align-items:baseline;gap:10px;padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:14px;line-height:1.5;color:var(--ink);min-width:0;transition:background .12s ease}
+.cmp-sugg [role=option]:hover{background:var(--fill-2)}
+.cmp-sugg [role=option][aria-selected=true]{background:var(--tint-soft)}
+.cmp-sugg .sg-name{font-weight:500;flex-shrink:0;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmp-sugg .sg-addr{font-size:13px;color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cmp-sugg .sg-mine{margin-left:auto;font-size:12px;color:var(--faint);flex-shrink:0}
 .dlp-bar{display:none;padding:12px 20px;font-size:13px;border-bottom:1px solid var(--hair-2)}
 .dlp-bar.warn{display:block;background:var(--amber-soft);color:var(--amber)}
 .dlp-bar.block{display:block;background:var(--red-soft);color:var(--red)}
@@ -1001,9 +1013,10 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <div class="grabber"></div>
     <div class="cmp-head"><b id="cmp-title">New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-discard" id="cmp-discard" hidden>Discard</button><button class="cmp-close" id="cmp-close" aria-label="Close, keeping the draft">✕</button></div>
     <div class="dlp-bar" id="dlp-bar"></div>
-    <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button><button type="button" class="cmp-cc-btn" id="cmp-bcc-btn" aria-label="Add people to copy without the others seeing">Bcc</button></div>
-    <input type="text" id="cmp-cc" placeholder="Cc" hidden>
-    <input type="text" id="cmp-bcc" placeholder="Bcc — the others will not see these" hidden>
+    <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To" aria-label="To" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button><button type="button" class="cmp-cc-btn" id="cmp-bcc-btn" aria-label="Add people to copy without the others seeing">Bcc</button></div>
+    <input type="text" id="cmp-cc" placeholder="Cc" aria-label="Cc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
+    <input type="text" id="cmp-bcc" placeholder="Bcc — the others will not see these" aria-label="Bcc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
+    <div class="cmp-sugg" id="cmp-sugg" role="listbox" aria-label="People you have written to or heard from" hidden></div>
     <input type="text" id="cmp-subj" placeholder="Subject">
     <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-files" id="cmp-files"></div>
@@ -3694,6 +3707,9 @@ let CMP_DRAFT=null;
    it for that mailbox's, and so a message holding only a signature still
    counts as empty. */
 let CMP_SIG=null;
+/* The address suggestions open under To, Cc or Bcc (H3), and the people
+   they are drawn from, gathered when that field is focused. */
+let SUGG={input:null,items:[],active:-1,span:null},SUGG_POOL=null;
 /* A mailbox's signature as a block ("-- " line first, the standard mark
    mail apps use to tell a signature from the message), or ''. */
 function sigOf(acctId){
@@ -3906,6 +3922,7 @@ function newDraft(){
 function openCompose(){
   /* Only the app can send, so only the app offers to attach. */
   const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
+  SUGG_POOL=null;
   fillComposeFrom();
   /* A new, empty message starts with the signature, and the cursor above it. */
   const b=$('#cmp-body'),sig=!CMP_SIG&&DRAFT.kind==='new'&&!b.value?sigOf($('#cmp-from').value):'';
@@ -3920,6 +3937,7 @@ function openCompose(){
 /* Closing keeps the draft here and, in the app, saves it to Drafts when
    something in it is new (F1). Escape calls this with nothing open. */
 function closeCompose(){
+  suggClose();SUGG_POOL=null;
   const was=ov.classList.contains('open');
   ov.classList.remove('open');stopDraftTimer();
   if(was)queueDraftSave('close');
@@ -4046,8 +4064,171 @@ function showCc(on){$('#cmp-cc').hidden=!on;$('#cmp-cc-btn').hidden=!!on}
 function showBcc(on){$('#cmp-bcc').hidden=!on;$('#cmp-bcc-btn').hidden=!!on}
 $('#cmp-cc-btn').onclick=()=>{showCc(true);$('#cmp-cc').focus()};
 $('#cmp-bcc-btn').onclick=()=>{showBcc(true);$('#cmp-bcc').focus()};
+/* ---- Address suggestions (H3) ----
+   To, Cc and Bcc suggest people RATA has seen: every From, To and Cc of the
+   mail it holds, and People. Built from what is held, on this computer, from
+   each message's addresses and names only (never its text), when a field is
+   focused; nothing is stored and nothing is asked of any server. Spam never
+   feeds it (a forger picks the From), nor do drafts (never sent). */
+const SUGG_MAX=8;
+const suggNorm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const SUGG_ADDR=/^[^\s@<>",;\\]+@[^\s@<>",;\\]+\.[^\s@<>",;\\]+$/;
+/* A name as the composer writes it between quotes: no control or bidi
+   characters, no quote, backslash or bracket, one space at a time, at most
+   64 characters (the engine keeps no more). Empty when it is only the
+   address again. */
+function suggName(name,addr){
+  const n=String(name||'').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069"\\<>]/g,'').replace(/\s+/g,' ').trim().slice(0,64).trim();
+  return n&&n.toLowerCase()!==String(addr).toLowerCase()&&!n.includes('@')?n:'';
+}
+/* Where each address in a field starts and ends: split at the commas that
+   are not inside quotes or angle brackets, as the engine splits it. */
+function addrSpans(v){
+  const out=[];let q=false,a=false,esc=false,s=0;
+  for(let i=0;i<v.length;i++){
+    const c=v[i];
+    if(q){if(esc)esc=false;else if(c==='\\')esc=true;else if(c==='"')q=false;continue}
+    if(c==='"'&&!a)q=true;else if(c==='<')a=true;else if(c==='>')a=false;
+    else if(c===','&&!a){out.push({s,e:i});s=i+1}
+  }
+  out.push({s,e:v.length});
+  return out;
+}
+/* The bare addresses in a field, lowercased. */
+function fieldAddrs(v){
+  return addrSpans(v).map(({s,e})=>{const t=v.slice(s,e).trim(),m=t.match(/<([^<>]*)>\s*$/);return (m?m[1]:t).trim().toLowerCase()}).filter(Boolean);
+}
+/* Everyone, once, with how often and how lately: each message counts for
+   less the older it is, so someone written to last week outranks someone
+   heard from often two years ago. The customer's own linked addresses are
+   marked, to go last. */
+function suggPool(){
+  const mine=new Set(S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase()));
+  const map=new Map(),now=Date.now();
+  const see=(addr,name,ts,named)=>{
+    addr=String(addr||'').trim().toLowerCase();
+    if(!SUGG_ADDR.test(addr))return;
+    let p=map.get(addr);
+    if(!p){p={addr,name:'',score:0,last:0,own:false,mine:mine.has(addr)};map.set(addr,p)}
+    const n=suggName(name,addr);
+    /* People's own name for someone wins; otherwise the latest name seen. */
+    if(n&&(named||(!p.own&&(ts>=p.last||!p.name)))){p.name=n;if(named)p.own=true}
+    if(ts){p.score+=1/(1+Math.max(0,now-ts)/(14*864e5));p.last=Math.max(p.last,ts)}
+    else p.score+=0.05;
+  };
+  for(const m of S.messages){
+    if(!m||m.draft||m.ch&&m.ch!=='email')continue;
+    const f=folderOf(m);if(f==='junk'||f==='drafts')continue;
+    const ts=m.ts||0;
+    if(m.sent){
+      /* RATA's own record of what it sent knows only the line as typed. */
+      if(!m.toAddr&&!(m.toAll||[]).length&&m.toName){
+        const v=String(m.toName);
+        for(const {s,e} of addrSpans(v)){const t=v.slice(s,e).trim(),x=t.match(/^\s*"?([^"<]*)"?\s*<([^<>]+)>\s*$/);see(x?x[2]:t,x?x[1]:'',ts)}
+      }else see(m.toAddr,m.toName!==m.toAddr?m.toName:'',ts);
+    }else see(m.fromAddr,m.fromName,ts);
+    for(const a of (m.toAll||[]))see(a,'',ts);
+    for(const a of (m.cc||[]))see(a,'',ts);
+  }
+  for(const c of S.contacts)if(c&&c.id!=='c8'&&c.addr)see(c.addr,c.name,0,true);
+  return [...map.values()];
+}
+function suggClose(){
+  const box=$('#cmp-sugg');box.hidden=true;box.innerHTML='';
+  if(SUGG.input){SUGG.input.setAttribute('aria-expanded','false');SUGG.input.removeAttribute('aria-activedescendant')}
+  SUGG={input:SUGG.input,items:[],active:-1,span:null};
+}
+/* What to suggest for the address under the cursor, if two or more
+   characters of it are typed and it is not already a whole "Name" <addr>. */
+function suggUpdate(input){
+  SUGG.input=input;
+  const v=input.value,pos=input.selectionStart??v.length;
+  const span=addrSpans(v).find(({s,e})=>pos>=s&&pos<=e);
+  const raw=span?v.slice(span.s,span.e):'';
+  const q=suggNorm(raw.replace(/["<>]/g,'').trim());
+  if(!span||q.length<2||/<[^<>]*>\s*$/.test(raw)){suggClose();return}
+  if(!SUGG_POOL)SUGG_POOL=suggPool();
+  const here=new Set(fieldAddrs(v.slice(0,span.s)+v.slice(span.e)));
+  /* The start of a word (of the name, or of the address between its dots,
+     @ and dashes) ranks above the middle of one. */
+  const wordStart=new RegExp('(^|[\\s.@_+\\-])'+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  const hits=[];
+  for(const p of SUGG_POOL){
+    if(here.has(p.addr))continue;
+    const hay=suggNorm(p.name)+' '+p.addr,start=wordStart.test(hay);
+    /* Inside a word only from three letters: two would find "le" in every
+       "example" and "an" in every "and". */
+    if(!start&&(q.length<3||!hay.includes(q)))continue;
+    hits.push({p,tier:(p.mine?2:0)+(start?0:1)});
+  }
+  hits.sort((a,b)=>a.tier-b.tier||b.p.score-a.p.score||a.p.addr.localeCompare(b.p.addr));
+  const items=hits.slice(0,SUGG_MAX).map(h=>h.p);
+  if(!items.length){suggClose();return}
+  SUGG={input,items,active:0,span};
+  suggDraw();
+}
+function suggDraw(){
+  const box=$('#cmp-sugg'),input=SUGG.input;
+  box.innerHTML=SUGG.items.map((p,i)=>`<div role="option" id="cmp-sugg-${i}" aria-selected="${i===SUGG.active}" data-i="${i}">${p.name?`<span class="sg-name">${esc(p.name)}</span>`:''}<span class="sg-addr">${esc(p.addr)}</span>${p.mine?'<span class="sg-mine">Your mailbox</span>':''}</div>`).join('');
+  const top=input.getBoundingClientRect().bottom-$('#compose').getBoundingClientRect().top;
+  box.style.top=(top+4)+'px';
+  box.hidden=false;
+  input.setAttribute('aria-expanded','true');
+  suggMark(SUGG.active);
+}
+/* Marks the active suggestion without redrawing the list. */
+function suggMark(i){
+  SUGG.active=i;
+  $$('#cmp-sugg [role=option]').forEach(o=>o.setAttribute('aria-selected',String(+o.dataset.i===i)));
+  if(SUGG.input)SUGG.input.setAttribute('aria-activedescendant','cmp-sugg-'+i);
+  const on=$('#cmp-sugg-'+i);if(on&&on.scrollIntoView)on.scrollIntoView({block:'nearest'});
+}
+function suggMove(d){
+  const n=SUGG.items.length;if(!n)return;
+  suggMark((SUGG.active+d+n)%n);
+}
+/* The chosen person replaces what was typed of that address, as
+   "Name" <addr> when there is a name; a comma and a space follow when it is
+   the last, ready for the next. */
+function suggChoose(i){
+  const p=SUGG.items[i],input=SUGG.input,span=SUGG.span;if(!p||!input||!span)return;
+  const v=input.value,before=v.slice(0,span.s),after=v.slice(span.e);
+  const chosen=p.name?`"${p.name}" <${p.addr}>`:p.addr;
+  const head=before.trim()?before.replace(/\s*$/,' '):'';
+  const tail=after.trim()?after:', ';
+  input.value=head+chosen+tail;
+  const at=(head+chosen).length+(after.trim()?0:2);
+  input.setSelectionRange(at,at);
+  suggClose();
+  draftEdited();renderDraftHead();
+}
+['cmp-to','cmp-cc','cmp-bcc'].forEach(id=>{
+  const input=$('#'+id);
+  input.addEventListener('focus',()=>{SUGG_POOL=null});
+  input.addEventListener('input',()=>suggUpdate(input));
+  input.addEventListener('click',()=>suggUpdate(input));
+  input.addEventListener('blur',()=>{if(SUGG.input===input)suggClose()});
+  input.addEventListener('keydown',e=>{
+    const open=SUGG.input===input&&SUGG.items.length>0;
+    if(!open){if(e.key==='ArrowDown'&&!e.altKey){suggUpdate(input);if(SUGG.items.length)e.preventDefault()}return}
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();suggMove(e.key==='ArrowDown'?1:-1)}
+    else if((e.key==='Enter'||e.key==='Tab')&&!e.shiftKey&&SUGG.active>=0){e.preventDefault();suggChoose(SUGG.active)}
+    /* Escape closes the list and nothing else: not the composer, and the
+       field keeps what was typed. */
+    else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();suggClose()}
+    else if(e.key==='ArrowLeft'||e.key==='ArrowRight'||e.key==='Home'||e.key==='End')setTimeout(()=>suggUpdate(input));
+  });
+});
+/* A press on a suggestion keeps the focus in the field, so the list is
+   still there when the click lands. */
+$('#cmp-sugg').addEventListener('mousedown',e=>e.preventDefault());
+$('#cmp-sugg').addEventListener('click',e=>{const o=e.target.closest('[role=option]');if(o)suggChoose(+o.dataset.i)});
+$('#cmp-sugg').addEventListener('mousemove',e=>{const o=e.target.closest('[role=option]');if(o&&+o.dataset.i!==SUGG.active)suggMark(+o.dataset.i)});
 $('#cmp-send').onclick=async()=>{
-  const to=$('#cmp-to').value.trim(),cc=$('#cmp-cc').value.trim(),bcc=$('#cmp-bcc').value.trim(),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
+  /* A chosen suggestion leaves ", " after it for the next (H3); a list
+     that ends there is sent without it. */
+  const line=id=>$(id).value.replace(/[\s,]+$/,'').trim();
+  const to=line('#cmp-to'),cc=line('#cmp-cc'),bcc=line('#cmp-bcc'),subj=$('#cmp-subj').value.trim(),body=$('#cmp-body').value,prov=$('#cmp-from').value;
   if(!to||!subj){toast('Recipient and subject required');return}
   liveScan();
   S.counters.scans++;
@@ -4065,7 +4246,8 @@ $('#cmp-send').onclick=async()=>{
   SENDING=true;
   await DRAFT_SAVING;
   try{
-  const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===to.toLowerCase());
+  const first=fieldAddrs(to)[0]||'';
+  const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===first);
   const acctSel=prov;
   const acct=S.linked.find(l=>l.id===acctSel);
   const mAcct=acct&&acct.type==='mail'?acct:null;

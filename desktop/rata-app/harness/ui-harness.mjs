@@ -647,6 +647,109 @@ console.log('\n— Cc, Bcc, and replying to everyone —');
   await pg.close();
 }
 
+console.log('\n— address suggestions in the composer (H3) —');
+{
+  const pg = await open(true);
+  const day = 864e5;
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Me', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '',
+    subject: 'Hello ' + uid, preview: 'p', body: 'Body text that must never be read ' + uid, ts: Date.now() - uid * day, unread: false, starred: false, uid, uidvalidity: 7,
+    message_id: 's' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    S.contacts.push({ id: 'c-h3', name: 'Beatrix Ortega', addr: 'bea@example.net' });
+  }, [
+    mk(1, { from_name: 'Smith, Ann', from_addr: 'ann.smith@example.org', cc: ['annika@example.org'] }),
+    mk(2, { from_name: 'Smith, Ann', from_addr: 'ann.smith@example.org' }),
+    mk(40, { from_name: 'Annette Old', from_addr: 'annette@example.org' }),
+    mk(3, { from_name: 'Bob Lee', from_addr: 'bob@example.org' }),
+    /* A spam sender, and a draft's recipient: neither is ever suggested. */
+    mk(4, { id: 'me@example.com_junk_4', folder: 'junk', from_name: 'Anna Prize', from_addr: 'anna.prize@spam.example', subject: 'You won', cc: ['annspam@spam.example'] }),
+    mk(5, { id: 'me@example.com_drafts_5', folder: 'drafts', from_name: 'Me', from_addr: 'me@example.com', to_name: 'Anne Draft', to_addr: 'anne.draft@example.org', to_all: ['anne.draft@example.org'] }),
+  ]);
+  const st = () => pg.evaluate(() => {
+    const box = document.querySelector('#cmp-sugg'), inp = document.activeElement;
+    return { open: !box.hidden, options: [...box.querySelectorAll('[role=option]')].map((o) => o.textContent), role: box.getAttribute('role'),
+      expanded: inp && inp.getAttribute('aria-expanded'), active: inp && inp.getAttribute('aria-activedescendant'),
+      selected: box.querySelector('[aria-selected=true]')?.id || null, value: inp && inp.value, id: inp && inp.id,
+      composer: document.querySelector('#compose-ov').classList.contains('open') };
+  });
+  await pg.evaluate(() => { newDraft(); openCompose(); });
+  await pg.click('#cmp-to');
+  await pg.keyboard.type('a');
+  let s = await st();
+  check(!s.open && s.expanded === 'false', `one letter suggests nothing yet: ${JSON.stringify(s)}`);
+  await pg.keyboard.type('n');
+  s = await st();
+  check(s.open && s.role === 'listbox' && s.expanded === 'true' && s.active === 'cmp-sugg-0' && s.selected === 'cmp-sugg-0' && s.options[0].startsWith('Smith, Ann'),
+    `two letters show a match, the most recent and frequent first, and the field says so: ${JSON.stringify(s)}`);
+  check(!s.options.some((o) => /prize|spam\.example/i.test(o)), `nothing is suggested from a spam sender or a spam message's Cc: ${JSON.stringify(s.options)}`);
+  check(!s.options.some((o) => /anne\.draft/.test(o)), `nor from a draft: ${JSON.stringify(s.options)}`);
+  check(s.options.some((o) => o.includes('annika@example.org')) && s.options.some((o) => o.includes('annette@example.org')), `every From, To and Cc of held mail feeds it: ${JSON.stringify(s.options)}`);
+  await pg.keyboard.press('Enter');
+  s = await st();
+  check(!s.open && s.value === '"Smith, Ann" <ann.smith@example.org>, ' && s.expanded === 'false' && s.composer, `Enter fills it as "Name" <addr>, ready for the next: ${JSON.stringify(s)}`);
+  await pg.keyboard.type('le');
+  s = await st();
+  check(s.open && s.options[0].startsWith('Bob Lee'), `a second address after a comma is suggested for, by a word in the middle of its name: ${JSON.stringify(s)}`);
+  await pg.keyboard.press('Tab');
+  s = await st();
+  check(s.value === '"Smith, Ann" <ann.smith@example.org>, "Bob Lee" <bob@example.org>, ' && s.id === 'cmp-to', `Tab chooses too, and keeps the cursor in the field: ${JSON.stringify(s)}`);
+  await pg.keyboard.type('ann');
+  s = await st();
+  check(s.open && !s.options.some((o) => o.includes('ann.smith@')), `someone already in the field is not offered again: ${JSON.stringify(s.options)}`);
+  await pg.keyboard.press('ArrowDown');
+  s = await st();
+  check(s.active === 'cmp-sugg-1' && s.selected === 'cmp-sugg-1', `Down moves the choice: ${JSON.stringify(s)}`);
+  await pg.keyboard.press('ArrowUp');
+  await pg.keyboard.press('ArrowUp');
+  s = await st();
+  check(s.active === 'cmp-sugg-' + (s.options.length - 1), `Up from the first wraps to the last: ${JSON.stringify(s)}`);
+  const before = s.value;
+  await pg.keyboard.press('Escape');
+  s = await st();
+  check(!s.open && s.value === before && s.composer && s.expanded === 'false', `Escape closes the list without changing the field or closing the composer: ${JSON.stringify(s)}`);
+  /* The mouse: a click on a suggestion in Cc. */
+  await pg.evaluate(() => { const v = document.querySelector('#cmp-to'); v.value = v.value.replace(/ann$/, ''); });
+  await pg.click('#cmp-cc-btn');
+  await pg.keyboard.type('Beatr');
+  s = await st();
+  check(s.open && s.id === 'cmp-cc' && s.options[0].startsWith('Beatrix Ortega'), `People feed it, in Cc too: ${JSON.stringify(s)}`);
+  await pg.click('#cmp-sugg-0');
+  s = await st();
+  check(s.value === '"Beatrix Ortega" <bea@example.net>, ' && s.id === 'cmp-cc' && !s.open, `a click chooses: ${JSON.stringify(s)}`);
+  await pg.click('#cmp-bcc-btn');
+  await pg.keyboard.type('prize');
+  s = await st();
+  check(!s.open, `a spam sender is not suggested by name either, in Bcc: ${JSON.stringify(s)}`);
+  await pg.fill('#cmp-bcc', '');
+  await pg.fill('#cmp-subj', 'Plans');
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  const sent = await pg.evaluate(() => __mock.calls.filter(([x]) => x === 'send_mail').map(([, a]) => a.draft)[0]);
+  check(sent && sent.to === '"Smith, Ann" <ann.smith@example.org>, "Bob Lee" <bob@example.org>' && sent.cc === '"Beatrix Ortega" <bea@example.net>' && sent.bcc === '',
+    `the quoted name with a comma reaches send_mail whole, without the trailing comma: ${JSON.stringify(sent)}`);
+  await pg.evaluate(() => { newDraft(); openCompose(); });
+  await pg.click('#cmp-to');
+  await pg.keyboard.type('exam');
+  s = await st();
+  check(s.options.length >= 4 && s.options.at(-1).includes('me@example.com') && s.options.at(-1).includes('Your mailbox') && !s.options.slice(0, -1).some((o) => o.includes('me@example.com')),
+    `the customer's own address ranks last: ${JSON.stringify(s.options)}`);
+  await pg.keyboard.press('Escape');
+  /* Built from addresses and names only: nothing that reads a message's
+     text is anywhere in it. */
+  const src = await pg.evaluate(() => [suggPool, suggUpdate, suggDraw, suggChoose].map(String).join('\n'));
+  check(!/body|bodyOf|bodiesOf|textOf|\.prev\b/.test(src), 'suggestions read no message text');
+  /* A name that could break the line is cleaned before it is written. */
+  const odd = await pg.evaluate(() => { S.contacts.push({ id: 'c-h3b', name: 'Eve "\u202e" <x>, Q', addr: 'eve@example.net' }); newDraft(); openCompose();
+    const inp = document.querySelector('#cmp-to'); inp.focus(); inp.value = 'eve'; inp.setSelectionRange(3, 3); inp.dispatchEvent(new Event('input'));
+    suggChoose(0); return inp.value; });
+  check(odd === '"Eve x, Q" <eve@example.net>, ', `a stranger's quotes and brackets never reach the line: ${JSON.stringify(odd)}`);
+  await pg.close();
+}
+
 console.log('\n— new mail as it arrives —');
 {
   const pg = await open(true);
