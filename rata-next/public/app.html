@@ -377,6 +377,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .sig-row .grow{min-width:0}
 .sig-row textarea{display:block;width:100%;margin-top:8px;min-height:74px;resize:vertical;border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font:inherit;font-size:13.5px;line-height:1.5;color:inherit;transition:box-shadow .15s}
 .sig-row textarea:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.diag-row{align-items:flex-start}
+.diag-row .grow{min-width:0}
+.diag-row textarea{display:block;width:100%;margin-top:8px;min-height:180px;resize:vertical;border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font-family:var(--mono);font-size:12px;line-height:1.5;color:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+.diag-row textarea:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.set-row span.diag-hint{display:block;margin-top:8px;color:var(--slate)}
+#help-sec a.btn{text-decoration:none}
 
 /* ---------- search ---------- */
 #view-search{flex-direction:column}
@@ -920,6 +926,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">About</div>
           <div class="set-row"><div class="grow"><b>Rata — standalone console</b><span class="mono" id="about-line"></span></div></div>
           <div class="set-row" id="upd-row" style="display:none"><div class="grow"><b>Updates</b><span id="upd-line">—</span></div><button class="btn" id="upd-check">Check for updates</button></div>
+        </div>
+        <div class="comp-sec" id="help-sec">
+          <div class="sec-label">Help &amp; diagnostics</div>
+          <div class="set-row diag-row" id="diag-row" style="display:none"><div class="grow"><b>Copy diagnostics</b><span>Your version, your system, and each mailbox's servers and last error, with no addresses, passwords or message text. Paste this into your bug report.</span><textarea id="diag-text" readonly spellcheck="false" aria-label="Diagnostics" style="display:none"></textarea><span class="diag-hint" id="diag-hint" role="status" style="display:none"></span></div><button class="btn" id="diag-copy">Copy diagnostics</button></div>
+          <div class="set-row"><div class="grow"><b>Help</b><span>Linking a mailbox, what RATA's messages mean, and how to report a problem, on mailrata.org.</span></div><a class="btn" id="help-link" href="https://mailrata.org/help" target="_blank" rel="noopener">Open help</a></div>
+          <div class="set-row"><div class="grow"><b>Report a bug</b><span>Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
         </div>
       </div>
     </section>
@@ -3117,9 +3129,39 @@ function renderSettings(){
   renderPlan();
   renderLinked();
   renderUpdateRow();if($('#upd-check'))$('#upd-check').onclick=()=>checkUpdate(true);
+  renderHelp();
   $('#about-line').textContent=`${S.messages.length} messages · ${S.contacts.length} people · ${S.documents.length} files · ${S.audit.length} audit entries · profile ${S.settings.profile}`;
 }
 $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim()||'User';save();toast('Name saved')});
+/* Help & diagnostics (H8). Copy diagnostics asks Rust for one plain-text
+   block (diagnostics.rs: no address, password, token, key or message text)
+   and puts it on the clipboard. The block is shown too, so the customer
+   sees what they are about to paste; where the webview will not write the
+   clipboard it is shown selected, to copy by hand. The website holds no
+   mailbox to diagnose, so there the section is Help and Report a bug only.
+   Both links go to the browser through open_link in the app (openLink). */
+function renderHelp(){
+  const row=$('#diag-row');if(row)row.style.display=window.__RATA_NATIVE__?'':'none';
+}
+async function copyDiagnostics(){
+  const b=$('#diag-copy'),ta=$('#diag-text'),hint=$('#diag-hint');
+  if(!b||!ta||!hint)return;
+  b.disabled=true;
+  let r;try{r=await apiFetch('/api/diagnostics')}catch(e){r={error:String(e&&e.message||e)}}
+  b.disabled=false;
+  if(!r||r.error||typeof r.text!=='string'){toast((r&&r.error)||'RATA could not put the diagnostics together.');return}
+  ta.value=r.text;ta.style.display='';hint.style.display='';
+  let copied=false;
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(r.text);copied=true}}catch(e){}
+  if(copied){hint.textContent='Copied. Paste this into your bug report.';toast('Diagnostics copied. Paste this into your bug report.');return}
+  hint.textContent='Copy it with Ctrl+C or Cmd+C, then paste it into your bug report.';
+  ta.focus();ta.select();
+}
+$('#diag-copy').addEventListener('click',copyDiagnostics);
+['#help-link','#bug-link'].forEach(id=>$(id).addEventListener('click',e=>{
+  if(!window.__RATA_NATIVE__)return;
+  e.preventDefault();openLink(e.currentTarget.getAttribute('href'));
+}));
 /* Signatures (0.1.36): one per mailbox, kept on this computer only — they
    are stripped from what travels to the online account (CLOUD_STRIP), as a
    phone number or an address is exactly what a breach would leak. Only the

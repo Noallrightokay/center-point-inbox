@@ -133,6 +133,18 @@ const CUT_MIN: usize = 8;
 /// before the line is shortened, or a cut could leave part of a secret that
 /// no longer matches.
 pub(crate) fn said(text: &str, secrets: &[String]) -> String {
+    said_within(text, secrets, SAID_MOST)
+}
+
+/// How many characters of a server's words [`said`] keeps.
+const SAID_MOST: usize = 200;
+
+/// [`said`], keeping at most `most` characters rather than 200. For the app
+/// to put an error it kept, a sentence of its own around a server's words,
+/// through the same rule again before it goes into the diagnostics block a
+/// customer pastes into a public bug report (H8): the sentence is often
+/// longer than 200 characters, and the server's words come at its end.
+pub fn said_within(text: &str, secrets: &[String], most: usize) -> String {
     let mut text = text.to_string();
     if !secrets.is_empty() {
         for secret in secrets.iter().filter(|s| !s.is_empty()) {
@@ -149,7 +161,7 @@ pub(crate) fn said(text: &str, secrets: &[String]) -> String {
         .unwrap_or_default()
         .chars()
         .filter(|c| !c.is_control() && !is_bidi_control(*c))
-        .take(200)
+        .take(most)
         .collect();
     line.trim().to_string()
 }

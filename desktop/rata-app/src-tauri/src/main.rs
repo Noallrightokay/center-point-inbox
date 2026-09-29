@@ -15,6 +15,7 @@
 
 mod commands;
 mod core;
+mod diagnostics;
 mod licence;
 mod links;
 mod mark;
@@ -191,6 +192,7 @@ fn main() {
             commands::read_attachment,
             commands::check_update,
             commands::install_update,
+            commands::diagnostics,
         ])
         .run(context)
         .expect("RATA could not start");
