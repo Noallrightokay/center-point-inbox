@@ -25,7 +25,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 // mail server on this machine, which is exactly what this module exists to
 // refuse. So the one exception is a feature that cannot reach a customer: a
 // release build with it on does not compile, and a debug build without it is
-// unchanged. See `loopback_test_server`.
+// unchanged. See `loopback_test_server`. This gate is on debug assertions,
+// which a release profile can switch on; `build.rs` closes that by refusing
+// the feature whenever the profile is release (SEC-5, review row 5). Keep both.
 #[cfg(all(feature = "loopback-tests", not(debug_assertions)))]
 compile_error!(
     "the loopback-tests feature lets the outbound guard connect to 127.0.0.1 and is for debug test builds only; it must never be on in a release build"
@@ -182,7 +184,8 @@ pub fn check_literal(host: &str) -> Option<HostVerdict> {
 /// Whether `ip` is the loopback tests' own mail server: `127.0.0.1` written as
 /// exactly that, and only in a debug build with the `loopback-tests` feature.
 /// Always false otherwise — the release build cannot even be compiled with the
-/// feature on (see the `compile_error!` at the top of this file).
+/// feature on (see the `compile_error!` at the top of this file, and
+/// `build.rs`).
 ///
 /// Deliberately narrow. Not the rest of 127/8, not `::1`, not
 /// `::ffff:127.0.0.1` or any other spelling, not `localhost` (refused as a
