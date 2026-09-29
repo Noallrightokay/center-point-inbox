@@ -181,9 +181,13 @@ export default async function run(state) {
     const text = entities(html);
     check(files.length >= 5, `BETA.md §1 names ${files.length} files`);
     for (const f of files) check(text.includes(f), `the page names ${f}`);
-    for (const step of ['More info', 'Run anyway', 'right-click', 'chmod +x', 'sudo apt install ./RATA_<version>_amd64.deb', 'RATA <version> beta']) {
+    for (const step of ['More info', 'Run anyway', 'Privacy & Security', 'Open Anyway', 'chmod +x', 'sudo apt install ./RATA_<version>_amd64.deb', 'RATA <version> beta']) {
       check(text.includes(step), `install says "${step}"`);
     }
+    /* macOS 15 took away right-click, Open for an unsigned app; Open Anyway
+       in System Settings is the way past Gatekeeper now, in both places. */
+    check(!/right-click/i.test(text) && install.includes('**Open Anyway**'),
+      'macOS: Open Anyway in System Settings, not right-click, Open (here and in BETA.md §1)');
     const report = html.slice(html.indexOf('id="report"'));
     check(report.includes('https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md'),
       'report links the Beta bug template');

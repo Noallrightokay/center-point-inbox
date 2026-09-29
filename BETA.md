@@ -24,12 +24,16 @@ Download from the latest release:
 | Platform | File | First launch |
 |---|---|---|
 | Windows | `RATA_<version>_x64-setup.exe` | "Windows protected your PC" → **More info** → **Run anyway** |
-| macOS, Apple silicon | `RATA_<version>_aarch64.dmg` | Right-click the app → **Open** → **Open** |
-| macOS, Intel | `RATA_<version>_x64.dmg` | Right-click the app → **Open** → **Open** |
+| macOS, Apple silicon | `RATA_<version>_aarch64.dmg` | Open it once and choose **Done**, then System Settings → **Privacy & Security** → **Open Anyway** |
+| macOS, Intel | `RATA_<version>_x64.dmg` | Open it once and choose **Done**, then System Settings → **Privacy & Security** → **Open Anyway** |
 | Linux | `RATA_<version>_amd64.deb`, or `RATA_<version>_amd64.AppImage` for other distributions | `sudo apt install ./RATA_<version>_amd64.deb`, or make the `.AppImage` executable (`chmod +x`) and run it |
 
 The warnings are because the installers are not code-signed yet. That is
-expected for the beta.
+expected for the beta. On macOS 15, right-click → **Open** no longer gets past
+the warning; System Settings → **Privacy & Security** → **Open Anyway** does.
+If macOS says instead that **RATA is damaged and can't be opened**, there is no
+Open Anyway: run `xattr -dr com.apple.quarantine /Applications/RATA.app` in
+Terminal, open RATA again, and tell us which of the two messages you saw.
 
 **Check your version:** it is in the window's title bar, as `RATA <version> beta`.
 Put it in every bug report.

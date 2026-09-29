@@ -1,14 +1,14 @@
 {
-  "name": "RATA \u2014 Every message. Every language. One inbox.",
+  "name": "RATA",
   "short_name": "RATA",
-  "description": "Texts, email, Slack, and Discord \u2014 translated automatically and unified into one inbox, with DLP and a tamper-evident audit trail built in.",
+  "description": "RATA is a desktop mail client for Windows, macOS and Linux that connects to your mailbox directly. Your password and your mail stay on your computer.",
   "id": "rata-console",
   "start_url": "./app.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0A0E1A",
-  "theme_color": "#0A0E1A",
+  "background_color": "#F5F6F8",
+  "theme_color": "#F5F6F8",
   "categories": [
     "productivity",
     "business",
@@ -32,28 +32,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Messages",
-      "url": "./app.html",
-      "icons": [
-        {
-          "src": "icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "Rata Assist briefing",
-      "url": "./app.html#assist",
-      "icons": [
-        {
-          "src": "icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
     }
   ]
 }

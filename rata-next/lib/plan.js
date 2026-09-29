@@ -9,9 +9,9 @@
    Three plans, and each one is defined by the thing it makes possible:
 
      Base        up to two mailboxes, arriving in one Center Point inbox,
-                 translated, with the Format Bridge
+                 translation when asked, with the Format Bridge
      Pro         more than two mailboxes, and the option to put them side by
-                 side, with summaries
+                 side, with summaries and the briefing
      Enterprise  the CRM, texts and automations on top
 
    The Center Point inbox is not the limitation at the bottom of the ladder —
@@ -41,12 +41,12 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
-    /* RATA-hosted addresses. Base connects the mailboxes you already have; it
-       does not hand out new ones. */
+    /* RATA-hosted addresses, which do not exist: RATA hosts no mail. Every
+       plan connects the mailboxes you already have. */
     ratamail: 0,
     domains: 0,
     sellable: true,
-    blurb: 'Up to two mailboxes in one Center Point inbox, translated as they arrive, and any file converted to any format.',
+    blurb: 'Up to two mailboxes in one inbox, translation of any message when you ask, and documents and attachments converted between formats.',
   },
   pro: {
     label: 'RATA Pro',
@@ -61,12 +61,13 @@ export const PLANS = {
     crm: false,
     sms: false,
     automations: false,
-    /* Addresses at mailrata.org, hosted by RATA rather than connected from
-       somewhere else. Their own domain is the paid add-on below. */
+    /* A flag for addresses at mailrata.org, which RATA does not host and
+       nothing reads. Kept as it was so no behaviour changes; no sentence may
+       offer it (tests/app.test.mjs checks the blurb). */
     ratamail: UNLIMITED,
     domains: 0,
     sellable: true,
-    blurb: 'Everything in Base, with more than two mailboxes, the option to view them side by side, summaries of what arrived, and your own @mailrata.org addresses.',
+    blurb: 'Everything in Base, with as many mailboxes as you have, the option to view them side by side, summaries, and a briefing of what needs you.',
   },
   enterprise: {
     label: 'RATA Enterprise',
@@ -111,10 +112,11 @@ export const NO_PLAN = {
 
 /* Mail on your own domain, for a plan that does not include it.
 
-   Pro gets addresses at mailrata.org. Hosting mail on a customer's own domain
-   is a different amount of work — their MX has to point here, and their mail
-   breaking becomes RATA's support call — so it is charged for rather than
-   folded in. Enterprise includes as many as they like.
+   RATA hosts no mail, at mailrata.org or anywhere else. Hosting mail on a
+   customer's own domain would be a different amount of work — their MX would
+   have to point here, and their mail breaking would become RATA's support
+   call — so it would be charged for rather than folded in. Enterprise, not on
+   sale, would include as many as they like.
 
    Priced per domain and per month, so somebody with three domains pays for
    three. Stripe carries it as a quantity on the same subscription. */
@@ -248,7 +250,7 @@ export function domainRefusal(plan, used, purchased = 0, env) {
 
   const have = purchased
     ? `You are hosting ${used} domain${used === 1 ? '' : 's'}.`
-    : `${planDef(plan).label} includes addresses at mailrata.org rather than mail on your own domain.`;
+    : `${planDef(plan).label} does not include mail on your own domain.`;
   const alt = PLANS.enterprise.sellable
     ? ` Or ${PLANS.enterprise.label} (${money(PLANS.enterprise.price)}/month) includes as many as you like.`
     : '';

@@ -180,6 +180,17 @@ export default async function run(state) {
     check((app.includes(`.slice(0,${LIMITS.briefingEach})`) || app.includes(`AI_BRIEF_EACH=${LIMITS.briefingEach}`)) && P.includes(`the first ${thousands(LIMITS.briefingEach)} characters`),
       `the start of each: ${thousands(LIMITS.briefingEach)} characters`);
     check(app.includes(`AI_TEXT=${LIMITS.text},`) && P.includes(`up to the first ${thousands(LIMITS.text)} characters`), `a summary or translation: up to ${thousands(LIMITS.text)} characters, and the page cuts to exactly that`);
+    /* The home page's privacy column says the same, in fewer words (BUG-D:
+       it once said only one message ever reached the relay, and that the
+       site kept only an email, a plan and a key). */
+    const home = visible(readFileSync(join(SITE, 'public', 'index.html'), 'utf8'));
+    check(home.includes(`the first ${thousands(LIMITS.briefingEach)} characters of up to ${max} recent messages in your inbox from the last ${days} days`),
+      'the home page gives the briefing the same numbers');
+    check(home.includes("Your preferences, if you use RATA's page here") && home.includes('The desktop app uploads none of this'),
+      'and names the synced preferences, which the desktop app does not upload');
+    check(home.includes('Cancel any time in the billing portal, which you reach from Settings when signed in at mailrata.org')
+      && T.includes('in the billing portal, which you reach from Settings when signed in at mailrata.org'),
+      'and cancelling is where the terms say: the billing portal, from Settings');
     /* What the online account keeps of someone's preferences, as app.html
        sends it. A field added to either list changes the page. */
     const fields = app.match(/const CLOUD_FIELDS=(\[[^\]]*\]);/);
