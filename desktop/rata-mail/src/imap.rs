@@ -2975,7 +2975,9 @@ pub enum Prior {
     /// None was named.
     None,
     /// It carried this draft's own id and was removed for good — the one
-    /// thing RATA ever deletes permanently.
+    /// thing RATA ever deletes permanently. On Gmail (`X-GM-EXT-1`) it was
+    /// moved to Gmail's Trash instead, since an expunge there only removes
+    /// the Drafts label; either way it has left Drafts.
     Replaced,
     /// It carried this draft's id and is flagged `\Deleted`, but the server
     /// has no UIDPLUS, so it was not expunged: a plain EXPUNGE would also
@@ -3131,22 +3133,24 @@ where
         Some((validity, uid)) if validity == generation && uid != 0 => Some(uid),
         // No APPENDUID: the newest copy carrying this id, which is the one
         // just saved — never the one before it.
-        _ => timeout(
-            COMMAND,
-            search(
-                session,
-                &format!("UNDELETED HEADER X-RATA-Draft \"{draft_id}\""),
-            ),
-        )
-        .await
-        .ok()
-        .flatten()
-        .and_then(|found| {
-            found
+        _ => {
+            let found = timeout(
+                COMMAND,
+                search(
+                    session,
+                    &format!("UNDELETED HEADER X-RATA-Draft \"{draft_id}\""),
+                ),
+            )
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+            let found: Vec<u32> = found
                 .into_iter()
                 .filter(|u| *u != 0 && Some(*u) != before)
-                .max()
-        }),
+                .collect();
+            newest_carrying(session, &found, draft_id).await
+        }
     };
     let Some(uid) = uid.filter(|_| generation != 0) else {
         return not_saved("the server took it but RATA could not find it again");
@@ -3164,6 +3168,31 @@ where
         id: message_key(acct, &Folder::Drafts, uid),
         prior,
     }
+}
+
+/// Of `uids` in the Drafts folder just selected, the newest whose message
+/// carries exactly one `X-RATA-Draft` header and it is `draft_id` — the
+/// check [`replace`] makes. IMAP's HEADER search matches a substring
+/// (P3-3), so a search hit alone could be another message whose header
+/// merely contains the id, which Send or Discard would then put in the
+/// Trash.
+async fn newest_carrying<T>(session: &mut Session<T>, uids: &[u32], draft_id: &str) -> Option<u32>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if uids.is_empty() {
+        return None;
+    }
+    let found =
+        answered(session.uid_fetch(join(uids), "(UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])"))
+            .await
+            .ok()?;
+    found
+        .iter()
+        .filter(|f| header_values(f.header().unwrap_or_default(), "X-RATA-Draft") == [draft_id])
+        .filter_map(|f| f.uid)
+        .filter(|u| uids.contains(u))
+        .max()
 }
 
 /// Remove `prior` from the Drafts folder just selected — only if it is
@@ -3201,6 +3230,21 @@ where
         Ok(Ok(c)) => c,
         _ => return Prior::Failed,
     };
+    // Gmail (P3-2): expunging from [Gmail]/Drafts only takes the Drafts
+    // label off, and the copy stays in All Mail — in the customer's quota,
+    // and under RATA's own Archive. Moving it to Gmail's Trash takes it out
+    // of All Mail, and Gmail empties the Trash after 30 days. The proof above
+    // still decides what is moved. `destination` only LISTs, so Drafts stays
+    // selected.
+    if caps.has_str("X-GM-EXT-1") {
+        let Some(trash) = destination(session, &Action::Trash).await else {
+            return Prior::Failed;
+        };
+        return match timeout(COMMAND, session.uid_mv(&set, &trash)).await {
+            Ok(Ok(())) => Prior::Replaced,
+            _ => Prior::Failed,
+        };
+    }
     if !matches!(
         timeout(COMMAND, store(session, &set, "+FLAGS.SILENT (\\Deleted)")).await,
         Ok(Ok(()))
@@ -6640,6 +6684,10 @@ mod tests {
         /// Already in Drafts: UID and whole message.
         held: Vec<(u32, String)>,
         next_uid: u32,
+        /// Match `UID SEARCH … HEADER X-RATA-Draft "<id>"` anywhere in the
+        /// header's value, as IMAP's HEADER search does (RFC 3501: a
+        /// substring), rather than only the exact line.
+        substring: bool,
     }
 
     impl DraftScript {
@@ -6652,6 +6700,16 @@ mod tests {
                 refuse: false,
                 held,
                 next_uid: 20,
+                substring: false,
+            }
+        }
+
+        /// Gmail's Drafts: its folder names and its own extension.
+        fn gmail(held: Vec<(u32, String)>) -> Self {
+            DraftScript {
+                caps: "UIDPLUS MOVE X-GM-EXT-1",
+                list: GMAIL_DRAFTS,
+                ..DraftScript::dovecot(held)
             }
         }
     }
@@ -6663,6 +6721,8 @@ mod tests {
         /// UID, message, flagged \Deleted.
         held: Vec<(u32, String, bool)>,
         expunged: Vec<u32>,
+        /// UID and the folder it was moved to.
+        moved: Vec<(u32, String)>,
     }
 
     /// A draft as some client saved it, with `ids` as its X-RATA-Draft headers.
@@ -6791,7 +6851,16 @@ mod tests {
                         .held
                         .iter()
                         .filter(|(_, raw, deleted)| {
-                            !deleted && raw.contains(&format!("X-RATA-Draft: {want}\r\n"))
+                            let head = raw.split("\r\n\r\n").next().unwrap_or_default();
+                            !deleted
+                                && if script.substring {
+                                    head.split("\r\n").any(|l| {
+                                        l.to_ascii_lowercase().starts_with("x-rata-draft:")
+                                            && l.contains(&want)
+                                    })
+                                } else {
+                                    raw.contains(&format!("X-RATA-Draft: {want}\r\n"))
+                                }
                         })
                         .map(|(u, _, _)| u.to_string())
                         .collect();
@@ -6837,6 +6906,13 @@ mod tests {
                             m.2 = true;
                         }
                     }
+                    String::new()
+                } else if up.starts_with("UID MOVE") {
+                    let uid = uid_arg(&cmd);
+                    let to = cmd.split('"').nth(1).unwrap_or_default().to_string();
+                    let mut b = shared.lock().unwrap();
+                    b.held.retain(|m| m.0 != uid);
+                    b.moved.push((uid, to));
                     String::new()
                 } else if up.starts_with("UID EXPUNGE") && !script.caps.contains("UIDPLUS") {
                     done = format!("{tag} BAD unknown command\r\n");
@@ -7126,6 +7202,79 @@ mod tests {
                 "{:?}",
                 b.log
             );
+        });
+    }
+
+    #[test]
+    fn on_gmail_the_copy_before_goes_to_the_trash_not_into_all_mail() {
+        // P3-2: expunging from [Gmail]/Drafts only takes the Drafts label
+        // off, and the copy stays in All Mail. Gmail's Trash takes it out.
+        rt_act().block_on(async {
+            let (mut s, state) =
+                scripted_drafts(DraftScript::gmail(vec![(3, stored_draft(&[DRAFT_ID]))])).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!((at.uid, prior), (20, Prior::Replaced));
+            let b = state.lock().unwrap();
+            // Proven first, exactly as anywhere else.
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c == "UID FETCH 3 (UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])"),
+                "{:?}",
+                b.log
+            );
+            assert_eq!(b.moved, vec![(3, "[Gmail]/Trash".to_string())]);
+            assert!(
+                b.log.iter().any(|c| c == "UID MOVE 3 \"[Gmail]/Trash\""),
+                "{:?}",
+                b.log
+            );
+            // Neither flagged nor expunged.
+            assert!(
+                !b.log.iter().any(|c| {
+                    let u = c.to_ascii_uppercase();
+                    u.starts_with("UID STORE") || u.contains("EXPUNGE")
+                }),
+                "{:?}",
+                b.log
+            );
+            assert!(b.expunged.is_empty());
+        });
+
+        // And a copy that is not provably RATA's is not moved either.
+        rt_act().block_on(async {
+            let (mut s, state) =
+                scripted_drafts(DraftScript::gmail(vec![(3, stored_draft(&[OTHER_ID]))])).await;
+            let (_, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(prior, Prior::NotOurs);
+            let b = state.lock().unwrap();
+            assert!(changed(&b.log).is_empty(), "{:?}", b.log);
+            assert!(b.moved.is_empty());
+        });
+    }
+
+    #[test]
+    fn without_appenduid_a_message_whose_header_only_contains_the_id_is_not_taken() {
+        // P3-3: IMAP's HEADER search matches a substring, so the newest
+        // match can be another message whose X-RATA-Draft merely contains
+        // this draft's id. RATA must not take that one as its copy.
+        rt_act().block_on(async {
+            let near_miss = stored_draft(&[&format!("x{DRAFT_ID}")]);
+            let mut script =
+                DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID])), (30, near_miss)]);
+            script.appenduid = false;
+            script.substring = true;
+            let (mut s, state) = scripted_drafts(script).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(at, ours(20));
+            assert_eq!(prior, Prior::Replaced);
+            let b = state.lock().unwrap();
+            assert_eq!(b.expunged, vec![3]);
+            // The near miss is where it was, untouched.
+            assert!(b.held.iter().any(|m| m.0 == 30 && !m.2), "{:?}", b.held);
         });
     }
 
