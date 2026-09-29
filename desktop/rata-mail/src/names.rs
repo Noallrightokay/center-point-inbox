@@ -14,7 +14,10 @@
 /// program passes itself off as a PDF. Nor can blank space hide the real
 /// extension: a file dialog cuts a long name at its end, so
 /// `invoice.pdf<35 spaces>.exe` read as `invoice.pdf`. Every run of blanks is
-/// one space, and none is left before the last extension.
+/// one space, and none is left before the last extension. And nothing that
+/// draws nothing is kept ([`invisible`]): `invoice.pdf<U+200B>.exe` showed as
+/// `invoice.pdf`, and was not flagged, because the zero-width space sat
+/// between the two extensions.
 pub fn safe_file_name(name: &str) -> String {
     // Every Unicode space, and the characters fonts draw as a gap: the Hangul
     // fillers and the blank Braille cell.
@@ -31,6 +34,7 @@ pub fn safe_file_name(name: &str) -> String {
         !c.is_control()
             && !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')
             && !matches!(*c as u32, 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069 | 0x061c)
+            && !invisible(*c)
     }) {
         if !blank(c) {
             clean.push(c);
@@ -88,18 +92,24 @@ pub fn safe_file_name(name: &str) -> String {
 /// as it is, since the customer must be able to save what was sent; this is
 /// how the reading pane can tell, and ask before saving. It judges the name
 /// `safe_file_name` gives, so the sender's name and the cleaned one answer
-/// alike (`invoice.pdf<spaces>.exe`, `invoice.pdf.exe.` included).
+/// alike (`invoice.pdf<spaces>.exe`, `invoice.pdf.exe.` included). A
+/// character drawn as a full stop counts as one here ([`looks_like_a_dot`]):
+/// `invoice<U+2024>pdf.exe` is a program Windows shows as `invoice.pdf`.
 pub fn looks_disguised(name: &str) -> bool {
-    const DOCUMENT: [&str; 13] = [
+    // Documents a customer expects to open, and program types Windows runs,
+    // merges into the registry, follows or mounts on a double-click (review
+    // P3-4 added csv, rtf, html and htm; cpl, reg, url, iso and one).
+    const DOCUMENT: [&str; 17] = [
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "jpg", "jpeg", "png", "gif", "txt",
-        "zip",
+        "zip", "csv", "rtf", "html", "htm",
     ];
-    const PROGRAM: [&str; 22] = [
+    const PROGRAM: [&str; 27] = [
         "exe", "msi", "bat", "cmd", "scr", "ps1", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta",
-        "jar", "com", "pif", "lnk", "app", "dmg", "pkg", "sh", "command",
+        "jar", "com", "pif", "lnk", "app", "dmg", "pkg", "sh", "command", "cpl", "reg", "url",
+        "iso", "one",
     ];
     let clean = safe_file_name(name);
-    let mut parts = clean.rsplit('.');
+    let mut parts = clean.rsplit(|c: char| c == '.' || looks_like_a_dot(c));
     // Three parts at least: a name, then two extensions. The cleaned name
     // never starts with a dot, so the name part is never empty.
     let (Some(last), Some(before), Some(_)) = (parts.next(), parts.next(), parts.next()) else {
@@ -107,6 +117,69 @@ pub fn looks_disguised(name: &str) -> bool {
     };
     DOCUMENT.iter().any(|e| before.eq_ignore_ascii_case(e))
         && PROGRAM.iter().any(|e| last.eq_ignore_ascii_case(e))
+}
+
+/// Characters that draw nothing: every format character (Unicode category
+/// Cf), and the rest of Default_Ignorable_Code_Point (the combining grapheme
+/// joiner, variation selectors, Khmer and Mongolian ones). Rust's
+/// `is_control` covers only category Cc. The Hangul fillers are left to
+/// `blank`, which turns them into a space. The bidirectional controls are Cf
+/// too and are also named where they are removed. Taking U+200C and U+200D
+/// out of a Persian name or an emoji sequence is a small cost in a file name.
+fn invisible(c: char) -> bool {
+    matches!(
+        c as u32,
+        // Category Cf (Unicode 16).
+        0x00ad
+            | 0x0600..=0x0605
+            | 0x061c
+            | 0x06dd
+            | 0x070f
+            | 0x0890..=0x0891
+            | 0x08e2
+            | 0x180e
+            | 0x200b..=0x200f
+            | 0x202a..=0x202e
+            | 0x2060..=0x2064
+            | 0x2066..=0x206f
+            | 0xfeff
+            | 0xfff9..=0xfffb
+            | 0x110bd
+            | 0x110cd
+            | 0x13430..=0x1343f
+            | 0x1bca0..=0x1bca3
+            | 0x1d173..=0x1d17a
+            | 0xe0001
+            | 0xe0020..=0xe007f
+            // The rest of Default_Ignorable_Code_Point, less the Hangul
+            // fillers: reserved, unassigned or drawing nothing.
+            | 0x034f
+            | 0x17b4..=0x17b5
+            | 0x180b..=0x180f
+            | 0x2065
+            | 0xfe00..=0xfe0f
+            | 0xfff0..=0xfff8
+            | 0xe0000..=0xe0fff
+    )
+}
+
+/// Characters drawn as a full stop that Windows does not take for one, so
+/// the extension it hides is whatever follows the last real dot.
+fn looks_like_a_dot(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2024}' // one dot leader
+            | '\u{fe52}' // small full stop
+            | '\u{ff0e}' // fullwidth full stop
+            | '\u{0701}' // Syriac supralinear full stop
+            | '\u{0702}' // Syriac sublinear full stop
+            | '\u{a4f8}' // Lisu letter tone mya ti
+            | '\u{10a50}' // Kharoshthi punctuation dot
+            | '\u{2e31}' // word separator middle dot
+            | '\u{00b7}' // middle dot
+            | '\u{2027}' // hyphenation point
+            | '\u{0387}' // Greek ano teleia
+    )
 }
 
 #[cfg(test)]
@@ -228,6 +301,120 @@ mod tests {
             "invoice.pdf. exe",
             "invoice.pdfx.exe",
             "",
+        ] {
+            assert!(!looks_disguised(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn nothing_invisible_or_dot_shaped_hides_a_program() {
+        // Review P3-1: a character that draws nothing, or one drawn as a full
+        // stop that Windows does not read as one, kept `invoice.pdf.exe` from
+        // being flagged while Explorer still showed it as `invoice.pdf`.
+        for name in [
+            "invoice.pdf\u{200b}.exe",
+            "invoice.pd\u{200b}f.exe",
+            "invoice.pdf\u{2060}.exe",
+            "invoice.pdf\u{feff}.exe",
+            "invoice.pdf\u{ad}.exe",
+            "invoice.pdf\u{180e}.exe",
+            "invoice.pdf\u{e0020}.exe",
+            "invoice\u{2024}pdf.exe",
+            "invoice\u{ff0e}pdf.exe",
+            "invoice\u{fe52}pdf.exe",
+        ] {
+            assert!(looks_disguised(name), "{name:?}");
+            assert!(looks_disguised(&safe_file_name(name)), "{name:?}");
+        }
+        assert_eq!(safe_file_name("invoice.pdf\u{200b}.exe"), "invoice.pdf.exe");
+        // Every format character (Unicode category Cf) goes from the name, and
+        // so does every other character that draws nothing.
+        for c in [
+            '\u{ad}',
+            '\u{600}',
+            '\u{605}',
+            '\u{6dd}',
+            '\u{70f}',
+            '\u{890}',
+            '\u{8e2}',
+            '\u{180e}',
+            '\u{200b}',
+            '\u{200c}',
+            '\u{200d}',
+            '\u{2060}',
+            '\u{2064}',
+            '\u{206a}',
+            '\u{206f}',
+            '\u{feff}',
+            '\u{fff9}',
+            '\u{fffb}',
+            '\u{110bd}',
+            '\u{110cd}',
+            '\u{13430}',
+            '\u{1343f}',
+            '\u{1bca0}',
+            '\u{1d173}',
+            '\u{e0001}',
+            '\u{e007f}',
+            '\u{34f}',
+            '\u{17b4}',
+            '\u{180b}',
+            '\u{fe0f}',
+            '\u{e0100}',
+        ] {
+            assert_eq!(
+                safe_file_name(&format!("re{c}port.pdf")),
+                "report.pdf",
+                "U+{:04X}",
+                c as u32
+            );
+        }
+        // A look-alike dot stays in the name (it is what was sent, and Windows
+        // takes the part after the real dot as the extension)...
+        assert_eq!(
+            safe_file_name("invoice\u{2024}pdf.exe"),
+            "invoice\u{2024}pdf.exe"
+        );
+        // ...and in a name that is not dressed up it changes nothing.
+        for name in [
+            "Q3\u{b7}figures.pdf",
+            "notes\u{2024}v2.txt",
+            "setup\u{ff0e}x64.exe",
+            "invoice\u{2024}exe.pdf",
+        ] {
+            assert!(!looks_disguised(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_wider_lists_catch_more_disguises_and_leave_honest_names_alone() {
+        // Review P3-4: program types Windows runs or mounts on a double-click,
+        // and documents a customer expects to open.
+        for name in [
+            "invoice.pdf.cpl",
+            "settings.txt.reg",
+            "link.pdf.url",
+            "invoice.pdf.iso",
+            "notes.docx.one",
+            "report.csv.exe",
+            "letter.rtf.exe",
+            "page.html.exe",
+            "page.htm.scr",
+            "REPORT.CSV.ISO",
+        ] {
+            assert!(looks_disguised(name), "{name}");
+        }
+        for name in [
+            "setup.exe",
+            "backup.iso",
+            "tweak.reg",
+            "shortcut.url",
+            "notebook.one",
+            "control.cpl",
+            "report.csv",
+            "page.html",
+            "v2.1.iso",
+            "invoice.pdf.csv",
         ] {
             assert!(!looks_disguised(name), "{name}");
         }
