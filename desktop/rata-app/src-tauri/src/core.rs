@@ -797,7 +797,7 @@ impl Rata {
             for done in futures::future::join_all(running).await {
                 match done {
                     Ok((email, mut found)) => {
-                        out.messages.append(&mut found.messages);
+                        out.messages.append(&mut as_links(found.messages));
                         out.flags.append(&mut found.flags);
                         out.gaps.extend(found.gaps.into_iter().map(|gap| MailGap {
                             email: email.clone(),
@@ -1276,7 +1276,7 @@ impl Rata {
             error,
         };
         match found {
-            Fetched::Messages(messages) => Ok(messages),
+            Fetched::Messages(messages) => Ok(as_links(messages)),
             Fetched::Auth(error) => {
                 self.note_auth_failure(email);
                 Err(problem("auth", error))
@@ -1854,9 +1854,98 @@ fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     ))
 }
 
+/// Messages on their way to the page, with each mailing list's web address
+/// for leaving it (`List-Unsubscribe`) checked by the one rule for a link,
+/// `links::classify`: http or https, a host, no user name making it read as
+/// another site. One that fails is dropped, and an `Unsubscribe` left with
+/// nothing goes too, so the page shows no button for it. The one that passes
+/// is sent as `classify` wrote it (a look-alike host in its `xn--` form), so
+/// the host the page names is the one the browser would go to. The page
+/// still only hands it to `open_link`, which checks it again, after the
+/// customer said yes.
+fn as_links(mut messages: Vec<Message>) -> Vec<Message> {
+    use crate::links::{Link, classify};
+    for m in &mut messages {
+        m.unsubscribe = m.unsubscribe.take().and_then(|mut u| {
+            u.https = u.https.and_then(|h| match classify(&h) {
+                Some(Link::Web(url)) => Some(url.to_string()),
+                _ => None,
+            });
+            (u.https.is_some() || u.mailto.is_some()).then_some(u)
+        });
+    }
+    messages
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_message() -> Message {
+        Message {
+            id: "k_1".into(),
+            folder: Folder::Inbox,
+            acct: "me@example.com".into(),
+            acct_label: "me@example.com".into(),
+            from_name: "News".into(),
+            from_addr: "news@list.example".into(),
+            to_name: "me@example.com".into(),
+            to_addr: "me@example.com".into(),
+            to_all: vec!["me@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+            in_reply_to: String::new(),
+            subject: "This week".into(),
+            preview: "News".into(),
+            body: "News".into(),
+            ts: 1,
+            unread: true,
+            starred: false,
+            uid: 1,
+            uidvalidity: 7,
+            message_id: "n1@list.example".into(),
+            draft_id: None,
+            truncated: false,
+            attachments: vec![],
+            html: false,
+            reply_to: String::new(),
+            unsubscribe: None,
+        }
+    }
+
+    #[test]
+    fn a_list_s_web_address_reaches_the_page_only_as_a_link_would() {
+        use rata_mail::body::{Unsubscribe, unsubscribe};
+        let with = |value: &str| {
+            let mut m = sample_message();
+            m.unsubscribe = unsubscribe(value);
+            as_links(vec![m]).remove(0).unsubscribe
+        };
+        assert_eq!(
+            with("<https://list.example/u?id=1>"),
+            Some(Unsubscribe {
+                https: Some("https://list.example/u?id=1".into()),
+                mailto: None
+            })
+        );
+        // A user name makes it read as the bank while it goes elsewhere.
+        assert_eq!(with("<https://bank.example@evil.example/u>"), None);
+        assert_eq!(with("<https://user:pw@list.example/u>"), None);
+        // Refused as a link, the mailto beside it still stands.
+        let u = with("<https://bank.example@evil.example/u>, <mailto:leave@list.example>").unwrap();
+        assert_eq!(u.https, None);
+        assert_eq!(u.mailto.as_deref(), Some("mailto:leave%40list.example"));
+        // A look-alike host is sent in the form the browser will go to.
+        let u = with("<https://аpple.com/u>").unwrap();
+        assert!(
+            u.https.as_deref().unwrap().starts_with("https://xn--"),
+            "{u:?}"
+        );
+        // Nothing to go on, nothing sent.
+        let mut m = sample_message();
+        m.unsubscribe = None;
+        assert_eq!(as_links(vec![m]).remove(0).unsubscribe, None);
+    }
     use crate::vault::Memory;
 
     fn rt() -> tokio::runtime::Runtime {
