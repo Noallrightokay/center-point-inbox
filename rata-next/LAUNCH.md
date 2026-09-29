@@ -74,7 +74,7 @@ openssl pkey -in /etc/rata/licence.key -pubout   # -> LICENCE_PUBLIC_KEY
 
 The second is the same PEM as the GitHub secret `RATA_LICENCE_PUBLIC_KEY`.
 If `openssl pkey` refuses the file, it is not a PEM key: stop and find out
-how `/etc/rata/mint.sh` reads it before setting anything. Hosting panels
+how `infrastructure/licence/mint.sh` reads it before setting anything. Hosting panels
 mangle multi-line values; the site accepts the PEM with real newlines or
 with them written as `\n` (LICENSING.md §2).
 
@@ -251,7 +251,7 @@ credentials; the second needs you.
    not the local one with a reason.
 9. **Renewal.** The app renews when it starts, online, with a licence inside
    its last week. Mint a short key on the VPS for the address that paid in
-   check 6 (`/etc/rata/mint.sh <that address> pro 6`), paste it into the app,
+   check 6 (`sudo infrastructure/licence/mint.sh <that address> pro 6`), paste it into the app,
    then quit and reopen RATA: Settings → Current plan now runs about 30 days
    out, not 6. Renewal from the app has never worked before this deploy.
 10. **Delete the account** (on the website, Settings → **Delete account**). It should

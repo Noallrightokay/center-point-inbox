@@ -36,7 +36,8 @@ You need your own key, tied to your email address. Ask the project owner for
 one; paste it into the box RATA shows on first launch. One line, no spaces.
 
 *(Owner: mint one per tester on the VPS
-(`/etc/rata/mint.sh their@email.com pro 30`) and send it privately. Keys are
+with `infrastructure/licence/mint.sh` from this repository (`sudo ./mint.sh check` first, then
+`sudo ./mint.sh their@email.com pro 30`) and send it privately. Keys are
 signed, not secret-encrypted, but they are still a year's access if you mint
 them for a year; 30 days is plenty for a beta.)*
 
