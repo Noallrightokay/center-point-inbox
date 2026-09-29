@@ -211,6 +211,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         if (M.sendFails) throw 'smtp.example.com refused the message';
         return { via: 'smtp.example.com', messageId: 'rata' + M.sent.length + '@example.com' };
       case 'change_messages':
+        /* What the mailbox answers, when a check says (BUG-M). */
+        if (M.change) return M.change(args);
         if (M.changeFails) return { ok: false, done: [], gone: [], kind: 'net', error: 'imap.example.com could not be reached' };
         return { ok: true, done: args.uids, gone: [] };
       default: throw 'unmocked ' + cmd;
@@ -355,6 +357,91 @@ console.log('\n— several messages archived, moved home, or filed at once —')
   check(a.length === 1 && JSON.stringify(a[0].action) === '{"move":{"named":"Travel"}}' && a[0].uids.join() === '7,8' && a[0].email === 'me@example.com',
     `Move to files the whole selection into that folder on one connection: ${JSON.stringify(a)}`);
   check(!(await has('me@example.com_7')) && /Moved to Travel — 2/.test((await toasts(pg))[0] || ''), 'and it leaves the list at once');
+  await pg.close();
+}
+
+console.log('\n— mail the server kept is never hidden: a refused Delete, Archive or Move comes back (BUG-M) —');
+{
+  const pg = await open(true);
+  const mk = (folder, uid, extra) => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Bo', to_addr: 'bo@example.org', subject: 'S' + uid, preview: 'p', body: 'The text of ' + uid,
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'k' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => { __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] }; await serverSync('mail', true); },
+    [mk('inbox', 1), mk('inbox', 2), mk('inbox', 3), mk('archive', 5, { uidvalidity: 9 }), mk('drafts', 21, { from_name: 'Me', from_addr: 'me@example.com' })]);
+  const state = (id) => pg.evaluate(async (id) => {
+    const m = S.messages.find((x) => x.id === id);
+    return { held: !!m, gone: !!(S.gone || {})[id], text: m ? await bodyOf(m) : null };
+  }, id);
+  const toasted = async () => { await pg.waitForFunction(() => window.__toasts.length > 0, null, { timeout: 5000 }).catch(() => {}); return (await toasts(pg))[0] || ''; };
+  const noTrash = 'This mailbox does not have a Trash folder, so RATA left the messages where they are rather than delete them for good.';
+
+  // Delete, on a server with no Trash: refused, so the message comes back.
+  await pg.evaluate((why) => { __mock.change = () => ({ ok: false, done: [], gone: [], kind: 'no-place', error: why }); window.__toasts = []; go('inbox'); openMail('me@example.com_1'); }, noTrash);
+  await pg.click('#md-del');
+  let t = await toasted();
+  let st = await state('me@example.com_1');
+  check(st.held && !st.gone && st.text === 'The text of 1', `a Delete the server refused puts the message back, text and all, and nothing is remembered as gone: ${JSON.stringify(st)}`);
+  check(t === 'Nothing was changed — me@example.com: ' + noTrash, `and the toast says why: ${t}`);
+
+  // Delete with the network down: the same.
+  await pg.evaluate(() => { __mock.change = () => ({ ok: false, done: [], gone: [], kind: 'net', error: 'imap.example.com could not be reached' }); openMail('me@example.com_2'); });
+  await pg.click('#md-del');
+  t = await toasted();
+  st = await state('me@example.com_2');
+  check(st.held && !st.gone && t === 'Nothing was changed — me@example.com: imap.example.com could not be reached', `a Delete the server never heard comes back too: ${JSON.stringify(st)} ${t}`);
+
+  // While the mailbox is being told, a refresh does not bring the message
+  // back; once it says the message has gone, that is remembered.
+  await pg.evaluate(() => { __mock.change = (a) => new Promise((res) => { window.__release = () => res({ ok: true, done: a.uids, gone: [] }); }); openMail('me@example.com_3'); });
+  await pg.click('#md-del');
+  await pg.waitForFunction(() => typeof window.__release === 'function', null, { timeout: 5000 }).catch(() => {});
+  const during = await pg.evaluate(async (m) => {
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    return { held: S.messages.some((x) => x.id === 'me@example.com_3'), gone: !!(S.gone || {})['me@example.com_3'] };
+  }, mk('inbox', 3));
+  check(!during.held && !during.gone, `a refresh while the mailbox is being told neither shows it nor counts it gone: ${JSON.stringify(during)}`);
+  await pg.evaluate(() => window.__release());
+  t = await toasted();
+  st = await state('me@example.com_3');
+  check(!st.held && st.gone && t === 'Deleted', `once the mailbox has done it, it is gone for good: ${JSON.stringify(st)} ${t}`);
+
+  // Several at once: Archive on a server with no Archive folder.
+  const pick = (ids) => pg.evaluate((ids) => { go('inbox'); selecting = true; SEL.clear(); ids.forEach((i) => SEL.add(i)); bulkRefresh(); window.__toasts = []; }, ids);
+  await pg.evaluate(() => { __mock.change = () => ({ ok: false, done: [], gone: [], kind: 'no-place', error: 'This mailbox does not have an Archive folder, so RATA left the messages in the inbox.' }); });
+  await pick(['me@example.com_1', 'me@example.com_2']);
+  await pg.click('#bulk-bar [data-bulk="archive"]');
+  t = await toasted();
+  let both = [await state('me@example.com_1'), await state('me@example.com_2')];
+  check(both.every((x) => x.held && !x.gone) && t === 'Nothing was changed — me@example.com: This mailbox does not have an Archive folder, so RATA left the messages in the inbox.',
+    `an Archive of several the server refused brings them all back and says why: ${JSON.stringify(both)} ${t}`);
+
+  // And Delete of several, refused.
+  await pg.evaluate((why) => { __mock.change = () => ({ ok: false, done: [], gone: [], kind: 'no-place', error: why }); }, noTrash);
+  await pick(['me@example.com_1', 'me@example.com_2']);
+  await pg.click('#bulk-bar [data-bulk="del"]');
+  t = await toasted();
+  both = [await state('me@example.com_1'), await state('me@example.com_2')];
+  check(both.every((x) => x.held && !x.gone && /^The text of /.test(x.text)) && t === 'Nothing was changed — me@example.com: ' + noTrash,
+    `a Delete of several the server refused brings them all back: ${JSON.stringify(both)} ${t}`);
+  await pg.evaluate(() => { selecting = false; SEL.clear(); });
+
+  // Out of Gmail's archive a move is a copy: the message leaves the list,
+  // but is not remembered as gone, so the archive listing can bring it back.
+  await pg.evaluate(() => { __mock.change = (a) => ({ ok: true, done: a.uids, gone: [], copied: true }); window.__toasts = []; openMail('me@example.com_archive_5'); });
+  await pg.click('#md-home');
+  t = await toasted();
+  st = await state('me@example.com_archive_5');
+  check(!st.held && !st.gone && /^Moved to your inbox/.test(t), `Move to inbox out of Gmail's archive leaves without being remembered as gone: ${JSON.stringify(st)} ${t}`);
+
+  // Read and starred from the server never make mail the customer wrote unread.
+  const un = await pg.evaluate(async () => {
+    __mock.refresh = { messages: [], flags: [{ id: 'me@example.com_drafts_21', unread: true, starred: false }, { id: 'me@example.com_1', unread: true, starred: false }], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    const f = (id) => S.messages.find((m) => m.id === id).unread;
+    return { draft: f('me@example.com_drafts_21'), inbox: f('me@example.com_1') };
+  });
+  check(un.draft === false && un.inbox === true, `a draft never turns unread on a refresh, while received mail follows the server: ${JSON.stringify(un)}`);
   await pg.close();
 }
 
