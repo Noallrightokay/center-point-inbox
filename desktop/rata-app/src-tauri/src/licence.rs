@@ -75,6 +75,35 @@ impl Reason {
     }
 }
 
+/// How long after it expired a licence may still renew itself.
+///
+/// `RENEW_GRACE_DAYS` in `rata-next/lib/licence.js`, and it must stay equal to
+/// it: the website refuses to renew a licence older than this, so the app
+/// treats one that old as no longer worth keeping (`renewable`).
+pub const RENEW_GRACE_DAYS: i64 = 90;
+
+/// A key as the customer gave it, without the white space a mail client or a
+/// terminal puts inside a long line when it wraps it. The token's alphabet is
+/// base64url and `.`, so no white space in one can be part of it.
+pub fn clean(token: &str) -> String {
+    token.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Whether a checked licence is still worth keeping: genuine and current, or
+/// genuine and expired no more than [`RENEW_GRACE_DAYS`] ago (the boundary
+/// itself included), so the website would still renew it. The same rule as
+/// `renewable` in `rata-next/lib/licence.js`.
+pub fn renewable(checked: &Result<Licence, Rejected>, now_secs: i64) -> bool {
+    match checked {
+        Ok(_) => true,
+        Err(Rejected {
+            reason: Reason::Expired,
+            licence: Some(l),
+        }) => now_secs - l.exp <= RENEW_GRACE_DAYS * 86_400,
+        Err(_) => false,
+    }
+}
+
 /// A rejected licence, with whatever could still be read out of it.
 #[derive(Debug, Clone)]
 pub struct Rejected {
@@ -91,7 +120,10 @@ pub fn check(token: &str, public_pem: Option<&str>, now_secs: i64) -> Result<Lic
         licence: None,
     };
 
-    if token.trim().is_empty() {
+    // White space is never part of a token, and a key wrapped by a mail
+    // client arrives with line breaks inside it (BUG-L).
+    let token = clean(token);
+    if token.is_empty() {
         return Err(bad(Reason::Missing));
     }
     let key = match public_pem.and_then(verifying_key) {
@@ -99,7 +131,7 @@ pub fn check(token: &str, public_pem: Option<&str>, now_secs: i64) -> Result<Lic
         None => return Err(bad(Reason::NoPublicKey)),
     };
 
-    let parts: Vec<&str> = token.trim().split('.').collect();
+    let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 || parts[0] != PREFIX {
         return Err(bad(Reason::Malformed));
     }
@@ -345,6 +377,57 @@ mod tests {
             );
             assert!(!e.reason.explain().is_empty());
         }
+    }
+
+    #[test]
+    fn a_key_wrapped_by_a_mail_client_still_verifies() {
+        // BUG-L: a key pasted out of an email arrives with line breaks (and
+        // sometimes spaces or tabs) wherever the mail client wrapped it. That
+        // was "could not be read"; white space is never part of a token.
+        let wrapped: String = JS_TOKEN
+            .as_bytes()
+            .chunks(20)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join("\r\n ");
+        let l = check(&format!("\t {wrapped}\n"), Some(JS_PUBLIC_KEY), ISSUED)
+            .expect("a wrapped key is the same key");
+        assert_eq!(l.sub, "buyer@example.com");
+        assert_eq!(clean(&wrapped), JS_TOKEN);
+        // Taking white space out never makes a forgery genuine.
+        let forged = wrapped.replacen('d', "e", 1);
+        assert_eq!(
+            check(&forged, Some(JS_PUBLIC_KEY), ISSUED)
+                .unwrap_err()
+                .reason,
+            Reason::BadSignature
+        );
+        // And a box of nothing but white space holds no licence.
+        assert_eq!(
+            check(" \r\n\t ", Some(JS_PUBLIC_KEY), ISSUED)
+                .unwrap_err()
+                .reason,
+            Reason::Missing
+        );
+    }
+
+    #[test]
+    fn an_expired_licence_is_worth_keeping_for_as_long_as_it_can_renew() {
+        // RENEW_GRACE_DAYS after it expired, and not a second more, which is
+        // what the website decides too (lib/licence.js, renewable).
+        let exp = check(JS_EXPIRED, Some(JS_PUBLIC_KEY), 0).unwrap().exp;
+        let at = |t: i64| renewable(&check(JS_EXPIRED, Some(JS_PUBLIC_KEY), t), t);
+        assert!(at(exp), "current");
+        assert!(at(exp + 1), "a second expired");
+        assert!(at(exp + RENEW_GRACE_DAYS * 86_400), "on the boundary");
+        assert!(!at(exp + RENEW_GRACE_DAYS * 86_400 + 1), "a second past it");
+        // A forgery or rubbish never is, however new.
+        let other = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----";
+        assert!(!renewable(&check(JS_TOKEN, Some(other), ISSUED), ISSUED));
+        assert!(!renewable(
+            &check("v1.a.b", Some(JS_PUBLIC_KEY), ISSUED),
+            ISSUED
+        ));
     }
 
     #[test]

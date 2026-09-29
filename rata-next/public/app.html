@@ -2893,10 +2893,17 @@ const planKey=()=>window.__RATA_NATIVE__?(LIC&&LIC.licensed&&LIC.plan?LIC.plan.k
 const tier=()=>TIERS[planKey()]||null;
 const tierLabel=()=>tier()?tier().label:window.__RATA_NATIVE__?'No licence yet':'No plan yet';
 function takeStanding(st){
+  const was=!!(LIC&&LIC.licensed);
   LIC=st&&typeof st==='object'&&!st.error?st:null;
   /* The bridge can answer before the workspace has loaded; boot asks again. */
   if(!S)return;
-  if(LIC&&LIC.licensed)startAutoSync();
+  if(LIC&&LIC.licensed){
+    /* Licensed again after lapsing while RATA was open (BUG-L: renewed by
+       the bridge's timer, the connection coming back, or Try again): mail
+       resumes now, not at the next five-minute turn. */
+    if(autoOn&&!was)setTimeout(()=>autoSync(),0);
+    startAutoSync();
+  }
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
 }
@@ -4339,7 +4346,11 @@ function serverSync(p,quiet,only){
       /* In the app, what RATA already holds of each folder goes with the
          request, so only new mail is downloaded. */
       const res=await apiFetch('/api/sync/mail',window.__RATA_NATIVE__?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({known:heldKnown(),...(only&&only.length?{only}:{})})}:undefined);
-      if(res.error){if(!quiet)toast(res.error);return}
+      /* `unlicensed`: the licence lapsed and the bridge could not renew it
+         (BUG-L). Said even by a quiet refresh, which used to drop it and
+         leave mail stopped with no word, unless the licence box is already
+         saying so. */
+      if(res.error){if(!quiet||(res.unlicensed&&!document.getElementById('rata-licence')))toast(res.error);return}
       await absorbMail(res,quiet);
     }catch(e){
       if(!quiet)toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');

@@ -65,6 +65,15 @@
   cursor: pointer;
 }
 .rata-lic button:disabled { opacity: .6; cursor: default; }
+/* Try again (BUG-L): renew the licence already here. Secondary, so the
+   filled button stays the one that uses a pasted key. */
+.rata-lic button.rata-lic-retry {
+  margin-top: 8px;
+  background: #FCFCFD;
+  color: #15171C;
+  border: 1px solid rgba(21, 23, 28, 0.16);
+}
+.rata-lic [hidden] { display: none; }
 
 /* Waiting for a renewal to come back. */
 .rata-lic-wait { font-size: 13px; color: #6B717B; }

@@ -43,7 +43,10 @@ async function renew(req) {
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }); }
 
-  const presented = String(body.licence || '').trim();
+  /* White space is never part of a licence (base64url and dots), and a key
+     that went through a mail client arrives wrapped, with line breaks inside
+     it. Taken out, so a wrapped key renews like the key it is. */
+  const presented = String(body.licence || '').replace(/\s+/g, '');
   if (!presented) return NextResponse.json({ error: 'No licence to renew.' });
 
   /* `check` refuses a forged token and reports an expired one separately, with

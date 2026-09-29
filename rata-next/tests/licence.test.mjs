@@ -195,6 +195,19 @@ export default async function run(state) {
       check_(!/could not be read/.test(expired.message || ''),
         `an expired licence is accepted for renewal rather than dismissed: ${JSON.stringify(expired.error || expired.message)}`);
 
+      /* BUG-L: a key that went through a mail client arrives wrapped, with
+         line breaks (and spaces or tabs) inside it. It is the same key and
+         renews the same way; white space is never part of a licence. */
+      const wrapped = '\t ' + mine.match(/.{1,40}/g).join('\r\n ') + ' \n';
+      const w = await post(wrapped);
+      check_(!/could not be read/.test(w.message || '') && !w.reason && /not configured/.test(w.error || ''),
+        `a wrapped key is read as the key it is (reaches the database, like the key unwrapped): ${JSON.stringify(w)}`);
+      const wrappedForgery = '\t ' + theirs.match(/.{1,40}/g).join('\r\n ') + ' \n';
+      const wf = await post(wrappedForgery);
+      check_(wf.licensed === false && wf.reason === 'bad-signature' && !wf.licence,
+        `and taking the white space out never makes a forgery renewable: ${JSON.stringify(wf.reason)}`);
+      check_(!!(await post(' \r\n\t ')).error, 'a key of nothing but white space is nothing to renew');
+
       /* But not one of any age: a token copied off a machine, or shared,
          would otherwise renew for as long as the subscription lives. Past
          RENEW_GRACE_DAYS the customer signs in at mailrata.org for a new
