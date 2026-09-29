@@ -46,11 +46,12 @@ press Summarize, Translate or Run briefing on.
 |---|---|
 | `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, signing in with a password or an OAuth token, and the outbound guard. Knows nothing about the app. |
 | `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, Sign in with Microsoft, and the glue to the interface. |
-| `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the release check (`verify-release.sh`) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
-| `rata-next/` | The website: marketing pages, Stripe checkout, licence issuing and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger's Node.js hosting. |
+| `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the update feed's rules (`feed.cjs`, tested by `feed.test.cjs`), the release check (`verify-release.sh`; `--title <version>` prints the window title it expects, "beta" for 0.x only) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
+| `rata-next/` | The website: marketing pages, the help page (`public/help.html`, at `/help`), the privacy policy and terms (`public/privacy.html`, `public/terms.html`), Stripe checkout, licence issuing and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger's Node.js hosting. The help page quotes the app's error sentences, and a test checks each quote is still in the code, so rewording an error means updating the page. |
 | `rata-next/public/app.html` | The interface. One copy, shared: the desktop app builds its own from this file. |
 | `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
+| `infrastructure/licence/` | `mint.sh`, which mints a tester's licence on the VPS and checks the signing key against the one the released app trusts. |
 | `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries) and how. |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 
@@ -67,7 +68,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 256 tests, no network required
+cargo test --all-targets   # 279 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -78,7 +79,7 @@ Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
 
-A second suite, `tests/loopback.rs` (13 tests), runs the engine against a
+A second suite, `tests/loopback.rs` (14 tests), runs the engine against a
 real Dovecot (IMAP) and GreenMail (SMTP, and IMAPS for a server that
 declares no special-use folders) on 127.0.0.1. CI runs it on every PR as
 *Mail layer against real servers*. Locally (needs `dovecot-imapd`, Java and
@@ -102,7 +103,7 @@ Never enable it in `rata-app`.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
-cargo test          # 111 tests
+cargo test          # 126 tests
 ```
 
 On Linux you need the system webview first:
@@ -120,7 +121,8 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (118 checks). CI runs it as *Desktop interface, driven*. From the
+policy (188 checks). CI runs it as *Desktop interface, driven*, together
+with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
 repository root:
 
 ```bash
@@ -138,7 +140,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test            # 545 checks, no network, no database required
+npm test 2>&1 | cat # 785 checks, no network, no database required
 npm run dev
 ```
 
@@ -146,7 +148,11 @@ After a deploy, `scripts/live-check.sh [https://mailrata.org]` checks the
 live site from outside, with no credentials: the current routes answer, the
 app's preflight is allowed and a stranger's refused, `/api/config` publishes
 no service-role key, the security headers are sent, and the landing page is
-the current one (`LAUNCH.md` §6).
+the current one (`LAUNCH.md` §6). It also fails while the live privacy
+policy or terms still show an `[OWNER: …]` placeholder (`LAUNCH.md`, the
+step before §6). Pipe `npm test` through `cat` to count its lines: the
+servers the tests start share a file's offset, so a straight redirect
+garbles the log.
 
 Fonts are vendored under `public/fonts` (Geist, Geist Mono, and Fredoka for the
 wordmark only) by `node scripts/vendor-fonts.mjs`. Never link a font CDN: the
@@ -241,7 +247,11 @@ not encrypted, and is meant to be readable.
 
 Tokens are issued for **30 days** (`LICENCE_DAYS` in `rata-next/lib/licence.js`)
 and the app renews itself by presenting the old token to `/api/licence/renew`
-once it is inside its final week. Thirty days covers a holiday or a dead
+once it is inside its final week: at start, every six hours while it is
+open, when the network comes back, and whenever a refresh or the AI relay
+finds the licence lapsed (v0.1.43). A renewal is kept only if it verifies,
+and a pasted key that does not verify never replaces one that works or can
+still renew. Thirty days covers a holiday or a dead
 laptop without anyone noticing. The trade is that a cancelled subscription
 stops working at the next renewal rather than instantly. That is accepted deliberately,
 because the alternative is phoning home.
@@ -249,7 +259,8 @@ because the alternative is phoning home.
 Releases are built by the **Release installers** workflow, which produces a
 `.deb` and `.AppImage` for Linux, a `.dmg` for each Mac architecture, and an
 NSIS `.exe` for Windows. They are **unsigned** so far, so Windows shows a
-SmartScreen warning and macOS requires right-click → Open. Signing is wired
+SmartScreen warning and macOS asks once: open it, then System Settings →
+Privacy & Security → Open Anyway (macOS 15 removed right-click → Open). Signing is wired
 for both (`docs/WINDOWS-SIGNING.md` for Windows) and waits for the owner's
 certificates. Before an installer is kept, the workflow installs and
 launches it on its own runner and checks the window title.
@@ -277,12 +288,25 @@ Be realistic about this before promising anything to a customer.
 - Drafts saved to the mailbox's Drafts folder (v0.1.41) when the composer
   closes and every two minutes while you write, replacing only RATA's own
   earlier copy, so a draft can be finished on a phone
+- Delete, Archive and Move put a message back, and say why, when the server
+  refuses (v0.1.43); Delete uses the declared Trash, or a folder named
+  exactly Trash, Deleted Items, Deleted Messages, Bin or INBOX.Trash
+- Unsubscribe from a mailing list's own header (v0.1.43): a web address
+  opens in the browser after a prompt naming the host, a mail address opens
+  the composer; RATA makes no request to the list itself
+- Address suggestions in To, Cc and Bcc from mail you already hold and
+  People, never from spam (v0.1.43), sent as `"Name" <address>`
+- Settings → Copy diagnostics (v0.1.43): a plain-text block for a bug report
+  with no address, password or message text in it, plus Help and Report a bug
 - A guard that stops a hostile mail server redirecting the app at your own LAN
 
 **Updates:** from v0.1.23 the app offers each new version itself and
 installs it only if it is signed with the project's update key, once that key
 is configured (`rata-next/LAUNCH.md` §9). Until then, and in any build without
-it, new versions are a download from the releases page.
+it, new versions are a download from the releases page. From v0.1.43 each
+kind of installation (AppImage, .deb, Windows, each Mac) reads its own feed
+file first, so a platform whose installer was held back from a release
+keeps being offered the last version it had.
 
 **Not built yet:**
 
@@ -330,7 +354,9 @@ it, new versions are a download from the releases page.
 - **AI needs the website deployed.** Summaries, translation and task flags
   go through RATA's relay at `mailrata.org/api/ai` (Haiku, capped at $2 per
   customer a month, nothing stored), which is not live until the site is
-  redeployed with `ANTHROPIC_API_KEY` set and `database.sql` §5 run.
+  redeployed with `ANTHROPIC_API_KEY` set and `database.sql` §5 run. Only
+  the first 12,000 characters of a long message are sent, and the app says
+  so (v0.1.43).
 - **Microsoft mailboxes** (Outlook.com, Hotmail, Live, Microsoft 365) sign
   in with **Sign in with Microsoft** from v0.1.39, in a build made with the
   owner's Microsoft client id; a build without it says they cannot be added

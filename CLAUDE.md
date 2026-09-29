@@ -25,12 +25,13 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 256 tests, plus 13 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 111 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 545 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 279 tests, plus 14 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 126 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (118 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (188 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
+| `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 | `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
@@ -66,6 +67,15 @@ beta) and publishes it once installers are attached — publishing is what
 creates the tag, with the workflow's own token. A merge without a version bump
 builds nothing. Nobody creates a tag by hand: that step failed three times in
 four through the GitHub UI, and an assistant session cannot do it at all.
+
+Nothing is built until `gate` (*Tests before a release*: `sync-ui.sh`, the
+engine and shell tests, the driven harness, and the update feed's rules in
+`harness/feed.test.cjs`) passes on the commit being released (BUG-R,
+v0.1.43); `create-release` and `installers` both need it, and `installers`
+names `needs.gate.result == 'success'` because its `always()` turns off the
+implicit check. A merge without a bump still stops at `plan`. Keep gate's
+steps in step with `desktop-ci.yml`. The first real run of the gate is
+v0.1.43's.
 
 The version lives in four places, bumped together: `tauri.conf.json`
 (`version` *and* the window `title`, which is how testers report their build),
@@ -107,6 +117,9 @@ Traps, all of which have bitten:
 - After a release, verify the shipped binary rather than assuming: extract it and
   check the licence public key, `org.mailrata.desktop`, and that no
   `fonts.googleapis`/`fonts.gstatic` string is present.
+  `harness/verify-release.sh` does this; `verify-release.sh --title <version>`
+  prints the window title it expects (0.x is `RATA <v> beta`, 1.x is
+  `RATA <v>`), worked out the way release.yml's smoke works it out.
 
 Released: **v0.1.1**, four of five files (the Linux `.AppImage` upload failed
 with `Error saving asset`, probably transient; the bundle built fine and is on
@@ -155,7 +168,14 @@ fixes the security review's part 3: the website takes the plan from
 Stripe's subscription events (every checkout had been recorded as Base),
 IMAP sign-in errors no longer repeat a password, Gmail's replaced drafts go
 to the Trash, and an invisible character can no longer hide a program's
-real extension (SEC-5, SEC-6). An
+real extension (SEC-5, SEC-6); v0.1.43 adds Unsubscribe, Copy diagnostics
+and a Help link, and address suggestions in the composer, renews the
+licence while RATA stays open, never hides mail the server kept when Delete
+or Archive is refused, finds Trash by name, keeps the server's own words
+when it refuses a password, sends to Outlook and iCloud on 587 first, sends
+the AI relay only the start of a long message, and is the first release
+built behind the `gate` job, with an update feed file per kind of
+installation (BUG-R). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -189,9 +209,31 @@ v0.1.41), so a token that leaked long ago cannot be revived. bridge.js
 `renew()` takes `too-old`, like `no-subscription`, as a real answer, and
 `settleLicence` puts the server's sentence in the licence box when the
 licence is still not good afterwards (harness: "a licence too old to renew
-itself says what to do"); any other answer, or none, leaves the app's own
-words and tries again at the next start. A copy that keeps renewing inside
-the 90 days is still not stopped (review row 15, a business decision).
+itself says what to do). **Renewal while RATA is open (BUG-L, v0.1.43).**
+`settleLicence(force)` is the only renewal path, one at a time (a second
+caller shares the one in flight): at launch, every six hours
+(`RENEW_EVERY`; the harness shortens it with `window.__RATA_RENEW_EVERY`),
+on `window` `online`, when `refresh_mail` answers `unlicensed` (it renews,
+then reads mail again), when the AI relay answers `reason: 'expired'`
+(forced, then one retry with the new token, never more), and from the
+licence box: Submit on an expired key that can still renew, or on an empty
+box, and **Try again**, shown only when there is a token to renew. Each run
+fires `rata-standing`. `renew()` gives up after 20 s and keeps a renewal only
+when `set_licence` answers licensed with nothing `refused`; anything else
+counts as unreachable, the old licence stays, and the box says it "could
+not reach mailrata.org". Before 0.1.43 renewal ran once at launch, so a
+copy left open across its expiry stopped fetching mail in silence.
+`set_licence` (core.rs, `outweighs`) never lets a key that fails
+`licence::check` (malformed, forged, another key's, or genuine but
+expired) replace a working licence, nor one that expired at most
+`RENEW_GRACE_DAYS` ago (`licence::renewable`; the constant must equal
+`lib/licence.js`'s) unless the key is genuine and expires no earlier; it
+then writes nothing and answers the kept licence's standing with
+`refused: { reason, message }`, which the box shows. White space is stripped
+from a key in the box, in `licence::check` (`clean`), in what is stored and
+in `/api/licence/renew`, so a key a mail client wrapped still reads. A copy
+that keeps renewing inside the 90 days is still not stopped (review row 15,
+a business decision).
 
 On the website side, a licence is issued or renewed only while the
 `subscriptions` row is live: `LIVE_STATUSES` (`active`, `trialing`,
@@ -226,7 +268,33 @@ events: `checkout.session.completed`,
 `customer.subscription.created`, `customer.subscription.updated` and
 `customer.subscription.deleted` (`STRIPE-SETUP.md` §3, `LAUNCH.md` §3);
 without `customer.subscription.created` a card checkout is never
-entitled. Deleting an account (`app/api/account/route.js`) removes
+entitled. **The subscription event that comes first (BUG-S, v0.1.43).**
+Stripe usually sends `customer.subscription.created` before the checkout,
+when there is no row to write yet; that event was answered 409 and the plan
+landed only on Stripe's retry, hours later in test mode. Now a subscription
+event that finds no row for its customer is kept in
+`pending_subscriptions` (`database.sql` §6, keyed by customer, no email,
+RLS on and no policy) and answered 200 `pending: true`; the checkout event
+applies it in the same request, after its own upsert, through the same
+guarded update (`pending_applied: true`), then deletes it. A kept event
+raised before that checkout is dropped, not applied. 409 is left for one
+case: §6 has not run (the log names the section, not the customer).
+`customer.subscription.created` writes under a strict `lt` guard
+(`orderGuard`, `lib/stripe.js`) and `updated`/`deleted` under `lte`, so a
+`created` in the same second as an `updated` cannot lower a live row to
+`incomplete`. `/api/licence` answers `reason: 'pending'` for an
+`incomplete` row that has a customer (`settingUp`, `lib/plan.js`), and
+`/account` then shows "Setting up your licence" with no buy buttons,
+asking 30 times 2 s apart (also after `checkout=success`), and ends on a
+Reload button, never on "has not reached us". Signed-out links on
+`/account` carry `next=account` and the just-paid state through
+`auth.html`. Every buy link built for a signed-in person carries
+`prefilled_email` and `client_reference_id` (`buyLink` in index.html and
+account.html, `withBuyer` in `renderPlan`); the webhook does not read
+`client_reference_id` yet (the licence is still keyed on the address paid
+with). A live plan in Settings switches only in the billing portal, never
+through a Payment Link, which made a second Stripe customer the webhook
+refused. Deleting an account (`app/api/account/route.js`) removes
 `workspaces`, `subscriptions` and the person's `ai_usage` rows, and still
 finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
 `database.sql` never ran). It is refused (`blocksDeletion`,
@@ -235,7 +303,15 @@ finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
 licence issued while it was live is the AI relay's credential, and
 deleting `ai_usage` would let it spend the month's allowance again.
 `incomplete_expired` issued no licence and does not block. The app's
-Delete account row names what `DELETION_REMOVES` names (tested). `next.config.js` sends HSTS (one year,
+Delete account row names what `DELETION_REMOVES` names (tested).
+`pending_subscriptions` rows hold no address and are not deleted with an
+account; they go when applied or dropped. **The privacy policy and terms
+(H1)** are tied to the code by `tests/legal.test.mjs`: `LICENCE_DAYS`,
+`RENEW_GRACE_DAYS`, `blocksDeletion`, `DELETION_REMOVES`/`KEEPS`, `PLANS`
+and their prices, `LIMITS` with the briefing's numbers, `CLOUD_FIELDS`/
+`CLOUD_STRIP` and database.sql's tables, so changing any of them means
+changing the pages. `manifest.json` and the plan blurbs are tested to sell
+nothing RATA does not do (`app.test.mjs`, BUG-D). `next.config.js` sends HSTS (one year,
 subdomains, no preload), `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
 `nosniff` and `strict-origin-when-cross-origin` on every path
 (`tests/headers.test.mjs`); they reach mailrata.org only when it is
@@ -284,10 +360,27 @@ mail persists between launches and is searchable. Read, unread, star, delete and
 copy at once and then the real mailbox (`serverAct` → `/api/mail/act` →
 `change_messages` → `rata_mail::imap::act`), one connection per mailbox for a
 whole selection. `act` never permanently deletes (Trash is a move to the
-server's declared `\Trash`; none means refused) and never acts on a UID it
-cannot vouch for (UIDVALIDITY must match; only UIDs still present are touched).
-Deletions are also remembered in `S.gone` so sync does not restore them, and a
-sync takes the server's read/starred for messages it already holds. What is
+server's declared `\Trash`, else, on a server that declares none, to a
+folder named exactly Trash, Deleted Items, Deleted Messages, Bin,
+INBOX.Trash or INBOX/Trash, in any case — `TRASH_NAMES`, `trash_in`, BUG-M,
+v0.1.43: never a name that only contains the word, a `\Noselect` folder, the
+inbox, or one declared or read as something else; none of those means
+refused) and never acts on a UID it cannot vouch for (UIDVALIDITY must
+match; only UIDs still present are touched). Deletions are also remembered
+in `S.gone` so sync does not restore them, but only once the server has
+said yes (below), and a sync takes the server's read/starred for messages
+it already holds, except that sent and draft mail is never made unread.
+**The page never hides mail the server kept (BUG-M, v0.1.43).** Delete,
+Archive, Move to and Move to inbox / Not spam, one message or a selection
+(`leave`, `bulkLeave`, bulk Delete), take mail off the list at once through
+`takeOff`, which holds it in `LEAVING` (`isGone` honours it, so a refresh in
+between cannot bring it back); it goes into `S.gone` only when its group's
+answer is `ok`. Any other answer (`no-place`, `stale`, `net`, `auth`, none)
+puts it back, text and all (read from disk before it left), and the toast
+says "Nothing was changed — <mailbox>: <why>"; a partial selection says how
+many came back. Until 0.1.43 a refused Delete had already hidden the
+message for good. A move out of Gmail's archive is a COPY (`Acted::Copied`,
+`copied: true` on the wire), so it leaves the list without `S.gone`. What is
 missing is scale. **New mail by itself, and only what is new (v0.1.27).**
 Until 0.1.27 the desktop app never refreshed on its own — boot only synced
 website accounts — so mail arrived only when someone pressed Sync. Now
@@ -432,7 +525,13 @@ base64 as the secrets, each also in async-imap's `Debug` form. While
 signing in `said` also removes any start of a secret 8 or more characters
 long (what a server's cut-short echo leaves) and keeps a bracketed IMAP
 response code such as `[AUTHENTICATIONFAILED]`; `one_line` is `said`
-with no secrets, so every IMAP error also loses bidi controls. async-imap
+with no secrets, so every IMAP error also loses bidi controls. `said(text,
+secrets)` is `said_within(text, secrets, 200)`; `said_within` is public so
+Copy diagnostics can keep 600 characters of the app's own longer sentences
+(H8). A password refused while linking keeps the server's words after
+RATA's advice ("The server said: …", `refusal`, already through `said`;
+BUG-M, v0.1.43), since Gmail's "IMAP access is disabled for your domain"
+has nothing to do with the password. async-imap
 reports each NO or BAD as `code: None, info: Some("…")`, and that is what
 the customer sees; the wording is left as it is.
 **Opening in full (v0.1.8).** A message marked `truncated`, or with
@@ -584,7 +683,27 @@ status. The app asks once before the first AI use (`aiOk`, `AI_NOTICE`),
 never sends anything on its own (opening Assist runs the local briefing), and
 falls back to the local summary/briefing with the reason when AI cannot be
 used. Flags are stored as `m.flag` and shown in the list. Translations live
-in `TRANSLATED` for the session. **Two things found on the way:** the live
+in `TRANSLATED` for the session. **Long mail and long answers (BUG-A,
+v0.1.43).** The page cuts what it sends (`aiCut`): 12 000 characters of one
+message (`AI_TEXT`, exactly what the relay reads and what the privacy page
+promises), 300 of a subject, 200 of a sender, 1 500 of each briefing
+message, with control and bidi-control characters removed first, since
+JSON spells each as six; it knows for itself that it cut (`aiLonger`), so
+a translation still says "only the start of this long message". The
+briefing drops its oldest messages until its JSON is at most 70 000
+characters (`AI_BRIEF_JSON`) and re-flags only what was sent. Before 0.1.43
+an opened message went whole, and anything over the route's raw 80 000
+guard was refused. The relay reads `stop_reason`: a translation or summary
+that stopped at `max_tokens` is `cut: true`; a briefing that did is 502
+"The briefing was cut short. Try again." (`reason: 'cut'`, still settled),
+and the page keeps every flag and says "Flags from earlier briefings are
+kept." The briefing's `max_tokens` is 3 000 (was 1 200, which an answer
+naming most of the 25 could run past), and the hold follows it through
+`worstCaseMicro`. Translate keeps `max_tokens` 4 096, so a long CJK
+translation can now be reported cut. A deploy without `LICENCE_PUBLIC_KEY`
+answers 503 "AI is not switched on for RATA yet." (`not-configured`) and
+logs the variable's name and LAUNCH.md §2, never a value, rather than
+telling a licensed customer they are not. **Two things found on the way:** the live
 mailrata.org is an old deploy (`/api/licence/renew` is 404 there), and even
 the current code never answered the app's cross-origin preflight, so licence
 renewal from the app has never worked — `lib/cors.js` now allows exactly the
@@ -672,9 +791,9 @@ and a quarter of an hour. RATA does not APPEND to Sent itself: a provider
 that does not file mail sent over SMTP (Gmail and Outlook do; not every
 provider does) shows only RATA's own record, as before.
 **Updating itself (v0.1.23).** `update.rs`, with `tauri-plugin-updater`.
-The app checks `latest.json` on the release tagged `updater` (a fixed
-address — 0.x releases are pre-releases, which GitHub's "latest" link
-skips) a few seconds after start and twice a day, and offers "RATA x is
+The app checks the release tagged `updater` (a fixed address — 0.x
+releases are pre-releases, which GitHub's "latest" link skips) a few
+seconds after start and twice a day, and offers "RATA x is
 ready." with a **Restart to update** button (`#upd-bar`, above the licence prompt so a copy
 whose licence check fails can still update). Nothing downloads until that
 click. An update installs only if its minisign signature verifies against
@@ -690,7 +809,26 @@ registers no updater and checks nothing (`has_key`). The publish job then
 maps each signed asset to its own key in the feed — `linux-x86_64-appimage`,
 `linux-x86_64-deb` (installed through pkexec), `windows-x86_64-nsis`,
 `darwin-{aarch64,x86_64}-app` — never a bare `linux-x86_64`, which would
-hand a .deb install the AppImage; the feed never moves backwards. The
+hand a .deb install the AppImage; the feed never moves backwards. **A
+feed file per kind of installation (BUG-R, v0.1.43).** The app reads
+`latest-<target>-<arch>-<installer>.json` on the `updater` release first
+(tauri.conf.json's first endpoint, `latest-{{target}}-{{arch}}-{{bundle_type}}.json`,
+which the plugin fills in and passes over on a 404), then `latest.json`.
+The publish job writes one file per kind of installation, each with its
+own version, plus `latest.json` with this release's signed installers only
+(`harness/feed.cjs`, a pure function tested by `feed.test.cjs` in the gate
+and in Desktop CI). A platform whose installer came off a release keeps
+its own file at the version it had, seeded the first time from the
+previous `latest.json`. It is not kept in `latest.json`: under
+`requireSignedVersion` the plugin compares each installer's signed version
+with the feed's single `version`, so an older installer announced as newer
+would be offered and then refused as a bad signature. Copies up to 0.1.42
+read only `latest.json`. A feed with no entry for this computer
+(`TargetNotFound`/`TargetsNotFound`, `not_here_yet`) is no update, not an
+error, and Install says "There is no update for this computer yet.";
+"cannot update itself" is for an unsupported OS or architecture and for
+failed installs, with the plugin's reason in brackets. The first per-
+installation files are written by 0.1.43's publish job. The
 Tauri CLI ignores a `TAURI_CONFIG` variable: use `--config`, and it signs
 against the config's pubkey, so an empty one fails the bundling step.
 Verified here with a throwaway key: a 0.1.23 AppImage fetched a local feed,
@@ -729,7 +867,9 @@ Archive by exact name is also where Archive files mail (v0.1.39:
 refresh reads), so a server that declares no `\Archive` can be archived to;
 until then RATA showed such a folder but refused to archive into it. On
 Gmail that means a label named exactly "Archive" is now archived into, as
-it was already shown as Archive. Trash still needs a declared `\Trash`.
+it was already shown as Archive. Trash is the declared `\Trash`, else a
+folder named exactly as `TRASH_NAMES` lists (since 0.1.43, BUG-M; see
+*Stored, and acted on for real*).
 **Your own folders (v0.1.26).** `Folder::Named(name)` — the server's own
 name, exactly as LIST gave it (modified UTF-7 and all; `folder_label` decodes
 it for showing, joins levels with " / " and drops an `INBOX.` prefix).
@@ -817,6 +957,34 @@ counts it in `RECIPIENTS_MAX`. `Message.bcc` is filled for Drafts only
 under Cc, hidden until **Bcc** is pressed (`showBcc`). RATA's own record of
 what it sent does not show Bcc, and the provider's Sent copy (which
 replaces it) usually does not either.
+**Address suggestions (H3, v0.1.43).** To, Cc and Bcc are comboboxes
+(`role="combobox"`, one `#cmp-sugg` `role="listbox"`,
+`aria-activedescendant`) that suggest people RATA has seen: every From, To
+and Cc of held mail plus People (`suggPool`; a contact's name wins), never
+spam, drafts or anything that is not email, and only addresses and names,
+never text. Each message adds `1/(1+age/14 days)`, so recency and frequency
+both count; a match at the start of a word (in the name, or in the address
+split at `.@_+-`) ranks above one inside a word, which needs 3 or more
+letters (2 found "le" in every "example"); the customer's own linked
+addresses rank last, labelled "Your mailbox". Suggestions start at 2
+characters, for the address under the cursor in a comma list (split at
+commas outside quotes and brackets, as the engine splits it), leave out
+anyone already in the field, and show at most 8. Up and Down wrap, Enter or
+Tab chooses, Escape closes the list only, and the mouse works. A choice
+goes in as `"Name" <addr>, ` (the name without control or bidi characters,
+`"`, `\`, `<` or `>`, at most 64 characters), or the bare address; Send
+trims a trailing comma. Nothing is stored and nothing goes to the network.
+**The engine takes that form** (before 0.1.43 `parse_list` split `"Smith,
+Ann" <ann@example.org>` at the comma and refused the list):
+`compose::split_list` cuts only at commas outside quotes (with backslash
+escapes) and angle brackets, and an unclosed quote refuses the list;
+`Address` keeps a cleaned display name (`name()`, `NAME_MAX` 64: a control
+character refuses the address, bidi controls, quotes, backslashes and
+brackets are removed); `addresses()` writes it quoted when ASCII, as
+encoded-words otherwise, still folding under 998 bytes; and
+`smtp::recipients` reads the envelope from each `<…>`, so a comma in a name
+is never a second recipient. RATA's own record of a sent message keeps the
+typed line as `toName` until the provider's copy replaces it.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an
@@ -978,7 +1146,8 @@ B2's Outlook column. Not handled: a Microsoft 365 domain behind a mail
 filter such as Mimecast (typing `outlook.office365.com` works around it),
 shared or delegated mailboxes.
 **Drafts saved to the server (F1, v0.1.41).** In the app the composer's
-draft is APPENDed to the mailbox's Drafts folder with `\Draft` set when the
+draft is APPENDed to the mailbox's Drafts folder with `\Seen \Draft` set
+(`\Seen` since 0.1.43, BUG-M, so it never comes back unread) when the
 composer closes with something new in it and every two minutes while it is
 open and edited (`queueDraftSave`, one queue, `DRAFT_SAVING`;
 `window.__RATA_DRAFT_EVERY` shortens the interval for tests), never per
@@ -1029,6 +1198,78 @@ a scripted server and real Dovecot (loopback). **Gmail, for B2:** the
 move to the Trash (above, review P3-2) has been seen only on a scripted
 Gmail server; on a real Gmail account, save a draft twice and check that
 All Mail, and RATA's Archive, hold one copy (SMOKE.md X7).
+**Unsubscribe (H7, v0.1.43).** `body::read` keeps `List-Unsubscribe` as
+`Message.unsubscribe` (`body::Unsubscribe { https, mailto }`,
+`serde(default)`): angle-bracketed entries, folded lines joined, a header
+over 8 KiB ignored. It holds the first `http(s)://` entry with an authority
+and no control or bidi-control character (at most 4 096), and the first
+`mailto:` whose percent-decoded address `compose::Address` parses as one
+address, rebuilt keeping only `subject` (200) and `body` (2 000), cleaned
+and percent-encoded again; a stranger's `to=`, `cc=` and `bcc=` are
+dropped, and every other scheme is ignored. The URL rule stays in one
+place, the app's `links::classify`: `core::as_links` runs it on every path
+messages reach the page (refresh and `answer`), sends the URL in classify's
+form (a look-alike host as `xn--`), and drops what fails; `open_link`
+checks again when Open is pressed. `List-Unsubscribe-Post` is never acted
+on: RATA makes no request of its own to a list's server. The bridge passes
+`unsub: {https?, mailto?}` when present. The reading pane shows
+**Unsubscribe** for inbox mail only (`unsubOf`, `leaveList`; never Sent,
+Spam, Drafts or Archive): a web address goes through the same "Open this
+link in your browser?" dialog naming the host as any link (`askToOpen`),
+and is preferred when a message has both; a mailto opens the composer from
+the mailbox the list wrote to, with the header's subject and body and no
+signature, and nothing is sent until Send. Mail stored before the field
+shows nothing until it is re-read; opening in full does not refill it.
+**Copy diagnostics and Help (H8, v0.1.43).** Settings → **Help &
+diagnostics**. **Copy diagnostics** (app only) calls the `diagnostics`
+command (`diagnostics.rs`, bridge `/api/diagnostics`) and puts one
+plain-text block on the clipboard, always showing it read-only; where the
+clipboard is refused the block is selected with "Copy it with Ctrl+C or
+Cmd+C". It holds the version and build kind, OS and architecture, which
+build keys are present (licence, updater, Microsoft client id), the
+licence's plan and day or the reason's name (never the token or the
+email), the last refresh, the store's schema and the version of the file
+read at start (`store::SCHEMA`, `on_disk`), and per mailbox, numbered and
+never by address: IMAP host:port, TLS and how it was found, the SMTP
+host:port last used and its mode (or the candidates it will try), how it
+signs in, whether and why it is parked, the last error, the last good
+refresh, the special folders seen this session, and whether its live
+connection is up. The notes are in memory only (`Rata::notes`, filled by
+`refresh` and `send`; act, older mail, open and the watcher's own failures
+are not recorded), and gathering them dials nothing. Every free sentence
+goes through `diagnostics::clean`: the mailbox's address becomes `Mailbox
+N`, then `credential::said_within` (600) with that mailbox's secrets, read
+from the keychain only when it has an error to show; any other address
+becomes `[address]` and the home folder `~`, and a last pass turns any `@`
+left into ` at `. How a folder other than Gmail's archive was found (by
+attribute or by name) is not reported yet: `places()` does not tell the
+app. **Open help** (`https://mailrata.org/help`) and **Report a bug** (the
+*Beta bug* template) go through `open_link`; the website shows those two
+only. **The help page (H2)** is `rata-next/public/help.html`, served at
+`/help` (`proxy.js`): installing, linking each provider (with that
+provider's own app-password page), what each linking error means, and how
+to report a bug. It quotes the engine's and the app's error sentences
+exactly, and `tests/help.test.mjs` checks every quote is still in the
+source, so **rewording a customer-facing error means updating the help
+page too**. It goes live only when mailrata.org is redeployed.
+**Real providers (BUG-M, v0.1.43).** Linking: a table or known-MX
+provider that cannot be reached (no DNS, a blocked port, too many
+connections) is named with the reason and "Check your connection and try
+again in a few minutes." (`known_host_failed`); the host box (`NeedsHost`)
+is only for a domain discovery could not settle. Before 0.1.43 a Gmail
+customer offline was asked for a server address. Zoho custom domains sign
+in at their own region, read from the MX (`ZOHO_REGIONS`: `imap.zoho.eu`,
+`.in`, `.com.au`, `.jp`, `zohocloud.ca`, `.sa`, `.com.cn`, `.com`), SMTP
+and the help text follow; Zoho documents `imappro.zoho.*` for organisation
+accounts, the next thing to try if one is refused. Sending: `smtp_ports`
+puts 587 first for `smtp-mail.outlook.com`, `smtp.office365.com` and
+`smtp.mail.me.com`, the only table hosts that document 587 alone; every
+other host keeps 465 first (`SMTP_PORTS`). `smtp::routes` tries each host's
+own ports, the host and port that last worked for this mailbox first
+(`WORKED`, in memory, by lowercased address). Before 0.1.43 a Microsoft or
+iCloud send waited out 465 on every address first. `Rata::send` goes
+through `usable` before anything is dialled, so a mailbox parked for its
+password sends nothing.
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and

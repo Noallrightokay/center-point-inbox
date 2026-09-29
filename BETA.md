@@ -149,6 +149,52 @@ Don't spend time reporting these; they are known and planned:
   Pro (it had been recorded as Base), your account page may say "not yet"
   for a short while after paying, and deleting your account waits 30 days
   after a subscription ends (the page gives the date).
+- **v0.1.43:**
+  - **Unsubscribe:** mail from a mailing list shows **Unsubscribe** beside
+    Archive (inbox mail only). A web address asks "Open this link in your
+    browser?" and names the site; a mail address opens a message to the
+    list for you to send. RATA itself contacts nobody. Mail you already had
+    shows the button only once RATA reads it again. Tell us about a list
+    whose button goes somewhere wrong, or a newsletter with no button.
+  - **Help & diagnostics** in Settings: **Copy diagnostics** puts a short
+    block on your clipboard (and shows it, so you see what you paste) with
+    your version, your system and each mailbox's servers and last error,
+    numbered, with no address, password or mail in it. Paste it into every
+    bug report (§6). If you find an address or anything private in it,
+    report that first. **Open help** and **Report a bug** open your
+    browser; the help page answers only once mailrata.org runs its new
+    version.
+  - **Address suggestions:** typing two letters in To, Cc or Bcc suggests
+    people from mail you already have and from People, never from spam.
+    Arrows move, Enter or Tab chooses, Escape closes the list. A choice goes
+    in as `"Name" <address>`. Tell us if someone is suggested who should
+    not be, or if a named address is refused when you send.
+  - **The licence renews while RATA stays open**, every six hours and
+    whenever mail stops because it lapsed, not only at start; if
+    mailrata.org cannot be reached, the licence box says so and has **Try
+    again**. A key pasted with a line break still works, and pasting a bad
+    key never replaces one that works. Renewal needs mailrata.org's new
+    version; until then, report a licence box that appears while your key
+    is still in date.
+  - **Delete, Archive and Move never hide mail the server kept:** if your
+    provider refuses, the message comes back to the list and a note says
+    why ("Nothing was changed — …"). Copy that sentence into your report.
+  - **Delete works on servers that only name their Trash** (Trash, Deleted
+    Items, Deleted Messages, Bin); before, it was refused there. Tell us
+    your provider if Delete still says there is nowhere to put the message.
+  - **A refused password shows the server's own words** after RATA's
+    advice ("The server said: …"). Gmail's "IMAP access is disabled for
+    your domain", for one, is not about the password. Copy the whole
+    sentence into your report. A provider RATA knows but cannot reach now
+    says so and asks you to try again, rather than asking for a server
+    address; a Zoho mailbox outside the US now signs in at its own region.
+  - **Sending from Outlook, Microsoft 365 and iCloud is faster:** RATA
+    tries the port they use first, and remembers which one worked for each
+    mailbox. Tell us if a send takes more than a few seconds.
+  - **AI on long mail:** Summarize and Translate send only the start of a
+    very long message (such as a newsletter), and Translate says so; a
+    briefing that ran out of room says to try again and keeps your flags.
+    AI still needs mailrata.org's new version.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
@@ -308,7 +354,7 @@ Running the full check on real mailboxes, provider by provider? Follow
 
 What makes a report fixable in minutes rather than days:
 
-1. **Settings → Copy diagnostics** (releases after 0.1.42), pasted into the
+1. **Settings → Copy diagnostics** (from v0.1.43), pasted into the
    report. It gives your version, your OS, and for each mailbox its servers,
    how it signs in and its last error, with no addresses, passwords, licence
    key or message text (you see the whole block before you paste it).

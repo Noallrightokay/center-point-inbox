@@ -1,7 +1,7 @@
 /* Rata service worker — app shell precache + offline fallback */
-const V = 'rata-shell-v45';
+const V = 'rata-shell-v46';
 const SHELL = [
-  './', './index.html', './auth.html', './app.html', './account.html', './manifest.json', './config.js',
+  './', './index.html', './auth.html', './app.html', './account.html', './help.html', './privacy.html', './terms.html', './manifest.json', './config.js',
   './fonts/fonts.css',
   './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png', './icons/mark-256.png'
 ];
