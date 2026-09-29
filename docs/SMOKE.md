@@ -47,7 +47,8 @@ steps, so the only mail you describe is mail you wrote for this test.
 
 Either:
 
-- mint one on the VPS: `/etc/rata/mint.sh you@example.com pro 30`
+- mint one on the VPS: `sudo infrastructure/licence/mint.sh you@example.com pro 30`
+  (from this repository; `sudo ./mint.sh check` first)
   (BETA.md §2), or
 - once [D5](MVP-PLAN.md#d5) is done, buy Pro and copy the key from
   https://mailrata.org/account

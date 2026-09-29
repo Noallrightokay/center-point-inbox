@@ -173,7 +173,8 @@ A signed Ed25519 token, verified offline against a public key compiled in at
 build time via `RATA_LICENCE_PUBLIC_KEY`. Tokens last 30 days
 (`LICENCE_DAYS` in `rata-next/lib/licence.js`) and the app renews itself in the
 final week. The private key lives on the VPS at `/etc/rata/licence.key`
-and is minted with `/etc/rata/mint.sh <email> <plan> <days>`. The website's
+and is minted with `infrastructure/licence/mint.sh <email> <plan> <days>` (OpenSSL only;
+`mint.sh check` says whether a key is the one the released app trusts). The website's
 `LICENCE_PRIVATE_KEY` is this same VPS key (`rata-next/LAUNCH.md` §2);
 never generate a new one for the site, or every licence it issues fails in
 every installed app.

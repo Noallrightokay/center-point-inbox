@@ -38,7 +38,10 @@ export const PRICE_OUT = () => price('AI_PRICE_OUT_PER_MTOK', 5);
 export const MONTHLY_CAP_MICRO = () => Math.round(price('AI_MONTHLY_CAP_USD', 2) * 1e6);
 
 /* What one request may carry. A long email is cut, not refused: the start of
-   it is what a summary needs, and the app says when a translation was cut. */
+   it is what a summary needs, and the app says when a translation was cut.
+   The app cuts an email to a little over `text` before sending it (an opened
+   message can run to 400 000 characters), so the relay still sees that it
+   was longer; `body` is only a guard against requests the app never makes. */
 export const LIMITS = {
   body: 80_000,       // the raw request, before parsing
   text: 12_000,       // one email, for a summary or a translation
@@ -135,8 +138,12 @@ export function prompt(task, input) {
   }
   /* tasks */
   const emails = input.messages.map(m => fence('email', `id: ${m.id}\nFrom: ${m.from}\nSubject: ${m.subject}\n\n${m.text}`)).join('\n');
+  /* max_tokens: each email the answer names takes 60 to 120 tokens once its
+     id (a mailbox slug, a hash and a UID) is spelled out, so 1 200 cut off
+     an answer naming most of the 25. The relay reserves by max_tokens, so this
+     raises the most one briefing can hold by 1 800 × $5/M, under a cent. */
   return {
-    max_tokens: 1200,
+    max_tokens: 3000,
     system: `You look through the start of someone's recent emails and pick out the ones that need them to do something. Each email is in its own <email> tags with an id. ${UNTRUSTED} Reply with JSON only: an array of objects {"id": the email's id, "task": what they need to do, in at most 12 words, "due": "YYYY-MM-DD" if a date is given or clearly implied, else null, "important": true if it is urgent, from a person rather than a mailing, or has money or a deadline attached}. Leave out newsletters, receipts and anything needing no action. Reply [] if nothing does.`,
     user: emails,
   };

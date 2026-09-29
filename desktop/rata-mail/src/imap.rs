@@ -211,6 +211,11 @@ pub struct Message {
     /// address — a mailing list, a ticket system. Empty means reply to
     /// `from_addr`.
     pub reply_to: String,
+    /// How to leave the mailing list it came from, from its
+    /// `List-Unsubscribe` header ([`body::Unsubscribe`]). `None` when it has
+    /// none RATA would act on, and for mail stored before this field.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unsubscribe: Option<body::Unsubscribe>,
 }
 
 /// What a successful link found.
@@ -3653,6 +3658,7 @@ fn build(
             None
         },
         reply_to,
+        unsubscribe: text.unsubscribe,
     }
 }
 
@@ -3923,6 +3929,10 @@ mod tests {
         greenmail: &'static [u32],
         /// The message partway through which the server hangs up.
         hang_up_at: Option<u32>,
+        /// Messages from a mailing list: their headers carry a
+        /// `List-Unsubscribe`, folded across lines, and a one-click
+        /// `List-Unsubscribe-Post`.
+        listed: &'static [u32],
     }
 
     /// Where a test's fresh connections come from: another sign-in to the
@@ -4006,8 +4016,15 @@ mod tests {
             let full = |seq: usize, uid: u32| {
                 // What a real server sends for BODY[]: headers and a MIME
                 // body, here quoted-printable UTF-8 as most mail programs write.
+                let list = if quirks.listed.contains(&uid) {
+                    format!(
+                        "List-Unsubscribe: <mailto:leave@list.example?subject=leave%20{uid}>,\r\n <https://list.example/u/{uid}>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"
+                    )
+                } else {
+                    String::new()
+                };
                 let body = format!(
-                    "From: Ann <ann@example.org>\r\nSubject: Subject {uid}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBody of {uid} =E2=80=94 caf=C3=A9\r\n"
+                    "From: Ann <ann@example.org>\r\nSubject: Subject {uid}\r\n{list}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBody of {uid} =E2=80=94 caf=C3=A9\r\n"
                 );
                 let gap = if quirks.greenmail.contains(&uid) {
                     ""
@@ -4918,6 +4935,40 @@ mod tests {
             // The fixture's Reply-To is the sender again, which is what servers
             // fill in when none was set; that is not worth keeping.
             assert_eq!(seven.reply_to, "");
+        });
+    }
+
+    #[test]
+    fn a_refresh_carries_how_to_leave_a_mailing_list() {
+        // What `fetch_newest` does once signed in, against a mailbox where
+        // one message came from a list.
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                listed: &[8],
+                ..Quirks::default()
+            };
+            let (addr, log) = scripted_mailbox(&[7, 8], 5, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut redial_to(addr), &me(), 15, &[])
+                .await
+                .unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+            let eight = got.messages.iter().find(|m| m.uid == 8).unwrap();
+            let u = eight.unsubscribe.as_ref().expect("the list's header");
+            assert_eq!(u.https.as_deref(), Some("https://list.example/u/8"));
+            assert_eq!(
+                u.mailto.as_deref(),
+                Some("mailto:leave%40list.example?subject=leave%208")
+            );
+            let seven = got.messages.iter().find(|m| m.uid == 7).unwrap();
+            assert_eq!(seven.unsubscribe, None);
+            // Read, never acted on: the refresh asked the mailbox for
+            // nothing it does not always ask for, and named no list address.
+            let log = log.lock().unwrap();
+            assert!(
+                !log.iter()
+                    .any(|c| c.to_ascii_lowercase().contains("list.example")),
+                "{log:?}"
+            );
         });
     }
 

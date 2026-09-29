@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F5F6F8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1014" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="description" content="How to install RATA, link Gmail, iCloud, Yahoo, Fastmail, your own domain or a Microsoft mailbox, what each message RATA shows when linking fails means, and how to report a bug.">
+<title>RATA · Help</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+/* DESIGN.md: the app's tokens, the website's measure. */
+:root{
+  --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
+  --ink:#15171C; --slate:#51565F; --faint:#6B717B;
+  --hair:rgba(21,23,28,.10);
+  --tint:#2B4FC7; --tint-deep:#233FA3; --tint-btn:#2B4FC7; --tint-btn-hover:#233FA3; --tint-soft:rgba(43,79,199,.09); --on-tint:#FCFCFD;
+  --red:#B4262D; --amber:#8A5B0C;
+  --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'Geist Mono',ui-monospace,Menlo,Consolas,monospace;
+  --gutter:24px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0E1014; --card:#15181D; --fill:#1F232A; --fill-2:#1A1D23;
+    --ink:#E7E9EE; --slate:#A4AAB5; --faint:#838A96;
+    --hair:rgba(231,233,238,.11);
+    --tint:#8FA6F2; --tint-deep:#B3C2F6; --tint-btn:#3E5FD6; --tint-btn-hover:#4A6BE0; --tint-soft:rgba(143,166,242,.13);
+    --red:#F07A7F; --amber:#E0A94A;
+  }
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:80px}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition-duration:.01ms!important}}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--tint);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 var(--gutter)}
+.skip{position:absolute;left:-9999px;top:8px;background:var(--card);padding:8px 12px;border-radius:8px;z-index:60}
+.skip:focus{left:8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:7px 14px;border-radius:8px;font:600 14px/1.2 var(--sans);transition:background-color .12s ease;white-space:nowrap}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--tint-btn);color:var(--on-tint)}
+.btn.primary:hover{background:var(--tint-btn-hover)}
+.link,article a{color:var(--tint);font-weight:500}
+.link:hover,article a:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* nav, as on the landing page */
+nav{position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--hair)}
+.nav-in{display:flex;align-items:center;gap:8px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo b{font-family:'Fredoka',var(--sans);font-weight:600;font-size:21px;letter-spacing:.04em}
+.mk{border-radius:50%;background:#F5F6F8;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+nav a.plain{color:var(--slate);font-size:14.5px;font-weight:500;padding:8px 10px;border-radius:8px}
+nav a.plain:hover{color:var(--ink);background:var(--fill-2)}
+nav .btn{margin-left:6px}
+
+/* the page: contents on the left, the text on the right */
+.head{padding:56px 0 40px;border-bottom:1px solid var(--hair)}
+h1{font-size:clamp(36px,5vw,52px);line-height:1.05;letter-spacing:-.035em;font-weight:600}
+.lede{margin-top:16px;font-size:18px;line-height:1.55;color:var(--slate);max-width:56ch;text-wrap:pretty}
+.layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px;padding:48px 0 96px}
+.toc{position:sticky;top:96px;align-self:start}
+.toc p{font-size:12.5px;font-weight:500;color:var(--faint);margin-bottom:8px}
+.toc ol{list-style:none;display:grid;gap:2px}
+.toc a{display:block;padding:6px 10px;border-radius:8px;font-size:14.5px;color:var(--slate)}
+.toc a:hover{background:var(--fill-2);color:var(--ink)}
+.toc ol ol{margin:2px 0 4px 10px}
+.toc ol ol a{font-size:13.5px;padding:4px 10px}
+
+article{max-width:720px}
+article > section{padding-bottom:56px;margin-bottom:56px;border-bottom:1px solid var(--hair)}
+article > section:last-child{border-bottom:0;margin-bottom:0}
+h2{font-size:clamp(26px,3vw,34px);line-height:1.15;letter-spacing:-.025em;font-weight:600}
+h3{font-size:18px;line-height:1.3;letter-spacing:-.01em;font-weight:600;margin-top:36px}
+h4{font-size:15px;line-height:1.3;font-weight:600;margin-top:22px}
+article p,article li{color:var(--slate);max-width:62ch}
+article p{margin-top:12px}
+article p b,article li b,article strong{color:var(--ink);font-weight:600}
+article ul,article ol.steps{margin-top:12px;padding-left:20px;display:grid;gap:6px}
+code,kbd{font-family:var(--mono);font-size:.88em;background:var(--fill);color:var(--ink);padding:1px 5px;border-radius:4px;word-break:break-word}
+var{font-style:normal;font-family:var(--mono);font-size:.86em;color:var(--tint-deep);background:var(--tint-soft);padding:1px 5px;border-radius:4px}
+
+/* install: one row per platform */
+.rows{margin-top:20px;border-radius:12px;background:var(--card);border:1px solid var(--hair);overflow:hidden}
+.row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;padding:18px 20px;border-top:1px solid var(--hair)}
+.row:first-child{border-top:0}
+.row > b{font-weight:600;color:var(--ink)}
+.row p{margin-top:0}
+.row p + p{margin-top:8px}
+
+/* providers */
+.prov{margin-top:36px;padding:24px;border-radius:12px;background:var(--card);border:1px solid var(--hair)}
+.prov h3{margin-top:0}
+.prov .shows{margin-top:14px;font-size:14px;color:var(--faint)}
+.note{margin-top:16px;padding:14px 16px;border-radius:8px;background:var(--fill-2);font-size:15px;color:var(--slate)}
+.note b{color:var(--ink)}
+
+/* what RATA says: the app's own words, then what they mean */
+.said{margin-top:14px;padding:14px 16px;border-left:3px solid var(--tint);border-radius:0 8px 8px 0;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair);color:var(--ink);font-size:15px;line-height:1.55}
+.said + .said{margin-top:8px}
+.means{margin-top:12px}
+.means dt{font-size:12.5px;font-weight:500;color:var(--faint);margin-top:12px}
+.means dd{color:var(--slate);max-width:62ch}
+.never{margin-top:16px;padding:16px 18px;border-radius:8px;border:1px solid var(--red);color:var(--ink);font-size:15px}
+.never ul{margin-top:8px}
+.never li{color:var(--ink)}
+
+footer{border-top:1px solid var(--hair);padding:32px 0 48px;font-size:14px;color:var(--faint)}
+footer .wrap{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap}
+footer .brand{display:flex;align-items:center;gap:8px;color:var(--ink);margin-right:auto}
+footer .brand b{font-family:'Fredoka',var(--sans);font-weight:600;letter-spacing:.04em}
+footer a:hover{color:var(--ink)}
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr;gap:32px;padding-top:32px}
+  .toc{position:static}
+  .toc ol ol{display:none}
+}
+@media (max-width:640px){
+  :root{--gutter:16px}
+  nav a.plain.opt{display:none}
+  .head{padding:40px 0 32px}
+  .row{grid-template-columns:1fr;gap:6px}
+  .prov{padding:20px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav aria-label="Main"><div class="wrap nav-in">
+  <a class="logo" href="index.html" aria-label="RATA home">
+    <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
+    <b>RATA</b>
+  </a>
+  <a class="plain opt" href="index.html#pricing">Pricing</a>
+  <a class="plain opt" href="account.html">Licence</a>
+  <a class="plain" href="auth.html?mode=login">Log in</a>
+  <a class="btn primary" href="index.html#download">Download</a>
+</div></nav>
+
+<main id="main">
+<header class="head"><div class="wrap">
+  <h1>Help</h1>
+  <p class="lede">Installing RATA, linking your mailbox, what RATA means when it cannot link one, and how to tell us when something breaks.</p>
+</div></header>
+
+<div class="wrap layout">
+<aside class="toc" aria-label="On this page">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#install">Install</a></li>
+    <li><a href="#link">Link a mailbox</a>
+      <ol>
+        <li><a href="#gmail">Gmail</a></li>
+        <li><a href="#icloud">iCloud</a></li>
+        <li><a href="#yahoo">Yahoo</a></li>
+        <li><a href="#fastmail">Fastmail</a></li>
+        <li><a href="#custom-domain">Your own domain</a></li>
+        <li><a href="#microsoft">Microsoft</a></li>
+      </ol>
+    </li>
+    <li><a href="#errors">When linking fails</a></li>
+    <li><a href="#report">Report a bug</a></li>
+  </ol>
+</aside>
+
+<article>
+
+<section id="install" aria-labelledby="install-h">
+  <h2 id="install-h">Install</h2>
+  <p>Every installer is on the <a href="https://github.com/Noallrightokay/center-point-inbox/releases">releases page</a>, with its version in the file name. RATA is in beta and the installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. That is expected.</p>
+  <div class="rows">
+    <div class="row">
+      <b>Windows 10 and 11</b>
+      <div>
+        <p>Run <code>RATA_&lt;version&gt;_x64-setup.exe</code>.</p>
+        <p>If Windows says <b>Windows protected your PC</b>, choose <b>More info</b>, then <b>Run anyway</b>.</p>
+      </div>
+    </div>
+    <div class="row">
+      <b>macOS</b>
+      <div>
+        <p><code>RATA_&lt;version&gt;_aarch64.dmg</code> for Apple silicon, <code>RATA_&lt;version&gt;_x64.dmg</code> for Intel. Open it and drag RATA to Applications.</p>
+        <p>The first time, right-click RATA in Applications, choose <b>Open</b>, then <b>Open</b> again in the box that follows.</p>
+      </div>
+    </div>
+    <div class="row">
+      <b>Linux</b>
+      <div>
+        <p>On Debian or Ubuntu: <code>sudo apt install ./RATA_&lt;version&gt;_amd64.deb</code></p>
+        <p>On other distributions, make the AppImage executable, then run it: <code>chmod +x RATA_&lt;version&gt;_amd64.AppImage</code>, then <code>./RATA_&lt;version&gt;_amd64.AppImage</code></p>
+      </div>
+    </div>
+  </div>
+  <p>The first time RATA opens it asks for your licence key. Copy it from your <a href="account.html">licence page</a> and paste it in: one line, no spaces.</p>
+  <p><b>Your version</b> is in the window's title bar, as <code>RATA &lt;version&gt; beta</code>. Put it in every bug report.</p>
+</section>
+
+<section id="link" aria-labelledby="link-h">
+  <h2 id="link-h">Link a mailbox</h2>
+  <p>Most providers refuse your normal account password in a mail app like RATA. They want an <b>app password</b>: a separate password, made in your provider's account settings, that only opens mail. Make one for RATA first, using your provider's steps below.</p>
+  <ol class="steps">
+    <li>In RATA, open <b>Settings</b>, then <b>Linked accounts</b>, then <b>＋ Email account</b>.</li>
+    <li>Enter your email address and the app password, and press <b>Link</b>. It reads <b>Checking…</b> while RATA finds your server and signs in.</li>
+    <li>RATA works out the server itself. Only if a server field appears, enter your provider's IMAP server name, such as <code>imap.example.com</code>. A pasted <code>imaps://imap.example.com:993</code> is fine too.</li>
+  </ol>
+  <p>Once it is linked, the mailbox's row in <b>Linked accounts</b> names the provider and server it found, and RATA starts bringing in your mail. The password is kept in your computer's keychain and is never sent to mailrata.org.</p>
+
+  <div class="prov" id="gmail">
+    <h3>Gmail</h3>
+    <p>Gmail app passwords need <b>2-Step Verification</b> turned on for your Google Account.</p>
+    <ol class="steps">
+      <li>Turn on 2-Step Verification, if it is not on already.</li>
+      <li>Go to <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>, give the password a name such as RATA, and create it.</li>
+      <li>Copy the password Google shows and paste it into RATA with your Gmail address.</li>
+    </ol>
+    <p>If Gmail's settings show an IMAP switch, turn it on. Google explains app passwords in <a href="https://support.google.com/accounts/answer/185833">Sign in with app passwords</a>, and IMAP in <a href="https://support.google.com/mail/answer/7126229">Add Gmail to another email client</a>.</p>
+    <p class="shows">RATA shows: <code>Gmail · imap.gmail.com</code></p>
+  </div>
+
+  <div class="prov" id="icloud">
+    <h3>iCloud</h3>
+    <p>For an address ending in <code>@icloud.com</code>, <code>@me.com</code> or <code>@mac.com</code>.</p>
+    <ol class="steps">
+      <li>Sign in at <a href="https://account.apple.com">account.apple.com</a>.</li>
+      <li>Open <b>Sign-In and Security</b>, then <b>App-Specific Passwords</b>, and create one for RATA.</li>
+      <li>Paste it into RATA with your iCloud address.</li>
+    </ol>
+    <p>Apple's own steps: <a href="https://support.apple.com/en-us/102654">Sign in to apps with your Apple Account using app-specific passwords</a>.</p>
+    <p class="shows">RATA shows: <code>iCloud Mail · imap.mail.me.com</code></p>
+  </div>
+
+  <div class="prov" id="yahoo">
+    <h3>Yahoo</h3>
+    <ol class="steps">
+      <li>Open your Yahoo <a href="https://login.yahoo.com/account/security">Account security</a> page.</li>
+      <li>Choose <b>Generate app password</b>, name it RATA, and create it.</li>
+      <li>Paste it into RATA with your Yahoo address.</li>
+    </ol>
+    <p>Yahoo's own steps: <a href="https://help.yahoo.com/kb/SLN15241.html">Generate and manage 3rd-party app passwords</a>.</p>
+    <p class="shows">RATA shows: <code>Yahoo Mail · imap.mail.yahoo.com</code></p>
+  </div>
+
+  <div class="prov" id="fastmail">
+    <h3>Fastmail</h3>
+    <ol class="steps">
+      <li>In Fastmail, open <b>Settings</b>, then <b>Privacy &amp; Security</b>, then <b>App passwords</b>.</li>
+      <li>Create a new app password with access to mail (IMAP and SMTP).</li>
+      <li>Paste it into RATA with your Fastmail address.</li>
+    </ol>
+    <p>Fastmail's own steps: <a href="https://www.fastmail.help/hc/en-us/articles/360058752854-App-passwords">App passwords</a>. The same works for your own domain when Fastmail hosts its mail.</p>
+    <p class="shows">RATA shows: <code>Fastmail · imap.fastmail.com</code></p>
+  </div>
+
+  <div class="prov" id="custom-domain">
+    <h3>Your own domain</h3>
+    <p>For an address like <code>you@yourcompany.com</code>, RATA asks your domain's DNS where its mail is kept, so it finds Google, Microsoft, Fastmail, Hostinger and many other hosts by itself. Use the password your mail host gives mail apps:</p>
+    <ul>
+      <li><b>Google Workspace:</b> an app password from <a href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</a>, signed in with your work address. It needs 2-Step Verification on, and your administrator may have to allow it.</li>
+      <li><b>Microsoft 365:</b> no password. See <a href="#microsoft">Microsoft</a> below.</li>
+      <li><b>Fastmail:</b> a Fastmail app password, as <a href="#fastmail">above</a>.</li>
+      <li><b>Another host:</b> the mailbox password or an app password, whichever your host issues for mail apps.</li>
+    </ul>
+    <p>If RATA cannot find the server, it asks for it. Your host's help pages, or your IT administrator, list it as "IMAP server" or "incoming mail server".</p>
+    <h4 id="hostinger">Hostinger</h4>
+    <p>Hostinger has no app passwords. Use the mailbox's own password, which you set in hPanel under <b>Emails</b>. Hostinger's own steps: <a href="https://support.hostinger.com/en/articles/4305847-set-up-hostinger-email-on-your-applications-and-devices">Set up Hostinger Email on your applications and devices</a>.</p>
+    <p class="shows">RATA shows: <code>Hostinger Email · imap.hostinger.com</code>, and the link message says your domain's mail is at Hostinger Email.</p>
+  </div>
+
+  <div class="prov" id="microsoft">
+    <h3>Microsoft: Outlook.com, Hotmail, Live and Microsoft 365</h3>
+    <p>Microsoft mailboxes take no password or app password in mail apps. Microsoft lets them in only through its own sign-in page, so RATA has <b>Sign in with Microsoft</b> instead of a password box: it opens Microsoft's page in your browser, and your password goes only to Microsoft.</p>
+    <p class="note"><b>Not switched on yet.</b> Sign in with Microsoft works only in a RATA build that carries RATA's Microsoft registration. Until a <a href="https://github.com/Noallrightokay/center-point-inbox/releases">release note</a> says it is switched on, the <b>＋ Email account</b> form says these mailboxes cannot be added yet. That message is expected.</p>
+    <p>Once it is on:</p>
+    <ol class="steps">
+      <li>Type your Microsoft address in <b>＋ Email account</b>. RATA shows <b>Sign in with Microsoft</b> where the password box would be.</li>
+      <li>Press it. Your browser opens Microsoft's page. Choose your account and sign in there.</li>
+      <li>Come back to RATA. It waits five minutes for you, then stops.</li>
+    </ol>
+    <p>A work or school account may need its IT administrator to allow RATA first. If a Microsoft mailbox later needs you again, its row in <b>Settings</b> says <b>Sign in to Microsoft again</b>.</p>
+    <p class="shows">RATA shows: <code>Outlook · outlook.office365.com</code> (or <code>Microsoft 365</code> for a work address)</p>
+  </div>
+</section>
+
+<section id="errors" aria-labelledby="errors-h">
+  <h2 id="errors-h">When linking fails</h2>
+  <p>RATA says what went wrong in its own words, naming the servers it tried and what each one said. They show in a short message at the bottom of the window, which fades after a few seconds, or on the mailbox's row in <b>Settings</b>, <b>Linked accounts</b>. Below are the sentences you can meet while linking, exactly as RATA says them, with <var>marked parts</var> filled in with your details.</p>
+
+  <h3 id="err-password">Your password was refused</h3>
+  <blockquote class="said"><var>Gmail</var> rejected the sign-in. Use an app password, not your normal account password — <var>where your provider makes one</var>.</blockquote>
+  <blockquote class="said"><var>example.com</var> rejected the sign-in. Use an app password, not your normal account password.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Your provider's server answered and said no to the password. Nearly always this is a normal account password where the provider wants an app password. RATA stops at the first refusal rather than trying the same password elsewhere, because providers count failed sign-ins.</dd>
+    <dt>What to do</dt>
+    <dd>Make an app password (see <a href="#link">your provider</a>) and link again with it. Check you copied all of it.</dd>
+  </dl>
+
+  <h3 id="err-revoked">A linked mailbox stops signing in</h3>
+  <blockquote class="said"><var>you@example.com</var> rejected the sign-in — the app password has probably been revoked. Relink it in Accounts. The server said: <var>the server's words</var></blockquote>
+  <blockquote class="said"><var>you@example.com</var> needs relinking — its app password was rejected.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The app password worked before and no longer does, usually because it was removed in your provider's settings. RATA stops trying that mailbox, so a wrong password is not sent again and again.</dd>
+    <dt>What to do</dt>
+    <dd>Make a new app password, then link the same address again in <b>Settings</b>, <b>Linked accounts</b>.</dd>
+  </dl>
+
+  <h3 id="err-sending">Sending is refused</h3>
+  <blockquote class="said"><var>smtp.example.com</var> refused the sign-in for sending. Some providers issue a separate app password for mail apps — regenerate it and relink the account. The server said: <var>the server's words</var></blockquote>
+  <blockquote class="said">Could not reach <var>smtp.example.com</var> to send: <var>the reason</var>. Check with your provider that sending from a mail app is enabled for this account.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Reading mail and sending it use two different servers. The first sentence is the sending server refusing the password; the second is RATA not reaching a sending server at all.</dd>
+    <dt>What to do</dt>
+    <dd>For the first, make a new app password and link the mailbox again. For the second, check in your provider's settings that sending from mail apps is allowed, and send us the reason it gave.</dd>
+  </dl>
+
+  <h3 id="err-certificate">The server's certificate is not trusted</h3>
+  <blockquote class="said">Could not connect to <var>mail.example.com</var>: <var>mail.example.com</var> could not be trusted: <var>the reason</var>. Check the server address with your mail provider.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>RATA reached the server you typed, but the certificate that proves who it is did not check out, for example <code>invalid peer certificate: UnknownIssuer</code>. Often the name you typed is not one the certificate covers: a host may serve your domain's mail under its own server name. RATA checks certificates the way your computer does, and never connects without that check.</dd>
+    <dt>What to do</dt>
+    <dd>Use the IMAP server name your mail host gives in its own help pages, not your domain's name, and link again.</dd>
+  </dl>
+
+  <h3 id="err-no-server">No server found</h3>
+  <blockquote class="said">RATA checked <var>example.com</var>’s DNS and tried <var>imap.example.com, mail.example.com</var> without finding a mailbox<var>: the last reason</var>. Enter the IMAP server address below — your provider or IT administrator lists it as "IMAP server" or "incoming mail server".</blockquote>
+  <blockquote class="said"><var>example.com</var> filters its mail through <var>the filter's server</var>, which does not say where the mailbox itself is. Enter the IMAP server address below — your IT administrator will know it.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Your domain's DNS did not lead RATA to a mail server that answered, or the domain's mail passes through a filtering service first, which hides where the mailbox is. The last reason, when there is one, says what the last server tried did.</dd>
+    <dt>What to do</dt>
+    <dd>Type the IMAP server name into the field that appears. Your mail host's help pages list it, or your IT administrator will know it.</dd>
+  </dl>
+
+  <h3 id="err-typed">The server address you typed does not work</h3>
+  <blockquote class="said">Could not reach <var>imap.example.com</var>. Check the server address with your mail provider.</blockquote>
+  <blockquote class="said">No mail server answers at <var>imap.example.com</var>.</blockquote>
+  <blockquote class="said">"<var>what you typed</var>" is not a server address RATA can use. Enter just the name, like imap.example.com.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Nothing answered at that name, the name does not exist, or what was typed is not a server name at all.</dd>
+    <dt>What to do</dt>
+    <dd>Check the spelling against your provider's help pages. Type only the name, such as <code>imap.example.com</code>.</dd>
+  </dl>
+
+  <h3 id="err-local">RATA will not connect to a local address</h3>
+  <blockquote class="said"><var>mail.example.com</var> is not a public mail server — it points inside a private network, and RATA will not connect there.</blockquote>
+  <blockquote class="said">"<var>mail.example.com</var>" is not a valid mail server address.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The server name leads to an address inside a private network, such as your home router, an office network or your own computer. RATA refuses those on purpose, so that a mail server can never point it at the machines around you. The second sentence means the name is not a valid server name at all.</dd>
+    <dt>What to do</dt>
+    <dd>Use your provider's public server name. A mail server reachable only inside a private network cannot be linked to RATA.</dd>
+  </dl>
+
+  <h3 id="err-microsoft">Microsoft needs its own sign-in</h3>
+  <blockquote class="said">Outlook.com, Hotmail and Live mailboxes cannot be added to RATA yet. Microsoft only lets other apps into them through its own sign-in page (OAuth), and no longer accepts passwords or app passwords for IMAP. RATA does not have that sign-in yet.</blockquote>
+  <blockquote class="said">That address's mail is at Microsoft 365, which RATA cannot open yet. Microsoft only lets other apps into Microsoft 365 mailboxes through its own sign-in page (OAuth), and no longer accepts passwords for IMAP. RATA does not have that sign-in yet.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Your copy of RATA does not have Sign in with Microsoft switched on yet (see <a href="#microsoft">Microsoft</a>). Expected until a release note says otherwise. RATA did not send your password anywhere.</dd>
+  </dl>
+  <blockquote class="said"><var>Outlook</var> mailboxes sign in with Microsoft, not with a password, so RATA did not send the password anywhere. Use Sign in with Microsoft.</blockquote>
+  <blockquote class="said">Microsoft mailboxes sign in with Microsoft instead of an app password. RATA opens Microsoft’s page in your browser, so your password goes only to Microsoft.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>Sign in with Microsoft is on, and the address is a Microsoft mailbox. RATA noticed before sending the password anywhere.</dd>
+    <dt>What to do</dt>
+    <dd>Press <b>Sign in with Microsoft</b> and sign in on Microsoft's page.</dd>
+  </dl>
+  <blockquote class="said">You signed in to Microsoft as <var>other@example.com</var>, which cannot open <var>you@example.com</var>. Sign in as <var>you@example.com</var>, or add <var>other@example.com</var> instead.</blockquote>
+  <blockquote class="said"><var>Microsoft 365</var> would not open <var>you@example.com</var> with the sign-in Microsoft gave RATA. A work or school mailbox may have IMAP turned off by its organisation. (<var>the server's words</var>)</blockquote>
+  <blockquote class="said">Sign in to Microsoft again to keep reading <var>you@example.com</var>.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The first: you chose a different account on Microsoft's page. The second: Microsoft signed you in, but the mailbox would not open for mail apps, which a work or school organisation can turn off. The third: Microsoft wants you to sign in again, which it asks from time to time.</dd>
+    <dt>What to do</dt>
+    <dd>Sign in again as the right account. For a work or school mailbox, ask your IT administrator whether IMAP is allowed.</dd>
+  </dl>
+
+  <h3 id="err-no-imap">Mail RATA cannot reach</h3>
+  <blockquote class="said"><var>Proton Mail</var> encrypts mail on your device and offers no IMAP server RATA can reach. Their bridge only runs on your own computer.</blockquote>
+  <blockquote class="said">That domain forwards its mail somewhere else rather than keeping a mailbox of its own. Link the address the mail is forwarded to — that is where it actually lands.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>There is no mailbox RATA can open at that address: Proton Mail and Tuta keep no IMAP server for other apps, and a forwarding service only passes mail on.</dd>
+    <dt>What to do</dt>
+    <dd>For a forwarded address, link the mailbox the mail is forwarded to.</dd>
+  </dl>
+</section>
+
+<section id="report" aria-labelledby="report-h">
+  <h2 id="report-h">Report a bug</h2>
+  <p>Open an issue with the <a href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md">Beta bug template</a> on GitHub. It asks for everything below.</p>
+  <ol class="steps">
+    <li><b>The exact error text</b>, copied, not retold. RATA's messages name the servers it tried and what each said, which is what makes a bug quick to find. The message at the bottom of the window fades, so copy it or take a screenshot at once.</li>
+    <li><b>Your provider</b>: Gmail, iCloud, a work domain on Google Workspace, and so on.</li>
+    <li><b>Your version</b> from the window's title bar, and your operating system.</li>
+    <li><b>What you did, what you expected, and what happened.</b></li>
+    <li><b>A screenshot</b>, if the problem is something you see rather than an error.</li>
+  </ol>
+  <div class="never">
+    <b>The issue is public. Never paste:</b>
+    <ul>
+      <li>your app password, or any password;</li>
+      <li>your licence key;</li>
+      <li>the contents of RATA's <code>mailboxes.json</code> file, which holds your licence key.</li>
+    </ul>
+  </div>
+  <p>Your own email address is fine to include if you are comfortable with that. If not, write <code>me@</code> and your provider, such as <code>me@gmail.com</code>: the provider is the useful part.</p>
+</section>
+
+</article>
+</div>
+</main>
+
+<footer><div class="wrap">
+  <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
+  <a href="account.html">Licence</a>
+  <a href="help.html">Help</a>
+  <a href="https://github.com/Noallrightokay/center-point-inbox/blob/main/BETA.md">Beta guide</a>
+  <a href="https://github.com/Noallrightokay/center-point-inbox/releases">Releases</a>
+  <span>© 2026 RATA</span>
+</div></footer>
+</body>
+</html>

@@ -10,7 +10,9 @@ const SUITES = [
   ['health endpoint',    './health.test.mjs'],
   ['licences',           './licence.test.mjs'],
   ['licence page',       './account.test.mjs'],
+  ['privacy and terms',  './legal.test.mjs'],
   ['AI relay',           './ai.test.mjs'],
+  ['help page',          './help.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 

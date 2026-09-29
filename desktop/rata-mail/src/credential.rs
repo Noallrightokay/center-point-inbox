@@ -252,7 +252,7 @@ fn hide_base64_runs(text: &str) -> String {
 
 /// The characters that reorder text on screen (U+200E, U+200F,
 /// U+202A–U+202E, U+2066–U+2069).
-fn is_bidi_control(c: char) -> bool {
+pub(crate) fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 

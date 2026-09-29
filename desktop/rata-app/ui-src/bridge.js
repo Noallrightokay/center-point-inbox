@@ -81,6 +81,13 @@
          answers to go when that is not the From address. */
       messageId: m.message_id || '',
       replyTo: m.reply_to || '',
+      /* How to leave the list it came from (List-Unsubscribe): a web address
+         Rust has checked as a link, and/or a mailto: it rebuilt. Absent when
+         there is none, and on mail stored before it was read. */
+      ...(m.unsubscribe && (m.unsubscribe.https || m.unsubscribe.mailto)
+        ? { unsub: { ...(m.unsubscribe.https ? { https: String(m.unsubscribe.https) } : {}),
+            ...(m.unsubscribe.mailto ? { mailto: String(m.unsubscribe.mailto) } : {}) } }
+        : {}),
       /* Decoded from MIME since 0.1.7; anything stored without this was kept
          as it arrived on the wire and is re-read when it can be. */
       bodyV: 2,
