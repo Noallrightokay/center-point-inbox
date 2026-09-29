@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F5F6F8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1014" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="description" content="What mailrata.org keeps about you, what it never sees, and what happens when you ask RATA's AI to read a message.">
+<title>RATA · Privacy policy</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+/* DESIGN.md: the website's tokens, and the same measure as index.html.
+   Every fact here is checked against the code by tests/legal.test.mjs; a
+   fact only the owner knows is left as one of LAUNCH.md's four
+   placeholders, and live-check.sh refuses a deploy that still shows one. */
+:root{
+  --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
+  --ink:#15171C; --slate:#51565F; --faint:#6B717B;
+  --hair:rgba(21,23,28,.10);
+  --tint:#2B4FC7; --tint-soft:rgba(43,79,199,.09);
+  --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'Geist Mono',ui-monospace,Menlo,Consolas,monospace;
+  --gutter:24px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0E1014; --card:#15181D; --fill:#1F232A; --fill-2:#1A1D23;
+    --ink:#E7E9EE; --slate:#A4AAB5; --faint:#838A96;
+    --hair:rgba(231,233,238,.11);
+    --tint:#8FA6F2; --tint-soft:rgba(143,166,242,.13);
+  }
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--tint);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 var(--gutter)}
+.skip{position:absolute;left:-9999px;top:8px;background:var(--card);padding:8px 12px;border-radius:8px;z-index:60}
+.skip:focus{left:8px}
+
+nav{position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--hair)}
+.nav-in{display:flex;align-items:center;gap:8px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo b{font-family:'Fredoka',var(--sans);font-weight:600;font-size:21px;letter-spacing:.04em}
+.mk{border-radius:50%;background:#F5F6F8;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+nav a.plain{color:var(--slate);font-size:14.5px;font-weight:500;padding:8px 10px;border-radius:8px}
+nav a.plain:hover{color:var(--ink);background:var(--fill-2)}
+nav a.plain[aria-current]{color:var(--ink)}
+
+.doc{padding:64px 0 96px}
+.doc-in{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,9fr);gap:56px;align-items:start}
+.toc{position:sticky;top:96px;font-size:14px}
+.toc ol{list-style:none;display:grid;gap:2px}
+.toc a{display:block;color:var(--slate);padding:5px 10px;border-radius:8px}
+.toc a:hover{color:var(--ink);background:var(--fill-2)}
+h1{font-size:clamp(30px,4vw,42px);line-height:1.1;letter-spacing:-.03em;font-weight:600}
+.stamp{margin-top:10px;font:400 13px/1.4 var(--mono);color:var(--faint)}
+.lede{margin-top:20px;font-size:18px;line-height:1.55;color:var(--slate);max-width:62ch}
+article section{margin-top:48px;padding-top:32px;border-top:1px solid var(--hair)}
+h2{font-size:20px;line-height:1.3;letter-spacing:-.015em;font-weight:600}
+h3{font-size:16px;font-weight:600;margin-top:24px}
+article p,article li{max-width:62ch;color:var(--slate)}
+article p{margin-top:12px}
+article b,article strong{color:var(--ink);font-weight:600}
+article ul{margin-top:12px;padding-left:20px;display:grid;gap:8px}
+article li::marker{color:var(--faint)}
+article a{color:var(--tint);font-weight:500}
+article a:hover{text-decoration:underline;text-underline-offset:3px}
+.facts{list-style:none;padding:0!important;gap:0!important;margin-top:16px!important;border-radius:12px;background:var(--card);border:1px solid var(--hair);max-width:62ch}
+.facts li{padding:14px 18px;border-top:1px solid var(--hair)}
+.facts li:first-child{border-top:0}
+.facts li b{display:block}
+.note{margin-top:16px;padding:14px 16px;border-radius:8px;background:var(--tint-soft);color:var(--ink);max-width:62ch;font-size:15px}
+
+footer{border-top:1px solid var(--hair);padding:32px 0 48px;font-size:14px;color:var(--faint)}
+footer .wrap{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap}
+footer .brand{display:flex;align-items:center;gap:8px;color:var(--ink);margin-right:auto}
+footer .brand b{font-family:'Fredoka',var(--sans);font-weight:600;letter-spacing:.04em}
+footer a:hover{color:var(--ink)}
+
+@media (max-width:900px){
+  .doc{padding:40px 0 72px}
+  .doc-in{grid-template-columns:1fr;gap:24px}
+  .toc{position:static}
+  .toc ol{display:flex;flex-wrap:wrap;gap:4px}
+  .toc a{background:var(--fill-2)}
+}
+@media (max-width:640px){
+  :root{--gutter:16px}
+  .lede{font-size:17px}
+}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav aria-label="Main"><div class="wrap nav-in">
+  <a class="logo" href="index.html" aria-label="RATA home">
+    <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
+    <b>RATA</b>
+  </a>
+  <a class="plain" href="privacy.html" aria-current="page">Privacy</a>
+  <a class="plain" href="terms.html">Terms</a>
+</div></nav>
+
+<main id="main" class="doc"><div class="wrap doc-in">
+  <aside class="toc" aria-label="On this page">
+    <ol>
+      <li><a href="#never">What we never see</a></li>
+      <li><a href="#keep">What mailrata.org keeps</a></li>
+      <li><a href="#ai">AI summaries and translation</a></li>
+      <li><a href="#payment">Payment</a></li>
+      <li><a href="#app">What the app connects to</a></li>
+      <li><a href="#others">Who else handles it</a></li>
+      <li><a href="#delete">Deleting your account</a></li>
+      <li><a href="#rights">Your choices and rights</a></li>
+      <li><a href="#contact">Changes and contact</a></li>
+    </ol>
+  </aside>
+
+  <article>
+    <h1>Privacy policy</h1>
+    <p class="stamp">Last updated 29 September 2026</p>
+    <p class="lede">RATA is a desktop mail client. It reads your mail on your own computer, so most of what a mail service would know about you never reaches us. This page says what does, and what happens to it.</p>
+    <p>RATA and mailrata.org are run by [OWNER: legal entity name], [OWNER: postal address] (&ldquo;we&rdquo;). For anything on this page, write to [OWNER: contact email].</p>
+
+    <section id="never" aria-labelledby="never-h">
+      <h2 id="never-h">What we never see</h2>
+      <ul>
+        <li><b>Your mail.</b> The app downloads it from your provider over IMAP, keeps it on your computer and sends over SMTP, directly. There is no RATA server between you and your mailbox. The one exception is text you ask RATA&rsquo;s AI to work on, <a href="#ai">below</a>.</li>
+        <li><b>Your mailbox passwords, and the sign-in tokens for a Microsoft mailbox.</b> They are kept in your computer&rsquo;s keychain (Keychain on a Mac, Credential Manager on Windows, Secret Service on Linux) and go only to your mail provider (for a Microsoft mailbox, that is Microsoft).</li>
+        <li><b>Your signatures, contacts and attachments, and the files you convert.</b> They stay on your computer. The Format Bridge converts files on your computer, without uploading them.</li>
+        <li><b>Your card.</b> Stripe takes the payment; we never see the card number.</li>
+      </ul>
+    </section>
+
+    <section id="keep" aria-labelledby="keep-h">
+      <h2 id="keep-h">What mailrata.org keeps</h2>
+      <p>This is all of it.</p>
+      <ul class="facts">
+        <li><b>Your login</b>Your email address and password, the password stored only as a hash, which cannot be turned back into it. The sign-in service also keeps a log of sign-ins and password changes, which can include the internet (IP) address they came from.</li>
+        <li><b>Your subscription record</b>Your email address, your plan, its status as Stripe reports it, your Stripe customer id, and when Stripe last changed it.</li>
+        <li><b>Your AI usage record</b>For each month: your email address, how many AI requests you made and what they cost us. Never any text.</li>
+        <li><b>Your preferences, if you use RATA&rsquo;s page on mailrata.org</b>While you are signed in there, the page keeps your settings in your account so they follow you: your display name and company, your privacy-check profile, your notification and AI choices and the plan the site recorded; your document folder names; your sorting rules (a sender&rsquo;s address and the category you chose for it); and the addresses of the mailboxes listed there, never their passwords. Signatures and API keys are left out. The desktop app does not upload any of this.</li>
+      </ul>
+      <p>Your licence is not stored. It is a signed key naming your email address, your plan, and when it was issued and expires; it lives in the app on your computer, and is made afresh each time it is issued or renewed.</p>
+      <p>Like every website, the server that runs mailrata.org sees your internet address and browser details with each request, and the hosting may record them in ordinary access logs. RATA&rsquo;s own code logs no email address and no message text. The site sets no advertising or analytics cookies and loads nothing from another company&rsquo;s servers; signing in keeps your session in your browser&rsquo;s own storage.</p>
+      <p>Backups of the website&rsquo;s database are encrypted before they leave the server, and each is deleted 90 days after it is made, so something deleted from the database is gone from every backup within 90 days.</p>
+    </section>
+
+    <section id="ai" aria-labelledby="ai-h">
+      <h2 id="ai-h">AI summaries and translation</h2>
+      <p>This is the one time any of your mail reaches a RATA server, and only when you press the button. RATA asks before the first time, and never sends anything on its own.</p>
+      <ul>
+        <li><b>Translate</b> (Base and Pro) sends the message&rsquo;s subject and its text, up to the first 12,000 characters.</li>
+        <li><b>Summarize</b> (Pro) sends the sender&rsquo;s name and address, the subject, and the text, up to the first 12,000 characters.</li>
+        <li><b>Run briefing</b> (Pro) sends, for each of up to 25 of the most recent messages in your inbox from the last 14 days, the sender&rsquo;s name, the subject, the first 1,500 characters of the text, and the reference RATA gives the message, which is made from the address of the mailbox it is in. The answer says which of them need you to do something.</li>
+      </ul>
+      <p>With each request the app sends your licence, which is how the relay knows you are a customer and what your plan includes. The relay at mailrata.org passes the text to Anthropic, whose model writes the answer, and sends the answer back to your app. RATA does not store the text or the answer and does not write either to any log. What it records is the usage count above. Anthropic handles the text under its own terms and privacy policy for businesses that use its service, at <a href="https://www.anthropic.com/legal">anthropic.com/legal</a>.</p>
+      <p>If you never press Summarize, Translate or Run briefing, none of your mail leaves your computer except to your own provider.</p>
+    </section>
+
+    <section id="payment" aria-labelledby="pay-h">
+      <h2 id="pay-h">Payment</h2>
+      <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy at <a href="https://stripe.com/privacy">stripe.com/privacy</a>.</p>
+    </section>
+
+    <section id="app" aria-labelledby="app-h">
+      <h2 id="app-h">What the app connects to</h2>
+      <ul>
+        <li><b>Your mail provider</b>, to read and send your mail, after asking your domain&rsquo;s DNS where its servers are.</li>
+        <li><b>mailrata.org</b>, to renew your licence in its last week, and for the AI requests you make.</li>
+        <li><b>Microsoft</b>, in your browser, when you add a Microsoft mailbox with Sign in with Microsoft.</li>
+        <li><b>GitHub</b>, where RATA&rsquo;s installers are published, to check for a new version.</li>
+      </ul>
+      <p>A link you open from a message goes to your browser. The app sends us no usage statistics and no crash reports.</p>
+    </section>
+
+    <section id="others" aria-labelledby="others-h">
+      <h2 id="others-h">Who else handles it</h2>
+      <ul>
+        <li><b>Stripe</b>, for payment.</li>
+        <li><b>Anthropic</b>, for the AI requests you make.</li>
+        <li><b>Hostinger</b>, which hosts the website and the server its database runs on.</li>
+        <li><b>The storage that holds the encrypted backups</b>, which cannot read them.</li>
+      </ul>
+      <p>We do not sell your information, and we share it with no one else unless the law requires it.</p>
+    </section>
+
+    <section id="delete" aria-labelledby="delete-h">
+      <h2 id="delete-h">Deleting your account</h2>
+      <p>Sign in at mailrata.org and choose Settings, then Delete account. It removes:</p>
+      <ul>
+        <li>your preferences and folder names</li>
+        <li>your subscription record</li>
+        <li>your AI usage record (only what your AI requests cost each month)</li>
+        <li>your login</li>
+      </ul>
+      <p>It cannot reach:</p>
+      <ul>
+        <li>your mail, which stays at your provider</li>
+        <li>your mailbox passwords, which are in your own computer&rsquo;s keychain and never reached RATA</li>
+        <li>Stripe&rsquo;s billing records, which Stripe must keep</li>
+        <li>what the app holds on your computer, until you uninstall it</li>
+      </ul>
+      <h3>When deletion waits</h3>
+      <ul>
+        <li><b>While your subscription is live</b> (active, in a trial, or retrying a failed payment). RATA cannot cancel a subscription for you, so cancel it in the billing portal first; otherwise Stripe would keep charging for an account that no longer exists.</li>
+        <li><b>While Stripe has not yet confirmed a payment</b>, as while a bank transfer clears.</li>
+        <li><b>For 30 days after a subscription ends.</b> A licence issued while it was live keeps working for up to 30 days, and deleting the account sooner would reset what that licence has used of the month&rsquo;s AI allowance. RATA tells you the date from which you can.</li>
+      </ul>
+    </section>
+
+    <section id="rights" aria-labelledby="rights-h">
+      <h2 id="rights-h">Your choices and rights</h2>
+      <p>You can use RATA without ever pressing an AI button. You can delete your account yourself, as above. Depending on where you live, you may also have the right to see a copy of what we hold about you, to have it corrected or deleted, to object to how we use it, and to complain to a data protection authority. To ask, write to [OWNER: contact email] from the address on your account.</p>
+      <p>We keep what is listed under <a href="#keep">What mailrata.org keeps</a> until you delete your account, apart from the backups, which go within 90 days of that.</p>
+    </section>
+
+    <section id="contact" aria-labelledby="contact-h">
+      <h2 id="contact-h">Changes and contact</h2>
+      <p>When this policy changes, the date at the top changes with it.</p>
+      <p>[OWNER: legal entity name], [OWNER: postal address]. Email [OWNER: contact email].</p>
+      <p>See also the <a href="terms.html">terms of service</a>.</p>
+    </section>
+  </article>
+</div></main>
+
+<footer><div class="wrap">
+  <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
+  <a href="index.html">Home</a>
+  <a href="account.html">Licence</a>
+  <a href="privacy.html">Privacy</a>
+  <a href="terms.html">Terms</a>
+  <span>© 2026 RATA</span>
+</div></footer>
+</body>
+</html>
