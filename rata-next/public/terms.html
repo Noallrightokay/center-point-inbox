@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F5F6F8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1014" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/png" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="description" content="The terms for using RATA and mailrata.org: plans, payment, the licence, AI features and your account.">
+<title>RATA · Terms of service</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+/* DESIGN.md: the website's tokens, and the same measure as index.html.
+   Every fact here is checked against the code by tests/legal.test.mjs; a
+   fact only the owner knows is left as one of LAUNCH.md's four
+   placeholders, and live-check.sh refuses a deploy that still shows one. */
+:root{
+  --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
+  --ink:#15171C; --slate:#51565F; --faint:#6B717B;
+  --hair:rgba(21,23,28,.10);
+  --tint:#2B4FC7; --tint-soft:rgba(43,79,199,.09);
+  --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'Geist Mono',ui-monospace,Menlo,Consolas,monospace;
+  --gutter:24px;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0E1014; --card:#15181D; --fill:#1F232A; --fill-2:#1A1D23;
+    --ink:#E7E9EE; --slate:#A4AAB5; --faint:#838A96;
+    --hair:rgba(231,233,238,.11);
+    --tint:#8FA6F2; --tint-soft:rgba(143,166,242,.13);
+  }
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--tint);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 var(--gutter)}
+.skip{position:absolute;left:-9999px;top:8px;background:var(--card);padding:8px 12px;border-radius:8px;z-index:60}
+.skip:focus{left:8px}
+
+nav{position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid var(--hair)}
+.nav-in{display:flex;align-items:center;gap:8px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;margin-right:auto}
+.logo b{font-family:'Fredoka',var(--sans);font-weight:600;font-size:21px;letter-spacing:.04em}
+.mk{border-radius:50%;background:#F5F6F8;padding:2px;box-sizing:content-box;display:inline-block;vertical-align:middle}
+nav a.plain{color:var(--slate);font-size:14.5px;font-weight:500;padding:8px 10px;border-radius:8px}
+nav a.plain:hover{color:var(--ink);background:var(--fill-2)}
+nav a.plain[aria-current]{color:var(--ink)}
+
+.doc{padding:64px 0 96px}
+.doc-in{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,9fr);gap:56px;align-items:start}
+.toc{position:sticky;top:96px;font-size:14px}
+.toc ol{list-style:none;display:grid;gap:2px}
+.toc a{display:block;color:var(--slate);padding:5px 10px;border-radius:8px}
+.toc a:hover{color:var(--ink);background:var(--fill-2)}
+h1{font-size:clamp(30px,4vw,42px);line-height:1.1;letter-spacing:-.03em;font-weight:600}
+.stamp{margin-top:10px;font:400 13px/1.4 var(--mono);color:var(--faint)}
+.lede{margin-top:20px;font-size:18px;line-height:1.55;color:var(--slate);max-width:62ch}
+article section{margin-top:48px;padding-top:32px;border-top:1px solid var(--hair)}
+h2{font-size:20px;line-height:1.3;letter-spacing:-.015em;font-weight:600}
+h3{font-size:16px;font-weight:600;margin-top:24px}
+article p,article li{max-width:62ch;color:var(--slate)}
+article p{margin-top:12px}
+article b,article strong{color:var(--ink);font-weight:600}
+article ul{margin-top:12px;padding-left:20px;display:grid;gap:8px}
+article li::marker{color:var(--faint)}
+article a{color:var(--tint);font-weight:500}
+article a:hover{text-decoration:underline;text-underline-offset:3px}
+.facts{list-style:none;padding:0!important;gap:0!important;margin-top:16px!important;border-radius:12px;background:var(--card);border:1px solid var(--hair);max-width:62ch}
+.facts li{padding:14px 18px;border-top:1px solid var(--hair)}
+.facts li:first-child{border-top:0}
+.facts li b{display:block}
+.note{margin-top:16px;padding:14px 16px;border-radius:8px;background:var(--tint-soft);color:var(--ink);max-width:62ch;font-size:15px}
+
+footer{border-top:1px solid var(--hair);padding:32px 0 48px;font-size:14px;color:var(--faint)}
+footer .wrap{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap}
+footer .brand{display:flex;align-items:center;gap:8px;color:var(--ink);margin-right:auto}
+footer .brand b{font-family:'Fredoka',var(--sans);font-weight:600;letter-spacing:.04em}
+footer a:hover{color:var(--ink)}
+
+@media (max-width:900px){
+  .doc{padding:40px 0 72px}
+  .doc-in{grid-template-columns:1fr;gap:24px}
+  .toc{position:static}
+  .toc ol{display:flex;flex-wrap:wrap;gap:4px}
+  .toc a{background:var(--fill-2)}
+}
+@media (max-width:640px){
+  :root{--gutter:16px}
+  .lede{font-size:17px}
+}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav aria-label="Main"><div class="wrap nav-in">
+  <a class="logo" href="index.html" aria-label="RATA home">
+    <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
+    <b>RATA</b>
+  </a>
+  <a class="plain" href="privacy.html">Privacy</a>
+  <a class="plain" href="terms.html" aria-current="page">Terms</a>
+</div></nav>
+
+<main id="main" class="doc"><div class="wrap doc-in">
+  <aside class="toc" aria-label="On this page">
+    <ol>
+      <li><a href="#what">What RATA is</a></li>
+      <li><a href="#account">Your account</a></li>
+      <li><a href="#plans">Plans and payment</a></li>
+      <li><a href="#licence">Your licence</a></li>
+      <li><a href="#ai">AI features</a></li>
+      <li><a href="#use">Using RATA</a></li>
+      <li><a href="#ending">Ending</a></li>
+      <li><a href="#beta">A beta, as it is</a></li>
+      <li><a href="#law">Law, changes and contact</a></li>
+    </ol>
+  </aside>
+
+  <article>
+    <h1>Terms of service</h1>
+    <p class="stamp">Last updated 29 September 2026</p>
+    <p class="lede">These terms are the agreement between you and [OWNER: legal entity name] (&ldquo;we&rdquo;) for using RATA, the desktop app, and mailrata.org. By creating an account, buying a plan or using RATA, you agree to them.</p>
+    <p>What we keep about you, and what we never see, is in the <a href="privacy.html">privacy policy</a>.</p>
+
+    <section id="what" aria-labelledby="what-h">
+      <h2 id="what-h">What RATA is</h2>
+      <p>RATA is a desktop mail client for Windows, macOS and Linux. It connects to the mailboxes you already have, over IMAP and SMTP, and reads and sends your mail on your own computer. Your mailbox passwords stay in your computer&rsquo;s keychain. mailrata.org sells the plans, issues the licence that unlocks the app, and runs the AI features you ask for.</p>
+      <p>Your mail stays with your mail provider, under that provider&rsquo;s own terms. RATA is not made by, or connected with, any mail provider. When you delete, archive or move a message in RATA, it does that in your real mailbox, as you asked.</p>
+    </section>
+
+    <section id="account" aria-labelledby="account-h">
+      <h2 id="account-h">Your account</h2>
+      <ul>
+        <li>Use an email address that is yours, and keep your password to yourself. You are responsible for what is done with your account.</li>
+        <li>Pay with the same address as your account. The subscription and the licence are matched by that address, so a payment made with another one does not reach your account.</li>
+      </ul>
+    </section>
+
+    <section id="plans" aria-labelledby="plans-h">
+      <h2 id="plans-h">Plans and payment</h2>
+      <ul class="facts">
+        <li><b>RATA Base, $12.99 a month</b>Up to two mailboxes in one inbox, translation of any message, and document and attachment conversion.</li>
+        <li><b>RATA Pro, $23.99 a month</b>Everything in Base, as many mailboxes as you have, mailboxes side by side, and summaries and a briefing of what needs you.</li>
+      </ul>
+      <p>Both are billed monthly by Stripe, and renew each month until you cancel. Both include every new version for as long as you subscribe. You can change plan or cancel at any time in the billing portal, which you reach from Settings when signed in at mailrata.org. If a payment fails, RATA keeps working while Stripe retries the card.</p>
+      <p>For a question about a charge, write to [OWNER: contact email].</p>
+    </section>
+
+    <section id="licence" aria-labelledby="licence-h">
+      <h2 id="licence-h">Your licence</h2>
+      <p>Once your payment is confirmed, your licence page at mailrata.org shows a licence key. Paste it into RATA once. The app checks it on your computer, so RATA works offline.</p>
+      <ul>
+        <li>Each key lasts 30 days. While your subscription is live, the app renews it by itself in its last week, whenever it is online.</li>
+        <li>When your subscription ends, the licence is no longer renewed. The key you hold keeps working until it expires, at most 30 days after it was issued.</li>
+        <li>A key that expired more than 90 days ago cannot renew itself. Sign in at mailrata.org to get a new one.</li>
+        <li>Without a current licence, RATA stops fetching and sending mail. What it has already downloaded stays on your computer.</li>
+        <li>The key is issued to you. Keep it to yourself: anyone with it can run RATA as you, and use your AI allowance, until it expires.</li>
+      </ul>
+    </section>
+
+    <section id="ai" aria-labelledby="ai-h">
+      <h2 id="ai-h">AI features</h2>
+      <p>Translation is on Base and Pro; summaries and the briefing are on Pro. They run only when you press Translate, Summarize or Run briefing, and RATA asks before the first time. The text you send goes to Anthropic to be answered, as the <a href="privacy.html#ai">privacy policy</a> describes.</p>
+      <ul>
+        <li>Each account has a monthly AI allowance. When it is used up, the AI features stop until the 1st of the next month, and RATA shows the quick version it makes on your computer instead.</li>
+        <li>AI answers can be wrong or leave things out. Check anything that matters against the message itself.</li>
+      </ul>
+    </section>
+
+    <section id="use" aria-labelledby="use-h">
+      <h2 id="use-h">Using RATA</h2>
+      <p>Do not use RATA or mailrata.org:</p>
+      <ul>
+        <li>to break the law or anyone else&rsquo;s rights, or to send mail you have no right to send;</li>
+        <li>to get into a mailbox that is not yours to use;</li>
+        <li>to disrupt or probe the website or the AI features, or to get around the licence or the AI allowance.</li>
+      </ul>
+      <p>RATA, the app and the website, belongs to [OWNER: legal entity name]. Your subscription lets you use it while it lasts. Parts of RATA are open-source software, used under their own licences.</p>
+    </section>
+
+    <section id="ending" aria-labelledby="ending-h">
+      <h2 id="ending-h">Ending</h2>
+      <p>You can stop at any time: cancel in the billing portal, and delete your account in Settings at mailrata.org. Deletion waits while a subscription is live or a payment is still being confirmed, and for 30 days after a subscription ends; the <a href="privacy.html#delete">privacy policy</a> says why and what deletion removes.</p>
+      <p>We may close an account that breaks these terms.</p>
+    </section>
+
+    <section id="beta" aria-labelledby="beta-h">
+      <h2 id="beta-h">A beta, as it is</h2>
+      <p>RATA is in beta. It has not yet been tested against every mail provider, its installers are not yet code-signed, and it changes as it improves. It is provided as it is. Your mail stays at your provider, so nothing RATA does on your computer is the only copy of it; keep your own copies of any files that matter.</p>
+      <p>Nothing in these terms takes away rights you have by law that cannot be taken away.</p>
+    </section>
+
+    <section id="law" aria-labelledby="law-h">
+      <h2 id="law-h">Law, changes and contact</h2>
+      <p>These terms are governed by [OWNER: governing law].</p>
+      <p>When these terms change, the date at the top changes with it.</p>
+      <p>[OWNER: legal entity name], [OWNER: postal address]. Email [OWNER: contact email].</p>
+    </section>
+  </article>
+</div></main>
+
+<footer><div class="wrap">
+  <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
+  <a href="index.html">Home</a>
+  <a href="account.html">Licence</a>
+  <a href="privacy.html">Privacy</a>
+  <a href="terms.html">Terms</a>
+  <span>© 2026 RATA</span>
+</div></footer>
+</body>
+</html>

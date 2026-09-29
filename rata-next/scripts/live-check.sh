@@ -10,8 +10,9 @@
 # What it proves: the deploy is the current code (the routes the old deploy
 # lacked answer), the app can talk to it cross-origin (the OPTIONS preflight
 # from the app's own origins is allowed, and from a stranger's is not), the
-# security headers are on, /api/config publishes no service-role key, and the
-# landing page's screenshots are there. It cannot sign up, pay or link a
+# security headers are on, /api/config publishes no service-role key, the
+# landing page's screenshots are there, and the privacy policy and terms are
+# served with every [OWNER: ...] placeholder filled in. It cannot sign up, pay or link a
 # mailbox: those are the owner's steps in LAUNCH.md §6.
 set -u
 BASE="${1:-https://mailrata.org}"
@@ -128,6 +129,19 @@ body=$(curl -sS --max-time 20 "$BASE/" 2>/dev/null)
 printf '%s' "$body" | grep -q 'Your mail, on your machine'; check $? "landing page is the current one"
 ! printf '%s' "$body" | grep -qiE 'slack|discord|texts and email|[$]8'; check $? "landing page sells nothing removed (no Slack, Discord, texts, \$8)"
 ! printf '%s' "$body" | grep -qE 'fonts\.(googleapis|gstatic)\.com'; check $? "landing page loads no Google font"
+printf '%s' "$body" | grep -q 'href="privacy.html"' && printf '%s' "$body" | grep -q 'href="terms.html"'; check $? "landing page links the privacy policy and the terms"
+
+echo "- the privacy policy and terms (LAUNCH.md, before §6) -"
+# Each must be served, be the page it says, and carry none of the owner's
+# placeholders: a live page that still says [OWNER: ...] names nobody.
+for pair in "privacy.html:Privacy policy" "terms.html:Terms of service"; do
+  p="${pair%%:*}"; want="${pair#*:}"
+  s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
+  page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
+  printf '%s' "$page" | grep -q "<h1>$want</h1>"; check $? "/$p is the $want"
+  left=$(printf '%s' "$page" | grep -o '\[OWNER:[^]]*\]' | sort -u | tr '\n' ' ')
+  [ -z "$left" ]; check $? "/$p has every [OWNER: ...] filled in${left:+ (still: $left)}"
+done
 
 echo
 if [ "$fails" = 0 ]; then echo "All checks passed."; else echo "$fails check(s) failed."; fi

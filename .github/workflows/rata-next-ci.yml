@@ -5,10 +5,12 @@ on:
     branches: [main, develop]
     paths:
       - "rata-next/**"
+      - ".github/workflows/rata-next-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "rata-next/**"
+      - ".github/workflows/rata-next-ci.yml"
 
 concurrency:
   group: rata-next-ci-${{ github.ref }}
