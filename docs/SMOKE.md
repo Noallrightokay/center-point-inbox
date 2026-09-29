@@ -441,7 +441,9 @@ before **Discard**, open **All Mail** in Gmail's webmail and search
 the older with only the first line: Gmail kept the copy RATA removed
 from Drafts. Also check RATA's **Archive** after a refresh: an old copy
 of the draft must not be there. Screenshot either way; this decides how
-RATA saves drafts on Gmail.
+RATA saves drafts on Gmail. From v0.1.42 RATA moves its older copy to
+Gmail's **Trash** (review P3-2), so an older copy in Trash is expected;
+All Mail must still show one.
 
 ---
 

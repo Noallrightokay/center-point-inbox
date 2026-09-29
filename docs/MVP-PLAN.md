@@ -68,6 +68,26 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   `.deb`, the `.AppImage` and the Windows `-setup.exe`), and it launches
   as "RATA 0.1.41 beta". The install-and-launch smoke test passed on all
   four builds ([run 36516132763](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36516132763)).
+- **v0.1.42** is the release captain's PR ([G2](#g2)): it folds in #80–#84
+  below and bumps the version. It is released when that PR merges, and is
+  verified with `verify-release.sh` afterwards.
+- **Merged for 0.1.42:** D5's public half, `rata-next/scripts/live-check.sh`
+  ([#80](https://github.com/Noallrightokay/center-point-inbox/pull/80));
+  TIDY-1, a docs sweep against the code ([#81](https://github.com/Noallrightokay/center-point-inbox/pull/81));
+  [F4](#f4) part 3, the review of code added since part 1: no High, two
+  Medium, five Low ([#82](https://github.com/Noallrightokay/center-point-inbox/pull/82));
+  SEC-6, the plan taken from Stripe's subscription events (every checkout
+  had been recorded as Base), P3-1, P3-4 (partly), P3-5 and P3-6
+  ([#83](https://github.com/Noallrightokay/center-point-inbox/pull/83));
+  SEC-5, IMAP sign-in errors redacted (row 8), the loopback gate on the
+  release profile (row 5), P3-2 and P3-3
+  ([#84](https://github.com/Noallrightokay/center-point-inbox/pull/84)).
+- **State at 0.1.42**, against Part 1: unchanged from 0.1.41 below. The
+  website half of SEC-6 (and SEC-4) reaches mailrata.org only at
+  [D4](#d4), and the webhook must also subscribe to
+  `customer.subscription.created` ([D3](#d3), `STRIPE-SETUP.md` §3).
+  Still open from the review: row 15's in-window renewals and the rest of
+  P3-4's lists (owner decisions), and [D8](#d8).
 - **State at 0.1.41**, against Part 1: M1 is code-complete but the site is
   not deployed ([D4](#d4)); M2, M3, M5, M8 and M9 wait on the owner's
   [D1](#d1)–[D5](#d5); M4 waits on signing ([E2](#e2), [E3](#e3)'s
@@ -86,9 +106,9 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
   asking before a disguised program is saved), and 4 is [D8](#d8).
-- **Tests.** Engine (246, plus 13 against real Dovecot and GreenMail),
-  shell (111) and website (501) suites run in CI (`desktop-ci.yml`,
-  `rata-next-ci.yml`). The **desktop UI harness** (117 checks that drive
+- **Tests.** Engine (256, plus 13 against real Dovecot and GreenMail),
+  shell (111) and website (546) suites run in CI (`desktop-ci.yml`,
+  `rata-next-ci.yml`). The **desktop UI harness** (118 checks that drive
   the real interface against a fake backend, in `desktop/rata-app/harness/`)
   runs in CI as *Desktop interface, driven* ([A3](#a3),
   [#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)).
@@ -214,7 +234,7 @@ cd desktop/rata-mail && cargo fmt --check && cargo clippy --all-targets -- -D wa
 # shell (needs libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf)
 cd desktop/rata-app && ./sync-ui.sh && cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 # website
-cd rata-next && npm ci && npm test && npm run build
+cd rata-next && npm ci && npm run build && npm test   # npm test reads the build
 # the interface, driven (after sync-ui.sh)
 (cd desktop/rata-app/ui && python3 -m http.server 3181 --bind 127.0.0.1 &) ; node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
 # a packaged build, for anything visible (tauri dev differs in the ways that ship bugs)
@@ -461,7 +481,7 @@ key), `/api/health` 200, `OPTIONS` preflight on `/api/ai` and
 makes no third-party requests (Playwright), and `index.html` copy matches
 the app.
 Owner: sign up, pay with test card `4242…`, and check the webhook 200, the
-`subscriptions` row and the key on `/account`. Paste the key into v0.1.38:
+`subscriptions` row and the key on `/account`. Paste the key into the current release (v0.1.42 or later):
 it must be accepted. Pro: Summarize gives an AI summary. Renewal: follow
 BETA.md's steps, or mint a 6-day key on the VPS and watch the app renew it.
 Done when: every line is in `MVP-EVIDENCE.md`.
@@ -568,6 +588,8 @@ BETA.md. Bump the version in all four places and merge. Run
 `verify-release.sh`. Retake `public/shots` if the interface changed
 visibly (DESIGN.md → Website).
 Done when: the release is verified, and the docs name the version.
+Runs: 0.1.42 folded in #80–#84 (docs notes, the review's P3 rows, the
+small follow-ups) and bumped the version.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into

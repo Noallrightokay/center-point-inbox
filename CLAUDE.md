@@ -25,14 +25,14 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 246 tests, plus 13 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 256 tests, plus 13 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 111 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 500 checks (`npm test`, after `npm run build`). |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 546 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials. |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (117 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (118 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
-| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`. |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 | `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
@@ -150,7 +150,12 @@ kept (watch that run); v0.1.40 marks every file it saves as a download,
 labels a program named to look like a document and asks before saving
 it, and holds the AI cap under concurrent requests; v0.1.41 saves RATA's
 own drafts to the mailbox's Drafts folder, so they follow the customer to
-the phone, and fixes the security review's cheap Lows (SEC-4). An
+the phone, and fixes the security review's cheap Lows (SEC-4); v0.1.42
+fixes the security review's part 3: the website takes the plan from
+Stripe's subscription events (every checkout had been recorded as Base),
+IMAP sign-in errors no longer repeat a password, Gmail's replaced drafts go
+to the Trash, and an invisible character can no longer hide a program's
+real extension (SEC-5, SEC-6). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -195,18 +200,41 @@ entitled everywhere; that is safe because a licence lasts 30 days and
 renews only while the row is live. A `checkout.session.completed` for an
 address whose row is live under a **different** `stripe_customer` gets 200
 `conflict: true`, writes nothing and logs one line without the address or
-customer id (`checkoutConflict`); the owner reconciles it in Stripe. The
+customer id (`checkoutConflict`, which since SEC-6 also holds an
+`incomplete` row, review P3-5); the owner reconciles it in Stripe. The
 same customer, a hand-minted row with no customer, or a row no longer live
-may be written. A checkout whose `payment_status` is not `paid` or
-`no_payment_required` (a bank transfer still clearing) is recorded
-`incomplete`, which is not live, so the customer's later events still find
-the row; it is never written over a live row (200 `pending: true`, nothing
-written), and `checkout.session.async_payment_succeeded` makes it `active`
-(SEC-4; the webhook must subscribe to it, `STRIPE-SETUP.md` §3 and
-`LAUNCH.md` §3). Deleting an account (`app/api/account/route.js`) removes
+may be written. **The plan comes from the subscription events** (SEC-6,
+v0.1.42). A delivered Checkout Session never carries `line_items`, so
+before SEC-6 every checkout was recorded as Base. The plan and domain
+add-ons now come only from `customer.subscription.created`/`updated`,
+which carry the prices; a checkout event writes only the email, the
+customer, whether the money is in, and the row's stamp, the session's own
+`created`, so no subscription event of that purchase is refused as stale
+(`checkoutWrite`). Until a subscription event of the purchase has named
+the plan, the row is `incomplete` even when paid, so `/account` says "not
+yet" rather than issuing a 30-day Base licence to a Pro buyer. A checkout
+whose `payment_status` is not `paid` or `no_payment_required` (a bank
+transfer still clearing) is recorded `incomplete` too, which is not live,
+so the customer's later events still find the row. An `incomplete` write
+never replaces a live row (200 `pending: true`, nothing written).
+`checkout.session.async_payment_succeeded` says only that the money is
+in: the row is `active` then if a subscription event has already named the
+plan, otherwise once one does. The webhook must subscribe to exactly five
+events: `checkout.session.completed`,
+`checkout.session.async_payment_succeeded`,
+`customer.subscription.created`, `customer.subscription.updated` and
+`customer.subscription.deleted` (`STRIPE-SETUP.md` §3, `LAUNCH.md` §3);
+without `customer.subscription.created` a card checkout is never
+entitled. Deleting an account (`app/api/account/route.js`) removes
 `workspaces`, `subscriptions` and the person's `ai_usage` rows, and still
 finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
-`database.sql` never ran). `next.config.js` sends HSTS (one year,
+`database.sql` never ran). It is refused (`blocksDeletion`,
+`lib/account.js`) while the subscription is live or `incomplete`, and for
+`LICENCE_DAYS` (30) after it ended, naming the date (review P3-6): a
+licence issued while it was live is the AI relay's credential, and
+deleting `ai_usage` would let it spend the month's allowance again.
+`incomplete_expired` issued no licence and does not block. The app's
+Delete account row names what `DELETION_REMOVES` names (tested). `next.config.js` sends HSTS (one year,
 subdomains, no preload), `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
 `nosniff` and `strict-origin-when-cross-origin` on every path
 (`tests/headers.test.mjs`); they reach mailrata.org only when it is
@@ -395,8 +423,17 @@ through `said`, one line of at most 200 characters with no control or
 bidi-control characters, and while signing in the password, its base64,
 the `AUTH PLAIN` string, the token and its XOAUTH2 string are taken out
 wherever they appear, in any case, then every run of 16 or more base64
-characters, all before the line is cut. The IMAP half is still open (see
-*Security review*).
+characters, all before the line is cut. IMAP sign-in follows the same
+rule (SEC-5, v0.1.42) through the one shared `credential::said`: `login`
+and `xoauth2` pass every NO, BAD and other failure through it, with the
+password, its LOGIN-quoted form, the LOGIN line, the token and their
+base64 as the secrets, each also in async-imap's `Debug` form. While
+signing in `said` also removes any start of a secret 8 or more characters
+long (what a server's cut-short echo leaves) and keeps a bracketed IMAP
+response code such as `[AUTHENTICATIONFAILED]`; `one_line` is `said`
+with no secrets, so every IMAP error also loses bidi controls. async-imap
+reports each NO or BAD as `code: None, info: Some("…")`, and that is what
+the customer sees; the wording is left as it is.
 **Opening in full (v0.1.8).** A message marked `truncated`, or with
 attachments seen in its first 64 KiB, is fetched whole when opened
 (`openWhole` → `open_message` → `rata_mail::imap::fetch_whole`, which asks
@@ -424,7 +461,14 @@ without `confirmed` (kind `needs-confirmation`, `consented`), judged from
 the name as fetched, never from what the page says, so the page alone
 cannot skip the question; a list stored before the flag gets the question
 when Rust refuses. Only disguised names are asked about: `setup.exe` says
-what it is and saves without a question (the owner's choice). Convert asks
+what it is and saves without a question (the owner's choice). Since
+SEC-6 (v0.1.42, review P3-1 and P3-4) `safe_file_name` drops every format
+character (Unicode Cf) and the rest of Default_Ignorable_Code_Point
+(`invisible`), so `invoice.pdf<U+200B>.exe` is caught; `looks_disguised`
+also splits on eleven characters drawn as a full stop
+(`looks_like_a_dot`: U+2024, U+FF0E, U+FE52…); and the lists add the
+documents csv, rtf, html and htm and the programs cpl, reg, url, iso and
+one (`DISGUISED_AS` in the page labels the new documents). Convert asks
 too, though its button never shows for such a name, since the last
 extension is a program's. **Marked as downloads (v0.1.40).** Every file
 `write_new` saves, attachments and Format Bridge downloads alike, is then
@@ -630,7 +674,7 @@ provider does) shows only RATA's own record, as before.
 The app checks `latest.json` on the release tagged `updater` (a fixed
 address — 0.x releases are pre-releases, which GitHub's "latest" link
 skips) a few seconds after start and twice a day, and offers "RATA x is
-ready — Restart to update" (`#upd-bar`, above the licence prompt so a copy
+ready." with a **Restart to update** button (`#upd-bar`, above the licence prompt so a copy
 whose licence check fails can still update). Nothing downloads until that
 click. An update installs only if its minisign signature verifies against
 the public key in the app's config, **and** the signature names the version
@@ -946,12 +990,17 @@ sent) and To allowed empty; a sent message's render is unchanged. The
 new UID comes from `APPENDUID` (RATA sends its own APPEND, since
 async-imap's drops the tagged response code), else `UID SEARCH UNDELETED
 HEADER X-RATA-Draft "<id>"`, the newest match that is not the copy
-before. **The one permanent delete in RATA** (`imap::replace`): the
+before and whose `X-RATA-Draft` header is exactly the id (`newest_carrying`;
+HEADER search matches a substring, review P3-3, SEC-5). **The one permanent delete in RATA** (`imap::replace`): the
 previous copy is removed only when its uid is not 0, it is not the copy
 just saved, Drafts' UIDVALIDITY matches, and `UID FETCH (BODY.PEEK[HEADER.FIELDS
 (X-RATA-Draft)])` finds exactly one `X-RATA-Draft` header whose value is
 this draft's id; then `UID STORE +FLAGS.SILENT (\Deleted)` and `UID
-EXPUNGE <uid>`, with UIDPLUS only. Without UIDPLUS the copy stays flagged
+EXPUNGE <uid>`, with UIDPLUS only. On a server offering `X-GM-EXT-1`
+(Gmail), where that expunge would only take the Drafts label off and leave
+the copy in All Mail, the proven copy is moved to the declared `\Trash`
+with `UID MOVE` instead (review P3-2, SEC-5, v0.1.42); no Trash, or a
+refused move, is `Failed` and the copy stays. Without UIDPLUS the copy stays flagged
 (`Prior::LeftFlagged`), never a bare EXPUNGE, which would take whatever
 anybody else had flagged. Anything else leaves it where it is
 (`NotOurs`; `Gone` when it is no longer there, `Failed` when the server
@@ -975,11 +1024,10 @@ RATA's copy is saved, and a From change sends the old mailbox's copy
 there too (both for the owner to confirm). `Message.draft_id` (Drafts
 only) lets `continueDraft` save over RATA's own copy; `X-RATA-Draft-Rev`
 is not read back, so a draft continued later starts again at 1. Tested on
-a scripted server and real Dovecot (loopback). **Gmail risk, for B2:**
-Gmail may treat an expunge from `[Gmail]/Drafts` as removing the label
-and keep each old copy in All Mail, where RATA's archive search
-(`-in:inbox -in:sent -in:drafts`) would show it under Archive; check All
-Mail on a real Gmail account after saving a draft twice.
+a scripted server and real Dovecot (loopback). **Gmail, for B2:** the
+move to the Trash (above, review P3-2) has been seen only on a scripted
+Gmail server; on a real Gmail account, save a draft twice and check that
+All Mail, and RATA's Archive, hold one copy (SMOKE.md X7).
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and
@@ -987,19 +1035,28 @@ the site's headers; SEC-2 the AI cap; SEC-3 Mark of the Web (#71), with
 UI-1's question for disguised programs (#75); SEC-4 (#77, v0.1.41) rows 6
 (navigation, *Links*), 7 (`background`, *HTML mail*), 11 (unpaid
 checkouts, *Licensing*), 14 (the store, below), the SMTP half of 8
-(*Bodies are decoded*) and part of 15 (`RENEW_GRACE_DAYS`). The store: on
+(*Bodies are decoded*) and part of 15 (`RENEW_GRACE_DAYS`); SEC-5 (#84,
+v0.1.42) row 5 (the loopback gate, below) and the IMAP half of 8
+(*Bodies are decoded*). Part 3 of the review (#82, 2026-09-29) covers the
+code added since part 1 (drafts, marks, navigation, the store, checkout,
+renewal, the AI cap, deletion): no High, two Medium, five Low. SEC-6
+(#83) fixed P3-1 (invisible characters, *Disguised programs*), P3-5 and
+P3-6 (*Licensing*), part of P3-4 (the lists), and the checkout-plan bug that
+part 3 found on the way (*Licensing*); SEC-5 fixed P3-2 and P3-3 (*Drafts
+saved to the server*) and P3-7 (row 8). The store: on
 Unix `store.rs` writes `mailboxes.json` 0600 (a fresh temporary file, then
 the rename), tightens a file an older build left wider when it opens it,
 and makes the app folder 0700 when RATA creates it (an existing one is
-left alone); Windows keeps the profile's ACL. Still open: the IMAP half of
-row 8 (`login` and `xoauth2` keep the server's NO/BAD text raw, and
-`credential::redact` matches only an exact echo), row 5 (the loopback
-gate, below), row 15's in-window renewals (a business decision), and one
-Medium waiting on the owner: email confirmation before paid launch
-(LAUNCH.md §7, D8). The `loopback-tests` gate is a `compile_error!` on the
-feature without `debug_assertions`, not on the release profile: a build
-with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` passes it. `release.yml`
-sets neither; never enable the feature in rata-app.
+left alone); Windows keeps the profile's ACL. Still open: row 15's
+in-window renewals (a business decision), the rest of P3-4's suggested
+lists (the owner's call), and one Medium waiting on the owner: email
+confirmation before paid launch (LAUNCH.md §7, D8). The `loopback-tests`
+gate is a `compile_error!` on the feature without `debug_assertions`, and
+`desktop/rata-mail/build.rs` also fails any build with the feature when
+`PROFILE` is `release`, whatever its assertions, with the same words (CI
+looks for them), so `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` no
+longer gets it into a release build. Never enable the feature in
+rata-app.
 Windows and macOS signing are wired and wait for the owner's
 certificates.
 

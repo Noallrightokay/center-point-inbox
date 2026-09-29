@@ -14,7 +14,9 @@ serde = ["dep:serde"]
 # For tests/loopback.rs only: lets the outbound guard accept the literal
 # 127.0.0.1, so the engine can be run against real mail servers on the test
 # machine (tests/loopback/servers.sh). Off by default, and a compile error in
-# any build without debug assertions — a release build cannot have it.
+# any build without debug assertions; build.rs also refuses it whenever
+# PROFILE is release, even with debug assertions forced on. A release build
+# cannot have it.
 loopback-tests = []
 
 [[test]]
