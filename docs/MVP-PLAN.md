@@ -43,14 +43,14 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 
 ### Done, and how it was checked
 
-- **The desktop app** has been built through v0.1.41. The feature list is
+- **The desktop app** has been built through v0.1.42. The feature list is
   `CLAUDE.md` → Status: licence, adding a mailbox, sync, IDLE, folders,
   Sent/Archive/Spam/Drafts, Gmail's archive, compose with Cc/Bcc and
   attachments, reply and forward, HTML mail in a locked-down frame, the
   Format Bridge, notifications, signatures, the updater code, the
   redesign, Sign in with Microsoft (live once [C4](#c4) is done), saved
   files marked as downloads, and RATA's own drafts saved to the mailbox.
-- **Releases** v0.1.0 to v0.1.41 are published on GitHub. v0.1.2 onwards are
+- **Releases** v0.1.0 to v0.1.42 are published on GitHub. v0.1.2 onwards are
   pre-releases. v0.1.37 was downloaded and checked: 5 assets, the licence
   public key embedded, no font CDN, and it launches as "RATA 0.1.37 beta".
 - **v0.1.38** (Gmail's archive) is [PR #52](https://github.com/Noallrightokay/center-point-inbox/pull/52).
@@ -68,9 +68,11 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   `.deb`, the `.AppImage` and the Windows `-setup.exe`), and it launches
   as "RATA 0.1.41 beta". The install-and-launch smoke test passed on all
   four builds ([run 36516132763](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36516132763)).
-- **v0.1.42** is the release captain's PR ([G2](#g2)): it folds in #80–#84
-  below and bumps the version. It is released when that PR merges, and is
-  verified with `verify-release.sh` afterwards.
+- **v0.1.42** was released and verified ([PR #85](https://github.com/Noallrightokay/center-point-inbox/pull/85),
+  merged as `0ca0da8`): five assets, the licence public key present in the
+  `.deb` and the Windows exe, no font CDN, and it launches as "RATA 0.1.42
+  beta" (`verify-release.sh`, 2026-09-29). The install-and-launch smoke
+  test passed on all four builds ([run 36574649823](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36574649823)).
 - **Merged for 0.1.42:** D5's public half, `rata-next/scripts/live-check.sh`
   ([#80](https://github.com/Noallrightokay/center-point-inbox/pull/80));
   TIDY-1, a docs sweep against the code ([#81](https://github.com/Noallrightokay/center-point-inbox/pull/81));
@@ -589,7 +591,7 @@ BETA.md. Bump the version in all four places and merge. Run
 visibly (DESIGN.md → Website).
 Done when: the release is verified, and the docs name the version.
 Runs: 0.1.42 folded in #80–#84 (docs notes, the review's P3 rows, the
-small follow-ups) and bumped the version.
+small follow-ups) and bumped the version; released and verified 2026-09-29.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
