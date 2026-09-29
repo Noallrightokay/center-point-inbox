@@ -177,9 +177,9 @@ export default async function run(state) {
     const max = brief && Number(brief[1]), days = brief && Number(brief[2]);
     check(max === LIMITS.briefing && P.includes(`up to ${max} of the most recent messages in your inbox from the last ${days} days`),
       `the briefing: up to ${max} messages (relay takes ${LIMITS.briefing}) from the last ${days} days`);
-    check(app.includes(`.slice(0,${LIMITS.briefingEach})`) && P.includes(`the first ${thousands(LIMITS.briefingEach)} characters`),
+    check((app.includes(`.slice(0,${LIMITS.briefingEach})`) || app.includes(`AI_BRIEF_EACH=${LIMITS.briefingEach}`)) && P.includes(`the first ${thousands(LIMITS.briefingEach)} characters`),
       `the start of each: ${thousands(LIMITS.briefingEach)} characters`);
-    check(P.includes(`up to the first ${thousands(LIMITS.text)} characters`), `a summary or translation: up to ${thousands(LIMITS.text)} characters`);
+    check(app.includes(`AI_TEXT=${LIMITS.text},`) && P.includes(`up to the first ${thousands(LIMITS.text)} characters`), `a summary or translation: up to ${thousands(LIMITS.text)} characters, and the page cuts to exactly that`);
     /* What the online account keeps of someone's preferences, as app.html
        sends it. A field added to either list changes the page. */
     const fields = app.match(/const CLOUD_FIELDS=(\[[^\]]*\]);/);

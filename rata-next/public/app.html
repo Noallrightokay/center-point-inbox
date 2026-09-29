@@ -5035,7 +5035,7 @@ async function summarizeMessage(id){
   if(!window.__RATA_NATIVE__||!aiOk()){quick(window.__RATA_NATIVE__?'Made on this computer, without AI.':'');await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
   title.textContent='Summary';text.textContent='Summarizing\u2026';
   const whole=OPENED.get(id);
-  const r=await askAI({task:'summarize',subject:m.subj||'',from:msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),text:(whole&&!whole.error&&whole.text)||stored||m.prev||'',lang:userLang()});
+  const r=await askAI({task:'summarize',subject:aiCut(m.subj,AI_SUBJ),from:aiCut(msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),AI_FROM),text:aiCut((whole&&!whole.error&&whole.text)||stored||m.prev,AI_TEXT),lang:userLang()});
   if(!box.isConnected)return;
   if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
   title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
@@ -5057,6 +5057,17 @@ function aiOk(){
   if(!confirm(AI_NOTICE))return false;
   S.settings.aiOk=true;save();return true;
 }
+/* What goes to the relay is cut here first. The relay reads 12 000
+   characters of one message (LIMITS.text in lib/ai.js) and refuses a request
+   over 80 000 outright, and a message opened in full runs to 400 000. So the
+   page sends exactly what the relay reads and no more, which is also what
+   the privacy page promises, and knows for itself when it cut (aiLonger).
+   The characters the relay drops anyway (control and bidi-control
+   characters) go first, since JSON spells each as six. */
+const AI_TEXT=12000,AI_SUBJ=300,AI_FROM=200,AI_BRIEF_EACH=1500,AI_BRIEF_JSON=70000;
+const AI_DROP=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+function aiCut(s,max){return String(s??'').replace(AI_DROP,'').slice(0,max)}
+function aiLonger(s,max){return String(s??'').replace(AI_DROP,'').length>max}
 async function askAI(body){
   let r;
   try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
@@ -5080,9 +5091,10 @@ async function translateMessage(id){
   const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
   const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
   const whole=OPENED.get(id),to=userLang();
-  const r=await askAI({task:'translate',subject:m.subj||'',text:(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev||'',to});
+  const src=(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev;
+  const r=await askAI({task:'translate',subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT),to});
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
-  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut,to,hidden:false,used:r.used});
+  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut||aiLonger(src,AI_TEXT),to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
   await audit('msg.translate',(m.subj||m.prev.slice(0,40))+' \u2192 '+to);
   if(selMail===id)openMail(id);
@@ -5147,13 +5159,21 @@ async function runAIBrief(){
   if(!window.__RATA_NATIVE__||!aiOk()){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
-  const pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
+  let pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
   if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
   btn.disabled=true;btn.textContent='Reading\u2026';
   const texts=await bodiesOf(pool);
-  const r=await askAI({task:'tasks',messages:pool.map(m=>({id:m.id,from:msgFrom(m),subject:m.subj||'',text:String(texts.get(m.id)||m.prev||'').slice(0,1500)}))});
+  const sent=pool.map(m=>({id:m.id,from:aiCut(msgFrom(m),AI_FROM),subject:aiCut(m.subj,AI_SUBJ),text:aiCut(texts.get(m.id)||m.prev,AI_BRIEF_EACH)}));
+  /* Mail full of quotes or line breaks grows as JSON; the oldest go until
+     the request is well under what the relay takes, and only what was sent
+     is re-flagged below. */
+  while(sent.length>1&&JSON.stringify(sent).length>AI_BRIEF_JSON)sent.pop();
+  pool=pool.slice(0,sent.length);
+  const r=await askAI({task:'tasks',messages:sent});
   btn.disabled=false;btn.textContent='Run briefing';
-  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.</p>`);return}
+  /* A briefing that failed, or was cut short, says nothing about what needs
+     doing: every flag stays as it was. */
+  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}
   const found=new Map((r.tasks||[]).map(t=>[t.id,t]));
   /* What the briefing looked at is re-flagged from its answer, so a message
      that no longer needs anything loses its flag. */
