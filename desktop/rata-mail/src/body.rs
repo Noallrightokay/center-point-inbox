@@ -12,9 +12,9 @@
 //! start of a message, not all of it), and keeping the result a sensible size
 //! to hold on the customer's machine.
 
-use mail_parser::{Message as Parsed, MessageParser, MimeHeaders, PartType};
+use mail_parser::{HeaderName, Message as Parsed, MessageParser, MimeHeaders, PartType};
 
-use crate::{html, names, words};
+use crate::{compose, credential, html, names, words};
 
 /// How much of a message is fetched: its headers and the first 64 KiB. Enough
 /// for the text of nearly any message, since the text part comes before the
@@ -46,6 +46,33 @@ pub struct Body {
     /// That HTML version, made safe — only from [`read_whole`], since it is for
     /// showing now and is never stored.
     pub html: Option<html::Safe>,
+    /// Where a mailing list says to go to leave it ([`Unsubscribe`]).
+    pub unsubscribe: Option<Unsubscribe>,
+}
+
+/// How to leave the list a message came from, from its `List-Unsubscribe`
+/// header (RFC 2369): the first web address and the first address to write
+/// to that the header gives, each only when it is one RATA would act on.
+///
+/// Stored with the message by the interface; mail stored before this field
+/// existed reads `None` and shows no Unsubscribe until it is read again.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
+pub struct Unsubscribe {
+    /// An `http:` or `https:` address, for the customer's browser, and only
+    /// after they are asked. The engine checks its scheme and that it holds
+    /// no control characters; the app then checks it by the same rules as
+    /// any link in a message (`links::classify` in rata-app: a host, no user
+    /// name disguising where it goes) and drops it otherwise.
+    pub https: Option<String>,
+    /// A `mailto:` rebuilt from what the header gave: one address that
+    /// parses ([`compose::Address`]), then `subject` and `body` only,
+    /// decoded, cleaned of control and bidi-control characters and encoded
+    /// again, every byte outside `A-Z a-z 0-9 - . _ ~` as `%XX`. Anything
+    /// else the header's `mailto:` asked for (more recipients, `cc`, `bcc`)
+    /// is left out: a stranger does not choose who else RATA writes to.
+    pub mailto: Option<String>,
 }
 
 /// One attachment, as the reading pane lists it.
@@ -150,8 +177,168 @@ fn read_capped(raw: &[u8], cut: bool, cap: usize) -> Body {
     Body {
         attachments,
         has_html,
+        unsubscribe: unsubscribe_of(&msg),
         ..text_of(&msg, raw, cut, cap)
     }
+}
+
+/// The longest `List-Unsubscribe` read. Real ones are a few hundred
+/// characters; a sender decides how long it is.
+const UNSUBSCRIBE_MAX: usize = 8 * 1024;
+/// The longest web address kept, as for any link (`links::URL_MAX`).
+const UNSUBSCRIBE_URL_MAX: usize = 4096;
+/// How much of a `mailto:`'s subject and body is kept.
+const UNSUBSCRIBE_SUBJECT_MAX: usize = 200;
+const UNSUBSCRIBE_BODY_MAX: usize = 2000;
+
+/// The message's `List-Unsubscribe`, if it names somewhere RATA will go.
+///
+/// `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058) arrives in
+/// the same headers and asks a mail program to POST to the web address by
+/// itself, with nobody looking. RATA reads it with the rest of the headers
+/// and never acts on it: RATA makes no request of its own to a stranger's
+/// server, ever. The web address goes to the customer's browser, after they
+/// are asked, and a `mailto:` to the composer, where they press Send.
+fn unsubscribe_of(msg: &Parsed<'_>) -> Option<Unsubscribe> {
+    unsubscribe(msg.header_raw(HeaderName::ListUnsubscribe)?)
+}
+
+/// Reads one `List-Unsubscribe` value: angle-bracketed entries separated by
+/// commas, folded across lines as long headers are. Whitespace inside the
+/// brackets is not part of the address (RFC 2369 says to ignore it, and a
+/// fold can fall mid-address). The first entry of each kind that passes is
+/// kept; every other scheme (`javascript:`, `data:`, `file:`...) is ignored.
+pub fn unsubscribe(value: &str) -> Option<Unsubscribe> {
+    if value.len() > UNSUBSCRIBE_MAX {
+        return None;
+    }
+    let mut out = Unsubscribe::default();
+    let mut rest = value;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else {
+            break;
+        };
+        let entry: String = after[..close]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        rest = &after[close + 1..];
+        let Some((scheme, _)) = entry.split_once(':') else {
+            continue;
+        };
+        match scheme.to_ascii_lowercase().as_str() {
+            "https" | "http" if out.https.is_none() => out.https = unsubscribe_web(&entry),
+            "mailto" if out.mailto.is_none() => out.mailto = unsubscribe_mail(&entry),
+            _ => {}
+        }
+    }
+    (out.https.is_some() || out.mailto.is_some()).then_some(out)
+}
+
+/// A web address with nothing hidden in it: a `//` authority after the
+/// scheme, no control or bidi-control character anywhere, and a length a
+/// link can have. The rest of the rule for a link is the app's.
+fn unsubscribe_web(entry: &str) -> Option<String> {
+    let (_, rest) = entry.split_once(':')?;
+    let authority = rest.strip_prefix("//")?;
+    if authority.is_empty()
+        || entry.len() > UNSUBSCRIBE_URL_MAX
+        || entry
+            .chars()
+            .any(|c| c.is_control() || credential::is_bidi_control(c))
+    {
+        return None;
+    }
+    Some(entry.to_string())
+}
+
+/// A `mailto:` to one address that parses, with its `subject` and `body`
+/// decoded and cleaned, rebuilt as a `mailto:` the interface can read back
+/// with `decodeURIComponent`. `None` for anything else, a query that does
+/// not decode included.
+fn unsubscribe_mail(entry: &str) -> Option<String> {
+    let (_, rest) = entry.split_once(':')?;
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let to = percent_decode(path)?;
+    // One address, bare: `Address::parse` would take the address out of
+    // `Name <a@b.example>`, which is not what a mailto: holds.
+    if to.contains(['<', '>']) {
+        return None;
+    }
+    let to = compose::Address::parse(&to)?;
+    let mut subject = None;
+    let mut body = None;
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = percent_decode(value)?;
+        if key.eq_ignore_ascii_case("subject") && subject.is_none() {
+            // A subject is one line: every control character goes, the line
+            // breaks that would make a header of the rest included.
+            subject = Some(clean(&value, false, UNSUBSCRIBE_SUBJECT_MAX));
+        } else if key.eq_ignore_ascii_case("body") && body.is_none() {
+            body = Some(clean(&value, true, UNSUBSCRIBE_BODY_MAX));
+        }
+    }
+    let mut out = format!("mailto:{}", percent_encode(to.as_str()));
+    let mut sep = '?';
+    for (key, value) in [("subject", subject), ("body", body)] {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            out.push(sep);
+            out.push_str(key);
+            out.push('=');
+            out.push_str(&percent_encode(&v));
+            sep = '&';
+        }
+    }
+    Some(out)
+}
+
+/// Text from a stranger without control or bidi-control characters, at most
+/// `max` characters. A body keeps its line breaks, as `\n`.
+fn clean(text: &str, lines: bool, max: usize) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .filter(|&c| (lines && c == '\n') || !(c.is_control() || credential::is_bidi_control(c)))
+        .take(max)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// `%XX` decoded, as UTF-8. `None` for a stray `%` or bytes that are not
+/// text.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3)?;
+            if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Every byte outside RFC 3986's unreserved characters as `%XX`.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn text_of(msg: &Parsed<'_>, raw: &[u8], cut: bool, cap: usize) -> Body {
@@ -684,6 +871,236 @@ mod tests {
             .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
             .collect();
         let _ = read(&bytes, true);
+    }
+
+    // ---------------------------------------------------------- unsubscribe
+
+    /// A `mailto:` as the interface reads it back: the address, then the
+    /// subject and body with `decodeURIComponent`.
+    fn mailto_parts(m: &str) -> (String, String, String) {
+        let rest = m.strip_prefix("mailto:").expect(m);
+        let (to, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let mut subject = String::new();
+        let mut body = String::new();
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap();
+            // Nothing but unreserved characters and %XX, so it decodes
+            // exactly and a `+` is never a space.
+            assert!(
+                v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-._~%".contains(&b)),
+                "{v}"
+            );
+            let v = percent_decode(v).unwrap();
+            match k {
+                "subject" => subject = v,
+                "body" => body = v,
+                other => panic!("unexpected {other} in {m}"),
+            }
+        }
+        (percent_decode(to).unwrap(), subject, body)
+    }
+
+    fn list_mail(unsubscribe: &str) -> Vec<u8> {
+        msg(
+            &format!("List-Id: <news.list.example>\r\nList-Unsubscribe:{unsubscribe}\r\n"),
+            "This week's news.\r\n",
+        )
+    }
+
+    #[test]
+    fn a_web_address_in_angle_brackets_is_kept() {
+        let u = read(&list_mail(" <https://list.example/u?id=42&t=x>"), false)
+            .unsubscribe
+            .unwrap();
+        assert_eq!(u.https.as_deref(), Some("https://list.example/u?id=42&t=x"));
+        assert_eq!(u.mailto, None);
+        // http too, and the scheme in any case; the app checks it as a link.
+        assert_eq!(
+            unsubscribe("<HTTP://list.example/u>")
+                .unwrap()
+                .https
+                .as_deref(),
+            Some("HTTP://list.example/u")
+        );
+    }
+
+    #[test]
+    fn an_address_to_write_to_is_kept_on_its_own() {
+        let u = unsubscribe("<mailto:leave@list.example>").unwrap();
+        assert_eq!(u.https, None);
+        assert_eq!(u.mailto.as_deref(), Some("mailto:leave%40list.example"));
+        let (to, subject, body) = mailto_parts(u.mailto.as_deref().unwrap());
+        assert_eq!(
+            (to.as_str(), subject.as_str(), body.as_str()),
+            ("leave@list.example", "", "")
+        );
+        let u = unsubscribe("<MAILTO:Leave@List.Example>").unwrap();
+        assert_eq!(mailto_parts(&u.mailto.unwrap()).0, "leave@list.example");
+    }
+
+    #[test]
+    fn both_kinds_are_kept_whichever_comes_first_and_only_the_first_of_each() {
+        for value in [
+            "<mailto:leave@list.example?subject=unsubscribe>, <https://list.example/u/abc>",
+            "<https://list.example/u/abc>,<mailto:leave@list.example?subject=unsubscribe>",
+            "<https://list.example/u/abc>, <mailto:leave@list.example?subject=unsubscribe>, <https://second.example/u>, <mailto:second@list.example>",
+        ] {
+            let u = unsubscribe(value).unwrap();
+            assert_eq!(
+                u.https.as_deref(),
+                Some("https://list.example/u/abc"),
+                "{value}"
+            );
+            let (to, subject, _) = mailto_parts(u.mailto.as_deref().unwrap());
+            assert_eq!(
+                (to.as_str(), subject.as_str()),
+                ("leave@list.example", "unsubscribe"),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_header_folded_across_lines_is_read_whole() {
+        // Folded between entries, as long headers are, and inside the web
+        // address itself, which RFC 2369 says to read without the space.
+        let raw = list_mail(
+            "\r\n <mailto:leave@list.example?subject=unsubscribe%20me>,\r\n\t<https://list.example/unsubscribe/\r\n 8f2c1d?list=news>",
+        );
+        let u = read(&raw, false).unsubscribe.unwrap();
+        assert_eq!(
+            u.https.as_deref(),
+            Some("https://list.example/unsubscribe/8f2c1d?list=news")
+        );
+        let (to, subject, _) = mailto_parts(u.mailto.as_deref().unwrap());
+        assert_eq!(
+            (to.as_str(), subject.as_str()),
+            ("leave@list.example", "unsubscribe me")
+        );
+        // Opened whole, the same.
+        assert_eq!(read_whole(&raw).unsubscribe, Some(u));
+    }
+
+    #[test]
+    fn anything_that_is_not_a_web_address_or_a_mailto_is_ignored() {
+        let u = unsubscribe("<javascript:alert(1)>, <https://list.example/u>").unwrap();
+        assert_eq!(u.https.as_deref(), Some("https://list.example/u"));
+        for value in [
+            "<javascript:alert(1)>",
+            "<JaVaScRiPt://list.example/%0Aalert(1)>",
+            "<data:text/html,<script>alert(1)</script>>",
+            "<file:///etc/passwd>",
+            "<ftp://list.example/u>",
+            "<list.example/u>",
+            // http without an authority, or with nothing in it.
+            "<https:list.example/u>",
+            "<https://>",
+            // No angle brackets: not an entry.
+            "https://list.example/u",
+            "mailto:leave@list.example",
+            // An entry that never closes.
+            "<https://list.example/u",
+            "",
+        ] {
+            assert_eq!(unsubscribe(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_web_address_hiding_a_character_is_refused() {
+        for value in [
+            "<https://list.example/u\u{0}x>",
+            "<https://list.example/u\u{7f}>",
+            "<https://list.example/\u{202e}fdp.exe>",
+            "<https://list.example/\u{2066}u>",
+        ] {
+            assert_eq!(unsubscribe(value), None, "{value:?}");
+        }
+        let long = format!("<https://list.example/{}>", "a".repeat(UNSUBSCRIBE_URL_MAX));
+        assert_eq!(unsubscribe(&long), None);
+        // A refused web address does not cost the mailto beside it.
+        let u =
+            unsubscribe("<https://list.example/\u{202e}u>, <mailto:leave@list.example>").unwrap();
+        assert_eq!(u.https, None);
+        assert!(u.mailto.is_some());
+    }
+
+    #[test]
+    fn a_mailto_that_is_not_one_address_is_ignored() {
+        for value in [
+            "<mailto:>",
+            "<mailto:nobody>",
+            "<mailto:a@b>",
+            "<mailto:a@b.example,c@d.example>",
+            "<mailto:a@b.example%2Cc@d.example>",
+            "<mailto:Name%20%3Ca@b.example%3E>",
+            "<mailto:%FF@b.example>",
+            "<mailto:a%4@b.example>",
+            "<mailto:a%+1@b.example>",
+            "<mailto:a%0D%0ABcc:x@y.example>",
+            // A query that does not decode.
+            "<mailto:leave@list.example?subject=%E2%80>",
+        ] {
+            assert_eq!(unsubscribe(value), None, "{value}");
+        }
+        // A bad one does not cost the web address beside it.
+        let u = unsubscribe("<mailto:nobody>, <https://list.example/u>").unwrap();
+        assert_eq!(u.mailto, None);
+        assert_eq!(u.https.as_deref(), Some("https://list.example/u"));
+    }
+
+    #[test]
+    fn a_mailto_s_subject_and_body_are_decoded_and_cleaned() {
+        let u = unsubscribe(
+            "<mailto:leave@list.example?Subject=Unsubscribe%20me%0D%0ABcc:%20all@example.com&BODY=Please%20remove%0D%0Ame+now%E2%80%AE%E2%81%A6%07.&cc=boss@example.com&to=other@example.com&bcc=x@example.com>",
+        )
+        .unwrap();
+        let m = u.mailto.unwrap();
+        let (to, subject, body) = mailto_parts(&m);
+        assert_eq!(to, "leave@list.example");
+        // One line: the break that would have made a Bcc header is gone.
+        assert_eq!(subject, "Unsubscribe meBcc: all@example.com");
+        // A body keeps its line break; the bidi and bell characters go, and
+        // `+` is a plus, as RFC 6068 has it.
+        assert_eq!(body, "Please remove\nme+now.");
+        // Nobody else: cc, bcc and to= from a stranger are not kept.
+        assert!(
+            !m.contains("boss") && !m.contains("other") && !m.contains("x%40"),
+            "{m}"
+        );
+        // Kept to a size.
+        let long = format!(
+            "<mailto:leave@list.example?subject={}&body={}>",
+            "s".repeat(1000),
+            "b".repeat(5000)
+        );
+        let (_, subject, body) = mailto_parts(&unsubscribe(&long).unwrap().mailto.unwrap());
+        assert_eq!(subject.len(), UNSUBSCRIBE_SUBJECT_MAX);
+        assert_eq!(body.len(), UNSUBSCRIBE_BODY_MAX);
+    }
+
+    #[test]
+    fn one_click_is_read_and_changes_nothing() {
+        // RFC 8058 asks a mail program to POST to the address itself. RATA
+        // never does; the header makes no difference to what is kept.
+        let plain = list_mail(" <https://list.example/u>");
+        let one_click = msg(
+            "List-Unsubscribe: <https://list.example/u>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n",
+            "This week's news.\r\n",
+        );
+        assert_eq!(
+            read(&one_click, false).unsubscribe,
+            read(&plain, false).unsubscribe
+        );
+    }
+
+    #[test]
+    fn mail_without_the_header_has_none() {
+        assert_eq!(read(&msg("", "Hi.\r\n"), false).unsubscribe, None);
+        assert_eq!(read(b"no headers at all", false).unsubscribe, None);
+        let long = format!("<https://list.example/u>, {}", " ".repeat(UNSUBSCRIBE_MAX));
+        assert_eq!(unsubscribe(&long), None);
     }
 
     #[test]

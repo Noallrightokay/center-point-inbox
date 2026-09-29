@@ -194,7 +194,8 @@ of its current 30 days. Mail already synced stays where it is.
 
 **A failed payment does not lock anyone out.** `past_due` is still entitled —
 a card that failed this morning should not cut off someone's mail while Stripe
-retries it. `LIVE_STATUSES` in `lib/stripe.js` is where that decision lives.
+retries it. `LIVE_STATUSES` in `lib/plan.js` is where that decision lives (`lib/stripe.js`
+re-exports it, so the webhook and the licence routes cannot disagree).
 
 ## Testing before going live
 

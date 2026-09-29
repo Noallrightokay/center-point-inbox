@@ -63,6 +63,9 @@ pub struct Mailbox {
     pub auth: Auth,
 }
 
+/// The shape of `mailboxes.json` this build writes, as its `version` field.
+pub const SCHEMA: u32 = 1;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Contents {
     #[serde(default)]
@@ -82,6 +85,9 @@ pub struct Store {
     path: PathBuf,
     boxes: Vec<Mailbox>,
     licence: Option<String>,
+    /// The `version` the file on disk had when it was opened: `None` when
+    /// there was no file, or none that could be read.
+    on_disk: Option<u32>,
 }
 
 impl Store {
@@ -102,12 +108,14 @@ impl Store {
         }
         let held = fs::read_to_string(&path)
             .ok()
-            .and_then(|raw| serde_json::from_str::<Contents>(&raw).ok())
-            .unwrap_or_default();
+            .and_then(|raw| serde_json::from_str::<Contents>(&raw).ok());
+        let on_disk = held.as_ref().map(|c| c.version);
+        let held = held.unwrap_or_default();
         Store {
             path,
             boxes: held.mailboxes,
             licence: held.licence,
+            on_disk,
         }
     }
 
@@ -126,7 +134,7 @@ impl Store {
             make_dir(dir)?;
         }
         let body = serde_json::to_string_pretty(&Contents {
-            version: 1,
+            version: SCHEMA,
             mailboxes: self.boxes.clone(),
             licence: self.licence.clone(),
         })?;
@@ -154,6 +162,11 @@ impl Store {
     #[cfg(test)]
     pub fn path_for_test(&self) -> PathBuf {
         self.path.clone()
+    }
+
+    /// The schema version the file had when it was opened, for diagnostics.
+    pub fn on_disk(&self) -> Option<u32> {
+        self.on_disk
     }
 
     pub fn licence(&self) -> Option<&str> {

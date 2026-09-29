@@ -34,11 +34,18 @@ export async function POST(req) {
      who is asking and what they bought. An expired one is refused here — the
      app renews it on its own when it is online. */
   const seen = check(String(body.licence || ''), process.env.LICENCE_PUBLIC_KEY);
+  if (seen.reason === 'no-public-key') {
+    /* The deploy is missing its half of the key, not the customer their
+       licence: telling a paying customer "not licensed" would be false. The
+       variable is named in the log only, never its value. */
+    console.warn('ai: LICENCE_PUBLIC_KEY is not set or cannot be read, so no licence can be checked; see rata-next/LAUNCH.md section 2');
+    return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
+  }
   if (!seen.ok) {
     return reply({
       error: seen.reason === 'expired' ? 'Your licence needs renewing — RATA does this itself when it is online.' : 'This copy of RATA is not licensed.',
       reason: seen.reason,
-    }, seen.reason === 'no-public-key' ? 503 : 401);
+    }, 401);
   }
   const who = String(seen.licence.sub).toLowerCase();
 
@@ -112,8 +119,17 @@ export async function POST(req) {
   const used = Math.min(1, Number(total ?? held) / cap);
 
   const text = (Array.isArray(d.content) ? d.content : []).filter(c => c && c.type === 'text').map(c => c.text).join('').trim();
+  /* An answer that ran into max_tokens stopped mid-sentence. A translation
+     is still worth showing, as the start of it; a briefing is not, because
+     its JSON is cut off and reads as "nothing needs doing", which the app
+     would take as leave to clear every flag. */
+  const stopped = d.stop_reason === 'max_tokens';
   if (asked.task === 'tasks') {
+    if (stopped) {
+      console.warn('ai: a briefing ran into max_tokens');
+      return reply({ error: 'The briefing was cut short. Try again.', reason: 'cut', used }, 502);
+    }
     return reply({ tasks: parseTasks(text, asked.input.messages.map(m => m.id)), used });
   }
-  return reply({ text, cut: !!asked.input.cut, used });
+  return reply({ text, cut: !!asked.input.cut || stopped, used });
 }
