@@ -210,6 +210,14 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         M.sent.push(args.draft);
         if (M.sendFails) throw 'smtp.example.com refused the message';
         return { via: 'smtp.example.com', messageId: 'rata' + M.sent.length + '@example.com' };
+      /* H6: as core::search: the newest of what the server found, and how
+         many matched. `M.serverFound[email]` is { messages, matched }. */
+      case 'search_mail': {
+        M.searches = (M.searches || []).concat([args]);
+        if (M.searchFails) throw { email: args.email, kind: 'net', error: args.email + ' would not search the inbox. It said: Search is switched off' };
+        const f = (M.serverFound || {})[args.email] || { messages: [], matched: 0 };
+        return { messages: f.messages, matched: f.matched };
+      }
       case 'change_messages':
         if (M.changeFails) return { ok: false, done: [], gone: [], kind: 'net', error: 'imap.example.com could not be reached' };
         return { ok: true, done: args.uids, gone: [] };
@@ -1594,6 +1602,104 @@ console.log('\n— Settings → Help & diagnostics —');
   });
   check(!web.native && !web.diag && web.help && web.bug && web.helpHref === 'https://mailrata.org/help',
     `on the website the section shows Help and Report a bug, and no Copy diagnostics: ${JSON.stringify(web)}`);
+  await pg.close();
+}
+
+console.log('\n— a search can ask each mailbox’s server too (H6) —');
+{
+  const pg = await open(true);
+  const mk = (who, uid, subject, extra) => Object.assign({ id: who + '_' + uid, folder: 'inbox', acct: who, acct_label: who,
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: who, subject, preview: 'p', body: 'The figures.',
+    ts: Date.parse('2025-01-01T10:00:00Z') + uid * 60000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'h' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate((held) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: held, flags: [], problems: [], skipped: [] };
+  }, [mk('me@example.com', 90, 'Lunch plans'), mk('work@example.net', 40, 'Rota')]);
+  await pg.evaluate(() => serverSync('mail'));
+  /* The server finds two old messages RATA has never held, and says twelve
+     matched: the invoice word is in their text only. */
+  await pg.evaluate((found) => {
+    __mock.serverFound = { 'me@example.com': { messages: found, matched: 12 } };
+    __mock.calls = [];
+  }, [mk('me@example.com', 7, 'Old statement', { body: 'Your invoice is attached.' }), mk('me@example.com', 5, 'Older statement', { body: 'The invoice for March.' })]);
+  await pg.evaluate(() => go('search'));
+  await pg.fill('#search-input', 'invoice');
+  await pg.click('#search-go');
+  await pg.waitForSelector('#srv-bar', { timeout: 5000 }).catch(() => {});
+  let bar = await pg.evaluate(() => {
+    const b = document.querySelector('#srv-bar');
+    return b ? { rows: [...b.querySelectorAll('.srv-row')].map((r) => r.textContent), all: (b.querySelector('[data-srv="*"]') || {}).textContent || '',
+      results: [...document.querySelectorAll('#res-pane .res-row')].filter((r) => /statement/.test(r.textContent)).length, asked: __mock.calls.filter(([c]) => c === 'search_mail').length } : null;
+  });
+  check(bar && bar.rows.length === 2 && bar.rows.every((r) => /Search on the server$/.test(r)) && /me@example\.com/.test(bar.rows[0] + bar.rows[1]) && /work@example\.net/.test(bar.rows[0] + bar.rows[1]),
+    `a search that ran here offers Search on the server for each linked mailbox: ${JSON.stringify(bar)}`);
+  check(bar && bar.all === 'Search all 2 on the server' && bar.results === 0 && bar.asked === 0, `and all at once, and asks no server until pressed: ${JSON.stringify(bar)}`);
+  await pg.click('#srv-bar [data-srv="me@example.com"]');
+  await pg.waitForFunction(() => /found/.test((document.querySelector('#srv-bar [data-srv="me@example.com"]') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const after = await pg.evaluate(() => {
+    const btn = document.querySelector('#srv-bar [data-srv="me@example.com"]');
+    const rows = [...document.querySelectorAll('#res-pane .res-row')].map((r) => r.textContent).filter((t) => /statement/.test(t));
+    const held = S.messages.filter((m) => m.id === 'me@example.com_7' || m.id === 'me@example.com_5');
+    return { said: btn && btn.textContent, disabled: btn && btn.disabled, rows,
+      asked: __mock.calls.filter(([c]) => c === 'search_mail').map(([, a]) => a),
+      held: held.map((m) => ({ id: m.id, srv: !!m.srvFound, acct: m.acct, mailbox: m.mailbox })),
+      oldest: (oldestRef('me@example.com', 'inbox') || {}).uid, known: heldKnown().filter((k) => k.email === 'me@example.com' && k.folder === 'inbox').map((k) => k.since) };
+  });
+  check(after.said === 'Newest 2 of 12 found' && after.disabled, `the button then says how many came: ${JSON.stringify({ said: after.said, disabled: after.disabled })}`);
+  check(after.asked.length === 1 && after.asked[0].email === 'me@example.com' && after.asked[0].folder === 'inbox' && after.asked[0].query === 'invoice',
+    `one mailbox's inbox is asked, with the words as typed: ${JSON.stringify(after.asked)}`);
+  check(after.rows.length === 2 && after.rows.every((r) => /Old(er)? statement/.test(r) && /me@example\.com/.test(r) && /Found on the server/.test(r)),
+    `what came is in the results, labelled with its mailbox and as found on the server: ${JSON.stringify(after.rows)}`);
+  check(after.held.length === 2 && after.held.every((m) => m.srv && m.mailbox === 'me@example.com' && m.acct !== 'me@example.com'),
+    `and stored like older mail, filed under its mailbox: ${JSON.stringify(after.held)}`);
+  check(after.oldest === 90 && after.known.length === 1 && after.known[0] === 90,
+    `neither Load older mail nor a refresh counts it, so nothing between is skipped: ${JSON.stringify({ oldest: after.oldest, known: after.known })}`);
+  /* All at once asks only the mailbox not yet asked. */
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#srv-bar [data-srv="*"]');
+  await pg.waitForFunction(() => /found/.test((document.querySelector('#srv-bar [data-srv="work@example.net"]') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const all = await pg.evaluate(() => ({ asked: __mock.calls.filter(([c]) => c === 'search_mail').map(([, a]) => a.email),
+    said: (document.querySelector('#srv-bar [data-srv="work@example.net"]') || {}).textContent, allLeft: !!document.querySelector('#srv-bar [data-srv="*"]') }));
+  check(all.asked.join() === 'work@example.net' && all.said === 'Nothing found on the server' && !all.allLeft,
+    `Search all asks the mailboxes not yet asked, and says when nothing came: ${JSON.stringify(all)}`);
+  /* Load older mail reaches the found messages: they become history. */
+  await pg.evaluate(() => {
+    __mock.inbox = [5, 7, 60, 90];
+    __mock.mk = (u) => ({ id: 'me@example.com_' + u, folder: 'inbox', acct: 'me@example.com', acct_label: 'me@example.com', from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com',
+      subject: 'Page ' + u, preview: 'p', body: 'b', ts: Date.parse('2025-01-01T10:00:00Z') + u * 60000, unread: false, starred: false, uid: u, uidvalidity: 7, message_id: 'h' + u + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  });
+  await pg.evaluate(() => loadOlder('me@example.com', true));
+  const paged = await pg.evaluate(() => ({ ids: S.messages.filter((m) => m.mailbox === 'me@example.com' && m.folder === 'inbox').map((m) => m.uid).sort((a, b) => a - b),
+    marked: S.messages.filter((m) => m.srvFound).map((m) => m.uid), subj7: (S.messages.find((m) => m.id === 'me@example.com_7') || {}).subj, oldest: (oldestRef('me@example.com', 'inbox') || {}).uid }));
+  check(paged.ids.join() === '5,7,60,90' && paged.marked.length === 0 && paged.subj7 === 'Old statement' && paged.oldest === 5,
+    `Load older mail pages from what it held, and takes the found ones in as history without doubling them: ${JSON.stringify(paged)}`);
+  /* A refused search says why, beside its mailbox, and can be tried again. */
+  await pg.evaluate(() => { __mock.searchFails = true; __mock.calls = []; });
+  await pg.fill('#search-input', 'a "quoted" \\ word');
+  await pg.click('#search-go');
+  await pg.waitForSelector('#srv-bar [data-srv="me@example.com"]', { timeout: 5000 }).catch(() => {});
+  const fresh = await pg.evaluate(() => document.querySelector('#srv-bar [data-srv="me@example.com"]').textContent);
+  await pg.click('#srv-bar [data-srv="me@example.com"]');
+  await pg.waitForSelector('#srv-bar .srv-err', { timeout: 5000 }).catch(() => {});
+  const refused = await pg.evaluate(() => ({ err: (document.querySelector('#srv-bar .srv-err') || {}).textContent, said: document.querySelector('#srv-bar [data-srv="me@example.com"]').textContent,
+    disabled: document.querySelector('#srv-bar [data-srv="me@example.com"]').disabled, query: (__mock.calls.find(([c]) => c === 'search_mail') || [, {}])[1].query }));
+  check(fresh === 'Search on the server' && /Search is switched off/.test(refused.err || '') && refused.said === 'Search on the server again' && !refused.disabled,
+    `a new query starts afresh, and a refusal is said beside its mailbox: ${JSON.stringify({ fresh, ...refused })}`);
+  check(refused.query === 'a "quoted" \\ word', `the words go to Rust exactly as typed: ${JSON.stringify(refused.query)}`);
+  await pg.close();
+}
+{
+  /* The website reads no mail, so it has no server to ask. */
+  const pg = await browser.newPage();
+  pg.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  await pg.addInitScript(() => { localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' })); });
+  await pg.goto(B + '/app.html');
+  await pg.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+  await pg.evaluate(() => { S.linked.push({ id: 'lk_web', type: 'mail', label: 'me@example.com' }); go('search'); });
+  await pg.fill('#search-input', 'invoice');
+  await pg.click('#search-go');
+  await pg.waitForFunction(() => !/Searching/.test(document.querySelector('#res-pane').textContent), null, { timeout: 5000 }).catch(() => {});
+  check(await pg.evaluate(() => !window.__RATA_NATIVE__ && !document.querySelector('#srv-bar')), 'on the website a search offers no server search');
   await pg.close();
 }
 

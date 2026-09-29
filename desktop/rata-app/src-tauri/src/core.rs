@@ -20,6 +20,7 @@ use rata_mail::{
     fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, looks_disguised,
     safe_file_name, save_draft, send, verify, verify_with,
 };
+use rata_mail::{SEARCH_LIMIT, search_folder, search_query};
 use serde::Serialize;
 
 use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Noted, Trouble};
@@ -141,6 +142,14 @@ pub struct Refreshed {
     pub problems: Vec<Problem>,
     /// Mailboxes that were not even tried, and why.
     pub skipped: Vec<Problem>,
+}
+
+/// What a search on the server found in one mailbox: the newest of the
+/// matches, and how many there were in all.
+#[derive(Debug, Serialize)]
+pub struct ServerFound {
+    pub messages: Vec<Message>,
+    pub matched: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1052,6 +1061,47 @@ impl Rata {
             })
             .await?;
         self.answer(&m.email, found)
+    }
+
+    /// Messages in one folder of one mailbox whose sender, subject or text
+    /// has `query` in it, as the server finds them: the newest
+    /// [`SEARCH_LIMIT`], whole, and how many matched in all. Refused on the
+    /// same terms as older mail (licensed, linked, not parked), and a query
+    /// the engine would refuse is refused here before anything is dialled.
+    /// The page asks for the inbox only in this version; the engine refuses
+    /// the customer's own folders and Gmail's archive.
+    pub async fn search(
+        &self,
+        email: &str,
+        folder: Folder,
+        query: &str,
+    ) -> Result<ServerFound, Problem> {
+        let m = self.usable(email)?;
+        let query = search_query(query).map_err(|error| Problem {
+            email: m.email.clone(),
+            kind: "query".into(),
+            error,
+        })?;
+        let found = self
+            .signed(&m, |acct| {
+                let folder = folder.clone();
+                async move {
+                    search_folder(&self.resolver, &acct, folder, query, SEARCH_LIMIT).await
+                }
+            })
+            .await?;
+        match found {
+            Ok(s) => Ok(ServerFound {
+                messages: as_links(s.messages),
+                matched: s.matched,
+            }),
+            // An error from the engine, said as every other list says it
+            // (and a refused password parks the mailbox, as there).
+            Err(failed) => self.answer(&m.email, failed).map(|messages| ServerFound {
+                matched: u32::try_from(messages.len()).unwrap_or(u32::MAX),
+                messages,
+            }),
+        }
     }
 
     /// The attachments of a message being forwarded, fetched from its mailbox.
@@ -2499,6 +2549,46 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(e.kind, "auth");
+        });
+    }
+
+    #[test]
+    fn a_server_search_refuses_before_ever_dialling() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("srch-unlic"));
+            let e = app
+                .search("owner@example.com", Folder::Inbox, "invoice")
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unlicensed");
+
+            let app = rata(tmpfile("srch-unknown"));
+            let e = app
+                .search("nobody@example.com", Folder::Inbox, "invoice")
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unknown");
+
+            let app = rata(tmpfile("srch-parked"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let e = app
+                .search("owner@example.com", Folder::Inbox, "invoice")
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "auth");
+
+            // A query the engine would refuse never reaches a server.
+            let app = rata(tmpfile("srch-query"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            let long = "a".repeat(rata_mail::SEARCH_QUERY_MAX + 1);
+            for q in ["", "   ", "x\r\nA1 LOGOUT", long.as_str()] {
+                let e = app
+                    .search("owner@example.com", Folder::Inbox, q)
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.kind, "query", "{q:?}: {e:?}");
+            }
         });
     }
 
