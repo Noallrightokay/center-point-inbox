@@ -25,7 +25,14 @@
 //!   an attacker who can modify traffic can strip the upgrade offer; with 465
 //!   there is nothing to strip. See [`starttls`] for what is checked before the
 //!   upgrade.
+//!
+//! Except where a provider documents 587 alone — Microsoft's two submission
+//! hosts and iCloud's ([`crate::discover::smtp_ports`]) — which get 587 first
+//! rather than a timeout per address on 465. And a mailbox's last working
+//! host and port go first for as long as RATA runs ([`routes`]).
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -35,7 +42,7 @@ use tokio_rustls::client::TlsStream;
 
 use crate::compose::{Outgoing, message_id, render};
 use crate::credential::{self, Credential, said};
-use crate::discover::{SMTP_PORTS, smtp_candidates};
+use crate::discover::{smtp_candidates, smtp_ports};
 use crate::guard::HostVerdict;
 use crate::imap::Account;
 use crate::resolve::Resolver;
@@ -202,6 +209,53 @@ impl Wire {
     }
 }
 
+/// The submission host and port that last took a message from each mailbox,
+/// by address, for as long as RATA runs. Kept in memory only: after a
+/// restart the first send finds it again.
+static WORKED: OnceLock<Mutex<HashMap<String, (String, u16)>>> = OnceLock::new();
+
+fn worked() -> &'static Mutex<HashMap<String, (String, u16)>> {
+    WORKED.get_or_init(Default::default)
+}
+
+fn mailbox_key(email: &str) -> String {
+    email.trim().to_ascii_lowercase()
+}
+
+/// The route that last worked for `email`, if any.
+fn last_route(email: &str) -> Option<(String, u16)> {
+    worked().lock().ok()?.get(&mailbox_key(email)).cloned()
+}
+
+fn remember_route(email: &str, host: &str, port: u16) {
+    if let Ok(mut w) = worked().lock() {
+        w.insert(mailbox_key(email), (host.to_string(), port));
+    }
+}
+
+/// Every (host, port, implicit TLS) to try, best first: the one that last
+/// worked for this mailbox, if it is still among `hosts`, then each host's
+/// own ports in order ([`smtp_ports`]) — so a Microsoft or iCloud send does
+/// not wait out 465 on every address before reaching 587, and a mailbox
+/// whose provider takes only one port finds it once, not on every send.
+fn routes(hosts: &[String], last: Option<&(String, u16)>) -> Vec<(String, u16, bool)> {
+    let mut out: Vec<(String, u16, bool)> = Vec::new();
+    if let Some((host, port)) = last
+        && hosts.contains(host)
+        && let Some((p, implicit)) = smtp_ports(host).into_iter().find(|(p, _)| p == port)
+    {
+        out.push((host.clone(), p, implicit));
+    }
+    for host in hosts {
+        for (port, implicit) in smtp_ports(host) {
+            if !out.iter().any(|(h, p, _)| h == host && *p == port) {
+                out.push((host.clone(), port, implicit));
+            }
+        }
+    }
+    out
+}
+
 /// Send one message, trying each submission host and port until one takes it.
 pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
     // Sending as somebody else from this account would be forgery, and the
@@ -228,30 +282,33 @@ pub async fn send(resolver: &Resolver, acct: &Account, msg: &Outgoing) -> Sent {
 
     let hosts = smtp_candidates(&acct.host, &acct.email);
     let mut blocked: Option<String> = None;
+    let mut refused_hosts: Vec<String> = Vec::new();
     let mut last = String::new();
 
-    for host in &hosts {
-        for (port, implicit) in SMTP_PORTS {
-            match attempt(resolver, acct, host, port, implicit, &body, &to).await {
-                Sent::Ok { via, id, .. } => {
-                    return Sent::Ok {
-                        via,
-                        id,
-                        message_id: written,
-                    };
-                }
-                // The password is wrong, or the message itself was refused.
-                // Another port would produce the same answer, and repeating a
-                // rejected password is how accounts get locked.
-                done @ (Sent::Auth(_) | Sent::OAuth(_) | Sent::Rejected(_)) => return done,
-                // A host pointing somewhere private is not retried on another
-                // port, but a *different* host might still be fine.
-                Sent::Host(why) => {
-                    blocked.get_or_insert(why);
-                    break;
-                }
-                Sent::Net(why) => last = why,
+    for (host, port, implicit) in routes(&hosts, last_route(&acct.email).as_ref()) {
+        if refused_hosts.contains(&host) {
+            continue;
+        }
+        match attempt(resolver, acct, &host, port, implicit, &body, &to).await {
+            Sent::Ok { via, id, .. } => {
+                remember_route(&acct.email, &host, port);
+                return Sent::Ok {
+                    via,
+                    id,
+                    message_id: written,
+                };
             }
+            // The password is wrong, or the message itself was refused.
+            // Another port would produce the same answer, and repeating a
+            // rejected password is how accounts get locked.
+            done @ (Sent::Auth(_) | Sent::OAuth(_) | Sent::Rejected(_)) => return done,
+            // A host pointing somewhere private is not retried on another
+            // port, but a *different* host might still be fine.
+            Sent::Host(why) => {
+                blocked.get_or_insert(why);
+                refused_hosts.push(host);
+            }
+            Sent::Net(why) => last = why,
         }
     }
 
@@ -780,6 +837,71 @@ mod tests {
     }
 
     #[test]
+    fn microsoft_and_icloud_are_tried_on_587_before_465() {
+        let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let order = |r: Vec<(String, u16, bool)>| {
+            r.into_iter()
+                .map(|(h, p, _)| format!("{h}:{p}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            order(routes(
+                &hosts(&["smtp-mail.outlook.com", "smtp.office365.com"]),
+                None
+            )),
+            [
+                "smtp-mail.outlook.com:587",
+                "smtp-mail.outlook.com:465",
+                "smtp.office365.com:587",
+                "smtp.office365.com:465"
+            ]
+        );
+        assert_eq!(
+            order(routes(&hosts(&["smtp.mail.me.com"]), None)),
+            ["smtp.mail.me.com:587", "smtp.mail.me.com:465"]
+        );
+        // Everyone else: implicit TLS first, as before.
+        assert_eq!(
+            order(routes(&hosts(&["smtp.gmail.com"]), None)),
+            ["smtp.gmail.com:465", "smtp.gmail.com:587"]
+        );
+        // 587 is STARTTLS, 465 TLS from the first byte, whatever the order.
+        for (h, p, implicit) in routes(&hosts(&["smtp.office365.com", "smtp.gmail.com"]), None) {
+            assert_eq!(implicit, p == 465, "{h}:{p}");
+        }
+    }
+
+    #[test]
+    fn the_route_that_worked_last_is_tried_first() {
+        let hosts: Vec<String> = ["smtp.office365.com", "smtp-mail.outlook.com"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let last = ("smtp-mail.outlook.com".to_string(), 587);
+        let r = routes(&hosts, Some(&last));
+        assert_eq!(r[0], ("smtp-mail.outlook.com".to_string(), 587, false));
+        // Then the rest, each once.
+        assert_eq!(r.len(), 4, "{r:?}");
+        assert_eq!(r[1], ("smtp.office365.com".to_string(), 587, false));
+        // A route for a host this mailbox no longer sends through is ignored.
+        let gone = ("smtp.example.org".to_string(), 25);
+        assert_eq!(routes(&hosts, Some(&gone)), routes(&hosts, None));
+
+        // Remembered per mailbox, in any case.
+        remember_route("Route.Test@Example.com ", "smtp.gmail.com", 587);
+        assert_eq!(
+            last_route("route.test@example.com"),
+            Some(("smtp.gmail.com".to_string(), 587))
+        );
+        assert_eq!(last_route("someone.else.route@example.com"), None);
+        let gmail = vec!["smtp.gmail.com".to_string()];
+        assert_eq!(
+            routes(&gmail, last_route("route.test@example.com").as_ref())[0],
+            ("smtp.gmail.com".to_string(), 587, false)
+        );
+    }
+
+    #[test]
     fn sending_as_somebody_else_is_refused_before_anything_is_dialled() {
         rt().block_on(async {
             let r = Resolver::system().unwrap();
@@ -1155,7 +1277,7 @@ mod tests {
     // well as how it reads the answers. Line by line rather than read by
     // read: a token line is thousands of characters long.
 
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     const TOKEN: &str = "EwBIA8l6BAAUbDba3x2OMJElkF7gJ4z/VbCPEz0AAZmp-secret";
     const CAPS: &str = "smtp.office365.com Hello SIZE 157286400 AUTH LOGIN XOAUTH2 8BITMIME";

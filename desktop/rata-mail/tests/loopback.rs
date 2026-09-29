@@ -713,6 +713,8 @@ async fn a_draft_saved_again_leaves_one_copy_the_newer_and_nobody_else_s_is_touc
     assert!(text.contains("Second go"), "{text}");
     let f = flags(&mut s, "Drafts", second.uid).await;
     assert!(f.iter().any(|x| x.contains("Draft")), "{f:?}");
+    // Seen: RATA's own draft never turns up unread (BUG-M).
+    assert!(f.iter().any(|x| x == "\\Seen"), "{f:?}");
     s.logout().await.unwrap();
 
     // A refresh reads it back as RATA's own, under the id the save gave.
@@ -727,6 +729,7 @@ async fn a_draft_saved_again_leaves_one_copy_the_newer_and_nobody_else_s_is_touc
     assert_eq!(mine.id, key);
     assert_eq!(mine.draft_id.as_deref(), Some(id));
     assert_eq!(mine.bcc, ["dave@rata.test"]);
+    assert!(!mine.unread, "{mine:?}");
     assert_eq!(mine.body.trim(), "Second go");
     let theirs = drafts.iter().find(|m| m.uid == before[0]).unwrap();
     assert_eq!(theirs.draft_id, None);
@@ -965,4 +968,31 @@ async fn greenmail_archive_by_name_is_read_and_archived_to() {
         ["INBOX 0", "INBOX 1"]
     );
     assert!(in_folder(&got.messages, &Folder::Inbox).is_empty());
+}
+
+#[tokio::test]
+async fn greenmail_delete_moves_to_a_folder_named_trash() {
+    let r = resolver();
+    let me = user("gm-trash");
+    let acct = greenmail(&me);
+    let mut s = session(SINK_PORT, &me).await;
+    // GreenMail declares no \Trash: this folder is Trash by its name alone.
+    s.create("Trash").await.unwrap();
+    put(&mut s, &me, "INBOX", 2, None).await;
+    let (uv, inbox) = uids(&mut s, "INBOX").await;
+    assert_eq!(inbox.len(), 2);
+
+    match act(&r, &acct, Folder::Inbox, &inbox[..1], uv, Action::Trash).await {
+        Acted::Done { done, gone } => {
+            assert_eq!(done, inbox[..1]);
+            assert!(gone.is_empty());
+        }
+        other => panic!("delete was refused: {other:?}"),
+    }
+    // Moved, not deleted: in Trash now, and only that one left the inbox.
+    let (_, trashed) = uids(&mut s, "Trash").await;
+    assert_eq!(trashed.len(), 1, "one message is in Trash");
+    let (_, left) = uids(&mut s, "INBOX").await;
+    assert_eq!(left, inbox[1..]);
+    s.logout().await.unwrap();
 }

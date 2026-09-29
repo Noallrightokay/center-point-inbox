@@ -304,6 +304,11 @@ pub struct Changed {
     pub ok: bool,
     pub done: Vec<u32>,
     pub gone: Vec<u32>,
+    /// Gmail's archive: `done` were copied, not moved, and are still
+    /// archived (`Acted::Copied`), so the page takes them off its list
+    /// without remembering them as gone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub copied: bool,
     /// Why not, for the interface to word: "stale", "no-place", "auth",
     /// "host", "net", "missing", "keychain", "unlicensed" or "unknown".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -318,6 +323,7 @@ impl Changed {
             ok: false,
             done: vec![],
             gone: vec![],
+            copied: false,
             kind: Some(kind.into()),
             error: Some(error),
         }
@@ -1307,27 +1313,23 @@ impl Rata {
     }
 
     /// Send from one of the linked mailboxes.
+    ///
+    /// Gated like everything else that signs in (`usable`): licensed,
+    /// linked, and not parked for a refused sign-in. A password the server
+    /// has refused is never sent to its SMTP server either — repeating it is
+    /// how accounts get locked — until the customer relinks.
     pub async fn send(&self, draft: Draft) -> Result<Delivered, String> {
         self.licensed()?;
         let msg = self.outgoing(draft, false).await?;
         let m = self
-            .store
-            .lock()
-            .map_err(|_| "the mailbox list is busy".to_string())?
-            .find(msg.from.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                format!(
+            .usable(msg.from.as_str())
+            .map_err(|p| match p.kind.as_str() {
+                "unknown" => format!(
                     "{} is not linked — add it in Accounts first.",
                     msg.from.as_str()
-                )
+                ),
+                _ => p.error,
             })?;
-
-        // A Microsoft mailbox parked for a refused sign-in waits for the
-        // customer to sign in again, like a refresh does.
-        if m.auth.is_oauth() && m.auth_failed_at.is_some() {
-            return Err(again(&m.email));
-        }
 
         let msg = &msg;
         // A refused token is refused at AUTH, before the message is handed
@@ -1717,6 +1719,15 @@ impl Rata {
                 ok: true,
                 done,
                 gone,
+                copied: false,
+                kind: None,
+                error: None,
+            },
+            Acted::Copied { done, gone } => Changed {
+                ok: true,
+                done,
+                gone,
+                copied: true,
                 kind: None,
                 error: None,
             },
@@ -2817,6 +2828,28 @@ mod tests {
     }
 
     #[test]
+    fn sending_from_a_mailbox_parked_for_its_password_dials_nothing() {
+        rt().block_on(async {
+            let app = rata(tmpfile("send-parked"));
+            // A private address: reaching the network at all would come back
+            // "host", so anything else means nothing was dialled.
+            linked(&app, "owner@example.com", "10.0.0.1");
+            app.note_auth_failure("owner@example.com");
+            let e = app
+                .send(Draft {
+                    from: "owner@example.com".into(),
+                    to: "them@elsewhere.org".into(),
+                    subject: "hi".into(),
+                    body: "hello".into(),
+                    ..Draft::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(e.contains("needs relinking"), "{e}");
+        });
+    }
+
+    #[test]
     fn sending_from_a_mailbox_that_is_not_linked_says_so() {
         rt().block_on(async {
             let app = rata(tmpfile("send"));
@@ -2922,6 +2955,27 @@ mod tests {
                 assert_eq!(e.kind, "refused", "{bad:?}");
             }
         });
+    }
+
+    #[test]
+    fn a_copy_out_of_gmails_archive_tells_the_page_it_is_still_archived() {
+        let changed = |copied| Changed {
+            ok: true,
+            done: vec![4],
+            gone: vec![],
+            copied,
+            kind: None,
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_value(changed(true)).unwrap(),
+            serde_json::json!({"ok": true, "done": [4], "gone": [], "copied": true})
+        );
+        // A real move says nothing of it: the page records it as gone.
+        assert_eq!(
+            serde_json::to_value(changed(false)).unwrap(),
+            serde_json::json!({"ok": true, "done": [4], "gone": []})
+        );
     }
 
     #[test]
