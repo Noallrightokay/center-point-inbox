@@ -418,3 +418,15 @@ pub async fn install_update(handle: AppHandle) -> Result<(), String> {
     crate::update::install(&handle).await?;
     handle.restart()
 }
+
+/// Settings → Copy diagnostics: one plain-text block for a bug report, with
+/// no address, password, token, key or message text in it (`diagnostics`).
+/// Nothing is dialled to make it.
+#[tauri::command]
+pub fn diagnostics(
+    handle: AppHandle,
+    app: App<'_>,
+    live: tauri::State<'_, crate::watch::Watching>,
+) -> String {
+    app.diagnostics(crate::update::has_key(handle.config()), &live.now())
+}

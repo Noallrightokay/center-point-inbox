@@ -81,6 +81,13 @@
          answers to go when that is not the From address. */
       messageId: m.message_id || '',
       replyTo: m.reply_to || '',
+      /* How to leave the list it came from (List-Unsubscribe): a web address
+         Rust has checked as a link, and/or a mailto: it rebuilt. Absent when
+         there is none, and on mail stored before it was read. */
+      ...(m.unsubscribe && (m.unsubscribe.https || m.unsubscribe.mailto)
+        ? { unsub: { ...(m.unsubscribe.https ? { https: String(m.unsubscribe.https) } : {}),
+            ...(m.unsubscribe.mailto ? { mailto: String(m.unsubscribe.mailto) } : {}) } }
+        : {}),
       /* Decoded from MIME since 0.1.7; anything stored without this was kept
          as it arrived on the wire and is re-read when it can be. */
       bodyV: 2,
@@ -401,6 +408,17 @@
         return { ok: true };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e) };
+      }
+    },
+
+    /* Settings → Copy diagnostics (H8): one plain-text block for a bug
+       report, made in Rust (diagnostics.rs) with no address, password,
+       token or key in it. */
+    async '/api/diagnostics'() {
+      try {
+        return { text: String(await invoke('diagnostics')) };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e) };
       }
     },
 

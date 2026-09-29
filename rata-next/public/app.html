@@ -377,6 +377,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .sig-row .grow{min-width:0}
 .sig-row textarea{display:block;width:100%;margin-top:8px;min-height:74px;resize:vertical;border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font:inherit;font-size:13.5px;line-height:1.5;color:inherit;transition:box-shadow .15s}
 .sig-row textarea:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.diag-row{align-items:flex-start}
+.diag-row .grow{min-width:0}
+.diag-row textarea{display:block;width:100%;margin-top:8px;min-height:180px;resize:vertical;border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font-family:var(--mono);font-size:12px;line-height:1.5;color:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+.diag-row textarea:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.set-row span.diag-hint{display:block;margin-top:8px;color:var(--slate)}
+#help-sec a.btn{text-decoration:none}
 
 /* ---------- search ---------- */
 #view-search{flex-direction:column}
@@ -920,6 +926,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">About</div>
           <div class="set-row"><div class="grow"><b>Rata — standalone console</b><span class="mono" id="about-line"></span></div></div>
           <div class="set-row" id="upd-row" style="display:none"><div class="grow"><b>Updates</b><span id="upd-line">—</span></div><button class="btn" id="upd-check">Check for updates</button></div>
+        </div>
+        <div class="comp-sec" id="help-sec">
+          <div class="sec-label">Help &amp; diagnostics</div>
+          <div class="set-row diag-row" id="diag-row" style="display:none"><div class="grow"><b>Copy diagnostics</b><span>Your version, your system, and each mailbox's servers and last error, with no addresses, passwords or message text. Paste this into your bug report.</span><textarea id="diag-text" readonly spellcheck="false" aria-label="Diagnostics" style="display:none"></textarea><span class="diag-hint" id="diag-hint" role="status" style="display:none"></span></div><button class="btn" id="diag-copy">Copy diagnostics</button></div>
+          <div class="set-row"><div class="grow"><b>Help</b><span>Linking a mailbox, what RATA's messages mean, and how to report a problem, on mailrata.org.</span></div><a class="btn" id="help-link" href="https://mailrata.org/help" target="_blank" rel="noopener">Open help</a></div>
+          <div class="set-row"><div class="grow"><b>Report a bug</b><span>Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
         </div>
       </div>
     </section>
@@ -2483,6 +2495,37 @@ function askToOpen(url,host){
   $('#link-open').focus();
 }
 function closeLink(){LINK_PENDING=null;$('#link-ov').classList.remove('open')}
+/* Leaving a mailing list (List-Unsubscribe, H7), for inbox mail only: never
+   Sent, Drafts, archived or filed mail, and never Spam, where "unsubscribe"
+   only tells a spammer the address is read. The web address Rust checked as
+   a link gets the same question as any link, naming its host; a mailto: opens
+   the composer with what the header gave. RATA itself asks nothing of the
+   list's server: the customer's browser does, or the customer presses Send. */
+function unsubOf(m){
+  const u=m&&inInbox(m)&&!m.draft&&m.unsub;if(!u||typeof u!=='object')return null;
+  if(typeof u.https==='string'){
+    try{const x=new URL(u.https);if(/^https?:$/.test(x.protocol)&&x.hostname&&!x.username&&!x.password)return {web:x.href,host:x.hostname}}catch(e){}
+  }
+  if(typeof u.mailto==='string'&&/^mailto:/i.test(u.mailto)){
+    try{
+      const x=new URL(u.mailto),to=decodeURIComponent(x.pathname);
+      if(/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(to)&&to.length<=254)
+        return {to,subject:(x.searchParams.get('subject')||'').replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200),body:x.searchParams.get('body')||''};
+    }catch(e){}
+  }
+  return null;
+}
+/* From the mailbox the list wrote to, since that is the address it knows,
+   and with no signature: a list's robot reads the body. */
+function leaveList(m){
+  const w=unsubOf(m);if(!w)return;
+  if(w.web){askToOpen(w.web,w.host);return}
+  writeTo(w.to,w.subject);
+  const from=$('#cmp-from');
+  if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
+  $('#cmp-body').value=w.body;CMP_SIG=null;
+  liveScan();renderDraftHead();
+}
 async function openLink(url){
   let r;
   try{r=await apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})})}
@@ -2526,6 +2569,7 @@ function openMail(id){
   if(body===undefined&&!whole)bodyOf(m).then(b=>{if(b&&selMail===id)openMail(id)});
   const atts=(whole&&whole.atts)||m.atts||[];
   const savable=native;
+  const unsub=unsubOf(m);
   /* A long message, or one with attachments, is fetched in full when opened:
      the stored copy is the start of it, and the attachments are not kept. */
   /* Also when it may have an HTML version: the stored copy is text only, and
@@ -2559,6 +2603,7 @@ function openMail(id){
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
         ${m.prov==='imap'&&m.uid&&inInbox(m)?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${unsub?`<button class="btn" id="md-unsub" title="${esc(unsub.web?'Opens '+unsub.host+' in your browser, after asking':'Writes to '+unsub.to+' to leave this list')}">Unsubscribe</button>`:''}
         ${m.prov==='imap'&&m.uid&&['archive','named'].includes(folderOf(m))?'<button class="btn" id="md-home">Move to inbox</button>':''}
         ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
         ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
@@ -2611,6 +2656,7 @@ function openMail(id){
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
+  if($('#md-unsub'))$('#md-unsub').onclick=()=>leaveList(m);
   /* Back to the inbox, where the next refresh brings it in as inbox mail. */
   /* Into one of the customer's own folders: it leaves the list here, and is
      there when that folder is opened. */
@@ -3083,9 +3129,39 @@ function renderSettings(){
   renderPlan();
   renderLinked();
   renderUpdateRow();if($('#upd-check'))$('#upd-check').onclick=()=>checkUpdate(true);
+  renderHelp();
   $('#about-line').textContent=`${S.messages.length} messages · ${S.contacts.length} people · ${S.documents.length} files · ${S.audit.length} audit entries · profile ${S.settings.profile}`;
 }
 $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim()||'User';save();toast('Name saved')});
+/* Help & diagnostics (H8). Copy diagnostics asks Rust for one plain-text
+   block (diagnostics.rs: no address, password, token, key or message text)
+   and puts it on the clipboard. The block is shown too, so the customer
+   sees what they are about to paste; where the webview will not write the
+   clipboard it is shown selected, to copy by hand. The website holds no
+   mailbox to diagnose, so there the section is Help and Report a bug only.
+   Both links go to the browser through open_link in the app (openLink). */
+function renderHelp(){
+  const row=$('#diag-row');if(row)row.style.display=window.__RATA_NATIVE__?'':'none';
+}
+async function copyDiagnostics(){
+  const b=$('#diag-copy'),ta=$('#diag-text'),hint=$('#diag-hint');
+  if(!b||!ta||!hint)return;
+  b.disabled=true;
+  let r;try{r=await apiFetch('/api/diagnostics')}catch(e){r={error:String(e&&e.message||e)}}
+  b.disabled=false;
+  if(!r||r.error||typeof r.text!=='string'){toast((r&&r.error)||'RATA could not put the diagnostics together.');return}
+  ta.value=r.text;ta.style.display='';hint.style.display='';
+  let copied=false;
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(r.text);copied=true}}catch(e){}
+  if(copied){hint.textContent='Copied. Paste this into your bug report.';toast('Diagnostics copied. Paste this into your bug report.');return}
+  hint.textContent='Copy it with Ctrl+C or Cmd+C, then paste it into your bug report.';
+  ta.focus();ta.select();
+}
+$('#diag-copy').addEventListener('click',copyDiagnostics);
+['#help-link','#bug-link'].forEach(id=>$(id).addEventListener('click',e=>{
+  if(!window.__RATA_NATIVE__)return;
+  e.preventDefault();openLink(e.currentTarget.getAttribute('href'));
+}));
 /* Signatures (0.1.36): one per mailbox, kept on this computer only — they
    are stripped from what travels to the online account (CLOUD_STRIP), as a
    phone number or an address is exactly what a breach would leak. Only the
@@ -5035,7 +5111,7 @@ async function summarizeMessage(id){
   if(!window.__RATA_NATIVE__||!aiOk()){quick(window.__RATA_NATIVE__?'Made on this computer, without AI.':'');await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
   title.textContent='Summary';text.textContent='Summarizing\u2026';
   const whole=OPENED.get(id);
-  const r=await askAI({task:'summarize',subject:m.subj||'',from:msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),text:(whole&&!whole.error&&whole.text)||stored||m.prev||'',lang:userLang()});
+  const r=await askAI({task:'summarize',subject:aiCut(m.subj,AI_SUBJ),from:aiCut(msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),AI_FROM),text:aiCut((whole&&!whole.error&&whole.text)||stored||m.prev,AI_TEXT),lang:userLang()});
   if(!box.isConnected)return;
   if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
   title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
@@ -5057,6 +5133,17 @@ function aiOk(){
   if(!confirm(AI_NOTICE))return false;
   S.settings.aiOk=true;save();return true;
 }
+/* What goes to the relay is cut here first. The relay reads 12 000
+   characters of one message (LIMITS.text in lib/ai.js) and refuses a request
+   over 80 000 outright, and a message opened in full runs to 400 000. So the
+   page sends exactly what the relay reads and no more, which is also what
+   the privacy page promises, and knows for itself when it cut (aiLonger).
+   The characters the relay drops anyway (control and bidi-control
+   characters) go first, since JSON spells each as six. */
+const AI_TEXT=12000,AI_SUBJ=300,AI_FROM=200,AI_BRIEF_EACH=1500,AI_BRIEF_JSON=70000;
+const AI_DROP=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+function aiCut(s,max){return String(s??'').replace(AI_DROP,'').slice(0,max)}
+function aiLonger(s,max){return String(s??'').replace(AI_DROP,'').length>max}
 async function askAI(body){
   let r;
   try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
@@ -5080,9 +5167,10 @@ async function translateMessage(id){
   const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
   const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
   const whole=OPENED.get(id),to=userLang();
-  const r=await askAI({task:'translate',subject:m.subj||'',text:(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev||'',to});
+  const src=(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev;
+  const r=await askAI({task:'translate',subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT),to});
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
-  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut,to,hidden:false,used:r.used});
+  TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut||aiLonger(src,AI_TEXT),to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
   await audit('msg.translate',(m.subj||m.prev.slice(0,40))+' \u2192 '+to);
   if(selMail===id)openMail(id);
@@ -5147,13 +5235,21 @@ async function runAIBrief(){
   if(!window.__RATA_NATIVE__||!aiOk()){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
-  const pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
+  let pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
   if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
   btn.disabled=true;btn.textContent='Reading\u2026';
   const texts=await bodiesOf(pool);
-  const r=await askAI({task:'tasks',messages:pool.map(m=>({id:m.id,from:msgFrom(m),subject:m.subj||'',text:String(texts.get(m.id)||m.prev||'').slice(0,1500)}))});
+  const sent=pool.map(m=>({id:m.id,from:aiCut(msgFrom(m),AI_FROM),subject:aiCut(m.subj,AI_SUBJ),text:aiCut(texts.get(m.id)||m.prev,AI_BRIEF_EACH)}));
+  /* Mail full of quotes or line breaks grows as JSON; the oldest go until
+     the request is well under what the relay takes, and only what was sent
+     is re-flagged below. */
+  while(sent.length>1&&JSON.stringify(sent).length>AI_BRIEF_JSON)sent.pop();
+  pool=pool.slice(0,sent.length);
+  const r=await askAI({task:'tasks',messages:sent});
   btn.disabled=false;btn.textContent='Run briefing';
-  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.</p>`);return}
+  /* A briefing that failed, or was cut short, says nothing about what needs
+     doing: every flag stays as it was. */
+  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}
   const found=new Map((r.tasks||[]).map(t=>[t.id,t]));
   /* What the briefing looked at is re-flagged from its answer, so a message
      that no longer needs anything loses its flag. */
