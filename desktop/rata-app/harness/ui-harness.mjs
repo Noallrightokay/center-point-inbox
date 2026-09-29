@@ -1023,6 +1023,15 @@ console.log('\n— keyboard shortcuts (H4) —');
   await pg.waitForTimeout(150);
   s = await st();
   check(s.acts.join() === 'trash:5', `so does Delete: ${JSON.stringify(s.acts)}`);
+  /* Through the button, BUG-M's rule holds: a Trash the server refuses
+     puts the message back. */
+  await pg.evaluate(() => { openMail('me@example.com_7'); __mock.changeFails = true; });
+  await clear();
+  await press('#');
+  await pg.waitForTimeout(300);
+  const back = await pg.evaluate(() => ({ held: S.messages.some((x) => x.id === 'me@example.com_7'), said: window.__toasts.slice() }));
+  check(back.held && back.said.some((t) => /Nothing was changed/.test(t)), `a delete the server refuses, by key, puts the message back and says so: ${JSON.stringify(back)}`);
+  await pg.evaluate(() => { __mock.changeFails = false; });
   /* Sent mail has no Archive button, so e does nothing. */
   await clear();
   await pg.evaluate(() => { mailFilter = 'sent'; renderMail(); openMail('me@example.com_sent_61'); });
