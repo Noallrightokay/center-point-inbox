@@ -7,7 +7,8 @@
    difference between "expired" and "forged" must survive, because telling a
    paying customer their licence is fake is a support call you do not recover
    from. */
-import { startServer, makeChecker } from './helpers.mjs';
+import { createServer } from 'node:http';
+import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
 import * as licence from '../lib/licence.js';
 import { generateKeys, issue, check, explain, LICENCE_DAYS } from '../lib/licence.js';
 
@@ -116,6 +117,47 @@ export default async function run(state) {
       const anon = await (await fetch(s.url + '/api/licence')).json();
       check_(!!anon.error, `no session, no licence: ${JSON.stringify(anon.error)}`);
     } finally { await s.stop(); }
+  }
+
+  /* BUG-S: a purchase still being set up (the checkout reached the webhook,
+     the plan or the money has not yet) is its own answer, so /account can say
+     "setting up" instead of offering a second checkout. Against a stand-in
+     Supabase: GoTrue for the session, PostgREST for the row. */
+  console.log('\n— a purchase still being set up is "pending", not "no subscription" —');
+  {
+    const fake = { row: null };
+    const sbx = await new Promise((res) => {
+      const srv = createServer((req, r) => {
+        const url = new URL(req.url, 'http://x');
+        req.resume();
+        const json = (status, body) => { r.writeHead(status, { 'content-type': 'application/json' }); r.end(JSON.stringify(body)); };
+        if (url.pathname === '/auth/v1/user') return json(200, { id: '6c1f3a0e-0000-4000-8000-000000000001', email: 'Buyer@Example.com', aud: 'authenticated' });
+        if (url.pathname === '/rest/v1/subscriptions') return json(200, fake.row ? [fake.row] : []);
+        json(404, { message: 'not in the stand-in' });
+      });
+      srv.listen(0, '127.0.0.1', () => res({ srv, url: `http://127.0.0.1:${srv.address().port}` }));
+    });
+    const s = await startServer({ env: {
+      SUPABASE_URL: sbx.url, SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
+      LICENCE_PRIVATE_KEY: keys.privateKey, LICENCE_PUBLIC_KEY: keys.publicKey,
+    } });
+    const ask = async () => (await fetch(s.url + '/api/licence', { headers: { Authorization: 'Bearer a-session' } })).json();
+    try {
+      fake.row = { plan: 'base', status: 'incomplete', stripe_customer: 'cus_1', domain_addons: 0 };
+      const p = await ask();
+      check_(p.licensed === false && p.reason === 'pending' && !p.licence,
+        `incomplete with a customer: reason pending, no key: ${JSON.stringify(p)}`);
+      check_(!/no active subscription|choose a plan|not paid/i.test(p.message || ''),
+        `and nothing that reads as "you have not paid": ${JSON.stringify(p.message)}`);
+      fake.row = { plan: 'base', status: 'incomplete', stripe_customer: null, domain_addons: 0 };
+      check_((await ask()).reason === 'no-subscription', 'incomplete with no customer: no-subscription, as before');
+      fake.row = null;
+      check_((await ask()).reason === 'no-subscription', 'no row: no-subscription, as before');
+      fake.row = { plan: 'pro', status: 'active', stripe_customer: 'cus_1', domain_addons: 0 };
+      const live = await ask();
+      check_(live.licensed === true && live.plan === 'pro' && check(live.licence, keys.publicKey).ok,
+        `once live: a Pro key: ${live.plan}`);
+    } finally { await s.stop(); sbx.srv.close(); }
   }
 
   /* Renewal is what makes "RATA renews itself whenever it is online" true, and

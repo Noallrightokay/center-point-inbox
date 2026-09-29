@@ -136,7 +136,13 @@ have to build any of it.
 
 ## What happens, in order
 
-1. Someone clicks a plan in Settings and pays on Stripe's page.
+1. Someone with no plan clicks a buy link (the home page, `/account`, or
+   Settings) and pays on Stripe's page. Signed in, the link carries their
+   address (`prefilled_email`) and account id (`client_reference_id`), so
+   they pay with the address the licence is keyed on. Someone who already
+   has a plan switches in the customer portal, never through a Payment
+   Link: that would make a second Stripe customer, whose checkout the
+   webhook refuses as a conflict (charged twice, nothing applied).
 2. Stripe raises `customer.subscription.created` and then
    `checkout.session.completed`, and POSTs both to the webhook, signed, in
    no promised order.
@@ -150,10 +156,20 @@ have to build any of it.
 4. The subscription event, matched on the customer id (it carries no
    email), writes the plan, any custom-domain add-on quantity (always zero,
    since `STRIPE_PRICE_DOMAIN` stays unset) and Stripe's status, which makes
-   the row live. If it arrived before the checkout event, it found no row,
-   got a `409`, and lands on Stripe's retry; until then the licence page
-   waits ("not yet"), rather than handing a Pro buyer a Base licence good
-   for 30 days.
+   the row live. If it arrived before the checkout event, which is the usual
+   order, it finds no row: the webhook keeps it in `pending_subscriptions`
+   (keyed by the customer id, no address; `database.sql` section 6) and
+   answers `200`, and the checkout event applies it in the same request,
+   straight after writing the row. No retry is needed. Until the row is
+   live, `/api/licence` answers `pending` and the licence page says
+   "Setting up your licence" with no buy buttons, rather than handing a Pro
+   buyer a Base licence good for 30 days. A `created` event stamped the
+   same second as an `updated` is the earlier of the two, so it never
+   replaces it, in either table.
+
+   The one case still left to Stripe's retry: a database where section 6
+   has not run has nowhere to keep the event, so it gets a `409` as before
+   and the server log says to run section 6.
 
    The plan is found by scanning every line rather than reading the first. A
    subscription carrying both Pro and the domain add-on can arrive in either
@@ -189,8 +205,9 @@ set the test values, then:
 1. Pay with `4242 4242 4242 4242`, any future expiry, any CVC.
 2. Dashboard → Webhooks → your endpoint shows the deliveries:
    `checkout.session.completed` and `customer.subscription.created` each
-   with a `200` (one `409` first is normal: the subscription event arrived
-   before its row existed, and Stripe's retry lands it).
+   with a `200` on the first delivery, in whichever order they arrived. A
+   `409` means `pending_subscriptions` is missing: re-run `database.sql`
+   (section 6).
 3. The `subscriptions` row appears, `active`, with the plan that was bought
    (Pro for the Pro link, not Base).
 4. Reload the app — the plan shows in Settings, and the gates for that tier open.

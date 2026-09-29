@@ -77,6 +77,7 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .step-sub{font-size:13px;color:var(--slate);margin-top:2px}
 .step{display:none}
 .step.on{display:block}
+.paid-note{background:var(--green-soft);color:var(--green);font-size:13px;font-weight:500;padding:9px 12px;border-radius:8px;margin-bottom:14px;line-height:1.5}
 .agree{margin-top:12px;font-size:12.5px;color:var(--faint);line-height:1.55}
 .agree a{color:var(--tint);text-decoration:none;font-weight:500}
 .agree a:hover{text-decoration:underline}
@@ -94,6 +95,8 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
   </div>
   <div class="tag">Your mail, on your machine.</div>
   <span class="mode-badge local" id="mode-badge">● Saved on this device only</span>
+
+  <p class="paid-note" id="paid-note" hidden>Thank you for paying. Use the address you paid with: your licence key is tied to it, and your licence page shows it once you are in.</p>
 
   <div class="tabs">
     <button id="tab-login">Log in</button>
@@ -134,7 +137,7 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 
     <div class="step on" id="step1">
       <div class="step-title">Create your account</div>
-      <div class="step-sub">Takes about ten seconds. You can connect your email straight after.</div>
+      <div class="step-sub" id="s-sub">Takes about ten seconds. Then choose a plan, and copy the licence key from your licence page into the RATA desktop app, where you add your mailboxes.</div>
       <label for="s-email">Email</label>
       <input type="email" id="s-email" autocomplete="email" placeholder="you@company.com">
       <label for="s-pw">Password</label>
@@ -225,9 +228,20 @@ function hideMsgs(){['#l-err','#l-ok','#s-err','#s-ok'].forEach(x=>{const n=$(x)
    query string is an open redirect, and an open redirect on the page that
    handles passwords is the one you least want. */
 const NEXT={account:'account.html',app:'app.html'};
+/* Straight from Stripe, the licence page waits for the webhook only when it
+   sees ?checkout=success, so that one flag is carried back to it, and only
+   to it; nothing else from the query string goes anywhere. */
+const PAID=new URLSearchParams(location.search).get('checkout')==='success';
 function nextPage(){
-  try{return NEXT[new URLSearchParams(location.search).get('next')]||'app.html'}catch(e){return 'app.html'}
+  try{
+    const page=NEXT[new URLSearchParams(location.search).get('next')]||'app.html';
+    return page==='account.html'&&PAID?'account.html?checkout=success':page;
+  }catch(e){return 'app.html'}
 }
+if(PAID&&new URLSearchParams(location.search).get('next')==='account')$('#paid-note').hidden=false;
+/* The desktop app opens this page for its own device account, where the key
+   is pasted in the app itself. */
+if(CFG.desktop)$('#s-sub').textContent='Takes about ten seconds. Then paste the licence key from your mailrata.org licence page, and add your mailboxes.';
 function session(s){localStorage.setItem('centra_session',JSON.stringify(s));try{localStorage.setItem(RETURNING,'1')}catch(e){}location.replace(nextPage())}
 
 $('#login-form').addEventListener('submit',async e=>{

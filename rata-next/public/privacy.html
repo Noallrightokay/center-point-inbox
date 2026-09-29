@@ -142,7 +142,7 @@ footer a:hover{color:var(--ink)}
       <p>This is all of it.</p>
       <ul class="facts">
         <li><b>Your login</b>Your email address and password, the password stored only as a hash, which cannot be turned back into it. The sign-in service also keeps a log of sign-ins and password changes, which can include the internet (IP) address they came from.</li>
-        <li><b>Your subscription record</b>Your email address, your plan, its status as Stripe reports it, your Stripe customer id, and when Stripe last changed it.</li>
+        <li><b>Your subscription record</b>Your email address, your plan, its status as Stripe reports it, your Stripe customer id, and when Stripe last changed it. If Stripe&rsquo;s word about a new subscription reaches us before the checkout does, it is kept under your Stripe customer id alone (the plan, its status and when, no email address) until the checkout arrives, usually seconds later, then added to the record and deleted.</li>
         <li><b>Your AI usage record</b>For each month: your email address, how many AI requests you made and what they cost us. Never any text.</li>
         <li><b>Your preferences, if you use RATA&rsquo;s page on mailrata.org</b>While you are signed in there, the page keeps your settings in your account so they follow you: your display name and company, your privacy-check profile, your notification and AI choices and the plan the site recorded; your document folder names; your sorting rules (a sender&rsquo;s address and the category you chose for it); and the addresses of the mailboxes listed there, never their passwords. Signatures and API keys are left out. The desktop app does not upload any of this.</li>
       </ul>

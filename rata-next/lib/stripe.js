@@ -183,7 +183,9 @@ export function rowForEvent(event, env = process.env) {
     const customer = typeof o.customer === 'string' ? o.customer : (o.customer?.id || null);
     if (!customer) return null;
     /* Keyed by customer, because a subscription event carries no email: the row
-       was created by the checkout event above, and this updates it. */
+       is created by the checkout event above, and this updates it. One that
+       arrives before that row exists is kept in pending_subscriptions until
+       the checkout event writes the row and applies it. */
     return {
       by: 'customer',
       stripe_customer: customer,
@@ -267,9 +269,11 @@ export function isNewer(eventAt, storedAt) {
      PENDING even when paid: not entitled until the subscription event names
      the plan and makes it live. A live row with the default plan would get
      a Base licence from /account, good for 30 days, if the subscription
-     event landed a few seconds later (it is raised first, so it often finds
-     no row and waits for Stripe's retry). Waiting says "not yet"; the Base
-     licence would have been wrong for a month.
+     event landed a few seconds later. Waiting says "not yet"; the Base
+     licence would have been wrong for a month. (A subscription event raised
+     first, as it usually is, and delivered before this one finds no row; the
+     route keeps it in pending_subscriptions and applies it straight after
+     this write, in the same request.)
 
    The row's stamp never moves backwards, and moves forward only to when the
    buyer opened the checkout (stamp_at). */
@@ -289,6 +293,58 @@ export function checkoutWrite(held, row, now = new Date().toISOString()) {
   if (typeof row.domain_addons === 'number') write.domain_addons = row.domain_addons;
   else if (!named) write.domain_addons = 0;
   return write;
+}
+
+/* The ordering guard a subscription event writes under, as a PostgREST `or`
+   filter: the stored row (or pending row) is replaced only when it has never
+   been stamped or was stamped no later than this event.
+
+   `customer.subscription.created` is strict (`lt`): nothing about a
+   subscription can happen before it is created, so an event stamped the
+   same second is `updated` (the first payment going through, most often)
+   and is later by definition. With `lte`, a `created` delivered after that
+   `updated` landed on the tie and lowered a live row back to `incomplete`.
+   `updated` and `deleted` keep `lte`, so a redelivery of the same event
+   still applies. An event with no timestamp is written unguarded (null),
+   as `isNewer` treats it. */
+export function orderGuard(type, eventAt) {
+  if (!eventAt) return null;
+  const op = type === 'customer.subscription.created' ? 'lt' : 'lte';
+  return `event_at.is.null,event_at.${op}.${eventAt}`;
+}
+
+/* What a subscription event writes, to the subscriptions row or to the
+   pending row that stands in for it. A plan and a number of domains only
+   when the event names them; the status always; the stamp when there is
+   one. Zero domains is written, not skipped: a customer who removes their
+   extra domain sends a quantity of nothing, and skipping it would leave them
+   entitled to a domain they stopped paying for. */
+export function subscriptionPatch(row, now = new Date().toISOString()) {
+  const patch = { status: row.status, updated_at: now };
+  if (row.plan) patch.plan = row.plan;
+  if (typeof row.domain_addons === 'number') patch.domain_addons = row.domain_addons;
+  if (row.event_at) patch.event_at = row.event_at;
+  return patch;
+}
+
+/* Whether a pending subscription event (one that arrived before any row had
+   its customer) belongs to the purchase this checkout event is about: it
+   must have been raised after the buyer opened this checkout (stamp_at).
+   Anything older is from an earlier subscription of the same customer and
+   says nothing about this one. */
+export function pendingBelongs(pending, row) {
+  if (!pending || !pending.event_at || !row) return false;
+  const stamp = row.stamp_at === undefined ? row.event_at : row.stamp_at;
+  if (!stamp) return true;
+  return Date.parse(pending.event_at) > Date.parse(stamp);
+}
+
+/* PostgREST's answer for a table that is not there: PGRST205 from current
+   versions, Postgres's own 42P01 (undefined_table) from older ones. The
+   webhook reads it for pending_subscriptions, which exists only once
+   database.sql section 6 has run. */
+export function tableMissing(e) {
+  return e?.code === 'PGRST205' || e?.code === '42P01';
 }
 
 function later(a, b) {

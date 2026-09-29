@@ -271,15 +271,26 @@ export const LIVE_STATUSES = ['active', 'trialing', 'past_due'];
 
 const entitled = (status) => LIVE_STATUSES.includes(String(status || '').toLowerCase());
 
+/* Whether a row is a purchase still being set up: `incomplete` (the webhook's
+   PENDING) and tied to a Stripe customer, so a checkout event wrote it. Its
+   plan has not been named yet, or its money has not cleared (a bank
+   transfer). Not entitled, but not "no subscription" either: the licence
+   page says "setting up" for it and offers no second checkout. A row with
+   no customer was not written by a checkout and gets no such answer. */
+export function settingUp(row) {
+  return !!(row && row.stripe_customer && String(row.status || '').toLowerCase() === 'incomplete');
+}
+
 /* The plan and everything bought alongside it, read from the subscriptions
    table the Stripe webhook maintains. No live subscription is no plan — not a
-   lesser one. */
+   lesser one. `pending` is true for a purchase still being set up
+   (settingUp), which is no plan yet. */
 export async function entitlementsForUser(sb, email) {
   if (!sb || !email) return { plan: null, domainAddons: 0 };
   const { data } = await sb.from('subscriptions')
-    .select('plan,status,domain_addons').eq('email', String(email).toLowerCase()).maybeSingle();
+    .select('plan,status,domain_addons,stripe_customer').eq('email', String(email).toLowerCase()).maybeSingle();
   if (!data) return { plan: null, domainAddons: 0 };
-  if (!entitled(data.status)) return { plan: null, domainAddons: 0 };
+  if (!entitled(data.status)) return { plan: null, domainAddons: 0, pending: settingUp(data) };
   return {
     plan: PLANS[data.plan] ? data.plan : 'base',
     domainAddons: Math.max(0, Number(data.domain_addons) || 0),

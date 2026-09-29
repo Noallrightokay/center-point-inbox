@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
-import { verifySignature, rowForEvent, isNewer, checkoutConflict, checkoutWrite, LIVE_STATUSES, PENDING } from '../../../../lib/stripe';
+import {
+  verifySignature, rowForEvent, isNewer, checkoutConflict, checkoutWrite, LIVE_STATUSES, PENDING,
+  orderGuard, subscriptionPatch, pendingBelongs, tableMissing,
+} from '../../../../lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,48 +83,132 @@ export async function POST(req) {
 
       const { error } = await sb.from('subscriptions').upsert(write);
       if (error) throw new Error(error.message);
+
+      /* A subscription event of this purchase that was delivered before this
+         checkout event found no row with its customer and was kept in
+         pending_subscriptions (below). Apply it now, in this request, through
+         the same guarded update a subscription event uses, so the plan lands
+         with the checkout rather than on Stripe's retry hours later. Read
+         after the upsert, never before: a subscription event racing this one
+         writes its pending row and then retries its own update, so whichever
+         of the two goes second sees the other's write. */
+      const applied = await applyPending(sb, row, now);
+      if (applied) {
+        return NextResponse.json({ received: true, acted: true, email: row.email, plan: applied.plan || write.plan || null,
+          status: applied.status, pending_applied: true });
+      }
       return NextResponse.json({ received: true, acted: true, email: row.email, plan: write.plan || null, status: write.status });
     }
 
-    /* Keyed by customer. The row was created by the checkout event, so if
-       there is none yet this is an event arriving out of order — Stripe's
-       retries will bring it round again once checkout has landed. */
-    const patch = { status: row.status, updated_at: now };
-    if (row.plan) patch.plan = row.plan;
-    /* Written on every subscription event rather than only when non-zero: a
-       customer who removes their extra domain sends a quantity of nothing, and
-       skipping the zero would leave them entitled to a domain they stopped
-       paying for. */
-    if (typeof row.domain_addons === 'number') patch.domain_addons = row.domain_addons;
-    if (row.event_at) patch.event_at = row.event_at;
+    /* Keyed by customer. The row is created by the checkout event, which
+       Stripe usually raises after this one and delivers in no promised order,
+       so there is often no row yet. */
+    const patch = subscriptionPatch(row, now);
+    const guard = orderGuard(event.type, row.event_at);
+    const matched = await updateByCustomer(sb, 'subscriptions', row.stripe_customer, patch, guard);
+    if (matched) return NextResponse.json({ received: true, acted: true, customers: matched, status: row.status });
 
-    /* The same guard, done in the database so two deliveries racing each other
-       cannot both pass a check and then both write. A row that has never been
-       stamped predates this and is always updated. */
-    let q = sb.from('subscriptions').update(patch).eq('stripe_customer', row.stripe_customer);
-    if (row.event_at) q = q.or(`event_at.is.null,event_at.lte.${row.event_at}`);
+    /* Either no row for this customer yet, or the stored one is newer. */
+    const { data: exists, error: existsErr } = await sb.from('subscriptions')
+      .select('email').eq('stripe_customer', row.stripe_customer).limit(1);
+    if (existsErr) throw new Error(existsErr.message);
+    if (exists && exists.length) {
+      return NextResponse.json({ received: true, acted: false, stale: true, type: event.type });
+    }
 
-    const { data, error } = await q.select('email');
-    if (error) throw new Error(error.message);
-
-    if (!data || !data.length) {
-      /* Either no row for this customer yet, or the stored one is newer. Tell
-         the two apart, because only the first is worth Stripe retrying. */
-      const { data: exists } = await sb.from('subscriptions')
-        .select('email').eq('stripe_customer', row.stripe_customer).maybeSingle();
-      if (exists) {
-        return NextResponse.json({ received: true, acted: false, stale: true, type: event.type });
-      }
+    /* No row: keep the event against its customer until the checkout event
+       writes the row, which applies it in the same request (applyPending).
+       The same ordering guard holds between pending events, so a `created`
+       delivered after its `updated` does not replace it. */
+    const kept = await keepPending(sb, row.stripe_customer, patch, guard);
+    if (kept === 'missing') {
+      /* The one case left for Stripe's retry: pending_subscriptions does not
+         exist because database.sql section 6 has not been run on this
+         database. 409 (not 200) so Stripe delivers it again, by which time
+         the checkout event has usually made the row. Logged without the
+         customer. */
+      console.warn('stripe: pending_subscriptions is missing (run database.sql section 6); subscription event left to Stripe\'s retry');
       return NextResponse.json(
-        { error: 'no subscription row for that customer yet', customer: row.stripe_customer },
+        { error: 'no subscription row for that customer yet, and nowhere to keep the event', customer: row.stripe_customer },
         { status: 409 });
     }
-    return NextResponse.json({ received: true, acted: true, customers: data.length, status: row.status });
+
+    /* The checkout may have written its row between the update above and the
+       pending write, and read pending_subscriptions before this event was in
+       it. Trying the update once more closes that gap. */
+    const late = await updateByCustomer(sb, 'subscriptions', row.stripe_customer, patch, guard);
+    if (late) {
+      await dropPending(sb, row.stripe_customer);
+      return NextResponse.json({ received: true, acted: true, customers: late, status: row.status });
+    }
+    return NextResponse.json({ received: true, acted: true, pending: true, kept, status: row.status, type: event.type });
   } catch (e) {
     /* 500 so Stripe retries: the payment happened, and the record has to catch
        up rather than being quietly lost. */
     return NextResponse.json({ error: 'could not record the subscription — ' + e.message }, { status: 500 });
   }
+}
+
+/* Update every row of `table` with this customer under the ordering guard,
+   in the database so two deliveries racing each other cannot both pass a
+   check and then both write. A row never stamped predates the guard and is
+   always updated. Returns how many rows it wrote. */
+async function updateByCustomer(sb, table, customer, patch, guard) {
+  let q = sb.from(table).update(patch).eq('stripe_customer', customer);
+  if (guard) q = q.or(guard);
+  const { data, error } = await q.select('stripe_customer');
+  if (error) throw new Error(error.message);
+  return data ? data.length : 0;
+}
+
+/* Keep a subscription event that found no row: insert it if the customer
+   has no pending row, otherwise update that row under the ordering guard.
+   Returns 'new', 'updated', 'stale' (a newer event is already kept) or
+   'missing' (the table does not exist). */
+async function keepPending(sb, customer, patch, guard) {
+  const { data: inserted, error } = await sb.from('pending_subscriptions')
+    .upsert({ stripe_customer: customer, ...patch }, { onConflict: 'stripe_customer', ignoreDuplicates: true })
+    .select('stripe_customer');
+  if (error) {
+    if (tableMissing(error)) return 'missing';
+    throw new Error(error.message);
+  }
+  if (inserted && inserted.length) return 'new';
+  const n = await updateByCustomer(sb, 'pending_subscriptions', customer, patch, guard);
+  return n ? 'updated' : 'stale';
+}
+
+/* After a checkout wrote its row: apply the pending subscription event of
+   this purchase, if one is kept, as if it had arrived now. Returns what it
+   applied, or null. A missing table means there is nothing kept. */
+async function applyPending(sb, row, now) {
+  if (!row.stripe_customer) return null;
+  const { data: held, error } = await sb.from('pending_subscriptions')
+    .select('plan,domain_addons,status,event_at').eq('stripe_customer', row.stripe_customer).maybeSingle();
+  if (error) {
+    if (tableMissing(error)) return null;
+    throw new Error(error.message);
+  }
+  if (!held) return null;
+  /* One from an earlier subscription of the same customer says nothing
+     about this purchase; it is dropped rather than applied. */
+  if (!pendingBelongs(held, row)) { await dropPending(sb, row.stripe_customer); return null; }
+  const patch = subscriptionPatch({
+    status: held.status, plan: held.plan, event_at: held.event_at,
+    domain_addons: typeof held.domain_addons === 'number' ? held.domain_addons : null,
+  }, now);
+  const n = await updateByCustomer(sb, 'subscriptions', row.stripe_customer, patch, orderGuard('customer.subscription.updated', held.event_at));
+  await dropPending(sb, row.stripe_customer);
+  return n ? { plan: held.plan, status: held.status } : null;
+}
+
+/* Best effort: a pending row left behind is harmless, since pendingBelongs
+   refuses it for any later checkout. */
+async function dropPending(sb, customer) {
+  try {
+    const { error } = await sb.from('pending_subscriptions').delete().eq('stripe_customer', customer);
+    if (error && !tableMissing(error)) console.warn('stripe: could not clear a pending subscription event; it is ignored from now on');
+  } catch { /* the same */ }
 }
 
 /* A browser visiting this URL should get an explanation, not a stack trace. */

@@ -49,9 +49,16 @@ ran it before: without them `/api/ai` answers 503 "AI is not switched on
 for RATA yet." and the server log says to run section 5 of
 `rata-next/database.sql`. Re-running only adds what is missing.
 
+Section 6 adds `pending_subscriptions` (BUG-S): where the webhook keeps a
+subscription event that arrives before its checkout, which is Stripe's
+usual order, so the plan lands with the checkout instead of on Stripe's
+retry hours later. **Re-run `database.sql` before deploying the build that
+carries it.** Without the table nothing breaks, but a first card checkout
+waits for that retry again, and the server log says to run section 6.
+
 **Check:** Table Editor → `subscriptions` shows both new columns, and
-`ai_usage` exists; Database → Functions lists `ai_reserve` and
-`ai_settle`.
+`ai_usage` and `pending_subscriptions` exist; Database → Functions lists
+`ai_reserve` and `ai_settle`.
 
 ## 2. The licence signing key
 
@@ -271,9 +278,23 @@ credentials; the second needs you.
 **Your checks** (in this order, because each depends on the last):
 
 6. **Sign up** with a real address, then **pay** with the test card
-   `4242 4242 4242 4242`. Stripe's webhook log shows `200`, the
-   `subscriptions` row appears, and the redirect lands on `/account`, which
-   shows a licence key.
+   `4242 4242 4242 4242` from the account's own buy link (on `/account`, or
+   the home page while signed in: Stripe's email field is already filled
+   with the account's address). In Stripe's webhook log,
+   `customer.subscription.created` and `checkout.session.completed` each
+   show `200` on their **first** delivery, whichever arrived first; a
+   subscription event that beat its checkout answers
+   `"pending":true` and the checkout's answer says `"pending_applied":true`.
+   There is no `409` and no retry (a `409` means section 6 of
+   `database.sql` has not run: see §1). The `subscriptions` row is `active`
+   with the plan bought (Pro for the Pro link), and
+   `pending_subscriptions` is empty again. The redirect lands on
+   `/account?checkout=success`, which says "Setting up your licence" for a
+   few seconds and then shows the key. If it is still setting up after a
+   minute, it says the key appears on reload; it never offers a second
+   checkout while a purchase is being set up. Signed out, the same page
+   sends **Create an account** and **Log in** back to itself, still just
+   paid, and asks for the address you paid with.
 7. **Paste that key into a released app** (the current beta). It must be
    accepted. *A signature error here means `LICENCE_PRIVATE_KEY` is not the
    existing key: go back to step 2.*

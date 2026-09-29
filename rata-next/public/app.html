@@ -3488,8 +3488,8 @@ function renderPlan(){
   else line.textContent=t
     ?`${money(t.price)} a month${S.settings.planSince?' · since '+new Date(S.settings.planSince).toLocaleDateString():''} · ${t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes'} in one Center Point inbox`
     :`No plan yet. ${TIERS.base.label} is ${money(TIERS.base.price)} a month: up to ${TIERS.base.mail} mailboxes in one Center Point inbox.`;
-  /* One button per plan that has a checkout link, and never one for the plan
-     they are already on — that is a paid-for confusion. */
+  /* One button per plan that has a checkout link, for someone with no plan;
+     someone with one is sent to the billing portal (below). */
   const links={base:c.stripeBase,pro:c.stripePro,enterprise:c.stripeEnterprise};
   const here=planKey();
 
@@ -3503,26 +3503,34 @@ function renderPlan(){
      no plan, which is the worst support ticket there is.
 
      prefilled_email fills Stripe's field; client_reference_id rides along so a
-     payment can still be matched to an account if they change it anyway. */
+     payment can still be matched to an account if they change it anyway.
+     buyLink in index.html and account.html is this same rule
+     (tests/account.test.mjs and app.test.mjs check each). */
   const buyer=(SESSION&&SESSION.email)||'';
   const withBuyer=u=>{
     if(!u)return u;
     try{
       const url=new URL(u);
+      if(url.protocol!=='https:'||url.host===location.host||/(^|\.)mailrata\.org$/.test(url.hostname))return u;
       if(buyer)url.searchParams.set('prefilled_email',buyer);
-      if(SESSION&&SESSION.uid)url.searchParams.set('client_reference_id',SESSION.uid);
+      if(SESSION&&SESSION.uid&&/^[A-Za-z0-9_-]{1,200}$/.test(SESSION.uid))url.searchParams.set('client_reference_id',SESSION.uid);
       return url.toString();
     }catch(e){return u}
   };
-  /* Only plans that are on sale, and never the one they are already on. A
-     checkout button for a tier whose features do not exist yet is a paid-for
-     disappointment. */
-  $('#plan-buttons').innerHTML=SELLABLE
-    .filter(k=>links[k]&&k!==here)
-    .map((k,i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(withBuyer(links[k]))}" target="_blank" rel="noopener">${here?'Switch to ':'Get '}${esc(TIERS[k].label.replace('RATA ',''))} — ${money(TIERS[k].price)}</a>`)
-    .join('');
-  const p=$('#bill-portal');
-  $('#bill-nolinks').style.display=SELLABLE.some(k=>links[k])?'none':'';
+  /* A live plan switches in the billing portal, never through a Payment
+     Link: a Payment Link makes a second Stripe customer, whose checkout the
+     webhook refuses as a conflict with the live one, so they would be
+     charged twice and the switch would never apply. Payment Links are for
+     someone with no plan, and only for plans on sale. */
+  $('#plan-buttons').innerHTML=here
+    ?(c.stripePortal?`<a class="btn primary" href="${esc(c.stripePortal)}" target="_blank" rel="noopener">Switch plan in billing portal</a>`:'')
+    :SELLABLE
+      .filter(k=>links[k])
+      .map((k,i)=>`<a class="btn ${i===0?'primary':''}" href="${esc(withBuyer(links[k]))}" target="_blank" rel="noopener">Get ${esc(TIERS[k].label.replace('RATA ',''))}, ${money(TIERS[k].price)}</a>`)
+      .join('');
+  const p=$('#bill-portal'),none=$('#bill-nolinks');
+  none.textContent=here?'Switch plans in the billing portal':'Checkout is on mailrata.org';
+  none.style.display=$('#plan-buttons').children.length?'none':'';
   p.style.display=c.stripePortal?'':'none';if(c.stripePortal)p.href=c.stripePortal;
 }
 $('#btn-export').onclick=async()=>{

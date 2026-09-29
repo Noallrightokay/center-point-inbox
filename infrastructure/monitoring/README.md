@@ -115,9 +115,13 @@ If it fails, the customer paid and cannot get a licence.
 - **What the codes mean here** (`app/api/stripe/webhook/route.js`): `400` on
   every delivery is a wrong or missing `STRIPE_WEBHOOK_SECRET` (*RATA ready*
   shows the missing case); `500` is the database unreachable (*RATA up* will
-  be down too); an occasional `409` "no subscription row for that customer
-  yet" is an event that arrived before the one that creates the row, and
-  succeeds on retry. Only a `409` that never clears needs a look.
+  be down too); a `409` "no subscription row for that customer yet, and
+  nowhere to keep the event" means `pending_subscriptions` is missing
+  (`database.sql` section 6 has not run; the server log says so): the event
+  succeeds on Stripe's retry once the checkout has made the row, but every
+  first checkout waits for that retry until section 6 is run. With the table
+  there, a subscription event that arrives before its checkout answers `200`
+  and is applied by the checkout.
 - **After any outage**, and whenever Stripe emails: Workbench → Webhooks →
   the endpoint → **Event deliveries**, filter *Failed*. Anything still
   failed after the fix: **Resend** (the Dashboard can resend for 15 days
