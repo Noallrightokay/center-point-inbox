@@ -12,7 +12,7 @@ const STORE_SOFT_CAP_JS = 3500000;
 let fails = 0;
 const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
 
-const MOCK = ({ licensed, ms }) => {
+const MOCK = ({ licensed, ms, old }) => {
   // Playwright injects this into every frame; the app is only the top one.
   if (window !== window.top) return;
   window.__mock = {
@@ -31,7 +31,10 @@ const MOCK = ({ licensed, ms }) => {
   const standing = () => M.licensed
     ? { licensed: true, message: M.planMessage || 'Licensed for RATA Pro until 26 October 2026.', plan: M.plan || { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
         used: M.mailboxes.length, limit: M.plan && M.plan.mail !== undefined ? M.plan.mail : null, renewSoon: false, token: 'v1.test-licence.sig' }
-    : { licensed: false, message: 'Enter your licence key.', token: null, renewSoon: false };
+    : old
+      /* A licence on disk that has expired: bridge.js offers it for renewal. */
+      ? { licensed: false, message: 'This licence expired on 1 March 2026.', token: 'v1.old-licence.sig', renewSoon: false }
+      : { licensed: false, message: 'Enter your licence key.', token: null, renewSoon: false };
   window.__TAURI__ = { core: { invoke: async (cmd, args) => {
     M.calls.push([cmd, args]);
     switch (cmd) {
@@ -187,7 +190,17 @@ async function open(licensed, opts = {}) {
   });
   page.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
   page.on('dialog', (d) => d.accept());
-  await page.addInitScript(MOCK, { licensed, ms: !!opts.ms });
+  /* What mailrata.org answers a renewal with (bridge.js renew()). */
+  if (opts.renew) {
+    page.__renewals = 0;
+    await page.route('https://mailrata.org/api/licence/renew', (route) => {
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST' };
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      page.__renewals++;
+      return route.fulfill({ status: opts.renew.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(opts.renew.body) });
+    });
+  }
+  await page.addInitScript(MOCK, { licensed, ms: !!opts.ms, old: !!opts.old });
   await page.goto(B + '/app.html');
   await page.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
   /* A licensed app refreshes by itself a moment after start (0.1.27); let
@@ -1047,6 +1060,24 @@ console.log('\n— a program named to look like a document is labelled, and aske
   await pg.evaluate(() => window.__conv);
   const reads = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_attachment').length);
   check(/Open it in the Format Bridge anyway\?$/.test(cq.title) && cq.go === 'Open anyway' && reads === 0, `Convert asks too, and Escape reads nothing: ${JSON.stringify({ cq, reads })}`);
+  await pg.close();
+}
+
+console.log('\n— a licence too old to renew itself says what to do —');
+{
+  /* SEC-4: the website refuses to renew a licence expired more than
+     RENEW_GRACE_DAYS ago, with reason 'too-old'. The licence box shows the
+     server's sentence, not only the app's "expired". */
+  const why = (pg) => pg.waitForSelector('#rata-licence-why', { timeout: 5000 }).then(() => pg.evaluate(() => document.querySelector('#rata-licence-why').textContent)).catch(() => null);
+  const tooOld = 'This licence expired more than 90 days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.';
+  let pg = await open(false, { old: true, renew: { body: { licensed: false, reason: 'too-old', message: tooOld } } });
+  let said = await why(pg);
+  check(pg.__renewals === 1 && said === tooOld, `too-old: the licence box says to sign in for a new one: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
+  await pg.close();
+  /* A server having a bad morning is not an answer: the app's own words stay. */
+  pg = await open(false, { old: true, renew: { status: 500, body: { error: 'The licence service is not configured.' } } });
+  said = await why(pg);
+  check(pg.__renewals === 1 && said === 'This licence expired on 1 March 2026.', `a server error keeps the app's own words: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
   await pg.close();
 }
 

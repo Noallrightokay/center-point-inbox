@@ -117,6 +117,17 @@ Don't spend time reporting these — they are known and planned:
   to look like a document (like `invoice.pdf.exe`) is labelled, and RATA
   asks before saving it. The website's app page now says that mail is read
   in the desktop app.
+- **v0.1.41:** in the app, a draft is saved to your mailbox's Drafts folder
+  when you close the composer and every two minutes while you write, so you
+  can finish it on your phone; if your mailbox has no Drafts folder it stays
+  in RATA. Saving again replaces RATA's own earlier copy, never anyone
+  else's. A half-typed address (in To, Cc or Bcc) stops the save: closing
+  the composer then says "Not saved to Drafts" with the reason, and the
+  draft is kept in RATA (**Compose** opens it again) until you fix it. On
+  Gmail, after saving a draft twice, look in **All Mail**: if old copies of
+  it pile up there (or show under Archive in RATA), tell us. Once
+  mailrata.org runs its new version, a licence that expired more than 90
+  days ago says to sign in there for a new one instead of trying to renew.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
@@ -140,8 +151,9 @@ Don't spend time reporting these — they are known and planned:
   draft begun on your phone or in webmail opens with **Continue**, which
   puts it in RATA's composer — everyone it was for, the subject, the words, its attachments
   and the thread it answers — and once you send it, the copy left in Drafts
-  goes to your Trash. RATA does not save its own drafts to the server yet,
-  and a formatted draft continues as plain text. From v0.1.32 the composer
+  goes to your Trash. A formatted draft continues as plain text. From
+  v0.1.41 a draft you write in RATA is saved to Drafts too (above);
+  **Discard** moves RATA's copy to the Trash. From v0.1.32 the composer
   has a **Cc** line (and from v0.1.33 **Bcc**, which the other recipients
   don't see), and a message that went to several people offers
   **Reply all** (not for mail RATA fetched before v0.1.31). If a reply to

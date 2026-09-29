@@ -58,6 +58,20 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   key present, no font CDN, and it launches as "RATA 0.1.39 beta". It was
   the first run of the install-and-launch smoke test, which passed on
   Linux, macOS (both) and Windows ([run 36490218903](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36490218903)).
+- **v0.1.40** was released and verified: five assets, the licence public
+  key present in the `.deb` and the Windows exe, no font CDN, and it
+  launches as "RATA 0.1.40 beta" (`verify-release.sh`, 2026-09-29). The
+  install-and-launch smoke test passed on all four builds: Linux, macOS
+  (both) and Windows ([run 36507670335](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36507670335)).
+- **[F1](#f1)** is done ([#78](https://github.com/Noallrightokay/center-point-inbox/pull/78)):
+  RATA's own drafts are saved to the mailbox's Drafts folder, replacing
+  only RATA's earlier copy. It ships in 0.1.41. The Gmail All Mail check is
+  for [B2](#b2) (SMOKE.md X7).
+- **SEC-4** is done ([#77](https://github.com/Noallrightokay/center-point-inbox/pull/77)):
+  the review's rows 6, 7, 11 and 14, the SMTP half of 8 and part of 15.
+  Still open: the IMAP half of 8, row 5, and row 15's in-window renewals
+  (a business decision). It ships in 0.1.41; the website half reaches
+  mailrata.org only when it is redeployed ([D4](#d4)).
 - **[F4](#f4)'s Mediums:** 1 and 3 are fixed ([#69](https://github.com/Noallrightokay/center-point-inbox/pull/69)),
   2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
@@ -85,7 +99,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 | **Installers are unsigned.** macOS signing is wired in `release.yml` but has no certificates. Windows signing is not wired at all. | `release.yml` lines 240–286 | [E2](#e2), [E3](#e3): Windows wiring **done** ([#55](https://github.com/Noallrightokay/center-point-inbox/pull/55)); both wait for the owner's certificates |
 | The **UI harness is not in CI**. | workflows list | [A3](#a3): **done** ([#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)) |
 | **Nothing is tested against a real IMAP server**, not even a local one: the outbound guard refuses private addresses. | `guard.rs` | [B1](#b1): **done** ([#58](https://github.com/Noallrightokay/center-point-inbox/pull/58)); its findings fixed in BUG-1..3 ([#66](https://github.com/Noallrightokay/center-point-inbox/pull/66)) |
-| RATA's **own drafts are not saved to the server**. | CLAUDE.md | [F1](#f1), waiting on an owner decision |
+| RATA's **own drafts are not saved to the server**. | CLAUDE.md | [F1](#f1): **done** ([#78](https://github.com/Noallrightokay/center-point-inbox/pull/78)), shipping in 0.1.41; Gmail's All Mail to be checked in [B2](#b2) |
 | **The launch docs are wrong in places** (see [A4](#a4)). | read today | [A4](#a4): **done** ([#56](https://github.com/Noallrightokay/center-point-inbox/pull/56)), with DOC-1 ([#63](https://github.com/Noallrightokay/center-point-inbox/pull/63)) and WEB-1 ([#65](https://github.com/Noallrightokay/center-point-inbox/pull/65)) |
 | **No database backups and no uptime monitor.** | LAUNCH.md §8 | [D7](#d7): scripts **done** ([#64](https://github.com/Noallrightokay/center-point-inbox/pull/64)); owner steps pending |
 | Signups are auto-confirmed (anyone can claim any address). | LAUNCH.md §7 | [D8](#d8), after launch |

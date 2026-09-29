@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 224 tests, plus 12 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 106 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 479 checks (`npm test`, after `npm run build`). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 246 tests, plus 13 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 111 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 500 checks (`npm test`, after `npm run build`). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (98 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (117 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`. |
@@ -148,7 +148,9 @@ only name the folder, says why a typed server address failed, and is the
 first release whose installers are installed and launched before they are
 kept (watch that run); v0.1.40 marks every file it saves as a download,
 labels a program named to look like a document and asks before saving
-it, and holds the AI cap under concurrent requests. An
+it, and holds the AI cap under concurrent requests; v0.1.41 saves RATA's
+own drafts to the mailbox's Drafts folder, so they follow the customer to
+the phone, and fixes the security review's cheap Lows (SEC-4). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -174,6 +176,17 @@ every installed app.
 A build without the public key rejects every licence; a build with the wrong one
 rejects every legitimate licence with a signature error.
 
+Renewal refuses a licence that expired more than `RENEW_GRACE_DAYS` (90,
+`lib/licence.js`, `renewable`) ago, before the database is asked, with
+`reason: 'too-old'` and "Sign in at mailrata.org to get a new one." (SEC-4,
+v0.1.41), so a token that leaked long ago cannot be revived. bridge.js
+`renew()` takes `too-old`, like `no-subscription`, as a real answer, and
+`settleLicence` puts the server's sentence in the licence box when the
+licence is still not good afterwards (harness: "a licence too old to renew
+itself says what to do"); any other answer, or none, leaves the app's own
+words and tries again at the next start. A copy that keeps renewing inside
+the 90 days is still not stopped (review row 15, a business decision).
+
 On the website side, a licence is issued or renewed only while the
 `subscriptions` row is live: `LIVE_STATUSES` (`active`, `trialing`,
 `past_due`) lives once in `lib/plan.js` and `lib/stripe.js` re-exports it.
@@ -184,7 +197,13 @@ address whose row is live under a **different** `stripe_customer` gets 200
 `conflict: true`, writes nothing and logs one line without the address or
 customer id (`checkoutConflict`); the owner reconciles it in Stripe. The
 same customer, a hand-minted row with no customer, or a row no longer live
-may be written. Deleting an account (`app/api/account/route.js`) removes
+may be written. A checkout whose `payment_status` is not `paid` or
+`no_payment_required` (a bank transfer still clearing) is recorded
+`incomplete`, which is not live, so the customer's later events still find
+the row; it is never written over a live row (200 `pending: true`, nothing
+written), and `checkout.session.async_payment_succeeded` makes it `active`
+(SEC-4; the webhook must subscribe to it, `STRIPE-SETUP.md` §3 and
+`LAUNCH.md` §3). Deleting an account (`app/api/account/route.js`) removes
 `workspaces`, `subscriptions` and the person's `ai_usage` rows, and still
 finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
 `database.sql` never ran). `next.config.js` sends HSTS (one year,
@@ -368,7 +387,16 @@ bytes: `reason()` makes each one line of at most 200 characters, a fixed
 sentence for a parse failure, naming the folder (`place`); a server's own
 NO/BAD text is kept, cut to that one line. Stream listings (flags, UID
 lists, LIST, STORE) go through `drain`, so one cut short by an error is a
-failure, never a complete answer.
+failure, never a complete answer. SMTP says as little (SEC-4, v0.1.41):
+`smtp::hear` reads a reply line up to `LINE_MAX` (1 KiB) and refuses a
+longer one, and checks the reply code as bytes (`line[..3]` panicked on a
+multibyte character there); every server sentence in an SMTP error goes
+through `said`, one line of at most 200 characters with no control or
+bidi-control characters, and while signing in the password, its base64,
+the `AUTH PLAIN` string, the token and its XOAUTH2 string are taken out
+wherever they appear, in any case, then every run of 16 or more base64
+characters, all before the line is cut. The IMAP half is still open (see
+*Security review*).
 **Opening in full (v0.1.8).** A message marked `truncated`, or with
 attachments seen in its first 64 KiB, is fetched whole when opened
 (`openWhole` → `open_message` → `rata_mail::imap::fetch_whole`, which asks
@@ -437,7 +465,10 @@ CSS properties and `cid:` pictures (inlined as `data:`, images only, capped)
 stay. An inline picture is charged against `INLINE_ALL` (4 MiB) once for
 **every** `cid:` reference; one that does not fit in full is left out
 everywhere and the text stays, so the output is bounded however often a
-picture is named (SEC-1: one 1 MiB PNG named 200 times built 280 MB before). (2) The interface shows it in `<iframe sandbox="allow-popups">` —
+picture is named (SEC-1: one 1 MiB PNG named 200 times built 280 MB before).
+Ammonia does not treat `background` as a URL, so `attribute_filter` keeps
+it only for an `https://` picture or `data:image/{png,jpeg,gif,webp};base64,`
+(what a `cid:` becomes) and drops it otherwise (SEC-4). (2) The interface shows it in `<iframe sandbox="allow-popups">` —
 never add `allow-scripts` or `allow-same-origin` (together they undo the
 sandbox, and this page can call the app), nor `allow-top-navigation`,
 `allow-forms` or `allow-popups-to-escape-sandbox`. `allow-popups` is there
@@ -467,7 +498,12 @@ frame's only permission), always answers `Deny`, and tells the page via
 "Open this link in your browser?" naming the host — the words of a link can
 say anything — and only **Open in browser** calls `open_link`; `kind:'mail'` opens
 RATA's composer (`writeTo`, with an empty body). `on_navigation` keeps the
-window on `tauri://localhost` / `http(s)://tauri.localhost` / `about:`,
+window only where this platform serves the app (`links::navigation`, SEC-4):
+`tauri://localhost` on macOS and Linux, `http(s)://tauri.localhost` on
+Windows, on the default port with no user name, plus exactly `about:blank`
+and `about:srcdoc`. `blob:` is refused from every origin, the app's own
+too (the app saves what it makes through `save_file` and never navigates
+to a blob), and so is any other `tauri://` host or port. It
 sends mailrata.org links to the browser and refuses the rest — the licence
 box's "Sign in at mailrata.org" used to replace the app with the website,
 with no way back. In the Text view, addresses are linked (`linkify`) and
@@ -706,9 +742,9 @@ says so), subject (never "(no subject)"), the whole text, attachments as
 `CMP_FWD` with folder `drafts` (fetched from the mailbox at send time, like
 a forward's), `REPLYING` from `inReplyTo`, and `CMP_DRAFT`, the draft
 itself. After a real send `CMP_DRAFT` leaves the list and goes to the Trash
-(`serverAct` trash in folder Drafts); Discard leaves it in Drafts. RATA
-does not APPEND its own drafts to the server yet, and a formatted draft
-continues as plain text. (Until 0.1.32 Cc was folded into To here.)
+(`serverAct` trash in folder Drafts); Discard leaves it in Drafts. A
+formatted draft continues as plain text. From 0.1.41 RATA saves its own
+drafts there too (*Drafts saved to the server*, below). (Until 0.1.32 Cc was folded into To here.)
 **Cc and Reply all (v0.1.32).** `Outgoing.cc`; `compose::render` writes To
 and Cc through `addresses`, which folds between addresses so no header line
 passes 998 bytes however many there are (a list of 120 was one illegal line
@@ -896,17 +932,76 @@ against a real Microsoft sign-in until the owner's registration (C4) and
 B2's Outlook column. Not handled: a Microsoft 365 domain behind a mail
 filter such as Mimecast (typing `outlook.office365.com` works around it),
 shared or delegated mailboxes.
+**Drafts saved to the server (F1, v0.1.41).** In the app the composer's
+draft is APPENDed to the mailbox's Drafts folder with `\Draft` set when the
+composer closes with something new in it and every two minutes while it is
+open and edited (`queueDraftSave`, one queue, `DRAFT_SAVING`;
+`window.__RATA_DRAFT_EVERY` shortens the interval for tests), never per
+keystroke; edits are counted from input events, so a programmatic fill
+saves nothing. `compose::render_draft` is the send render plus `Bcc:`,
+`X-RATA-Draft: <uuid>` (made once per draft by the page; `draft_id_ok`
+takes only 16 to 64 characters of lowercase hex and `-`) and
+`X-RATA-Draft-Rev: <n>`, with no dot-stuffing (APPEND stores the bytes as
+sent) and To allowed empty; a sent message's render is unchanged. The
+new UID comes from `APPENDUID` (RATA sends its own APPEND, since
+async-imap's drops the tagged response code), else `UID SEARCH UNDELETED
+HEADER X-RATA-Draft "<id>"`, the newest match that is not the copy
+before. **The one permanent delete in RATA** (`imap::replace`): the
+previous copy is removed only when its uid is not 0, it is not the copy
+just saved, Drafts' UIDVALIDITY matches, and `UID FETCH (BODY.PEEK[HEADER.FIELDS
+(X-RATA-Draft)])` finds exactly one `X-RATA-Draft` header whose value is
+this draft's id; then `UID STORE +FLAGS.SILENT (\Deleted)` and `UID
+EXPUNGE <uid>`, with UIDPLUS only. Without UIDPLUS the copy stays flagged
+(`Prior::LeftFlagged`), never a bare EXPUNGE, which would take whatever
+anybody else had flagged. Anything else leaves it where it is
+(`NotOurs`; `Gone` when it is no longer there, `Failed` when the server
+would not flag it). `act` still never deletes permanently. A mailbox with no Drafts
+folder keeps drafts local (`NoPlace`, remembered in `DRAFT_NOPLACE` and
+not asked again this session); RATA never creates a folder.
+`Rata::save_draft` is gated like a refresh (`usable`: licensed, linked,
+not parked), since the page saves on a timer, and checks a draft like a
+message being sent (`outgoing()`, shared with `send`: every address, 18
+MB, 100 people, forwarded files fetched before the save) except that To
+may be empty; a half-typed address refuses the save, and on close the
+toast says "Not saved to Drafts: …" and the draft stays in the composer.
+"Saved to Drafts" is said at most once per close, never for a timer save.
+The page files its own copy under Drafts at once (`ownDraft`, which
+`heldKnown` skips and `absorbMail` clears when a refresh brings it back;
+`dropVanishedDrafts` spares one saved in the last ten minutes), and the
+copy before leaves the list without going through `S.gone`. Send waits
+for a save in flight and Discard asks first; both move RATA's copy to the
+Trash. A draft from another device finished here goes to the Trash once
+RATA's copy is saved, and a From change sends the old mailbox's copy
+there too (both for the owner to confirm). `Message.draft_id` (Drafts
+only) lets `continueDraft` save over RATA's own copy; `X-RATA-Draft-Rev`
+is not read back, so a draft continued later starts again at 1. Tested on
+a scripted server and real Dovecot (loopback). **Gmail risk, for B2:**
+Gmail may treat an expunge from `[Gmail]/Drafts` as removing the label
+and keep each old copy in All Mail, where RATA's archive search
+(`-in:inbox -in:sent -in:drafts`) would show it under Archive; check All
+Mail on a real Gmail account after saving a draft twice.
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and
 the site's headers; SEC-2 the AI cap; SEC-3 Mark of the Web (#71), with
-UI-1's question for disguised programs (#75). One Medium waits on the
-owner: email confirmation before paid launch (LAUNCH.md §7, D8). The `loopback-tests` gate is a `compile_error!` on the
+UI-1's question for disguised programs (#75); SEC-4 (#77, v0.1.41) rows 6
+(navigation, *Links*), 7 (`background`, *HTML mail*), 11 (unpaid
+checkouts, *Licensing*), 14 (the store, below), the SMTP half of 8
+(*Bodies are decoded*) and part of 15 (`RENEW_GRACE_DAYS`). The store: on
+Unix `store.rs` writes `mailboxes.json` 0600 (a fresh temporary file, then
+the rename), tightens a file an older build left wider when it opens it,
+and makes the app folder 0700 when RATA creates it (an existing one is
+left alone); Windows keeps the profile's ACL. Still open: the IMAP half of
+row 8 (`login` and `xoauth2` keep the server's NO/BAD text raw, and
+`credential::redact` matches only an exact echo), row 5 (the loopback
+gate, below), row 15's in-window renewals (a business decision), and one
+Medium waiting on the owner: email confirmation before paid launch
+(LAUNCH.md §7, D8). The `loopback-tests` gate is a `compile_error!` on the
 feature without `debug_assertions`, not on the release profile: a build
 with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` passes it. `release.yml`
 sets neither; never enable the feature in rata-app.
-Also not built: saving RATA's drafts to the server. Windows and macOS
-signing are wired and wait for the owner's certificates.
+Windows and macOS signing are wired and wait for the owner's
+certificates.
 
 **Never tested with a customer's mailbox.** No customer's mailbox has been
 opened yet; the engine runs against real Dovecot (IMAP) and GreenMail (SMTP,

@@ -106,8 +106,11 @@ Full detail in `STRIPE-SETUP.md`. In order:
    waits for the webhook when it sees `?checkout=success` (STRIPE-SETUP.md §2
    says why).
 4. **Webhook** → `https://mailrata.org/api/stripe/webhook`, subscribed to
-   exactly `checkout.session.completed`, `customer.subscription.updated`,
-   `customer.subscription.deleted`. Copy the `whsec_…`.
+   exactly `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded` (a delayed payment, such as a
+   bank transfer, that has cleared; STRIPE-SETUP.md §3),
+   `customer.subscription.updated`, `customer.subscription.deleted`. Copy
+   the `whsec_…`.
 5. **Customer portal** — activate it, allow plan changes and cancellation, copy
    the login link.
 
