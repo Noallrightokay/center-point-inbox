@@ -766,7 +766,7 @@ fn envelope(rendered: &str, bcc: &[crate::compose::Address]) -> Vec<String> {
 /// this header tells every correspondent, and every server in between, roughly
 /// where the customer is sitting. It is the kind of thing a mail client leaks
 /// without anybody deciding to.
-fn now_rfc2822() -> String {
+pub(crate) fn now_rfc2822() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

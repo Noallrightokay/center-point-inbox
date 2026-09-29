@@ -55,9 +55,10 @@ pub use discover::{
 };
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
-    ARCHIVE_WINDOW, Account, Acted, Action, Archived, Fetched, Flags, Folder, Gap, IDLE_FOR, Known,
-    Listed, Message, Newest, OwnFolder, Verified, Verify, Watch, Watched, Whole, act, fetch_folder,
-    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, verify, verify_with, watch,
+    ARCHIVE_WINDOW, Account, Acted, Action, Archived, DraftRef, DraftSaved, Fetched, Flags, Folder,
+    Gap, IDLE_FOR, Known, Listed, Message, Newest, OwnFolder, Prior, Verified, Verify, Watch,
+    Watched, Whole, act, fetch_folder, fetch_newest, fetch_older, fetch_uids, fetch_whole,
+    list_folders, save_draft, verify, verify_with, watch,
 };
 pub use key::{domain_of, mail_key};
 pub use names::{looks_disguised, safe_file_name};

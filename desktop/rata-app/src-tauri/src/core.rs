@@ -10,13 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rata_mail::Credential;
+use rata_mail::compose::draft_id_ok;
 use rata_mail::discover::{MS_HELP, MS_IMAP, MS365_HELP, is_microsoft, is_microsoft_consumer};
 use rata_mail::{
-    ATTACH_MAX, Account, Acted, Action, Address, Discovery, Fetched, File, Flags, Folder, Gap,
-    IMAP_PORT, Known, Listed, Message, Newest, Outgoing, OwnFolder, Resolver, Sent, Verify, Watch,
-    Watched, Whole, act, body, discover, domain_of, fetch_folder, fetch_newest, fetch_older,
-    fetch_uids, fetch_whole, list_folders, looks_disguised, safe_file_name, send, verify,
-    verify_with,
+    ATTACH_MAX, Account, Acted, Action, Address, Discovery, DraftRef, DraftSaved, Fetched, File,
+    Flags, Folder, Gap, IMAP_PORT, Known, Listed, Message, Newest, Outgoing, OwnFolder, Prior,
+    Resolver, Sent, Verify, Watch, Watched, Whole, act, body, discover, domain_of, fetch_folder,
+    fetch_newest, fetch_older, fetch_uids, fetch_whole, list_folders, looks_disguised,
+    safe_file_name, save_draft, send, verify, verify_with,
 };
 use serde::Serialize;
 
@@ -247,6 +248,26 @@ pub struct Handed {
 pub struct Delivered {
     pub via: String,
     pub message_id: String,
+}
+
+/// A draft saved to the mailbox's Drafts folder, in the shape the page
+/// needs: the id a refresh will give it, its place, and what became of the
+/// copy saved before. Or no Drafts folder at all, which is not a failure:
+/// the draft stays in RATA, as before, and the page stops asking.
+#[derive(Debug, Serialize)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
+pub enum Drafted {
+    Saved {
+        id: String,
+        uid: u32,
+        uidvalidity: u32,
+        #[serde(rename = "draftId")]
+        draft_id: String,
+        prior: Prior,
+    },
+    NoPlace {
+        error: String,
+    },
 }
 
 /// Which attachment of which message: all the page names when it asks for
@@ -1269,66 +1290,18 @@ impl Rata {
 
     /// Send from one of the linked mailboxes.
     pub async fn send(&self, draft: Draft) -> Result<Delivered, String> {
-        let Draft {
-            from,
-            to,
-            cc,
-            bcc,
-            subject,
-            body,
-            in_reply_to,
-            mut attachments,
-            forward,
-        } = draft;
-        let (from, to) = (from.as_str(), to.as_str());
         self.licensed()?;
-        if let Some(fw) = forward.filter(|f| !f.indexes.is_empty()) {
-            attachments.extend(self.forwarded_files(&fw).await?);
-        }
-        // Checked before anything is dialled: a message the provider is going
-        // to refuse for its size should fail here, in words, not after the
-        // upload as a bare 552.
-        let total: usize = attachments.iter().map(|f| f.data.len()).sum();
-        if total > ATTACH_MAX {
-            return Err(format!(
-                "The attachments add up to {} MB. Most providers refuse mail over 25 MB, which is about {} MB of files — send a link to them instead.",
-                total.div_ceil(1024 * 1024),
-                ATTACH_MAX / (1024 * 1024)
-            ));
-        }
-        let from_addr = Address::parse(from)
-            .ok_or_else(|| "Which account should this come from?".to_string())?;
-        let to_list = Address::parse_list(to).ok_or_else(|| {
-            "Enter a valid recipient address — one address, or several separated by commas."
-                .to_string()
-        })?;
-        let copied = |line: &str, raw: &str| {
-            if raw.trim().is_empty() {
-                Ok(vec![])
-            } else {
-                Address::parse_list(raw).ok_or_else(|| {
-                    format!("One of the addresses in {line} is not valid — check them, separated by commas.")
-                })
-            }
-        };
-        let cc_list = copied("Cc", &cc)?;
-        let bcc_list = copied("Bcc", &bcc)?;
-        if to_list.len() + cc_list.len() + bcc_list.len() > RECIPIENTS_MAX {
-            return Err(format!(
-                "That is more than {RECIPIENTS_MAX} people. Most providers refuse a message sent to so many — send it in smaller groups."
-            ));
-        }
-
+        let msg = self.outgoing(draft, false).await?;
         let m = self
             .store
             .lock()
             .map_err(|_| "the mailbox list is busy".to_string())?
-            .find(from_addr.as_str())
+            .find(msg.from.as_str())
             .cloned()
             .ok_or_else(|| {
                 format!(
                     "{} is not linked — add it in Accounts first.",
-                    from_addr.as_str()
+                    msg.from.as_str()
                 )
             })?;
 
@@ -1337,17 +1310,6 @@ impl Rata {
         if m.auth.is_oauth() && m.auth_failed_at.is_some() {
             return Err(again(&m.email));
         }
-        let msg = Outgoing {
-            from: from_addr,
-            from_name: None,
-            to: to_list,
-            cc: cc_list,
-            bcc: bcc_list,
-            subject: subject.to_string(),
-            body: body.to_string(),
-            in_reply_to,
-            attachments,
-        };
 
         let msg = &msg;
         // A refused token is refused at AUTH, before the message is handed
@@ -1371,6 +1333,138 @@ impl Rata {
                 Err(error)
             }
         }
+    }
+
+    /// Save the composer's draft to its mailbox's Drafts folder (F1),
+    /// replacing RATA's own copy saved before it — `prior`, removed only if
+    /// the engine proves it is this draft's (`rata_mail::save_draft`).
+    ///
+    /// Checked like a message being sent — every address, the size, the
+    /// number of people — except that a draft need not be addressed to
+    /// anyone yet. A draft that forwards files carries them: they are
+    /// fetched from the mailbox here, as for sending, and before the save,
+    /// since the copy they come from may be the one this save replaces.
+    /// Gated like a refresh: licensed, linked, and not parked for a refused
+    /// sign-in, since the page saves on a timer and a rejected password must
+    /// never be sent again by itself.
+    pub async fn save_draft(
+        &self,
+        draft: Draft,
+        draft_id: &str,
+        rev: u32,
+        prior: Option<DraftRef>,
+    ) -> Result<Drafted, Problem> {
+        let email = draft.from.trim().to_ascii_lowercase();
+        let problem = |kind: &str, error: String| Problem {
+            email: email.clone(),
+            kind: kind.into(),
+            error,
+        };
+        let m = self.usable(&email)?;
+        if !draft_id_ok(draft_id) {
+            return Err(problem(
+                "refused",
+                "RATA could not name this draft, so it was kept here and not saved to Drafts."
+                    .into(),
+            ));
+        }
+        let msg = self
+            .outgoing(draft, true)
+            .await
+            .map_err(|e| problem("refused", e))?;
+        let (msg, prior) = (&msg, prior.as_ref());
+        let saved = self
+            .signed(&m, |acct| async move {
+                save_draft(&self.resolver, &acct, msg, draft_id, rev, prior).await
+            })
+            .await?;
+        match saved {
+            DraftSaved::Saved { saved, id, prior } => Ok(Drafted::Saved {
+                id,
+                uid: saved.uid,
+                uidvalidity: saved.uidvalidity,
+                draft_id: saved.draft_id,
+                prior,
+            }),
+            DraftSaved::NoPlace(error) => Ok(Drafted::NoPlace { error }),
+            DraftSaved::Refused(error) => Err(problem("refused", error)),
+            DraftSaved::Auth(error) => {
+                self.note_auth_failure(&m.email);
+                Err(problem("auth", error))
+            }
+            DraftSaved::OAuth(error) => Err(problem("oauth", error)),
+            DraftSaved::Host(error) => Err(problem("host", error)),
+            DraftSaved::Net(error) => Err(problem("net", error)),
+        }
+    }
+
+    /// The composer's message, checked and ready: what sending and saving a
+    /// draft both start from. Everything is checked before anything is
+    /// dialled; `draft_only` allows an empty To.
+    async fn outgoing(&self, draft: Draft, draft_only: bool) -> Result<Outgoing, String> {
+        let Draft {
+            from,
+            to,
+            cc,
+            bcc,
+            subject,
+            body,
+            in_reply_to,
+            mut attachments,
+            forward,
+        } = draft;
+        let (from, to) = (from.as_str(), to.as_str());
+        if let Some(fw) = forward.filter(|f| !f.indexes.is_empty()) {
+            attachments.extend(self.forwarded_files(&fw).await?);
+        }
+        // Checked before anything is dialled: a message the provider is going
+        // to refuse for its size should fail here, in words, not after the
+        // upload as a bare 552.
+        let total: usize = attachments.iter().map(|f| f.data.len()).sum();
+        if total > ATTACH_MAX {
+            return Err(format!(
+                "The attachments add up to {} MB. Most providers refuse mail over 25 MB, which is about {} MB of files — send a link to them instead.",
+                total.div_ceil(1024 * 1024),
+                ATTACH_MAX / (1024 * 1024)
+            ));
+        }
+        let from_addr = Address::parse(from)
+            .ok_or_else(|| "Which account should this come from?".to_string())?;
+        let to_list = if draft_only && to.trim().is_empty() {
+            vec![]
+        } else {
+            Address::parse_list(to).ok_or_else(|| {
+                "Enter a valid recipient address — one address, or several separated by commas."
+                    .to_string()
+            })?
+        };
+        let copied = |line: &str, raw: &str| {
+            if raw.trim().is_empty() {
+                Ok(vec![])
+            } else {
+                Address::parse_list(raw).ok_or_else(|| {
+                    format!("One of the addresses in {line} is not valid — check them, separated by commas.")
+                })
+            }
+        };
+        let cc_list = copied("Cc", &cc)?;
+        let bcc_list = copied("Bcc", &bcc)?;
+        if to_list.len() + cc_list.len() + bcc_list.len() > RECIPIENTS_MAX {
+            return Err(format!(
+                "That is more than {RECIPIENTS_MAX} people. Most providers refuse a message sent to so many — send it in smaller groups."
+            ));
+        }
+        Ok(Outgoing {
+            from: from_addr,
+            from_name: None,
+            to: to_list,
+            cc: cc_list,
+            bcc: bcc_list,
+            subject,
+            body,
+            in_reply_to,
+            attachments,
+        })
     }
 
     fn remember(&self, m: Mailbox) -> Result<(), String> {
@@ -1604,6 +1698,12 @@ impl TokenRefused for Whole {
 impl TokenRefused for Acted {
     fn token_refused(&self) -> bool {
         matches!(self, Acted::OAuth(_))
+    }
+}
+
+impl TokenRefused for DraftSaved {
+    fn token_refused(&self) -> bool {
+        matches!(self, DraftSaved::OAuth(_))
     }
 }
 
@@ -2443,6 +2543,121 @@ mod tests {
                 .unwrap_err();
             assert!(e.contains("not linked"), "{e}");
         });
+    }
+
+    const DRAFT_ID: &str = "0f8b6a52-3c1e-4d7a-9b2e-5a4c3d2e1f00";
+
+    fn draft_to(to: &str) -> Draft {
+        Draft {
+            from: "owner@example.com".into(),
+            to: to.into(),
+            subject: "Plan".into(),
+            body: "Half a thought".into(),
+            ..Draft::default()
+        }
+    }
+
+    #[test]
+    fn a_draft_is_saved_only_from_a_licensed_linked_mailbox_that_is_not_parked() {
+        rt().block_on(async {
+            let app = unlicensed(tmpfile("draft-unlicensed"));
+            linked(&app, "owner@example.com", "10.0.0.1");
+            let e = app
+                .save_draft(draft_to("a@example.org"), DRAFT_ID, 1, None)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unlicensed");
+
+            let app = rata(tmpfile("draft-unlinked"));
+            let e = app
+                .save_draft(draft_to("a@example.org"), DRAFT_ID, 1, None)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "unknown");
+
+            // Saved on a timer: a refused password is never sent again by it.
+            linked(&app, "owner@example.com", "10.0.0.1");
+            app.note_auth_failure("owner@example.com");
+            let e = app
+                .save_draft(draft_to("a@example.org"), DRAFT_ID, 1, None)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "auth");
+        });
+    }
+
+    #[test]
+    fn a_draft_is_checked_like_a_message_but_need_not_be_addressed_yet() {
+        rt().block_on(async {
+            let app = rata(tmpfile("draft-checks"));
+            // A private address the guard refuses without a socket: reaching
+            // it means everything before dialling was accepted.
+            linked(&app, "owner@example.com", "10.0.0.1");
+            let e = app
+                .save_draft(draft_to(""), DRAFT_ID, 1, None)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "host", "{e:?}");
+
+            let mut d = draft_to("a@example.org");
+            d.cc = "b@example.org, not an address".into();
+            let e = app.save_draft(d, DRAFT_ID, 1, None).await.unwrap_err();
+            assert!(e.kind == "refused" && e.error.contains("Cc"), "{e:?}");
+
+            let e = app
+                .save_draft(
+                    draft_to("a@b.com\r\nBcc: sneak@example.net"),
+                    DRAFT_ID,
+                    1,
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "refused", "{e:?}");
+
+            let mut d = draft_to("a@example.org");
+            d.attachments = vec![File {
+                name: "video.mp4".into(),
+                mime: "video/mp4".into(),
+                data: vec![0; ATTACH_MAX + 1],
+            }];
+            let e = app.save_draft(d, DRAFT_ID, 1, None).await.unwrap_err();
+            assert!(e.error.contains("25 MB"), "{e:?}");
+
+            // Only an id RATA could have made goes into a header.
+            for bad in ["", "x\r\nBcc: a@b.c", "NOT-A-UUID-AT-ALL-0000"] {
+                let e = app
+                    .save_draft(draft_to("a@example.org"), bad, 1, None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.kind, "refused", "{bad:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn a_saved_draft_reaches_the_page_in_its_words() {
+        let v = serde_json::to_value(Drafted::Saved {
+            id: "k_drafts_20".into(),
+            uid: 20,
+            uidvalidity: 7,
+            draft_id: DRAFT_ID.into(),
+            prior: Prior::LeftFlagged,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"outcome": "saved", "id": "k_drafts_20", "uid": 20, "uidvalidity": 7,
+                "draftId": DRAFT_ID, "prior": "left-flagged"})
+        );
+        let v = serde_json::to_value(Drafted::NoPlace { error: "x".into() }).unwrap();
+        assert_eq!(v["outcome"], "no-place");
+        // And the page's reference comes back as the engine's.
+        let r: DraftRef = serde_json::from_value(
+            serde_json::json!({"uid": 3, "uidvalidity": 7, "draft_id": DRAFT_ID}),
+        )
+        .unwrap();
+        assert_eq!(r.uid, 3);
     }
 
     #[test]

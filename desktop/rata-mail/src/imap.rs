@@ -37,6 +37,7 @@ use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::ServerName;
 
 use crate::body;
+use crate::compose::{self, Outgoing};
 use crate::credential::{self, Credential};
 use crate::discover::{Candidate, IMAP_PORT, Source, is_auth_failure, is_microsoft};
 use crate::guard::HostVerdict;
@@ -194,6 +195,10 @@ pub struct Message {
     /// can name what it answers and land in the same thread. Empty when the
     /// sender gave none.
     pub message_id: String,
+    /// For a draft RATA itself saved to Drafts, the id it wrote into it
+    /// (`X-RATA-Draft`), so finishing it here saves over that copy rather
+    /// than beside it. None for everything else.
+    pub draft_id: Option<String>,
     /// True when `body` is not the whole message: it ran past what is fetched
     /// or past what RATA keeps. The rest is in the mailbox.
     pub truncated: bool,
@@ -2890,6 +2895,413 @@ where
     }
 }
 
+// -------------------------------------------------------------------- drafts
+
+/// The copy of a draft RATA saved last: where it is in Drafts, and the id
+/// RATA wrote into it (`X-RATA-Draft`), which is what proves it RATA's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DraftRef {
+    pub uid: u32,
+    pub uidvalidity: u32,
+    pub draft_id: String,
+}
+
+/// What became of the copy saved before, when a draft is saved again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum Prior {
+    /// None was named.
+    None,
+    /// It carried this draft's own id and was removed for good — the one
+    /// thing RATA ever deletes permanently.
+    Replaced,
+    /// It carried this draft's id and is flagged `\Deleted`, but the server
+    /// has no UIDPLUS, so it was not expunged: a plain EXPUNGE would also
+    /// remove every other message anybody had flagged there. RATA hides
+    /// `\Deleted` mail, and the server removes it when something expunges.
+    LeftFlagged,
+    /// It could not be proven RATA's copy of this draft — another id or
+    /// none, Drafts rebuilt since, or the check itself failed — so it was
+    /// left exactly where it is.
+    NotOurs,
+    /// It was RATA's, but the server would not remove it. It is still there.
+    Failed,
+    /// It was no longer in Drafts — sent or deleted elsewhere.
+    Gone,
+}
+
+/// How saving a draft to the mailbox went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DraftSaved {
+    /// In Drafts now, as `saved`, under the message id a refresh gives it.
+    Saved {
+        saved: DraftRef,
+        id: String,
+        prior: Prior,
+    },
+    /// This mailbox has no Drafts folder. The draft stays in RATA only, as it
+    /// always did; RATA never creates a folder.
+    NoPlace(String),
+    /// The server would not take it (over quota, too large), or the draft
+    /// itself cannot be saved. Trying again unchanged will not help.
+    Refused(String),
+    Auth(String),
+    /// See [`Fetched::OAuth`].
+    OAuth(String),
+    Host(String),
+    Net(String),
+}
+
+/// Save a draft to the mailbox's Drafts folder, replacing RATA's own copy
+/// saved before it, on one connection.
+///
+/// The draft is rendered as it would be sent ([`compose::render_draft`]:
+/// attachments, Cc and Bcc kept) with `X-RATA-Draft: <draft_id>` and
+/// `X-RATA-Draft-Rev: <rev>`, and APPENDed with `\Draft` set. Its new UID
+/// is the server's `APPENDUID` answer where it gives one (UIDPLUS), else the
+/// newest message in Drafts carrying this id.
+///
+/// `prior` is the copy saved before. It is permanently removed only when
+/// every check holds: Drafts has the same UIDVALIDITY, the message at that
+/// UID carries exactly one `X-RATA-Draft` header and it is this `draft_id`,
+/// and it is not the copy just saved. Then it is flagged `\Deleted` and
+/// expunged by its UID alone (`UID EXPUNGE`, UIDPLUS); without UIDPLUS it is
+/// left flagged rather than running an EXPUNGE that would take other
+/// messages with it. Anything else leaves it alone. Nothing else in RATA
+/// ever deletes permanently.
+pub async fn save_draft(
+    resolver: &Resolver,
+    acct: &Account,
+    msg: &Outgoing,
+    draft_id: &str,
+    rev: u32,
+    prior: Option<&DraftRef>,
+) -> DraftSaved {
+    if !compose::draft_id_ok(draft_id) {
+        return DraftSaved::Refused(
+            "RATA could not name this draft, so it was kept here and not saved to Drafts.".into(),
+        );
+    }
+    if !msg.from.as_str().eq_ignore_ascii_case(acct.email.trim()) {
+        return DraftSaved::Refused(format!(
+            "This draft says it is from {}, but it was being saved to {}.",
+            msg.from.as_str(),
+            acct.email
+        ));
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let unique = compose::message_id(msg, nanos);
+    let raw = compose::render_draft(msg, &crate::smtp::now_rfc2822(), &unique, draft_id, rev);
+
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return DraftSaved::Host(why),
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
+            return DraftSaved::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return DraftSaved::Auth(revoked_msg(acct, &why)),
+        Err(Trouble::OAuth(why)) => return DraftSaved::OAuth(oauth_msg(acct, &why)),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return DraftSaved::Net(unreachable_msg(acct, &why));
+        }
+    };
+    let saved = save_in(&mut session, acct, &raw, draft_id, prior).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    saved
+}
+
+/// The part of [`save_draft`] that talks to a signed-in session, with the
+/// draft already rendered.
+async fn save_in<T>(
+    session: &mut Session<T>,
+    acct: &Account,
+    raw: &str,
+    draft_id: &str,
+    prior: Option<&DraftRef>,
+) -> DraftSaved
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let not_saved = |why: &str| {
+        DraftSaved::Net(format!(
+            "The draft was not saved to Drafts in {} — {}. It is kept here and will be saved again.",
+            acct.email,
+            why.trim_end_matches('.')
+        ))
+    };
+    let Some(listed) = listing(session).await else {
+        return not_saved("the server would not list its folders");
+    };
+    let Some(drafts) = places_in(&listed).drafts else {
+        return DraftSaved::NoPlace(format!(
+            "{} has no Drafts folder, so RATA keeps this draft on this computer only.",
+            acct.email
+        ));
+    };
+    let appended = match append(session, &drafts, raw).await {
+        Appended::Done(uid) => uid,
+        Appended::Refused(why) => {
+            return DraftSaved::Refused(format!(
+                "{} would not keep the draft in its Drafts folder: {}",
+                acct.email,
+                if why.is_empty() {
+                    "it gave no reason".into()
+                } else {
+                    why
+                }
+            ));
+        }
+        Appended::Failed(why) => return not_saved(&why),
+    };
+    let Selected::Open(mailbox) = select_name(session, &drafts).await else {
+        return not_saved("its Drafts folder could not be opened after saving");
+    };
+    let generation = mailbox.uid_validity.unwrap_or(0);
+    let before = prior.filter(|p| p.uidvalidity == generation).map(|p| p.uid);
+    let uid = match appended {
+        Some((validity, uid)) if validity == generation && uid != 0 => Some(uid),
+        // No APPENDUID: the newest copy carrying this id, which is the one
+        // just saved — never the one before it.
+        _ => timeout(
+            COMMAND,
+            search(
+                session,
+                &format!("UNDELETED HEADER X-RATA-Draft \"{draft_id}\""),
+            ),
+        )
+        .await
+        .ok()
+        .flatten()
+        .and_then(|found| {
+            found
+                .into_iter()
+                .filter(|u| *u != 0 && Some(*u) != before)
+                .max()
+        }),
+    };
+    let Some(uid) = uid.filter(|_| generation != 0) else {
+        return not_saved("the server took it but RATA could not find it again");
+    };
+    let prior = match prior {
+        None => Prior::None,
+        Some(p) => replace(session, p, draft_id, generation, uid).await,
+    };
+    DraftSaved::Saved {
+        saved: DraftRef {
+            uid,
+            uidvalidity: generation,
+            draft_id: draft_id.to_string(),
+        },
+        id: message_key(acct, &Folder::Drafts, uid),
+        prior,
+    }
+}
+
+/// Remove `prior` from the Drafts folder just selected — only if it is
+/// provably RATA's earlier copy of this draft (see [`save_draft`]).
+async fn replace<T>(
+    session: &mut Session<T>,
+    prior: &DraftRef,
+    draft_id: &str,
+    generation: u32,
+    saved: u32,
+) -> Prior
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    if prior.uid == 0
+        || prior.uid == saved
+        || prior.uidvalidity != generation
+        || prior.draft_id != draft_id
+    {
+        return Prior::NotOurs;
+    }
+    let set = prior.uid.to_string();
+    let Ok(found) =
+        answered(session.uid_fetch(&set, "(UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])")).await
+    else {
+        return Prior::NotOurs;
+    };
+    let Some(f) = found.iter().find(|f| f.uid == Some(prior.uid)) else {
+        return Prior::Gone;
+    };
+    if header_values(f.header().unwrap_or_default(), "X-RATA-Draft") != [draft_id] {
+        return Prior::NotOurs;
+    }
+    let caps = match timeout(COMMAND, session.capabilities()).await {
+        Ok(Ok(c)) => c,
+        _ => return Prior::Failed,
+    };
+    if !matches!(
+        timeout(COMMAND, store(session, &set, "+FLAGS.SILENT (\\Deleted)")).await,
+        Ok(Ok(()))
+    ) {
+        return Prior::Failed;
+    }
+    if !caps.has_str("UIDPLUS") {
+        return Prior::LeftFlagged;
+    }
+    // Expunged by UID alone: never a plain EXPUNGE.
+    match timeout(COMMAND, async {
+        drain(session.uid_expunge(&set).await?).await
+    })
+    .await
+    {
+        Ok(Ok(_)) => Prior::Replaced,
+        _ => Prior::LeftFlagged,
+    }
+}
+
+/// How an APPEND went.
+enum Appended {
+    /// Stored; with UIDPLUS the server says where: (UIDVALIDITY, UID).
+    Done(Option<(u32, u32)>),
+    /// The server said no, in these words.
+    Refused(String),
+    Failed(String),
+}
+
+/// `APPEND` of `raw` to `mailbox`, flagged `\Draft`, reading the server's
+/// `APPENDUID` if it gives one — which async-imap's own `append` drops.
+async fn append<T>(session: &mut Session<T>, mailbox: &str, raw: &str) -> Appended
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::imap_proto::types::{Response, ResponseCode, Status, UidSetMember};
+    let Some(name) = quoted(mailbox) else {
+        return Appended::Failed("its Drafts folder has a name RATA cannot use".into());
+    };
+    let lost = || Appended::Failed("the connection was lost".into());
+    let run = async {
+        let id = session
+            .run_command(format!("APPEND {name} (\\Draft) {{{}}}", raw.len()))
+            .await
+            .map_err(|e| Appended::Failed(reason(&e)))?;
+        // Go ahead — or a refusal before anything is uploaded.
+        loop {
+            let data = session
+                .read_response()
+                .await
+                .map_err(|e| Appended::Failed(io_reason(&e)))?
+                .ok_or_else(lost)?;
+            match data.parsed() {
+                Response::Continue { .. } => break,
+                Response::Done {
+                    tag, information, ..
+                } if *tag == id => {
+                    return Err(Appended::Refused(one_line(
+                        information.as_deref().unwrap_or_default(),
+                    )));
+                }
+                _ => {}
+            }
+        }
+        // The literal, then the CRLF that ends the command.
+        session
+            .run_command_untagged(raw)
+            .await
+            .map_err(|e| Appended::Failed(reason(&e)))?;
+        loop {
+            let data = session
+                .read_response()
+                .await
+                .map_err(|e| Appended::Failed(io_reason(&e)))?
+                .ok_or_else(lost)?;
+            if let Response::Done {
+                tag,
+                status,
+                code,
+                information,
+            } = data.parsed()
+                && *tag == id
+            {
+                if *status != Status::Ok {
+                    return Err(Appended::Refused(one_line(
+                        information.as_deref().unwrap_or_default(),
+                    )));
+                }
+                let at = match code {
+                    Some(ResponseCode::AppendUid(validity, set)) => match set.first() {
+                        Some(UidSetMember::Uid(u)) => Some((*validity, *u)),
+                        Some(UidSetMember::UidRange(r)) => Some((*validity, *r.start())),
+                        None => None,
+                    },
+                    _ => None,
+                };
+                return Ok(at);
+            }
+        }
+    };
+    match timeout(upload_time(raw.len()), run).await {
+        Ok(Ok(at)) => Appended::Done(at),
+        Ok(Err(e)) => e,
+        Err(_) => Appended::Failed("the server did not answer in time".into()),
+    }
+}
+
+/// How long an upload of `len` bytes may take: a minute, and a second more
+/// for each 64 KiB, as SMTP's DATA gets.
+fn upload_time(len: usize) -> Duration {
+    Duration::from_secs(60 + (len / 65_536) as u64)
+}
+
+/// A folder name as an IMAP quoted string, or nothing for a name that cannot
+/// be one (a line break or NUL would end the command).
+fn quoted(name: &str) -> Option<String> {
+    if name.is_empty() || name.contains(['\r', '\n', '\0']) {
+        return None;
+    }
+    Some(format!(
+        "\"{}\"",
+        name.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
+}
+
+/// Every value of header `name` in a message's header block, unfolded and
+/// trimmed.
+fn header_values(raw: &[u8], name: &str) -> Vec<String> {
+    let text = String::from_utf8_lossy(raw);
+    let head = text
+        .split("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .split("\n\n")
+        .next()
+        .unwrap_or_default();
+    let mut fields: Vec<String> = Vec::new();
+    for line in head.lines() {
+        match fields.last_mut() {
+            Some(last) if line.starts_with([' ', '\t']) => last.push_str(line),
+            _ => fields.push(line.to_string()),
+        }
+    }
+    fields
+        .iter()
+        .filter_map(|f| f.split_once(':'))
+        .filter(|(n, _)| n.trim().eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.trim().to_string())
+        .collect()
+}
+
+/// The id RATA wrote into a draft it saved, from the draft's own headers:
+/// exactly one `X-RATA-Draft`, and one RATA could have made. Anything else
+/// is a draft RATA did not save, which it never replaces.
+fn rata_draft_id(raw: &[u8]) -> Option<String> {
+    match header_values(raw, "X-RATA-Draft").as_slice() {
+        [one] if compose::draft_id_ok(one) => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// "its inbox could not be opened", for whichever folder it was.
 fn cannot_open(folder: &Folder) -> String {
     match folder {
@@ -3131,6 +3543,11 @@ fn build(
         uid: f.uid.unwrap_or(0),
         uidvalidity: generation,
         message_id,
+        draft_id: if *folder == Folder::Drafts {
+            rata_draft_id(raw)
+        } else {
+            None
+        },
         reply_to,
     }
 }
@@ -5961,6 +6378,577 @@ mod tests {
                 sign_in(client, "me@example.com", &pw).await,
                 Err(Trouble::Auth(_))
             ));
+        });
+    }
+
+    // ----------------------------------------------------------- draft tests
+    //
+    // A scripted Drafts folder that takes APPEND literals, keeps what it was
+    // given, and answers SEARCH, FETCH, STORE and EXPUNGE from that. What is
+    // under test is which copy RATA ever removes for good: only its own.
+
+    const DRAFT_ID: &str = "0f8b6a52-3c1e-4d7a-9b2e-5a4c3d2e1f00";
+    const OTHER_ID: &str = "9a7c2e10-0b1d-4e6f-8a3b-7c6d5e4f3a21";
+    const DOVECOT_DRAFTS: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren \\Drafts) \"/\" \"Drafts\"\r\n* LIST (\\HasNoChildren \\Trash) \"/\" \"Trash\"\r\n";
+
+    #[derive(Clone)]
+    struct DraftScript {
+        caps: &'static str,
+        list: &'static str,
+        uidvalidity: u32,
+        /// Answer APPEND with `[APPENDUID …]` (UIDPLUS).
+        appenduid: bool,
+        /// Refuse APPEND, as a mailbox over quota does.
+        refuse: bool,
+        /// Already in Drafts: UID and whole message.
+        held: Vec<(u32, String)>,
+        next_uid: u32,
+    }
+
+    impl DraftScript {
+        fn dovecot(held: Vec<(u32, String)>) -> Self {
+            DraftScript {
+                caps: "UIDPLUS MOVE",
+                list: DOVECOT_DRAFTS,
+                uidvalidity: 7,
+                appenduid: true,
+                refuse: false,
+                held,
+                next_uid: 20,
+            }
+        }
+    }
+
+    /// What the scripted Drafts folder holds, and every command it heard.
+    #[derive(Default)]
+    struct DraftBox {
+        log: Vec<String>,
+        /// UID, message, flagged \Deleted.
+        held: Vec<(u32, String, bool)>,
+        expunged: Vec<u32>,
+    }
+
+    /// A draft as some client saved it, with `ids` as its X-RATA-Draft headers.
+    fn stored_draft(ids: &[&str]) -> String {
+        let mut raw =
+            String::from("From: <me@example.com>\r\nTo: <bo@example.org>\r\nSubject: Plan\r\n");
+        for id in ids {
+            raw.push_str(&format!("X-RATA-Draft: {id}\r\n"));
+        }
+        raw.push_str(
+            "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHalf a thought\r\n",
+        );
+        raw
+    }
+
+    fn outgoing_draft() -> Outgoing {
+        let a = |s: &str| crate::compose::Address::parse(s).unwrap();
+        Outgoing {
+            from: a("me@example.com"),
+            from_name: None,
+            to: vec![a("bo@example.org")],
+            cc: vec![a("cy@example.org")],
+            bcc: vec![a("boss@example.net")],
+            subject: "Plan".into(),
+            body: "Half a thought, the second time".into(),
+            in_reply_to: None,
+            attachments: vec![],
+        }
+    }
+
+    fn rendered(rev: u32) -> String {
+        compose::render_draft(
+            &outgoing_draft(),
+            "Tue, 29 Sep 2026 10:00:00 +0000",
+            "u1",
+            DRAFT_ID,
+            rev,
+        )
+    }
+
+    fn ours(uid: u32) -> DraftRef {
+        DraftRef {
+            uid,
+            uidvalidity: 7,
+            draft_id: DRAFT_ID.into(),
+        }
+    }
+
+    fn uid_arg(cmd: &str) -> u32 {
+        cmd.split_whitespace().nth(2).unwrap().parse().unwrap()
+    }
+
+    async fn scripted_drafts(
+        script: DraftScript,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<DraftBox>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let state = Arc::new(std::sync::Mutex::new(DraftBox {
+            held: script
+                .held
+                .iter()
+                .map(|(u, raw)| (*u, raw.clone(), false))
+                .collect(),
+            ..DraftBox::default()
+        }));
+        let shared = state.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut r = BufReader::new(r);
+            let mut next = script.next_uid;
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                let (tag, cmd) = (tag.to_string(), cmd.to_string());
+                shared.lock().unwrap().log.push(cmd.clone());
+                let up = cmd.to_ascii_uppercase();
+                let mut done = format!("{tag} OK done\r\n");
+                let body = if up.starts_with("APPEND") && script.refuse {
+                    done = format!(
+                        "{tag} NO [OVERQUOTA] Quota exceeded (mailbox for user is full)\r\n"
+                    );
+                    String::new()
+                } else if up.starts_with("APPEND") {
+                    let n: usize = cmd
+                        .rsplit_once('{')
+                        .and_then(|(_, n)| n.trim_end_matches('}').parse().ok())
+                        .unwrap();
+                    w.write_all(b"+ go ahead\r\n").await.unwrap();
+                    let mut literal = vec![0u8; n];
+                    r.read_exact(&mut literal).await.unwrap();
+                    let mut end = String::new();
+                    r.read_line(&mut end).await.unwrap();
+                    assert_eq!(end, "\r\n", "the command ends right after the literal");
+                    let uid = next;
+                    next += 1;
+                    shared.lock().unwrap().held.push((
+                        uid,
+                        String::from_utf8(literal).unwrap(),
+                        false,
+                    ));
+                    if script.appenduid {
+                        done = format!(
+                            "{tag} OK [APPENDUID {} {uid}] Append completed.\r\n",
+                            script.uidvalidity
+                        );
+                    }
+                    String::new()
+                } else if up.starts_with("SELECT") {
+                    let n = shared.lock().unwrap().held.len();
+                    format!(
+                        "* {n} EXISTS\r\n* OK [UIDVALIDITY {}] ok\r\n",
+                        script.uidvalidity
+                    )
+                } else if up.starts_with("UID SEARCH") {
+                    let want = cmd.split('"').nth(1).unwrap_or("").to_string();
+                    let found: Vec<String> = shared
+                        .lock()
+                        .unwrap()
+                        .held
+                        .iter()
+                        .filter(|(_, raw, deleted)| {
+                            !deleted && raw.contains(&format!("X-RATA-Draft: {want}\r\n"))
+                        })
+                        .map(|(u, _, _)| u.to_string())
+                        .collect();
+                    format!("* SEARCH {}\r\n", found.join(" "))
+                } else if up.starts_with("UID FETCH") {
+                    let held = shared.lock().unwrap().held.clone();
+                    let mut out = String::new();
+                    for asked in cmd.split_whitespace().nth(2).unwrap().split(',') {
+                        let asked: u32 = asked.parse().unwrap();
+                        let Some(i) = held.iter().position(|(u, _, _)| *u == asked) else {
+                            continue;
+                        };
+                        let raw = &held[i].1;
+                        if up.contains("HEADER.FIELDS") {
+                            let mut fields: String = raw
+                                .split("\r\n\r\n")
+                                .next()
+                                .unwrap()
+                                .split("\r\n")
+                                .filter(|l| l.to_ascii_lowercase().starts_with("x-rata-draft:"))
+                                .map(|l| format!("{l}\r\n"))
+                                .collect();
+                            fields.push_str("\r\n");
+                            out.push_str(&format!(
+                                "* {} FETCH (UID {asked} BODY[HEADER.FIELDS (X-RATA-DRAFT)] {{{}}}\r\n{fields})\r\n",
+                                i + 1,
+                                fields.len()
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                "* {} FETCH (UID {asked} FLAGS (\\Draft \\Seen) INTERNALDATE \"29-Sep-2026 10:{:02}:00 +0000\" ENVELOPE (NIL \"Plan\" ((NIL NIL \"me\" \"example.com\")) NIL NIL ((NIL NIL \"bo\" \"example.org\")) ((NIL NIL \"cy\" \"example.org\")) ((NIL NIL \"boss\" \"example.net\")) NIL NIL) BODY[]<0> {{{}}}\r\n{raw})\r\n",
+                                i + 1,
+                                asked % 60,
+                                raw.len()
+                            ));
+                        }
+                    }
+                    out
+                } else if up.starts_with("UID STORE") {
+                    let uid = uid_arg(&cmd);
+                    for m in shared.lock().unwrap().held.iter_mut() {
+                        if m.0 == uid && up.contains("\\DELETED") {
+                            m.2 = true;
+                        }
+                    }
+                    String::new()
+                } else if up.starts_with("UID EXPUNGE") && !script.caps.contains("UIDPLUS") {
+                    done = format!("{tag} BAD unknown command\r\n");
+                    String::new()
+                } else if up.starts_with("UID EXPUNGE") {
+                    let uid = uid_arg(&cmd);
+                    let mut b = shared.lock().unwrap();
+                    let before = b.held.len();
+                    b.held.retain(|m| !(m.0 == uid && m.2));
+                    if b.held.len() < before {
+                        b.expunged.push(uid);
+                    }
+                    String::new()
+                } else if up.starts_with("LIST") {
+                    script.list.to_string()
+                } else if up.starts_with("CAPABILITY") {
+                    format!("* CAPABILITY IMAP4rev1 {}\r\n", script.caps)
+                } else if up.starts_with("LOGOUT") {
+                    "* BYE\r\n".to_string()
+                } else {
+                    String::new()
+                };
+                if w.write_all(format!("{body}{done}").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        (scripted_login(addr).await, state)
+    }
+
+    fn saved(d: DraftSaved) -> (DraftRef, String, Prior) {
+        match d {
+            DraftSaved::Saved { saved, id, prior } => (saved, id, prior),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_draft_is_appended_to_drafts_and_its_uid_read_from_appenduid() {
+        rt_act().block_on(async {
+            let (mut s, state) = scripted_drafts(DraftScript::dovecot(vec![])).await;
+            let (at, id, prior) = saved(save_in(&mut s, &me(), &rendered(1), DRAFT_ID, None).await);
+            assert_eq!(at, ours(20));
+            assert_eq!(id, format!("{}_drafts_20", mail_key("me@example.com")));
+            assert_eq!(prior, Prior::None);
+            let b = state.lock().unwrap();
+            let appends: Vec<_> = b.log.iter().filter(|c| c.starts_with("APPEND")).collect();
+            assert_eq!(appends.len(), 1, "{:?}", b.log);
+            assert!(
+                appends[0].starts_with("APPEND \"Drafts\" (\\Draft) {"),
+                "{appends:?}"
+            );
+            // The server said where it went, so nothing is searched for.
+            assert!(
+                !b.log.iter().any(|c| c.starts_with("UID SEARCH")),
+                "{:?}",
+                b.log
+            );
+            // Stored byte for byte as rendered: Bcc and RATA's id in it.
+            let (_, raw, _) = &b.held[0];
+            assert_eq!(*raw, rendered(1));
+            assert!(raw.contains("\r\nBcc: <boss@example.net>\r\n"));
+            assert!(raw.contains(&format!("\r\nX-RATA-Draft: {DRAFT_ID}\r\n")));
+        });
+    }
+
+    #[test]
+    fn without_appenduid_the_new_copy_is_found_by_its_header_never_the_old_one() {
+        rt_act().block_on(async {
+            let mut script = DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))]);
+            script.appenduid = false;
+            let (mut s, state) = scripted_drafts(script).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(at, ours(20));
+            assert_eq!(prior, Prior::Replaced);
+            let b = state.lock().unwrap();
+            let asked = format!("UID SEARCH UNDELETED HEADER X-RATA-Draft \"{DRAFT_ID}\"");
+            assert!(b.log.contains(&asked), "{:?}", b.log);
+            assert_eq!(b.expunged, vec![3]);
+        });
+    }
+
+    #[test]
+    fn the_copy_before_is_removed_for_good_only_when_it_carries_this_drafts_id() {
+        rt_act().block_on(async {
+            let (mut s, state) =
+                scripted_drafts(DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))])).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!((at.uid, prior), (20, Prior::Replaced));
+            let b = state.lock().unwrap();
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c == "UID FETCH 3 (UID BODY.PEEK[HEADER.FIELDS (X-RATA-Draft)])"),
+                "{:?}",
+                b.log
+            );
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c == "UID STORE 3 +FLAGS.SILENT (\\Deleted)"),
+                "{:?}",
+                b.log
+            );
+            assert!(b.log.iter().any(|c| c == "UID EXPUNGE 3"), "{:?}", b.log);
+            // Never a bare EXPUNGE, which takes every \Deleted message with it.
+            assert!(
+                !b.log.iter().any(|c| c.eq_ignore_ascii_case("EXPUNGE")),
+                "{:?}",
+                b.log
+            );
+            assert_eq!(b.expunged, vec![3]);
+            // Exactly one copy is left: the one just saved.
+            assert_eq!(b.held.iter().map(|m| m.0).collect::<Vec<_>>(), vec![20]);
+        });
+    }
+
+    #[test]
+    fn a_copy_that_is_not_provably_rata_s_is_never_touched() {
+        // Another draft's id, no id at all (saved by another app), and two ids
+        // of which one is this draft's (not something RATA writes).
+        for held in [
+            stored_draft(&[OTHER_ID]),
+            stored_draft(&[]),
+            stored_draft(&[OTHER_ID, DRAFT_ID]),
+        ] {
+            rt_act().block_on(async {
+                let (mut s, state) =
+                    scripted_drafts(DraftScript::dovecot(vec![(3, held.clone())])).await;
+                let (at, _, prior) =
+                    saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+                assert_eq!((at.uid, prior), (20, Prior::NotOurs));
+                let b = state.lock().unwrap();
+                assert!(changed(&b.log).is_empty(), "{:?}", b.log);
+                assert_eq!(b.held.len(), 2);
+                assert!(b.held.iter().all(|m| !m.2));
+            });
+        }
+    }
+
+    #[test]
+    fn a_rebuilt_drafts_folder_or_a_mismatched_reference_leaves_the_copy_alone() {
+        let cases = [
+            // Drafts was rebuilt since: UID 3 may be anything now.
+            DraftRef {
+                uid: 3,
+                uidvalidity: 6,
+                draft_id: DRAFT_ID.into(),
+            },
+            // A reference to another draft's copy.
+            DraftRef {
+                uid: 3,
+                uidvalidity: 7,
+                draft_id: OTHER_ID.into(),
+            },
+            // No reference at all.
+            DraftRef {
+                uid: 0,
+                uidvalidity: 7,
+                draft_id: DRAFT_ID.into(),
+            },
+        ];
+        for prior in cases {
+            rt_act().block_on(async {
+                let (mut s, state) =
+                    scripted_drafts(DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))]))
+                        .await;
+                let (_, _, got) =
+                    saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&prior)).await);
+                assert_eq!(got, Prior::NotOurs, "{prior:?}");
+                let b = state.lock().unwrap();
+                // Not even looked at: nothing is fetched, flagged or expunged.
+                assert!(
+                    !b.log.iter().any(|c| c.starts_with("UID FETCH")),
+                    "{:?}",
+                    b.log
+                );
+                assert!(changed(&b.log).is_empty(), "{:?}", b.log);
+            });
+        }
+    }
+
+    #[test]
+    fn a_copy_already_gone_is_said_to_be_gone() {
+        rt_act().block_on(async {
+            let (mut s, state) = scripted_drafts(DraftScript::dovecot(vec![])).await;
+            let (_, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(prior, Prior::Gone);
+            assert!(changed(&state.lock().unwrap().log).is_empty());
+        });
+    }
+
+    #[test]
+    fn without_uidplus_the_copy_before_is_only_flagged() {
+        rt_act().block_on(async {
+            let mut script = DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))]);
+            script.caps = "MOVE";
+            script.appenduid = false;
+            let (mut s, state) = scripted_drafts(script).await;
+            let (at, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!((at.uid, prior), (20, Prior::LeftFlagged));
+            let b = state.lock().unwrap();
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c == "UID STORE 3 +FLAGS.SILENT (\\Deleted)"),
+                "{:?}",
+                b.log
+            );
+            assert!(
+                !b.log
+                    .iter()
+                    .any(|c| c.to_ascii_uppercase().contains("EXPUNGE")),
+                "{:?}",
+                b.log
+            );
+            assert!(b.held.iter().any(|m| m.0 == 3 && m.2));
+        });
+    }
+
+    #[test]
+    fn with_no_drafts_folder_nothing_is_saved_or_created() {
+        rt_act().block_on(async {
+            let mut script = DraftScript::dovecot(vec![]);
+            script.list = TRASH;
+            let (mut s, state) = scripted_drafts(script).await;
+            let got = save_in(&mut s, &me(), &rendered(1), DRAFT_ID, Some(&ours(3))).await;
+            assert!(
+                matches!(got, DraftSaved::NoPlace(ref why) if why.contains("no Drafts folder")),
+                "{got:?}"
+            );
+            let b = state.lock().unwrap();
+            assert!(
+                !b.log.iter().any(|c| {
+                    let u = c.to_ascii_uppercase();
+                    u.starts_with("APPEND") || u.starts_with("CREATE") || u.starts_with("UID")
+                }),
+                "{:?}",
+                b.log
+            );
+        });
+    }
+
+    #[test]
+    fn a_refused_save_says_why_and_removes_nothing() {
+        rt_act().block_on(async {
+            let mut script = DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))]);
+            script.refuse = true;
+            let (mut s, state) = scripted_drafts(script).await;
+            let got = save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await;
+            assert!(
+                matches!(got, DraftSaved::Refused(ref why) if why.contains("Quota exceeded")),
+                "{got:?}"
+            );
+            let b = state.lock().unwrap();
+            assert!(changed(&b.log).is_empty(), "{:?}", b.log);
+            assert_eq!(b.held.len(), 1);
+        });
+    }
+
+    #[test]
+    fn gmail_keeps_drafts_in_its_own_drafts_folder() {
+        rt_act().block_on(async {
+            let mut script = DraftScript::dovecot(vec![(3, stored_draft(&[DRAFT_ID]))]);
+            script.list = GMAIL_DRAFTS;
+            let (mut s, state) = scripted_drafts(script).await;
+            let (_, _, prior) =
+                saved(save_in(&mut s, &me(), &rendered(2), DRAFT_ID, Some(&ours(3))).await);
+            assert_eq!(prior, Prior::Replaced);
+            let b = state.lock().unwrap();
+            assert!(
+                b.log
+                    .iter()
+                    .any(|c| c.starts_with("APPEND \"[Gmail]/Drafts\" (\\Draft) {")),
+                "{:?}",
+                b.log
+            );
+            assert!(
+                b.log.iter().any(|c| c == "SELECT \"[Gmail]/Drafts\""),
+                "{:?}",
+                b.log
+            );
+        });
+    }
+
+    #[test]
+    fn a_draft_rata_saved_is_read_back_with_its_id_and_its_bcc() {
+        rt_act().block_on(async {
+            let (mut s, _) =
+                scripted_drafts(DraftScript::dovecot(vec![(3, stored_draft(&[]))])).await;
+            let (at, id, _) = saved(save_in(&mut s, &me(), &rendered(1), DRAFT_ID, None).await);
+            let got = by_uid(
+                &mut s,
+                &mut no_redial(),
+                &me(),
+                &Folder::Drafts,
+                &[at.uid, 3],
+                7,
+            )
+            .await
+            .unwrap();
+            let mine = got.iter().find(|m| m.uid == at.uid).unwrap();
+            assert_eq!(mine.id, id);
+            assert_eq!(mine.draft_id.as_deref(), Some(DRAFT_ID));
+            assert_eq!(mine.bcc, vec!["boss@example.net"]);
+            assert_eq!(mine.body, "Half a thought, the second time");
+            // Another app's draft carries no id: RATA will never replace it.
+            assert_eq!(got.iter().find(|m| m.uid == 3).unwrap().draft_id, None);
+        });
+        assert_eq!(
+            rata_draft_id(stored_draft(&[DRAFT_ID]).as_bytes()).as_deref(),
+            Some(DRAFT_ID)
+        );
+        assert_eq!(
+            rata_draft_id(stored_draft(&[DRAFT_ID, DRAFT_ID]).as_bytes()),
+            None
+        );
+        assert_eq!(
+            rata_draft_id(stored_draft(&["\"quoted\" value"]).as_bytes()),
+            None
+        );
+        // A line in the text is not a header.
+        assert_eq!(
+            rata_draft_id(format!("Subject: x\r\n\r\nX-RATA-Draft: {DRAFT_ID}\r\n").as_bytes()),
+            None
+        );
+    }
+
+    #[test]
+    fn saving_refuses_an_id_rata_did_not_make_before_dialling() {
+        rt_act().block_on(async {
+            let r = Resolver::system().unwrap();
+            let got = save_draft(
+                &r,
+                &acct("10.0.0.1"),
+                &outgoing_draft(),
+                "x\r\nBcc: a@b.c",
+                1,
+                None,
+            )
+            .await;
+            assert!(matches!(got, DraftSaved::Refused(_)), "{got:?}");
         });
     }
 }

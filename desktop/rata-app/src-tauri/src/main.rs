@@ -176,6 +176,7 @@ fn main() {
             commands::retry_mailbox,
             commands::refresh_mail,
             commands::send_mail,
+            commands::save_draft,
             commands::change_messages,
             commands::older_mail,
             commands::reread_mail,

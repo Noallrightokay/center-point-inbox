@@ -140,6 +140,52 @@ pub const ATTACH_MAX: usize = 18 * 1024 * 1024;
 /// `now_rfc2822` and `unique` are passed in rather than read here so the whole
 /// thing can be tested byte for byte.
 pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
+    render_as(msg, now_rfc2822, unique, None)
+}
+
+/// A draft as it is kept in the mailbox's Drafts folder, for IMAP `APPEND`.
+///
+/// The message [`render`] would send, with three differences, all of them
+/// only here:
+///
+/// * **Bcc is written.** A draft is the customer's own copy, and finishing it
+///   on another device must keep its blind copies. Nothing is sent from it:
+///   sending renders the message again through [`render`], which never
+///   writes Bcc.
+/// * **`X-RATA-Draft: <id>` and `X-RATA-Draft-Rev: <n>`** say which draft
+///   this is and which save of it. The id is how RATA proves a copy in
+///   Drafts is its own before it replaces it; nothing without it ever is.
+/// * **No dot-stuffing, and To may be empty.** An APPEND literal is stored
+///   byte for byte, so a `.` doubled here would stay doubled; and a draft
+///   need not be addressed to anyone yet.
+///
+/// `draft_id` must pass [`draft_id_ok`]: it goes into a header as it is.
+pub fn render_draft(
+    msg: &Outgoing,
+    now_rfc2822: &str,
+    unique: &str,
+    draft_id: &str,
+    rev: u32,
+) -> String {
+    render_as(msg, now_rfc2822, unique, Some((draft_id, rev)))
+}
+
+/// Whether a draft id is one RATA could have made: a UUID's characters
+/// (lowercase hex and `-`), 16 to 64 of them. It is written into a header and
+/// searched for, so nothing else may be one.
+pub fn draft_id_ok(id: &str) -> bool {
+    (16..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
+}
+
+fn render_as(
+    msg: &Outgoing,
+    now_rfc2822: &str,
+    unique: &str,
+    draft: Option<(&str, u32)>,
+) -> String {
     let mut out = String::with_capacity(msg.body.len() + 512);
 
     let from = match &msg.from_name {
@@ -155,9 +201,19 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
     };
 
     let _ = write!(out, "From: {from}\r\n");
-    addresses(&mut out, "To", &msg.to);
+    // A message sent always has someone in To (`smtp::send` refuses one
+    // without); a draft may not yet.
+    if draft.is_none() || !msg.to.is_empty() {
+        addresses(&mut out, "To", &msg.to);
+    }
     if !msg.cc.is_empty() {
         addresses(&mut out, "Cc", &msg.cc);
+    }
+    if let Some((id, rev)) = draft {
+        if !msg.bcc.is_empty() {
+            addresses(&mut out, "Bcc", &msg.bcc);
+        }
+        let _ = write!(out, "X-RATA-Draft: {id}\r\nX-RATA-Draft-Rev: {rev}\r\n");
     }
     let _ = write!(out, "Subject: {}\r\n", words::encode_header(&msg.subject));
     let _ = write!(out, "Date: {now_rfc2822}\r\n");
@@ -187,8 +243,9 @@ pub fn render(msg: &Outgoing, now_rfc2822: &str, unique: &str) -> String {
         out.push_str("Content-Transfer-Encoding: 7bit\r\n\r\n");
         for line in plain.split('\n') {
             // Dot-stuffing: a line of a single "." would otherwise end the
-            // message early and hand the rest to the server as commands.
-            if line.starts_with('.') {
+            // message early and hand the rest to the server as commands. A
+            // draft is an APPEND literal, stored as it is, so not there.
+            if draft.is_none() && line.starts_with('.') {
                 out.push('.');
             }
             out.push_str(line);
@@ -720,5 +777,87 @@ mod tests {
         assert_ne!(message_id(&a, 1), message_id(&a, 2));
         assert_ne!(message_id(&a, 1), message_id(&msg("x", "z"), 1));
         assert_eq!(message_id(&a, 1).len(), 32);
+    }
+
+    const ID: &str = "0f8b6a52-3c1e-4d7a-9b2e-5a4c3d2e1f00";
+
+    #[test]
+    fn a_draft_keeps_its_bcc_and_says_whose_it_is_but_a_sent_message_never_has_bcc() {
+        let mut m = msg("Plan", "Half a thought");
+        m.cc = vec![addr("cy@example.org")];
+        m.bcc = vec![addr("boss@example.net")];
+        let draft = render_draft(&m, "d", "i", ID, 3);
+        assert!(draft.contains("\r\nBcc: <boss@example.net>\r\n"), "{draft}");
+        assert!(
+            draft.contains(&format!("\r\nX-RATA-Draft: {ID}\r\n")),
+            "{draft}"
+        );
+        assert!(draft.contains("\r\nX-RATA-Draft-Rev: 3\r\n"), "{draft}");
+        // The headers come before the text, where a header belongs.
+        let head = draft.split("\r\n\r\n").next().unwrap();
+        assert!(head.contains("X-RATA-Draft:") && head.contains("Bcc:"));
+        // What a mail program makes of it: the same message, Bcc and all.
+        let parsed = mail_parser::MessageParser::default()
+            .parse(draft.as_bytes())
+            .unwrap();
+        assert_eq!(
+            parsed
+                .bcc()
+                .and_then(|a| a.first())
+                .and_then(|a| a.address()),
+            Some("boss@example.net")
+        );
+        // The message as sent is unchanged: no Bcc, no draft headers.
+        let sent = render(&m, "d", "i");
+        assert!(!sent.contains("Bcc:"), "{sent}");
+        assert!(!sent.contains("X-RATA-Draft"), "{sent}");
+    }
+
+    #[test]
+    fn a_draft_is_stored_as_written_and_need_not_be_addressed_yet() {
+        let mut m = msg("Notes", "one\n.\n.two");
+        m.to.clear();
+        let draft = render_draft(&m, "d", "i", ID, 1);
+        assert!(!draft.contains("\r\nTo:"), "{draft}");
+        // An APPEND literal is stored byte for byte: no dot-stuffing.
+        assert!(draft.ends_with("\r\n\r\none\r\n.\r\n.two\r\n"), "{draft}");
+        // Sending still stuffs them.
+        assert!(
+            render(&msg("Notes", "one\n.\n.two"), "d", "i").ends_with("one\r\n..\r\n..two\r\n")
+        );
+    }
+
+    /// The page repoints a draft's carried files at the copy just saved by
+    /// position: the files in the order given, from 0. This is that order.
+    #[test]
+    fn a_draft_s_files_read_back_in_the_order_they_were_given_from_zero() {
+        let mut m = with_file("a.pdf", "application/pdf", b"%PDF-1.4\n");
+        m.attachments.push(File {
+            name: "b.txt".into(),
+            mime: "text/plain".into(),
+            data: b"second".to_vec(),
+        });
+        let draft = render_draft(&m, "d", "i", ID, 1);
+        let got = crate::body::read_whole(draft.as_bytes()).attachments;
+        let seen: Vec<(u32, &str)> = got.iter().map(|a| (a.index, a.name.as_str())).collect();
+        assert_eq!(seen, [(0, "a.pdf"), (1, "b.txt")]);
+        let (_, data) = crate::body::attachment(draft.as_bytes(), 1).unwrap();
+        assert_eq!(data, b"second");
+    }
+
+    #[test]
+    fn only_an_id_rata_could_have_made_is_a_draft_id() {
+        assert!(draft_id_ok(ID));
+        for bad in [
+            "",
+            "short",
+            "0F8B6A52-3C1E-4D7A-9B2E-5A4C3D2E1F00",
+            "0f8b6a52 3c1e 4d7a 9b2e 5a4c3d2e1f00",
+            "0f8b6a52-3c1e-4d7a\r\nBcc: x@y.z",
+            "\"0f8b6a52-3c1e-4d7a-9b2e-5a4c3d2e1f00",
+            &"a".repeat(65),
+        ] {
+            assert!(!draft_id_ok(bad), "{bad:?}");
+        }
     }
 }
