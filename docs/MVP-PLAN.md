@@ -54,6 +54,14 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   public key embedded, no font CDN, and it launches as "RATA 0.1.37 beta".
 - **v0.1.38** (Gmail's archive) is [PR #52](https://github.com/Noallrightokay/center-point-inbox/pull/52).
   CI was green on `aebadb1`, and it merged as `8511dad` ([A1](#a1)).
+- **v0.1.39** was released and verified: five assets, the licence public
+  key present, no font CDN, and it launches as "RATA 0.1.39 beta". It was
+  the first run of the install-and-launch smoke test, which passed on
+  Linux, macOS (both) and Windows ([run 36490218903](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36490218903)).
+- **[F4](#f4)'s Mediums:** 1 and 3 are fixed ([#69](https://github.com/Noallrightokay/center-point-inbox/pull/69)),
+  2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
+  with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
+  asking before a disguised program is saved), and 4 is [D8](#d8).
 - **Tests.** Engine, shell and website suites run in CI (`desktop-ci.yml`,
   `rata-next-ci.yml`). The website suite passed today. The **desktop UI
   harness** (60 checks that drive the real interface against a fake

@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2). Standalone, knows nothing about the app. 219 tests, plus 12 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments, updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 102 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 457 checks (`npm test`, after `npm run build`). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, Gmail's archive, refreshing only what is new, Cc and Bcc, being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 224 tests, plus 12 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`). 106 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger. 479 checks (`npm test`, after `npm run build`). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (84 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (98 checks, CI job *Desktop interface, driven*); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release; `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`. |
@@ -146,7 +146,9 @@ in with Microsoft (live once the owner's client id is in the build), no
 longer lets one unreadable message stop a refresh, archives on servers that
 only name the folder, says why a typed server address failed, and is the
 first release whose installers are installed and launched before they are
-kept (watch that run). An
+kept (watch that run); v0.1.40 marks every file it saves as a download,
+labels a program named to look like a document and asks before saving
+it, and holds the AI cap under concurrent requests. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -221,6 +223,13 @@ strips their leftovers from an older saved workspace. Translation and AI came
 back in v0.1.17 through RATA's own relay, and signing in to a Microsoft
 *mailbox* in v0.1.39 (below); each is real. Adding a mailbox has one
 home: Settings → Linked accounts (`openAddMailbox`).
+
+**The website's app page.** In a browser, `app.html` shows one dismissible
+banner at the top of the workspace (`#web-note`, `webNote()`): "RATA reads
+your mail in the desktop app. This page keeps your account and settings.",
+with Download and Dismiss (kept in `localStorage` as
+`rata_web_note_dismissed`). The markup starts hidden and the app never
+shows it (harness check, licensed and unlicensed).
 
 Stored, and acted on for real: the interface keeps every fetched message, so
 mail persists between launches and is searchable. Read, unread, star, delete and archive change RATA's
@@ -369,8 +378,33 @@ puts 📎 in the list. Inline images with a Content-ID are not listed. Saving
 (`save_attachment`) re-fetches the message and writes one part into the
 Downloads folder: the page supplies only message and index, and Rust picks the
 folder, cleans the name (`safe_file_name`: no path parts, Windows device
-names, or bidi controls that disguise `.exe` as `.pdf`) and creates the file
-exclusively (`write_new`, `name (2).pdf`). RATA never opens a saved file.
+names including `COM¹`–`³`, `LPT¹`–`³`, `CONIN$` and `CONOUT$`, bidi
+controls that disguise `.exe` as `.pdf`, or runs of blank space that push
+`.exe` out of view; every run of blanks is one space, none before the last
+extension) and creates the file exclusively (`write_new`, `name (2).pdf`).
+RATA never opens a saved file. **Disguised programs (v0.1.40).**
+`rata_mail::names` holds `safe_file_name` and `looks_disguised` (both moved
+out of the app's `core.rs`); `looks_disguised` is true when a document
+extension is followed by a program one (`invoice.pdf.exe`), and that name
+is kept as sent. The engine marks such an attachment `disguised` wherever
+it lists attachments (`body::Attachment`, `serde(default)`, so a list
+stored earlier reads `false`); the reading pane labels it ("a program
+(.exe), not a PDF") and asks before saving (`askDisguised`, `#warn-ov`:
+Cancel focused, Escape, Enter and the backdrop all cancel, only **Save
+anyway** goes on). `save_attachment` and `read_attachment` refuse it
+without `confirmed` (kind `needs-confirmation`, `consented`), judged from
+the name as fetched, never from what the page says, so the page alone
+cannot skip the question; a list stored before the flag gets the question
+when Rust refuses. Only disguised names are asked about: `setup.exe` says
+what it is and saves without a question (the owner's choice). Convert asks
+too, though its button never shows for such a name, since the last
+extension is a program's. **Marked as downloads (v0.1.40).** Every file
+`write_new` saves, attachments and Format Bridge downloads alike, is then
+marked as a download (`mark.rs`: a `Zone.Identifier` stream with `ZoneId=3`
+on Windows, `com.apple.quarantine` `0081;<hex time>;RATA;` on macOS,
+nothing on Linux, never naming the sender), so SmartScreen, Protected View
+and Gatekeeper check it; a failed mark never fails the save and nothing is
+logged. Neither mark has been seen on a real Windows or Mac.
 **Sending attachments (v0.1.9).** The composer reads picked files only when
 Send is pressed and hands them over as base64 (`send_mail`'s `attachments`);
 `core::send` refuses over `ATTACH_MAX` (18 MB) before dialling, and
@@ -456,8 +490,15 @@ untrusted (`fence` turns any `<` that starts an `email` tag, in any case or
 spacing, opening or closing, into `‹`, so a message cannot close its fence
 early; `clean` strips control and bidi-control characters from what goes in
 and from each task that comes back), the task list is parsed strictly (ids must be ones sent). Each
-request is charged from Anthropic's reported token use into `ai_usage`
-(`database.sql` §5) and refused at the month's cap; nothing is logged but a
+request's worst case (`worstCaseMicro`: every prompt byte as a token, plus
+64, plus `max_tokens` of output) is reserved before the call, settled to
+Anthropic's reported token use after, and refused at the cap atomically
+(`ai_reserve`/`ai_settle`, `database.sql` §5; v0.1.40, SEC-2): a refused
+reserve is 429, a database error 503 with no model call (it fails closed),
+a missing function 503 "AI is not switched on for RATA yet." with only the
+server log naming section 5, and a settle that fails keeps the whole hold.
+One worst case is about $0.06 (a 12 000-character CJK translation), so
+`AI_MONTHLY_CAP_USD` must stay well above that. Nothing is logged but a
 status. The app asks once before the first AI use (`aiOk`, `AI_NOTICE`),
 never sends anything on its own (opening Assist runs the local briefing), and
 falls back to the local summary/briefing with the reason when AI cannot be
@@ -858,9 +899,9 @@ shared or delegated mailboxes.
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and
-the site's headers; two Mediums wait on the owner: Mark of the Web on saved
-attachments (none is set today) and email confirmation before paid launch
-(LAUNCH.md §7). The `loopback-tests` gate is a `compile_error!` on the
+the site's headers; SEC-2 the AI cap; SEC-3 Mark of the Web (#71), with
+UI-1's question for disguised programs (#75). One Medium waits on the
+owner: email confirmation before paid launch (LAUNCH.md §7, D8). The `loopback-tests` gate is a `compile_error!` on the
 feature without `debug_assertions`, not on the release profile: a build
 with `CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true` passes it. `release.yml`
 sets neither; never enable the feature in rata-app.

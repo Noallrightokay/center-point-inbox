@@ -6,7 +6,7 @@ issue (`/api/licence`) and renewal (`/api/licence/renew`), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (457 checks).
+the website's test suites pass with `npm test` after it (479 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -41,8 +41,17 @@ Supabase → SQL Editor → paste `database.sql` → Run. Safe to re-run; it is 
 (`domain_addons`, `event_at`) and the `ai_usage` table (its section 5), so
 it must be run even though the other tables exist.
 
+Section 5 now also adds two functions, `ai_reserve` and `ai_settle`, which
+the AI relay uses to hold each request's worst case against the monthly cap
+before it calls Anthropic (SEC-2, merged after 0.1.39). **Re-run
+`database.sql` before deploying the build that carries them**, even if you
+ran it before: without them `/api/ai` answers 503 "AI is not switched on
+for RATA yet." and the server log says to run section 5 of
+`rata-next/database.sql`. Re-running only adds what is missing.
+
 **Check:** Table Editor → `subscriptions` shows both new columns, and
-`ai_usage` exists.
+`ai_usage` exists; Database → Functions lists `ai_reserve` and
+`ai_settle`.
 
 ## 2. The licence signing key
 
@@ -117,7 +126,7 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `LICENCE_PUBLIC_KEY` | its public half (step 2), the same as the GitHub secret `RATA_LICENCE_PUBLIC_KEY` — renewal and the AI relay check licences with it |
 | `HEALTH_TOKEN` | make it with `openssl rand -hex 32` and use it for nothing else. With it, `/api/health?token=…` says which check fails and why; without it, only which. Paste the same value into the uptime monitor's "RATA ready" check (§8) |
 | `ANTHROPIC_API_KEY` | an API key from console.anthropic.com, for the AI relay. Paste it into hPanel only — never into a chat, an issue or a commit |
-| `AI_MONTHLY_CAP_USD` | optional; what AI may cost per customer per month. Default `2` |
+| `AI_MONTHLY_CAP_USD` | optional; what AI may cost per customer per month. Default `2`. Keep it well above one request's worst case, about `0.06` (a long translation): each request holds its worst case against the cap before it is sent, so at `0.05` or less the longest translations (12 000 characters of Chinese, Japanese or Korean) are always refused |
 | `AI_MODEL` | optional; default `claude-haiku-4-5-20251001` |
 | `STRIPE_WEBHOOK_SECRET` | the `whsec_…` |
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
@@ -150,10 +159,15 @@ included, §10), and the server has no route that reads anybody's messages.
 
 `/api/ai` does summaries, translation and task flags for the desktop app, and
 RATA pays for them. It is off (answers "AI is not switched on") until
-`ANTHROPIC_API_KEY` is set **and** section 5 of `database.sql` has been run —
-that section creates `ai_usage`, the running total that caps each customer at
-`AI_MONTHLY_CAP_USD` a month. Without the table it refuses rather than
-spending without a limit. It passes each request's text to Anthropic and
+`ANTHROPIC_API_KEY` is set **and** section 5 of `database.sql` has been run.
+That section creates `ai_usage`, the running total that caps each customer at
+`AI_MONTHLY_CAP_USD` a month, and the functions `ai_reserve` and `ai_settle`:
+each request's worst case is reserved before the call and refused at the cap
+in one statement, then settled to what Anthropic reports it cost. Without
+them the relay answers 503 "AI is not switched on for RATA yet." (the log
+names section 5), and if the database cannot be reached it refuses rather
+than spending without a limit. So run `database.sql` again (§1) before
+deploying this build. It passes each request's text to Anthropic and
 back and writes none of it anywhere: the table holds an address, a month and
 a number. In the Anthropic console, set a monthly spend limit on the key as
 well — the cap here is per customer, that one is for the whole bill.

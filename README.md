@@ -63,7 +63,7 @@ an API gateway, or a translation worker, it is a ghost — report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 219 tests, no network required
+cargo test --all-targets   # 224 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -97,7 +97,7 @@ so it refuses to compile without debug assertions. Never enable it in
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first — see the trap below
 cd src-tauri
-cargo test          # 102 tests
+cargo test          # 106 tests
 ```
 
 On Linux you need the system webview first:
@@ -115,7 +115,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (84 checks). CI runs it as *Desktop interface, driven*. From the
+policy (98 checks). CI runs it as *Desktop interface, driven*. From the
 repository root:
 
 ```bash
@@ -133,7 +133,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test            # 457 checks, no network, no database required
+npm test            # 479 checks, no network, no database required
 npm run dev
 ```
 
@@ -294,7 +294,10 @@ it, new versions are a download from the releases page.
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
-  RATA. Files can be attached when sending, up to 18 MB in all, and a
+  RATA. The engine's `names.rs` cleans the name and spots a program named to
+  look like a document (`invoice.pdf.exe`), which is labelled, and RATA asks
+  before saving it; on Windows and macOS every saved file is marked as
+  downloaded from the internet (`mark.rs`), so the system checks it. Files can be attached when sending, up to 18 MB in all, and a
   forwarded message carries its attachments. HTML mail is shown formatted
   in a locked-down frame (see *Traps*), with remote images off until asked.
   Links open in the browser — web addresses only, and from formatted mail
