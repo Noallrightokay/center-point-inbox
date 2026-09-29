@@ -598,6 +598,238 @@ small follow-ups) and bumped the version; released and verified 2026-09-29.
 `MVP-EVIDENCE.md`. No open High from F4. Backups verified (D7). Then
 announce.
 
+### Workstream H: complete and better (wave 5, 2026-09-29)
+
+What a first paying customer expects of a mail client and a paid website,
+and what beta support needs, that RATA does not have at 0.1.42. Found by
+reading the interface, the website and BETA.md §5 against the code: no
+privacy or terms page, no help page, no address suggestions when writing,
+no keyboard shortcuts, search that never asks the server, no unsubscribe,
+no way to copy diagnostics into a bug report, no undo send, no
+conversation view, and thin accessibility markup. Every card is an
+agent's; two need the [owner]'s review after. Part 4's rules apply, hot
+files included: `app.html` is on nearly every card here, so the PM runs
+them in the order under *Waves* and each agent starts from the `main`
+that holds the cards before it.
+
+#### H1
+**Privacy policy and terms of service on the website.** Who: agent
+(website) · Needs: nothing to start; the [owner] reviews before launch ·
+Do: `rata-next/public/privacy.html` and `terms.html` in DESIGN.md's
+voice and tokens, true to the architecture: what mailrata.org stores
+(the login email, the subscription record with its Stripe customer id,
+the AI usage count), what it never sees (mail, mail passwords, OAuth
+tokens: they stay on the customer's computer), what the AI relay sends
+to Anthropic and that neither RATA nor Anthropic keeps it (CLAUDE.md,
+`lib/ai.js`), that Stripe processes payment, what deleting the account
+removes and when it is refused (`lib/account.js`), the licence (30 days,
+renewed while subscribed), and the plans. Mark every fact only the owner
+knows as `[OWNER: legal entity name]`, `[OWNER: postal address]`,
+`[OWNER: contact email]`, `[OWNER: governing law]`. Link both pages from
+the footer of `index.html`, from `auth.html` beside the sign-up button
+("By creating an account you agree to…") and from `account.html`. Add
+a LAUNCH.md step, before §6's go-live check, to fill the placeholders,
+and make `scripts/live-check.sh` fail while `[OWNER:` is still on the
+live pages. Tests in `rata-next/tests`: both pages exist, are linked
+from the three places, and claim nothing the code contradicts.
+Done when: the pages are live in the repo with every unknown marked
+`[OWNER:`, the links are in, live-check.sh refuses a placeholder, and
+the suite is green. Not: legal advice; the owner reads it before D6.
+
+#### H2
+**A help page: app passwords per provider, what errors mean, how to
+report.** Who: agent (website) · Needs: nothing · Do:
+`rata-next/public/help.html`, DESIGN.md's voice: for Gmail, iCloud,
+Yahoo, Fastmail, a custom domain and Microsoft, how to link the mailbox
+(app password or Sign in with Microsoft), with links to each provider's
+own official page for app passwords, drawn from SMOKE.md §1 and BETA.md
+§3; the sentences RATA can say when a link fails and what each means
+(from `desktop/rata-mail/src/imap.rs`, `smtp.rs`, `resolve.rs`,
+`guard.rs` and `core.rs`: certificate not trusted, password refused,
+provider needs an app password, no server found, refused to connect to a
+local address, Microsoft needs Sign in); how to report a bug (the *Beta
+bug* template, what to include, what never to paste: the app password,
+the licence key). Link it from `index.html`'s footer and from BETA.md.
+Tests: the page exists, is linked, every provider named in SMOKE.md's
+grid has a section, every external link is https and points at the
+provider's own domain. Done when: the page is in, linked, and the suite
+is green. Not: the in-app Help link (H8 adds it).
+
+#### H3
+**Address suggestions in the composer.** Who: agent (interface) · Needs:
+nothing · Do: To, Cc and Bcc suggest people RATA has seen (every From,
+To and Cc of held mail, plus the People list), as you type, in a
+dropdown driven by the keyboard (arrows, Enter, Escape) and the mouse;
+several addresses separated by commas; a chosen person is inserted as
+`"Name" <addr>` when there is a name, and `core::outgoing` must accept
+that form (check `compose.rs` and add a test if it does not). Spam and
+drafts never feed the list (`mailRecord` already keeps spam out of
+People; keep it that way). No network, no new storage: the list is
+built from what is held. Harness checks: typing two letters shows a
+match, Enter fills it, a second address follows a comma, Escape closes
+without changing the field, nothing is suggested from a spam sender.
+Done when: the harness checks pass and `send_mail` accepts what the
+composer now writes. Hot file: `app.html` (composer region only).
+
+#### H4
+**Keyboard shortcuts.** Who: agent (interface) · Needs: H3 merged (both
+touch key handling) · Do: in the list, `j`/`k` and the arrows move, Enter
+opens, `x` ticks; on a message, `r` reply, `a` reply all, `f` forward,
+`e` archive, `#` or Delete deletes (to Trash, as the button does), `s`
+star, `u` unread, `m` move to; anywhere, `c` compose, `/` search, `g i`
+inbox, Escape closes the pane or composer, `?` shows the sheet. Never
+while an input, textarea or contenteditable has focus. A Settings row
+lists them and can turn them off. Set `spellcheck="true"` and
+`lang` on the composer's fields on the way, since the webview spells
+only when asked. Harness checks for each key, and that typing `j` in
+the composer types a `j`. Done when: the harness checks pass and the
+sheet matches the code (one table, read by both). Hot file: `app.html`.
+
+#### H5
+**Conversation view.** Who: agent (Rust engine + app + interface) ·
+Needs: H4 merged · Do: the engine keeps the last id of `References`
+on `Message` (`references_last`, `serde(default)`, checked like
+`message_id`); the bridge passes it; when a message is open, the
+reading pane shows **In this conversation**: every other held message
+whose `message_id`, `in_reply_to` or `references_last` links it into
+the same chain (ids only; never by subject), oldest first, each a line
+with sender, date and the first words, and one click opens it. Sent
+mail joins the chain (it carries the Message-ID RATA wrote). Mail
+stored before the field has no `references_last` and links by the two
+ids it has. Engine test on the scripted server; harness checks with a
+three-message chain across inbox and Sent, and one that a same-subject
+stranger is not pulled in. Done when: those pass. Hot files: `imap.rs`,
+`core.rs`, `bridge.js`, `app.html` (reading pane).
+
+#### H6
+**Search the server too.** Who: agent (Rust engine + app + interface) ·
+Needs: H3 merged (app.html) · Do: `rata_mail::imap::search_folder(
+account, folder, query, limit)`: one `UID SEARCH` of `OR OR FROM
+<q> SUBJECT <q> TEXT <q>` in the inbox, with the query sent as an IMAP
+literal (never inside a quoted string: a `"` or a non-ASCII character
+must not be able to change the command), `CHARSET UTF-8` where the
+server wants it, refused when the server refuses (the existing
+`search()` rule), then the newest `limit` (50) of the UIDs found through
+`fetch_uids`. App command `search_mail` (licence, linked, not parked:
+`usable`), bridge route `/api/mail/search`. In the app only, a search
+that ran locally offers **Search on the server** per linked mailbox;
+results arrive like older mail (absorbed and stored, labelled with the
+mailbox), and the button says how many came. Not for Gmail's archive
+or named folders in this version. Engine tests on the scripted server
+including a query with `"`, `\` and an accented letter; a loopback test
+against Dovecot; harness check for the button and the label. Done when:
+those pass. Hot files: `imap.rs`, `core.rs`, `bridge.js`, `app.html`
+(search region).
+
+#### H7
+**Unsubscribe.** Who: agent (Rust engine + interface) · Needs: nothing
+(reading-pane actions region; H11 follows it) · Do: `body::read` keeps
+`List-Unsubscribe` as `Message.unsubscribe: Option<Unsubscribe { https:
+Option<String>, mailto: Option<String> }>` (`serde(default)`): the
+first `https://` URL and the first `mailto:` of the header, each checked
+by the same rules as a link (`links::classify` for the URL: http(s)
+only, no `user@host` disguise; a mailto whose address parses), and
+`List-Unsubscribe-Post` is read but **never** acted on: RATA makes no
+request of its own to a stranger's server. The reading pane, for inbox
+mail that has one, shows **Unsubscribe**: an https link goes through
+the same "Open this link in your browser?" dialog naming the host as
+any link; a mailto opens RATA's composer with the address, subject and
+body the header gave. Mail stored before the field shows nothing until
+it is re-read. Engine tests with the header's real shapes (angle
+brackets, several entries, folded, both kinds); harness checks for both
+paths and for no button on Sent and Spam. Done when: those pass. Hot
+files: `imap.rs` (or `body.rs`), `core.rs`, `bridge.js`, `app.html`
+(reading-pane actions).
+
+#### H8
+**Copy diagnostics, and a Help link, in Settings.** Who: agent (Rust +
+interface) · Needs: nothing (Settings region) · Do: a Rust command
+`diagnostics` that returns one plain-text block: app version, OS and
+architecture, whether the build has a licence key, an updater key and
+a Microsoft client id; the licence's plan and expiry day (no key, no
+email); for each linked mailbox, an index (never the address), the IMAP
+and SMTP hosts and ports and TLS mode, the auth kind (password or
+Microsoft), whether it is parked and why, the last error sentence
+(already through `said`), which special folders were found and by what
+(attribute or name), and whether its live connection is up; the last
+refresh time; the store's schema version. **Nothing else**: no
+addresses, no message text, no paths that carry a user name. A Rust test
+builds the block from a state whose last error was made with a password
+in it and asserts the password, its base64 and any `@` are absent. In
+Settings, a **Help & diagnostics** section: **Copy diagnostics** puts
+the block in the clipboard (or shows it selected, where the webview
+refuses the clipboard) and says "Paste this into your bug report"; a
+**Help** link opens `https://mailrata.org/help` in the browser through
+`open_link`; a **Report a bug** link opens the *Beta bug* issue
+template. BETA.md §6 gains "Settings → Copy diagnostics" as the first
+step (this card may touch BETA.md). Harness check that the block the
+fake backend returns is shown and that no `@` appears. Done when: the
+tests and harness pass. Hot files: `core.rs`, `bridge.js`, `app.html`
+(Settings region), `BETA.md`.
+
+#### H9
+**Undo send.** Who: agent (interface) · Needs: H6 merged · Do: Send
+closes the composer and shows "Sending in 5 s · Undo" (Settings: 0, 5,
+10 s); the message goes to `send_mail` when the count ends, or at once
+if the window is closing (`beforeunload`/`pagehide`) or the app is
+quitting; **Undo** reopens the composer with the whole draft (To, Cc,
+Bcc, subject, text, files, forward references, thread, `CMP_DRAFT`).
+RATA's server copy of a draft (F1) is moved to the Trash only after
+the real send succeeds, never at Undo. A second Send while one is
+counting down queues behind it. Harness checks: Undo restores every
+field and sends nothing; the count ending sends once; two sends in a
+row send two. Done when: those pass. Hot file: `app.html` (send path).
+
+#### H10
+**Accessibility pass, checked by axe.** Who: agent (interface + harness)
+· Needs: every other H card that touches `app.html` merged (runs last,
+alone) · Do: every icon-only button gets a name (`aria-label`), the mail
+list is a `listbox`/`option` or `grid` with roving focus and a visible
+focus ring, toasts announce (`role="status"`), dialogs are `role=dialog`
+with `aria-modal` and a focus trap (the disguised-program question
+already traps; reuse it), the reading pane and composer are landmarks,
+colour is never the only signal for unread or starred, `prefers-reduced-
+motion` turns off what moves. Add `@axe-core/playwright` to the
+harness and run it on the inbox, an open message, the composer and
+Settings, failing on any serious or critical rule. Done when: axe is
+clean at those four points and the harness is green. Hot file:
+`app.html` (wide).
+
+#### H11
+**Picture attachments shown in the message.** Who: agent (Rust +
+interface) · Needs: H7 merged (same region) · Do: an attachment whose
+name ends in png, jpg, jpeg, gif or webp and is under 5 MB shows as a
+thumbnail under the message, fetched through `read_attachment` (the
+existing path, base64) and shown as `data:image/<type>;base64,` where
+the type comes from the file's magic bytes in Rust, never from the
+message's declared type or the name; a file whose bytes are not that
+picture is listed, not shown. Click opens it large in the pane (still a
+`data:` image, no navigation, no new window). Saving is unchanged. The
+app CSP already allows `img-src data:`; do not widen it. Rust tests for
+the sniffing (PNG, JPEG, GIF, WebP, and a PNG named `.jpg`, and an HTML
+file named `.png` refused); harness checks that a picture shows and a
+non-picture does not. Done when: those pass. Hot files: `core.rs`,
+`bridge.js`, `app.html` (attachments).
+
+#### H12
+**Quoted text folded, and small reading polish.** Who: agent
+(interface) · Needs: H9 merged · Do: in the Text view, the quoted part
+of a reply (lines starting `>` , or from a line matching "On … wrote:"
+or "-----Original Message-----" to the end) is folded behind **Show
+quoted text**; the signature block after `-- ` is shown lighter; long
+URLs in the Text view are cut for display but open whole. Nothing
+changes in the formatted (HTML) view. Harness checks with a reply that
+has all three. Done when: they pass. Hot file: `app.html` (text view).
+
+#### Waves
+- **5a** (in parallel, no `app.html` region shared): H1, H2, H7, H8.
+- **5b**: H3, then H6 and H9 (H6 first); H12 after H9.
+- **5c**: H4, then H5 and H11; H10 last, alone.
+- BUG cards from the 2026-09-29 pre-launch audit slot in wherever their
+  region is free. [G2](#g2) releases 0.1.43 after 5a and 5b, and 0.1.44
+  after 5c, retaking the screenshots (the composer and reading pane
+  change visibly).
+
 ---
 
 ## Part 6. Order of work
@@ -619,6 +851,9 @@ Then:
   E4 first self-update (needs E1 + two releases)
   D6 Stripe live → G3 go/no-go
 ```
+
+Wave 5 (2026-09-29): Workstream H in the order under its *Waves*,
+with the pre-launch audit's BUG cards; G2 after 5b and after 5c.
 
 Hot-file locks for the first wave: `app.html` goes to C0, then F2, then C3.
 `imap.rs` goes to C1; B1 adds its own test module and touches `imap.rs`
