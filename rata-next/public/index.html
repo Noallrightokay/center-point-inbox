@@ -137,6 +137,7 @@ h2{font-size:clamp(28px,3.2vw,38px);line-height:1.12;letter-spacing:-.025em;font
 .steps b{display:block;font-weight:600}
 .steps span{color:var(--slate);font-size:15px}
 .beta{margin-top:28px;padding:14px 16px;border-radius:8px;background:var(--fill-2);font-size:14px;color:var(--slate)}
+.beta code{font:400 13px/1 var(--mono);color:var(--ink)}
 
 footer{border-top:1px solid var(--hair);padding:32px 0 48px;font-size:14px;color:var(--faint)}
 footer .wrap{display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap}
@@ -199,7 +200,7 @@ footer a:hover{color:var(--ink)}
 
 <section class="where" aria-labelledby="where-h"><div class="wrap">
   <h2 id="where-h">What stays on your computer</h2>
-  <p class="sub">RATA reads and sends your mail itself, over IMAP and SMTP. There is no RATA server between you and your mailbox, so there is nothing of yours on one to steal.</p>
+  <p class="sub">RATA reads and sends your mail itself, over IMAP and SMTP. There is no RATA server between you and your mailbox, so your mail and your password are on no RATA server to steal.</p>
   <div class="where-grid">
     <div class="where-col here">
       <h3>On your computer</h3>
@@ -212,9 +213,10 @@ footer a:hover{color:var(--ink)}
     <div class="where-col">
       <h3>On mailrata.org</h3>
       <ul>
-        <li><b>Your account and licence</b>Your email address, your plan, and the key that unlocks the app.</li>
+        <li><b>Your account</b>Your email address, your password as a hash, your plan, and what your AI requests cost each month. Your licence key is made afresh each time it is issued, and not stored.</li>
+        <li><b>Your preferences, if you use RATA&rsquo;s page here</b>Settings, folder names, sorting rules and the addresses of your mailboxes, so they follow you. Never a password or a signature. The desktop app uploads none of this.</li>
         <li><b>Billing</b>Handled by Stripe. RATA never sees your card.</li>
-        <li><b>Summaries and translations, only when you ask</b>The text of that one message passes through to be summarized or translated, and is not stored or logged.</li>
+        <li><b>AI, only when you ask</b>A summary or translation sends the text of that one message. A briefing sends the first 1,500 characters of up to 25 recent messages in your inbox from the last 14 days. The text passes through and is not stored or logged.</li>
       </ul>
     </div>
   </div>
@@ -288,7 +290,7 @@ footer a:hover{color:var(--ink)}
       <a class="btn primary" id="buy-pro" href="auth.html?mode=signup">Buy Pro</a>
     </div>
   </div>
-  <p class="fine">Payments go through Stripe. Cancel any time from your account. Your licence key is on your licence page as soon as the payment clears.</p>
+  <p class="fine">Payments go through Stripe. Cancel any time in the billing portal, which you reach from Settings when signed in at mailrata.org. Your licence key is on your licence page as soon as the payment clears.</p>
 </div></section>
 
 <section class="dl" id="download" aria-labelledby="dl-h"><div class="wrap">
@@ -309,7 +311,7 @@ footer a:hover{color:var(--ink)}
         <li><div><b>Install and paste it</b><span>RATA asks for the key the first time it opens.</span></div></li>
         <li><div><b>Add a mailbox</b><span>Your address and an app password from your provider. RATA finds the server itself.</span></div></li>
       </ol>
-      <p class="beta">RATA is in beta. The installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it.</p>
+      <p class="beta">RATA is in beta. The installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. On a Mac, open it once, then choose Open Anyway in System Settings, Privacy &amp; Security. On Linux, make the AppImage executable before you run it (<code>chmod +x</code>).</p>
     </div>
   </div>
 </div></section>

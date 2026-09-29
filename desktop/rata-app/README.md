@@ -6,25 +6,31 @@ RATA used to read everybody's mail from a VPS, which meant holding everybody's
 mail password. That is a thing worth attacking, and it is a thing worth
 attacking *once* — one break, every customer. This app holds nobody's: it runs
 on the machine that owns the mailbox, the passwords are in that machine's own
-credential store, and the only thing left on a server is the landing page, the
-payment link and a signature.
+credential store, and what is left on a server is the website, the payment
+link, the licence signature, and the AI relay, which passes on the text of a
+message only when its customer asks for a summary, a translation or a
+briefing.
 
 ```
 desktop/
   rata-mail/          the mail layer — DNS, IMAP, SMTP, the outbound guard
   rata-app/
-    src-tauri/        the shell: vault, store, core, commands
+    src-tauri/        the shell: vault, store, core, commands, licence, links,
+                      oauth (Sign in with Microsoft), watch (IDLE), notify,
+                      update, mark (saved files marked as downloads)
     ui-src/           bridge.js — the seam between the interface and Rust
     ui/               assembled at build time, never committed
+    harness/          the interface driven against a fake backend, the
+                      website's screenshots, release checks
 ```
 
 ## Where things live on a customer's machine
 
 | What | Where | Why there |
 |---|---|---|
-| Mail passwords | The OS credential store — Keychain, Credential Manager, Secret Service | Encrypted at rest, tied to the login session, and already trusted with these same passwords by every mail client they have used |
-| Mailbox list | `mailboxes.json` in the app's data directory | Metadata only. There is a test asserting no password ever reaches it |
-| Messages | The webview's own storage, as on the web | Unchanged from the website |
+| Mail passwords, and a Microsoft mailbox's refresh token | The OS credential store — Keychain, Credential Manager, Secret Service | Encrypted at rest, tied to the login session, and already trusted with these same passwords by every mail client they have used |
+| Mailbox list | `mailboxes.json` in the app's data directory (0600 on Unix) | Metadata only. There is a test asserting no password ever reaches it |
+| Messages | The webview's IndexedDB, one record per message | The same code as the website's page, which keeps nothing of the mail on a server |
 
 **There is no fallback to a file for passwords.** If the credential store cannot
 be reached, linking fails and says so. The tempting alternative — an encrypted
@@ -44,11 +50,19 @@ cd src-tauri
 # licence — which is the safe direction to fail in, and not one you want to
 # discover after shipping.
 export RATA_LICENCE_PUBLIC_KEY="$(cat /path/to/licence.pub)"
-cargo build --release
+# Optional: Microsoft's public OAuth client id turns on Sign in with Microsoft.
+# export RATA_MS_CLIENT_ID=...
+
+# A packaged build, the one to test anything visible in. Without the
+# custom-protocol feature a release build looks for a dev server instead of
+# the interface compiled into it, and `tauri dev` differs from the shipped app
+# in exactly the ways that ship bugs (the CSP, the asset protocol).
+cargo build --release --features tauri/custom-protocol
 cargo tauri build                   # installers: .deb/.AppImage, .dmg, .exe
 ```
 
-`licence.pub` is the public half of the pair in `LICENSING.md`. It is not a
+`licence.pub` is the public half of the pair in
+[`rata-next/LICENSING.md`](../../rata-next/LICENSING.md). It is not a
 secret — it can only check signatures, not make them — so it belongs in the
 build, in CI, and anywhere else convenient. The private half never leaves the
 server.
@@ -81,7 +95,9 @@ and running anywhere is the only reason to ship an AppImage.
 |---|---|
 | `RATA_LICENCE_PUBLIC_KEY` | **The build fails, deliberately.** An installer with no licence key refuses every licence, and that is the worst possible thing to hand somebody who has just paid. It is the public half and is not secret; it lives in Actions secrets so it cannot be changed by accident. |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | macOS shows *"RATA is damaged and can't be opened"* — Gatekeeper's words for an unsigned app, and indistinguishable from a broken download to the person reading it. Needs a paid Apple Developer account. |
-| A Windows code-signing certificate | SmartScreen warns before the installer runs. Setting one up is in Tauri's Windows signing documentation. |
+| Six `AZURE_*` values (Artifact Signing), or `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` | SmartScreen warns before the installer runs. Never both sets, and half a set fails the Windows job; see `docs/WINDOWS-SIGNING.md`. |
+| `RATA_UPDATER_PUBKEY` and `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | The app registers no updater and never checks for a new version. Half the pair fails the build. |
+| `RATA_MS_CLIENT_ID` (a repository **variable**, not a secret) | The build has no Sign in with Microsoft; Microsoft mailboxes cannot be added. |
 
 The build works without the signing secrets and the installers install; they
 just arrive looking untrustworthy, which for a product whose pitch is "your mail
@@ -96,12 +112,24 @@ compiled cleanly and then died at bundling.
 
 ## CI
 
-`.github/workflows/desktop-ci.yml`, in two jobs. **Mail layer** needs nothing
-installed and answers in about a minute; **Desktop shell** installs the system
-webview and runs `sync-ui.sh` first, which makes that script's three anchor
-checks against `rata-next/public` part of CI rather than something that fails on
-a release machine. Both run `cargo fmt --check`, `cargo clippy -- -D warnings`
-and `cargo test`.
+`.github/workflows/desktop-ci.yml`, in four jobs:
+
+- **Mail layer** needs nothing installed and answers in about a minute.
+- **Mail layer against real servers** starts Dovecot and GreenMail on the
+  runner (`rata-mail/tests/loopback/servers.sh`) and runs the loopback tests
+  with `--features loopback-tests`, after checking that feature cannot build
+  for release.
+- **Desktop shell** installs the system webview and runs `sync-ui.sh` first,
+  which makes that script's anchor checks against `rata-next/public` part of
+  CI rather than something that fails on a release machine.
+- **Desktop interface, driven** runs `harness/ui-harness.mjs` against the
+  assembled `ui/` under the app's own CSP, with a fake backend, and the update
+  feed's rules (`harness/feed.test.cjs`).
+
+The Rust jobs run `cargo fmt --check`, `cargo clippy --all-targets -- -D
+warnings` and `cargo test --all-targets`. `release.yml` also installs and
+launches each installer on its own runner before keeping it
+(`harness/smoke-installed.sh`, `.ps1` on Windows).
 
 The toolchain is pinned rather than `stable`. With `-D warnings`, an unpinned
 toolchain means a new clippy lint reddens an unrelated pull request on the day
@@ -138,17 +166,27 @@ The interface reaches the outside world through one function, `apiFetch`, and
 
 ## The attack surface from the page
 
-Six commands, and nothing else. No filesystem plugin, no shell plugin, no
-arbitrary HTTP. A script that somehow reached a rendered message can ask to
-refresh the mail; it cannot ask to read `~/.ssh`.
+Twenty-seven commands, the list in `main.rs`'s `generate_handler!`, and
+nothing else. No filesystem plugin, no shell plugin, no arbitrary HTTP. The
+notification and updater plugins are called from Rust only; the page holds no
+plugin permission. A script that somehow reached a rendered message can ask to
+refresh the mail; it cannot ask to read `~/.ssh`. The commands that write a
+file (`save_attachment`, `save_file`) choose the Downloads folder and clean the
+name in Rust, and `open_link` hands only http and https addresses to the
+browser.
 
 ```
-licence_status  set_licence  link_mailbox  list_mailboxes
-unlink_mailbox  retry_mailbox  refresh_mail  send_mail
+licence_status   set_licence      link_mailbox     link_microsoft
+cancel_microsoft microsoft_ready  discover_mailbox list_mailboxes
+unlink_mailbox   retry_mailbox    refresh_mail     send_mail
+save_draft       change_messages  older_mail       reread_mail
+list_folders     folder_mail      notify_mail      watching
+open_message     save_attachment  open_link        save_file
+read_attachment  check_update     install_update
 ```
 
-Verified rather than assumed: `ui-src/probe.html` calls each one and also asks
-for a command that does not exist. Copy it over `ui/index.html`, run the app,
+Verified rather than assumed: `ui-src/probe.html` calls a few of them and also
+asks for a command that does not exist. Copy it over `ui/index.html`, run the app,
 and read the answers — the last one should say `Command read_file not found`.
 
 ## The licence
@@ -158,7 +196,7 @@ server, so making it ask us for permission would mean their mail stops working
 when we do — and would be useless on a train. Instead the server issues a small
 Ed25519-signed token and the app checks it locally, with no network.
 
-`src/licence.rs` is the other half of `rata-next/lib/licence.js`, and there is a
+`src-tauri/src/licence.rs` is the other half of `rata-next/lib/licence.js`, and there is a
 test here that verifies a token produced by that file. Two implementations of
 one signature check that disagree is precisely the bug that locks paying
 customers out, and neither codebase's own tests would find it.
@@ -173,24 +211,30 @@ downloaded mail all stay exactly where they are, because they are theirs.
 for renewal — it is signed with a key only the server holds, so presenting one
 proves where it came from, and an expired one is accepted because renewing an
 expired licence is the whole job. The request is made from `bridge.js` rather
-than from Rust, so the app needs no HTTP client and the single address it may
-contact is one line of the content security policy.
+than from Rust, and `https://mailrata.org` is the one outside address in the
+content security policy's `connect-src`. In Rust, only the updater (GitHub's
+release page, `update.rs`) and Sign in with Microsoft (Microsoft's token
+endpoint, `oauth.rs`) make HTTP requests.
 
 So a cancelled subscription keeps working for up to a month. That is the
 deliberate trade, and `LICENCE_DAYS` is the one place to change it.
 
 ## What is not done yet
 
-- **Mail is IMAP with an app password, and nothing else.** There is no OAuth
-  sign-in (it needs a server to receive the redirect), and the interface no
-  longer offers one. Every IMAP mailbox, Gmail and Outlook included, links with
-  an app password.
-- **Installers are not signed.** The release workflow builds all four; Windows
-  and macOS warn on first launch.
-- **No mailbox has been opened for real.** The container this was written in
-  blocks 993, 465 and 587, so every network path is tested up to the socket and
-  no further. Renewal has not been exercised against a live server either: the
-  endpoint has tests, but no app has renewed against a deployed `mailrata.org`.
+- **Two ways to sign in to a mailbox.** An IMAP mailbox links with its
+  address and an app password. Microsoft mailboxes (Outlook.com, Hotmail, Live,
+  Microsoft 365) use **Sign in with Microsoft** instead (`oauth.rs`: OAuth 2.0
+  code with PKCE, the redirect caught by a one-shot listener on `127.0.0.1`, so
+  no server is needed), and only in a build carrying `RATA_MS_CLIENT_ID`; it
+  has not yet been tried against a real Microsoft sign-in. Google sign-in does
+  not exist: Gmail links with an app password.
+- **Installers are not signed** until the owner adds the certificates. The
+  release workflow builds all four; Windows and macOS warn on first launch.
+- **No customer's mailbox has been opened.** The engine runs against real
+  Dovecot and GreenMail in CI, but not against Gmail, Outlook or any hosted
+  provider (`docs/SMOKE.md` is that checklist). Renewal has not been exercised
+  against a live server either: the endpoint has tests, but no app has renewed
+  against a deployed `mailrata.org`.
 - **The interface has no licence screen of its own.** `bridge.js` puts up a box
   asking for the key when there is no usable one. That is desktop-only on
   purpose — the website has no key to type, and giving `app.html` a field that

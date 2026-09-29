@@ -185,7 +185,8 @@ footer a:hover{color:var(--ink)}
       <b>macOS</b>
       <div>
         <p><code>RATA_&lt;version&gt;_aarch64.dmg</code> for Apple silicon, <code>RATA_&lt;version&gt;_x64.dmg</code> for Intel. Open it and drag RATA to Applications.</p>
-        <p>The first time, right-click RATA in Applications, choose <b>Open</b>, then <b>Open</b> again in the box that follows.</p>
+        <p>The first time, open RATA from Applications. macOS says it could not check RATA: choose <b>Done</b>. Then open <b>System Settings</b>, choose <b>Privacy &amp; Security</b>, scroll down to the line about RATA, and choose <b>Open Anyway</b>. Confirm when macOS asks again (it may want your password), and RATA opens. After that it opens normally.</p>
+        <p>If macOS says instead that <b>RATA is damaged and can&rsquo;t be opened</b>, there is no Open Anyway. Open Terminal and run <code>xattr -dr com.apple.quarantine /Applications/RATA.app</code>, then open RATA again.</p>
       </div>
     </div>
     <div class="row">

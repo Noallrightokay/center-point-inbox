@@ -47,8 +47,10 @@ create trigger workspaces_touch
 
 -- ------------------------------------------------------------
 -- 2. SUBSCRIPTIONS — billing entitlements (Stripe).
---    Written ONLY by the Stripe webhook Edge Function
---    (service role — see STRIPE-SETUP.md). Users can read
+--    Written ONLY by the Stripe webhook, the Next route
+--    app/api/stripe/webhook (service role — see
+--    STRIPE-SETUP.md); deleting an account removes the row
+--    (app/api/account). Users can read
 --    their own row; the app checks it at sign-in to set the
 --    plan. Harmless to create now while the site is free —
 --    it simply sits empty until Stripe goes live.

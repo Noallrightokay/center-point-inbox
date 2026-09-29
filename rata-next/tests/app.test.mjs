@@ -3,7 +3,9 @@
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { startServer, makeChecker } from './helpers.mjs';
+import { PLANS, SELLABLE, domainRefusal } from '../lib/plan.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CSV = join(HERE, 'fixtures', 'sample.csv');
@@ -151,6 +153,37 @@ export default async function run(state) {
     check(legacy.v === 6 && legacy.linked.join() === 'mail' && legacy.msgs.join() === 'e',
       `an older workspace keeps its mailbox and its mail: v${legacy.v}, linked ${legacy.linked.join()}, messages ${legacy.msgs.join()}`);
     check(legacy.leftovers.length === 0 && !legacy.api, 'and sheds the Slack feed, the switches and the API key');
+
+    /* ---- the install dialog and the plans sell only what RATA does ---- */
+    console.log('\n— the manifest and the plan blurbs name nothing RATA does not do —');
+    {
+      /* manifest.json is what a browser's install dialog shows: it sold texts,
+         Slack, Discord and an audit trail, in the old colours, long after the
+         app dropped them (BUG-D). */
+      const raw = await (await fetch(s.url + '/manifest.json')).text();
+      const man = JSON.parse(raw);
+      const said = JSON.stringify(man);
+      const gone = said.match(/\btexts?\b|\bSMS\b|Slack|Discord|audit trail|translated automatically/gi) || [];
+      check(gone.length === 0, `the manifest names no feature RATA dropped: ${gone.join(', ') || 'none'}`);
+      check(!/[\u2013\u2014]/.test(said) && !/\\u201[34]/i.test(raw), 'and has no em or en dash, written or escaped');
+      check(man.name === 'RATA' && man.short_name === 'RATA', `its name is RATA: "${man.name}"`);
+      const index = readFileSync(join(HERE, '..', 'public', 'index.html'), 'utf8');
+      check(index.includes(`<meta name="description" content="${man.description}">`),
+        `its description is the home page's own: "${man.description}"`);
+      check(['#F5F6F8', '#0E1014'].includes(man.theme_color) && ['#F5F6F8', '#0E1014'].includes(man.background_color),
+        `its colours are DESIGN.md's --bg: ${man.theme_color}, ${man.background_color}`);
+      check((man.shortcuts || []).every(x => !String(x.url).includes('#')),
+        'no shortcut to a hash app.html does not handle');
+
+      /* RATA hosts no mail, so no plan may promise an address or a domain. */
+      const hosted = /mailrata\.org|@|host(ed|s)? mail|your own domain/i;
+      for (const p of SELLABLE) {
+        check(!hosted.test(PLANS[p].blurb), `${PLANS[p].label}'s blurb promises no hosted address: "${PLANS[p].blurb}"`);
+      }
+      check(!/as they arrive|automatic/i.test(PLANS.base.blurb), 'and Base translates when asked, not as mail arrives');
+      const offer = domainRefusal('pro', 0, 0, { STRIPE_PRICE_DOMAIN: 'price_x' });
+      check(!/mailrata\.org/.test(offer), `the domain add-on's offer claims no mailrata.org addresses: "${offer}"`);
+    }
 
     /* ---- one mail form, any provider ---- */
     console.log('\n— adding an email account —');

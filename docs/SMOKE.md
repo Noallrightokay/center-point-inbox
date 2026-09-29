@@ -30,18 +30,26 @@ steps, so the only mail you describe is mail you wrote for this test.
 ### Which release to install
 
 1. Open https://github.com/Noallrightokay/center-point-inbox/releases
-2. Take the newest release. This checklist is written for **v0.1.41**,
-   the first with rows X5 to X7 (RATA's drafts saved to the mailbox).
+2. Take the newest release. This checklist is written for **v0.1.42**
+   and later. Rows X5 to X7 (RATA's drafts saved to the mailbox) need
+   v0.1.41 or later, and X7's Trash step needs v0.1.42.
 3. Install as in BETA.md §1:
    - Windows: `RATA_<version>_x64-setup.exe`. Install it with the setup
      program and start RATA from the Start menu. Row 16 needs the
      installed copy.
    - macOS: the `aarch64` dmg (Apple silicon) or `x64` dmg (Intel). Drag
-     RATA to Applications, then right-click it, **Open**, **Open**.
+     RATA to Applications and open it once. macOS says it could not
+     check RATA: choose **Done**. Then System Settings, **Privacy &
+     Security**, scroll to the line about RATA, **Open Anyway**, and
+     confirm when macOS asks again (it may want your password). Right-click, **Open** no longer gets
+     past this on macOS 15. If macOS says instead that RATA is damaged and
+     can't be opened, run `xattr -dr com.apple.quarantine
+     /Applications/RATA.app` in Terminal, and write down which message
+     you saw: it says whether the unsigned build needs that step.
    - Linux: `sudo apt install ./RATA_<version>_amd64.deb`, or the
      `RATA_<version>_amd64.AppImage` made executable (`chmod +x`).
-4. Check the window title. It must read `RATA 0.1.41 beta` (or the version
-   you installed). Write that version in every result.
+4. Check the window title. It must read `RATA <version> beta`, with the
+   version you installed. Write that version in every result.
 
 ### The licence key
 
@@ -457,7 +465,7 @@ All Mail must still show one.
 3. Title: `[beta] Row <n> <row name>, <column>`, for example
    `[beta] Row 12 Archive, Yahoo`.
 4. Fill in:
-   - **Version**: from the window title, for example `RATA 0.1.41 beta`.
+   - **Version**: the version in the title bar, for example `RATA 0.1.42 beta`.
    - **OS**: for example `Windows 11` or `macOS 15, Apple silicon`.
    - **Mail provider**: the column name.
    - **What I did**: the row number and its steps.
