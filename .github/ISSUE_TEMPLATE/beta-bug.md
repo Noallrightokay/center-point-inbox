@@ -7,11 +7,12 @@ labels: beta
 
 <!--
 This repository is PUBLIC.
-Never paste an app password or a licence key.
+Never paste an app password, a licence key or the contents of mailboxes.json
+(it holds your licence key).
 Replace your email with me@<provider> if you'd rather not share it.
 -->
 
-**Version** (from the window title, e.g. `RATA 0.1.2 beta`):
+**Version** (from the window title, e.g. `RATA 0.1.41 beta`):
 
 **OS** (Windows 11 / macOS 15 Apple silicon / Ubuntu 24.04 …):
 
@@ -26,7 +27,7 @@ Replace your email with me@<provider> if you'd rather not share it.
 
 **What happened**
 
-**Exact error text** — copied, not paraphrased:
+**Exact error text** (copied, not paraphrased):
 
 ```
 

@@ -25,9 +25,10 @@ function freePort() {
   });
 }
 
-/* Each config-route case needs its own process environment, so suites start
-   their own server rather than sharing one. `env` may be an object, or a
-   function of the base URL for values like APP_URL that embed the port. */
+/* Each case that sets environment variables needs its own process, so suites
+   start their own server rather than sharing one. `env` may be an object, or
+   a function of the base URL for a value that embeds the port (redirect.test
+   points REDIRECT_TO at the server itself). */
 export async function startServer({ env = {} } = {}) {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;

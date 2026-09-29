@@ -2,14 +2,16 @@
 
 Your mail, on your machine.
 
-RATA links the mailboxes you already have — Gmail, Fastmail, a work IMAP server —
+RATA links the mailboxes you already have (Gmail, Fastmail, a work IMAP server)
 and reads them on your own computer. The mail password is kept in the operating
 system's keychain and never leaves the device. There is no server holding
-anybody's mail, because there is no server in the path at all.
+anybody's mail, because there is no server between you and your mailbox.
 
 That last sentence is the product. It is also why this repository looks the way
 it does: the mail code is a Rust library that runs on the customer's machine,
-and the website exists only to sell licences.
+and the website sells licences. The one exception is deliberate: when you ask
+for an AI summary, translation or briefing, that text goes through RATA's AI
+relay to Anthropic and back, and nothing of it is stored or logged.
 
 ---
 
@@ -23,8 +25,9 @@ and the website exists only to sell licences.
    │  OS keychain         │
    └──────────┬───────────┘
               │
-              │  licence check only — a signed token, verified offline.
-              │  Contacted roughly monthly to renew. Never sees mail.
+              │  licence: a signed token, verified offline, renewed
+              │  in its last week. AI: only the text you ask it to
+              │  summarise or translate, passed on and never kept.
               ▼
       ┌────────────────┐
       │  mailrata.org  │
@@ -32,7 +35,8 @@ and the website exists only to sell licences.
 ```
 
 The website cannot read your mail even if it wanted to. It has no credentials,
-no connection, and no code for it.
+no connection to your mailbox, and no code for one. It sees only the text you
+press Summarize, Translate or Run briefing on.
 
 ---
 
@@ -43,7 +47,7 @@ no connection, and no code for it.
 | `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, signing in with a password or an OAuth token, and the outbound guard. Knows nothing about the app. |
 | `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, Sign in with Microsoft, and the glue to the interface. |
 | `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the release check (`verify-release.sh`) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
-| `rata-next/` | The website — marketing pages, Stripe checkout, licence issuing and renewal. Next.js on a Hostinger VPS. |
+| `rata-next/` | The website: marketing pages, Stripe checkout, licence issuing and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger's Node.js hosting. |
 | `rata-next/public/app.html` | The interface. One copy, shared: the desktop app builds its own from this file. |
 | `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
@@ -53,7 +57,7 @@ no connection, and no code for it.
 There is no `src/`. An earlier version of this product was nine .NET
 microservices on Kubernetes; it was abandoned and the code removed in favour of
 the two halves above. If you find a reference to `centerpoint-inbox.com`,
-an API gateway, or a translation worker, it is a ghost — report it.
+an API gateway, or a translation worker, it is a ghost: report it.
 
 ---
 
@@ -95,7 +99,7 @@ so it refuses to compile without debug assertions. Never enable it in
 
 ```bash
 cd desktop/rata-app
-./sync-ui.sh        # MUST run first — see the trap below
+./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
 cargo test          # 111 tests
 ```
@@ -133,7 +137,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test            # 500 checks, no network, no database required
+npm test            # 501 checks, no network, no database required
 npm run dev
 ```
 
@@ -162,22 +166,25 @@ differences loudly, in one script you can read. Do not create a second
 
 **Inline `style="..."` attributes used to be silently dropped in the shipped
 app.** Tauri adds a nonce to `style-src`, and per CSP a nonce makes
-`'unsafe-inline'` ignored — even though the config asks for it. It never
+`'unsafe-inline'` ignored, even though the config asks for it. It never
 reproduced in `tauri dev`, only in the packaged build, and it shipped in v0.1.2
 as a first screen with two forms on it. `tauri.conf.json` now sets
 `dangerousDisableAssetCspModification: ["style-src"]` so the declared policy is
 the one that applies; scripts keep Tauri's protection. Leave it there, and check
 interface changes in a packaged build.
 
-**HTML mail is shown behind three locks — keep all three.** It is sanitised in
+**HTML mail is shown behind three locks. Keep all three.** It is sanitised in
 Rust (`html::safe`, ammonia: no scripts, handlers, forms, frames, `<base>`,
-`<meta>`, link addresses); shown in an iframe with an empty `sandbox`
-(no scripts, own origin, no popups); and that frame's own content security
-policy fetches nothing but, once the customer clicks Load images, `https:`
-pictures. Behind those, the app's CSP has `frame-src 'none'`, which also stops
+`<meta>`, or link addresses other than http, https and mailto); shown in an
+iframe with `sandbox="allow-popups"` and nothing more (no scripts, no origin
+of its own; `allow-popups` is there only so a click on a link reaches Rust,
+which opens no window and asks before handing the link to the browser); and
+that frame's own content security policy fetches nothing but, once the
+customer clicks Load images, `https:` pictures. Behind those, the app's CSP has `frame-src 'none'`, which also stops
 a frame navigating anywhere, and `img-src … https:`, which only the frame's
 policy narrows. Do not add `allow-scripts` or `allow-same-origin` to that
 sandbox, ever: together they undo it, and the page it sits in can call the app.
+Nor `allow-top-navigation`, `allow-forms` or `allow-popups-to-escape-sandbox`.
 
 **`bridge.js` replaces the browser's `fetch`.**
 The interface was written to call a server. Rather than rewrite it, the bridge
@@ -207,7 +214,7 @@ and macOS codesigning then fails confusingly. The release workflow has an
 explicit opt-in step for the Apple variables because of this.
 
 **`tauri.conf.json` builds `nsis`, not `msi`.**
-The Windows installer is `RATA_0.1.0_x64-setup.exe`. Anything promising a
+The Windows installer is `RATA_<version>_x64-setup.exe`. Anything promising a
 `.msi` is wrong.
 
 ---
@@ -222,14 +229,14 @@ v1.<base64url payload>.<base64url Ed25519 signature>
 ```
 
 The app verifies the signature against the compiled-in public key and reads the
-expiry. **No network involved** — RATA works on a plane. The token is signed,
+expiry. **No network involved**: RATA works on a plane. The token is signed,
 not encrypted, and is meant to be readable.
 
 Tokens are issued for **30 days** (`LICENCE_DAYS` in `rata-next/lib/licence.js`)
 and the app renews itself by presenting the old token to `/api/licence/renew`
 once it is inside its final week. Thirty days covers a holiday or a dead
 laptop without anyone noticing. The trade is that a cancelled subscription
-stops working at the next renewal rather than instantly — accepted deliberately,
+stops working at the next renewal rather than instantly. That is accepted deliberately,
 because the alternative is phoning home.
 
 Releases are built by the **Release installers** workflow, which produces a
@@ -252,11 +259,11 @@ Be realistic about this before promising anything to a customer.
 - Adding a mailbox by address and app password, and telling a wrong
   password (`auth`) from a refused or expired OAuth token (`oauth`) and from
   a server that cannot be reached (`net`)
-- Server discovery — asks the domain's DNS (SRV, then MX, then conventional
+- Server discovery: RATA asks the domain's DNS (SRV, then MX, then conventional
   names), which is what makes `you@yourcompany.com` work when it is really Google
 - New mail within seconds on servers that offer IMAP IDLE (nearly all do),
-  and by itself on every server — at start, every five minutes and when you come
-  back to the window — from the inbox, Sent, Archive, Spam and Drafts of several
+  and by itself on every server (at start, every five minutes and when you come
+  back to the window) from the inbox, Sent, Archive, Spam and Drafts of several
   mailboxes at once, downloading only what is new
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
@@ -266,7 +273,7 @@ Be realistic about this before promising anything to a customer.
 - A guard that stops a hostile mail server redirecting the app at your own LAN
 
 **Updates:** from v0.1.23 the app offers each new version itself and
-installs it only if it is signed with the project's update key — once that key
+installs it only if it is signed with the project's update key, once that key
 is configured (`rata-next/LAUNCH.md` §9). Until then, and in any build without
 it, new versions are a download from the releases page.
 
@@ -275,7 +282,7 @@ it, new versions are a download from the releases page.
 - **Very large mailboxes.** Each message is its own record in IndexedDB
   (v0.1.13), the list draws only the rows on screen (v0.1.16), and since
   v0.1.21 a message's text stays on disk until it is opened, replied to,
-  searched or summarised — memory holds only what the list shows (about
+  searched or summarised, so memory holds only what the list shows (about
   3 MB for 10,000 messages, against 48 MB of text). What still grows with
   the mailbox: start-up reads every message's details (about 0.75 s at
   10,000), and a search reads through all the text on disk (about half a
@@ -291,18 +298,19 @@ it, new versions are a download from the releases page.
   and **Move to** files a message into one. Mail sent from RATA appears in
   Sent only if the provider files it there (Gmail and Outlook do); RATA does
   not add it itself.
-- **Mail is shown as text.** Each message's first 64 KB is fetched and decoded
-  — MIME, quoted-printable, base64, any charset — and an HTML-only message is
+- **Mail is fetched in part first.** Each message's first 64 KB is fetched and
+  decoded (MIME, quoted-printable, base64, any charset), and an HTML-only message is
   turned into text with its links' addresses kept (`body.rs`, `html.rs`).
   Opening a long message, or one with attachments, fetches all of it; an
   attachment is saved to Downloads under a cleaned-up name and never opened by
   RATA. The engine's `names.rs` cleans the name and spots a program named to
   look like a document (`invoice.pdf.exe`), which is labelled, and RATA asks
   before saving it; on Windows and macOS every saved file is marked as
-  downloaded from the internet (`mark.rs`), so the system checks it. Files can be attached when sending, up to 18 MB in all, and a
+  downloaded from the internet (`mark.rs`), so the system checks it (neither
+  mark has been seen on a real Windows or Mac yet). Files can be attached when sending, up to 18 MB in all, and a
   forwarded message carries its attachments. HTML mail is shown formatted
   in a locked-down frame (see *Traps*), with remote images off until asked.
-  Links open in the browser — web addresses only, and from formatted mail
+  Links open in the browser: web addresses only, and from formatted mail
   only after a prompt naming where the link really goes (`links.rs`).
 - **The Format Bridge reads .pdf, .docx, .xlsx, .csv, .md, .txt and .html**
   and writes real .docx, .xlsx (every sheet), .csv, Markdown and PDF, keeping

@@ -39,17 +39,18 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 
 ---
 
-## Part 2. State of play (checked 2026-09-28)
+## Part 2. State of play (checked 2026-09-28, updated 2026-09-29)
 
 ### Done, and how it was checked
 
-- **The desktop app** has been built through v0.1.38. The feature list is
+- **The desktop app** has been built through v0.1.41. The feature list is
   `CLAUDE.md` → Status: licence, adding a mailbox, sync, IDLE, folders,
   Sent/Archive/Spam/Drafts, Gmail's archive, compose with Cc/Bcc and
   attachments, reply and forward, HTML mail in a locked-down frame, the
-  Format Bridge, notifications, signatures, the updater code and the
-  redesign.
-- **Releases** v0.1.0 to v0.1.37 are published on GitHub. v0.1.2 onwards are
+  Format Bridge, notifications, signatures, the updater code, the
+  redesign, Sign in with Microsoft (live once [C4](#c4) is done), saved
+  files marked as downloads, and RATA's own drafts saved to the mailbox.
+- **Releases** v0.1.0 to v0.1.41 are published on GitHub. v0.1.2 onwards are
   pre-releases. v0.1.37 was downloaded and checked: 5 assets, the licence
   public key embedded, no font CDN, and it launches as "RATA 0.1.37 beta".
 - **v0.1.38** (Gmail's archive) is [PR #52](https://github.com/Noallrightokay/center-point-inbox/pull/52).
@@ -63,25 +64,34 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   launches as "RATA 0.1.40 beta" (`verify-release.sh`, 2026-09-29). The
   install-and-launch smoke test passed on all four builds: Linux, macOS
   (both) and Windows ([run 36507670335](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36507670335)).
+- **v0.1.41** was released and verified: five assets (both dmgs, the
+  `.deb`, the `.AppImage` and the Windows `-setup.exe`), and it launches
+  as "RATA 0.1.41 beta". The install-and-launch smoke test passed on all
+  four builds ([run 36516132763](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36516132763)).
+- **State at 0.1.41**, against Part 1: M1 is code-complete but the site is
+  not deployed ([D4](#d4)); M2, M3, M5, M8 and M9 wait on the owner's
+  [D1](#d1)–[D5](#d5); M4 waits on signing ([E2](#e2), [E3](#e3)'s
+  certificates); M6, M7 and M11 wait on the [B2](#b2) run; M10 waits on
+  [E1](#e1).
 - **[F1](#f1)** is done ([#78](https://github.com/Noallrightokay/center-point-inbox/pull/78)):
   RATA's own drafts are saved to the mailbox's Drafts folder, replacing
-  only RATA's earlier copy. It ships in 0.1.41. The Gmail All Mail check is
+  only RATA's earlier copy. It shipped in 0.1.41. The Gmail All Mail check is
   for [B2](#b2) (SMOKE.md X7).
 - **SEC-4** is done ([#77](https://github.com/Noallrightokay/center-point-inbox/pull/77)):
   the review's rows 6, 7, 11 and 14, the SMTP half of 8 and part of 15.
   Still open: the IMAP half of 8, row 5, and row 15's in-window renewals
-  (a business decision). It ships in 0.1.41; the website half reaches
+  (a business decision). It shipped in 0.1.41; the website half reaches
   mailrata.org only when it is redeployed ([D4](#d4)).
 - **[F4](#f4)'s Mediums:** 1 and 3 are fixed ([#69](https://github.com/Noallrightokay/center-point-inbox/pull/69)),
   2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
   asking before a disguised program is saved), and 4 is [D8](#d8).
-- **Tests.** Engine, shell and website suites run in CI (`desktop-ci.yml`,
-  `rata-next-ci.yml`). The website suite passed today. The **desktop UI
-  harness** (60 checks that drive the real interface against a fake
-  backend) lived only in one session's scratch space. It is now in
-  `desktop/rata-app/harness/` and passed from there today. It is **not in
-  CI** yet ([A3](#a3)).
+- **Tests.** Engine (246, plus 13 against real Dovecot and GreenMail),
+  shell (111) and website (501) suites run in CI (`desktop-ci.yml`,
+  `rata-next-ci.yml`). The **desktop UI harness** (117 checks that drive
+  the real interface against a fake backend, in `desktop/rata-app/harness/`)
+  runs in CI as *Desktop interface, driven* ([A3](#a3),
+  [#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)).
 - **The server side** is in code: licence issue (`/api/licence`), renewal
   (`/api/licence/renew`), the AI relay (`/api/ai`), the Stripe webhook,
   health (`/api/health`), account deletion, CORS for the app's origins.
@@ -94,12 +104,12 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 | So renewal, AI and the new landing page have **never worked for anyone**. | same | [D4](#d4), [D5](#d5) |
 | **The update feed returns 404.** No updater key in GitHub secrets. | Fetched the `updater` release's `latest.json` | [E1](#e1) |
 | **No real mailbox has ever been opened by this code.** | CLAUDE.md, BETA.md; no tester reports (0 open issues) | [B2](#b2) |
-| **Outlook, Hotmail and Microsoft 365 cannot work.** Microsoft turned off password (Basic) sign-in to Outlook.com over IMAP in September 2024. It requires OAuth 2.0 now, and RATA only does passwords. Exchange Online IMAP Basic auth is gone too. | [Microsoft Support: Outlook.com and Basic authentication](https://support.microsoft.com/en-us/office/outlook-and-other-apps-are-unable-to-connect-to-outlook-com-when-using-basic-authentication-f4202ebf-89c6-4a8a-bec3-3d60cf7deaef), [Deprecation of Basic auth in Exchange Online](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online); `grep -i oauth` finds nothing in the engine | [C1](#c1)–[C4](#c4). **Done in code:** C1 ([#59](https://github.com/Noallrightokay/center-point-inbox/pull/59)), C2+C3 ([#67](https://github.com/Noallrightokay/center-point-inbox/pull/67)), shipping in 0.1.39; live only after the owner's [C4](#c4) |
+| **Outlook, Hotmail and Microsoft 365 cannot work.** Microsoft turned off password (Basic) sign-in to Outlook.com over IMAP in September 2024. It requires OAuth 2.0 now, and RATA only does passwords. Exchange Online IMAP Basic auth is gone too. | [Microsoft Support: Outlook.com and Basic authentication](https://support.microsoft.com/en-us/office/outlook-and-other-apps-are-unable-to-connect-to-outlook-com-when-using-basic-authentication-f4202ebf-89c6-4a8a-bec3-3d60cf7deaef), [Deprecation of Basic auth in Exchange Online](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online); `grep -i oauth` finds nothing in the engine | [C1](#c1)–[C4](#c4). **Done in code:** C1 ([#59](https://github.com/Noallrightokay/center-point-inbox/pull/59)), C2+C3 ([#67](https://github.com/Noallrightokay/center-point-inbox/pull/67)), shipped in 0.1.39; live only after the owner's [C4](#c4) |
 | The website, the app and BETA.md all **tell people Outlook works**. | `index.html:226`, `app.html:886,2301,3069`, `BETA.md:49` | [C0](#c0): **done** ([#57](https://github.com/Noallrightokay/center-point-inbox/pull/57)) |
 | **Installers are unsigned.** macOS signing is wired in `release.yml` but has no certificates. Windows signing is not wired at all. | `release.yml` lines 240–286 | [E2](#e2), [E3](#e3): Windows wiring **done** ([#55](https://github.com/Noallrightokay/center-point-inbox/pull/55)); both wait for the owner's certificates |
 | The **UI harness is not in CI**. | workflows list | [A3](#a3): **done** ([#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)) |
 | **Nothing is tested against a real IMAP server**, not even a local one: the outbound guard refuses private addresses. | `guard.rs` | [B1](#b1): **done** ([#58](https://github.com/Noallrightokay/center-point-inbox/pull/58)); its findings fixed in BUG-1..3 ([#66](https://github.com/Noallrightokay/center-point-inbox/pull/66)) |
-| RATA's **own drafts are not saved to the server**. | CLAUDE.md | [F1](#f1): **done** ([#78](https://github.com/Noallrightokay/center-point-inbox/pull/78)), shipping in 0.1.41; Gmail's All Mail to be checked in [B2](#b2) |
+| RATA's **own drafts are not saved to the server**. | CLAUDE.md | [F1](#f1): **done** ([#78](https://github.com/Noallrightokay/center-point-inbox/pull/78)), shipped in 0.1.41; Gmail's All Mail to be checked in [B2](#b2) |
 | **The launch docs are wrong in places** (see [A4](#a4)). | read today | [A4](#a4): **done** ([#56](https://github.com/Noallrightokay/center-point-inbox/pull/56)), with DOC-1 ([#63](https://github.com/Noallrightokay/center-point-inbox/pull/63)) and WEB-1 ([#65](https://github.com/Noallrightokay/center-point-inbox/pull/65)) |
 | **No database backups and no uptime monitor.** | LAUNCH.md §8 | [D7](#d7): scripts **done** ([#64](https://github.com/Noallrightokay/center-point-inbox/pull/64)); owner steps pending |
 | Signups are auto-confirmed (anyone can claim any address). | LAUNCH.md §7 | [D8](#d8), after launch |
@@ -441,7 +451,10 @@ Done when: `/api/licence/renew` answers something other than 404.
 #### D5
 **Live smoke test.** Who: agent for the public checks, [owner] for the rest
 · Needs: D1–D4.
-Agent (no credentials needed): `/api/config` (keys present, no service-role
+Agent (no credentials needed): run `rata-next/scripts/live-check.sh`
+([#80](https://github.com/Noallrightokay/center-point-inbox/pull/80)), which
+covers the routes, preflight, config shape, headers and landing page below,
+then the rest by hand: `/api/config` (keys present, no service-role
 key), `/api/health` 200, `OPTIONS` preflight on `/api/ai` and
 `/api/licence/renew` from `tauri://localhost` allowed and from
 `https://evil.example` not, `/shots/app-light.webp` 200, the landing page
