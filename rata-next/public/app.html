@@ -2483,6 +2483,37 @@ function askToOpen(url,host){
   $('#link-open').focus();
 }
 function closeLink(){LINK_PENDING=null;$('#link-ov').classList.remove('open')}
+/* Leaving a mailing list (List-Unsubscribe, H7), for inbox mail only: never
+   Sent, Drafts, archived or filed mail, and never Spam, where "unsubscribe"
+   only tells a spammer the address is read. The web address Rust checked as
+   a link gets the same question as any link, naming its host; a mailto: opens
+   the composer with what the header gave. RATA itself asks nothing of the
+   list's server: the customer's browser does, or the customer presses Send. */
+function unsubOf(m){
+  const u=m&&inInbox(m)&&!m.draft&&m.unsub;if(!u||typeof u!=='object')return null;
+  if(typeof u.https==='string'){
+    try{const x=new URL(u.https);if(/^https?:$/.test(x.protocol)&&x.hostname&&!x.username&&!x.password)return {web:x.href,host:x.hostname}}catch(e){}
+  }
+  if(typeof u.mailto==='string'&&/^mailto:/i.test(u.mailto)){
+    try{
+      const x=new URL(u.mailto),to=decodeURIComponent(x.pathname);
+      if(/^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/.test(to)&&to.length<=254)
+        return {to,subject:(x.searchParams.get('subject')||'').replace(/[\u0000-\u001f\u007f]/g,'').slice(0,200),body:x.searchParams.get('body')||''};
+    }catch(e){}
+  }
+  return null;
+}
+/* From the mailbox the list wrote to, since that is the address it knows,
+   and with no signature: a list's robot reads the body. */
+function leaveList(m){
+  const w=unsubOf(m);if(!w)return;
+  if(w.web){askToOpen(w.web,w.host);return}
+  writeTo(w.to,w.subject);
+  const from=$('#cmp-from');
+  if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
+  $('#cmp-body').value=w.body;CMP_SIG=null;
+  liveScan();renderDraftHead();
+}
 async function openLink(url){
   let r;
   try{r=await apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})})}
@@ -2526,6 +2557,7 @@ function openMail(id){
   if(body===undefined&&!whole)bodyOf(m).then(b=>{if(b&&selMail===id)openMail(id)});
   const atts=(whole&&whole.atts)||m.atts||[];
   const savable=native;
+  const unsub=unsubOf(m);
   /* A long message, or one with attachments, is fetched in full when opened:
      the stored copy is the start of it, and the attachments are not kept. */
   /* Also when it may have an HTML version: the stored copy is text only, and
@@ -2559,6 +2591,7 @@ function openMail(id){
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
         ${m.prov==='imap'&&m.uid&&inInbox(m)?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${unsub?`<button class="btn" id="md-unsub" title="${esc(unsub.web?'Opens '+unsub.host+' in your browser, after asking':'Writes to '+unsub.to+' to leave this list')}">Unsubscribe</button>`:''}
         ${m.prov==='imap'&&m.uid&&['archive','named'].includes(folderOf(m))?'<button class="btn" id="md-home">Move to inbox</button>':''}
         ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
         ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
@@ -2611,6 +2644,7 @@ function openMail(id){
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
+  if($('#md-unsub'))$('#md-unsub').onclick=()=>leaveList(m);
   /* Back to the inbox, where the next refresh brings it in as inbox mail. */
   /* Into one of the customer's own folders: it leaves the list here, and is
      there when that folder is opened. */

@@ -1063,6 +1063,64 @@ console.log('\n— a program named to look like a document is labelled, and aske
   await pg.close();
 }
 
+console.log('\n— Unsubscribe: the link question, or a message to send —');
+{
+  /* H7: a list's List-Unsubscribe, as Rust sends it (a web address checked
+     as a link, a mailto: rebuilt). Inbox mail only. */
+  const pg = await open(true);
+  const mk = (who, folder, uid, extra) => Object.assign({ id: who + '_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: who, acct_label: who,
+    from_name: 'News', from_addr: 'news@list.example', to_name: '', to_addr: who, to_all: [who], cc: [], in_reply_to: '', subject: 'Issue ' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'u' + uid + '@list.example', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const both = { https: 'https://list.example/u/81?t=x', mailto: 'mailto:leave%40list.example?subject=leave%2081' };
+  await pg.evaluate(async (msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    /* Stored before the field: nothing to go on. */
+    S.messages.push({ id: 'old-u', ch: 'email', prov: 'imap', acct: S.messages[0].acct, mailbox: 'me@example.com', fromName: 'News', fromAddr: 'news@list.example', subj: 'Stored before', prev: 'p', body: 'b', ts: 1, unread: false, starred: false, atts: [], uid: 1, uidvalidity: 7, bodyV: 2 });
+  }, [mk('me@example.com', 'inbox', 81, { unsubscribe: both }),
+    mk('work@example.net', 'inbox', 82, { unsubscribe: { https: null, mailto: 'mailto:leave%40list.example?subject=unsubscribe%20me&body=Please%20remove%0Ame%20now' } }),
+    mk('me@example.com', 'sent', 83, { unsubscribe: both }), mk('me@example.com', 'junk', 84, { unsubscribe: both }),
+    mk('me@example.com', 'drafts', 85, { unsubscribe: both }), mk('me@example.com', 'archive', 86, { unsubscribe: both }),
+    mk('me@example.com', 'inbox', 87)]);
+  /* null when the message is not held at all, so "no button" means a pane was drawn without one. */
+  const shown = (id) => pg.evaluate((id) => { if (!S.messages.some((m) => m.id === id)) return null; openMail(id); return !!document.querySelector('#md-unsub'); }, id);
+  check((await shown('me@example.com_81')) && (await shown('work@example.net_82')), 'inbox mail from a list offers Unsubscribe, a web address or a mailto alike');
+  const none = [];
+  for (const id of ['me@example.com_sent_83', 'me@example.com_junk_84', 'me@example.com_drafts_85', 'me@example.com_archive_86', 'me@example.com_87', 'old-u']) if ((await shown(id)) !== false) none.push(id);
+  check(none.length === 0, `none on Sent, Spam, Drafts or archived mail, mail with no header, or mail stored before it: ${JSON.stringify(none)}`);
+
+  await pg.evaluate(() => { openMail('me@example.com_81'); __mock.calls = []; __mock.opened = []; });
+  await pg.click('#md-unsub');
+  let st = await pg.evaluate(() => ({ open: document.querySelector('#link-ov').classList.contains('open'), host: document.querySelector('#link-host').textContent,
+    url: document.querySelector('#link-url').textContent, calls: __mock.calls.map(([c]) => c), composing: document.querySelector('#compose-ov').classList.contains('open') }));
+  check(st.open && st.host === 'list.example' && st.url === 'https://list.example/u/81?t=x' && st.calls.length === 0 && !st.composing,
+    `a web address asks first, naming the host, and nothing is opened or sent yet: ${JSON.stringify(st)}`);
+  await pg.click('#link-cancel');
+  check(await pg.evaluate(() => !document.querySelector('#link-ov').classList.contains('open') && __mock.opened.length === 0 && __mock.calls.length === 0), 'Cancel opens nothing');
+  await pg.click('#md-unsub');
+  await pg.click('#link-open');
+  await pg.waitForTimeout(200);
+  st = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map(([c]) => c) }));
+  check(JSON.stringify(st.opened) === '["https://list.example/u/81?t=x"]' && st.calls.join() === 'open_link',
+    `Open in browser hands exactly that address to the browser, and RATA requests nothing itself: ${JSON.stringify(st)}`);
+
+  await pg.evaluate(() => { openMail('work@example.net_82'); __mock.calls = []; __mock.opened = []; });
+  await pg.click('#md-unsub');
+  await pg.waitForTimeout(200);
+  const c = await pg.evaluate(() => ({ open: document.querySelector('#compose-ov').classList.contains('open'), to: document.querySelector('#cmp-to').value,
+    subj: document.querySelector('#cmp-subj').value, body: document.querySelector('#cmp-body').value, from: document.querySelector('#cmp-from').value,
+    want: (S.linked.find((l) => l.label === 'work@example.net') || {}).id, asked: document.querySelector('#link-ov').classList.contains('open'), calls: __mock.calls.map(([x]) => x) }));
+  check(c.open && c.to === 'leave@list.example' && c.subj === 'unsubscribe me' && c.body === 'Please remove\nme now' && c.from === c.want && !c.asked && c.calls.length === 0,
+    `a mailto opens the composer with the address, subject and body the header gave, from the mailbox the list wrote to, and sends nothing: ${JSON.stringify(c)}`);
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  const sent = await pg.evaluate(() => __mock.calls.filter(([x]) => x === 'send_mail').map(([, a]) => a.draft)[0]);
+  check(sent && sent.to === 'leave@list.example' && sent.subject === 'unsubscribe me' && sent.body === 'Please remove\nme now' && sent.from === 'work@example.net',
+    `only Send sends it, as it was shown: ${JSON.stringify(sent)}`);
+  await pg.close();
+}
+
 console.log('\n— a licence too old to renew itself says what to do —');
 {
   /* SEC-4: the website refuses to renew a licence expired more than
