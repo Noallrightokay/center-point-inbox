@@ -93,6 +93,13 @@ impl Store {
     /// mailboxes again, and the passwords are in the keychain either way.
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
+        // A file an older build wrote readable by everyone is closed now,
+        // not at the next save. Best effort: failing leaves it as it was.
+        #[cfg(unix)]
+        if path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
         let held = fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Contents>(&raw).ok())
@@ -109,9 +116,14 @@ impl Store {
     /// Through a temporary file and a rename, because the alternative loses
     /// every linked mailbox if the machine stops between opening the file and
     /// finishing the write. A rename either happened or it did not.
+    ///
+    /// It holds the licence token and every linked address, so on Unix the
+    /// file is readable by this account only (0600), and so is the folder
+    /// when RATA is the one making it (0700). Windows keeps the ACL of the
+    /// profile folder it is in, which is already the account's own.
     pub fn save(&self) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
+            make_dir(dir)?;
         }
         let body = serde_json::to_string_pretty(&Contents {
             version: 1,
@@ -119,7 +131,23 @@ impl Store {
             licence: self.licence.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, body)?;
+        // Made afresh, so it is created with the mode below rather than
+        // keeping one a leftover file had.
+        if let Err(e) = fs::remove_file(&tmp)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            return Err(e);
+        }
+        let mut open = fs::OpenOptions::new();
+        open.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open.mode(0o600);
+        }
+        let mut file = open.open(&tmp)?;
+        io::Write::write_all(&mut file, body.as_bytes())?;
+        drop(file);
         fs::rename(&tmp, &self.path)
     }
 
@@ -174,6 +202,28 @@ impl Store {
         if let Some(m) = self.boxes.iter_mut().find(|m| m.email == key) {
             m.auth_failed_at = failed_at;
         }
+    }
+}
+
+/// `dir` and its parents. The last one, the app's own folder, is made 0700
+/// on Unix when RATA makes it; one that already exists is left alone.
+fn make_dir(dir: &std::path::Path) -> io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    let made = {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(dir)
+    };
+    #[cfg(not(unix))]
+    let made = fs::DirBuilder::new().create(dir);
+    match made {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        other => other,
     }
 }
 
@@ -383,5 +433,43 @@ mod tests {
         assert!(s.remove("OWNER@Example.com "));
         assert!(s.list().is_empty());
         assert!(!s.remove("owner@example.com"));
+    }
+
+    #[cfg(unix)]
+    fn mode(p: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_this_account_can_read_the_file() {
+        // It holds the licence token and the list of addresses: another
+        // account on a shared Linux machine has no business reading either.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmpdir().join("fresh");
+        let file = dir.join("mailboxes.json");
+        let mut s = Store::open(&file);
+        s.set_licence(Some("v1.payload.signature".into()));
+        s.save().unwrap();
+        assert_eq!(mode(&file), 0o600, "the file");
+        assert_eq!(mode(&dir), 0o700, "the directory RATA made for it");
+
+        // A file an older build wrote readable by everyone is tightened the
+        // next time RATA opens it, and stays so when it is rewritten.
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(mode(&file), 0o600, "after opening");
+        s.put(mailbox("owner@example.com"));
+        s.save().unwrap();
+        assert_eq!(mode(&file), 0o600, "after rewriting");
+
+        // A directory that was already there is left as it was.
+        let own = tmpdir().join("theirs");
+        fs::create_dir_all(&own).unwrap();
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o755)).unwrap();
+        Store::open(own.join("mailboxes.json")).save().unwrap();
+        assert_eq!(mode(&own), 0o755);
+        assert_eq!(mode(&own.join("mailboxes.json")), 0o600);
     }
 }

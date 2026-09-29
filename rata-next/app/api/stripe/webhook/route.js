@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
-import { verifySignature, rowForEvent, isNewer, checkoutConflict, LIVE_STATUSES } from '../../../../lib/stripe';
+import { verifySignature, rowForEvent, isNewer, checkoutConflict, LIVE_STATUSES, PENDING } from '../../../../lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,6 +64,13 @@ export async function POST(req) {
         console.warn('stripe: checkout conflict: an address with a live subscription under another customer; row left alone');
         return NextResponse.json({ received: true, acted: false, conflict: true, type: event.type });
       }
+      if (row.status === PENDING && held && LIVE_STATUSES.includes(String(held.status || '').toLowerCase())) {
+        /* A checkout still waiting for its money (a bank transfer) never
+           takes away a subscription that is live now: the row stays as it
+           is until the payment clears (async_payment_succeeded) or the
+           subscription events say otherwise. */
+        return NextResponse.json({ received: true, acted: false, pending: true, type: event.type });
+      }
 
       const { error } = await sb.from('subscriptions').upsert({
         email: row.email,
@@ -75,7 +82,7 @@ export async function POST(req) {
         updated_at: now,
       });
       if (error) throw new Error(error.message);
-      return NextResponse.json({ received: true, acted: true, email: row.email, plan: row.plan });
+      return NextResponse.json({ received: true, acted: true, email: row.email, plan: row.plan, status: row.status });
     }
 
     /* Keyed by customer. The row was created by the checkout event, so if
