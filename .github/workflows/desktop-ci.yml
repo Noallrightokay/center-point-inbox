@@ -14,6 +14,10 @@ on:
       - "desktop/rata-app/harness/**"
       # The interface the harness drives, and the shell's web assets.
       - "rata-next/public/**"
+      # The harness imports Playwright from rata-next/node_modules, so a
+      # change to what rata-next installs can break it.
+      - "rata-next/package.json"
+      - "rata-next/package-lock.json"
       - ".github/workflows/desktop-ci.yml"
   pull_request:
     branches: [main]
@@ -23,6 +27,8 @@ on:
       # The shell build assembles its web assets from rata-next/public, so a
       # change there can break this build without touching desktop/ at all.
       - "rata-next/public/**"
+      - "rata-next/package.json"
+      - "rata-next/package-lock.json"
       - ".github/workflows/desktop-ci.yml"
 
 concurrency:
@@ -247,3 +253,8 @@ jobs:
             exit 1
           }
           node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+
+      # The rules release.yml writes the update feed by (feed.cjs): a platform
+      # missing from a release keeps its own feed, nothing moves backwards.
+      - name: The update feed's rules
+        run: node --test desktop/rata-app/harness/feed.test.cjs

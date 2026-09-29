@@ -80,14 +80,98 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"; echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           fi
 
+  # Nothing is built, let alone released, until the tests pass on the commit
+  # being released. Until this job a merge that bumped the version went
+  # straight to four installers and a published release, whatever the tests
+  # said, since `main` has no branch protection to insist on Desktop CI.
+  # After `plan`, so a merge without a version bump (build=false) stops there
+  # and runs none of this. The same checks as desktop-ci.yml's Mail layer
+  # tests, Desktop shell tests and Desktop interface, driven, step for step;
+  # change them there and here together.
+  gate:
+    name: Tests before a release
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the system webview
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/rata-mail
+            desktop/rata-app/src-tauri
+
+      # Before the shell is compiled: Tauri compiles ui/ into the binary.
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - name: Mail layer tests
+        run: cargo test --all-targets
+        working-directory: desktop/rata-mail
+
+      - name: Desktop shell tests
+        run: cargo test --all-targets
+        working-directory: desktop/rata-app/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: rata-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: rata-next
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: rata-next
+
+      - name: Drive the interface
+        run: |
+          python3 -m http.server 3181 --bind 127.0.0.1 --directory desktop/rata-app/ui \
+            > "$RUNNER_TEMP/http.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:3181/app.html && break
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:3181/app.html || {
+            cat "$RUNNER_TEMP/http.log"
+            echo "::error::the interface server did not start"
+            exit 1
+          }
+          node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+
+      # The rules the publish job below writes the update feed by.
+      - name: The update feed's rules
+        run: node --test desktop/rata-app/harness/feed.test.cjs
+
   # One release, made before the builds rather than by them: four builds each
   # finding no release and creating one is a race that leaves duplicates. Made
   # as a draft so nobody sees an empty release while the installers build, and
   # reused if a draft for this tag already exists, so a re-run does not add a
-  # second one.
+  # second one. Only once the gate has passed (an `if` with no status check
+  # runs only when every need succeeded).
   create-release:
     name: Create release
-    needs: plan
+    needs: [plan, gate]
     if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
@@ -130,11 +214,13 @@ jobs:
 
   installers:
     name: ${{ matrix.name }}
-    needs: [plan, create-release]
+    needs: [plan, gate, create-release]
     # create-release is skipped for a build-only run, and a skipped need would
-    # otherwise skip this job too.
+    # otherwise skip this job too. `always()` switches off the implicit
+    # "every need succeeded", so the gate is asked for by name.
     if: >-
       always() && needs.plan.outputs.build == 'true' &&
+      needs.gate.result == 'success' &&
       (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -755,17 +841,25 @@ jobs:
             await github.rest.repos.updateRelease({ ...context.repo, release_id, draft: false });
             core.info(`Published ${r.tag_name}: https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${r.tag_name}`);
 
-      # The update feed: latest.json on a release tagged `updater`, rewritten
-      # to point at this release. A fixed address, because 0.x releases are
-      # pre-releases and GitHub's "latest release" link skips those. Only
-      # installers with a signature go in it — the app refuses anything else
-      # anyway — and each under its own installer's name, so a .deb install
-      # is never handed the AppImage. Never moves backwards.
+      # The update feed, on a release tagged `updater`: a fixed address,
+      # because 0.x releases are pre-releases and GitHub's "latest release"
+      # link skips those. Only installers with a signature go in it (the app
+      # refuses anything else anyway), each under its own installer's keys, so
+      # a .deb install is never handed the AppImage. One file per kind of
+      # installation (latest-<key>.json, which copies after 0.1.42 read first),
+      # so a platform whose installer came off this release keeps the version
+      # it had instead of vanishing, plus latest.json for older copies. Nothing
+      # moves backwards. The rules are desktop/rata-app/harness/feed.cjs, tested
+      # by feed.test.cjs in the gate; this step only reads and uploads.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/rata-app/harness
       - uses: actions/github-script@v7
         env:
           ID: ${{ needs.create-release.outputs.id }}
         with:
           script: |
+            const feed = require('./desktop/rata-app/harness/feed.cjs');
             const release_id = Number(process.env.ID);
             const { data: r } = await github.rest.repos.getRelease({ ...context.repo, release_id });
             if (r.draft) { core.info('Still a draft; the feed is left alone.'); return; }
@@ -775,27 +869,16 @@ jobs:
               const res = await github.rest.repos.getReleaseAsset({ ...context.repo, asset_id: a.id, headers: { accept: 'application/octet-stream' } });
               return Buffer.from(res.data).toString('utf8').trim();
             };
-            const keysFor = (n) => {
-              if (n.endsWith('.AppImage')) return ['linux-x86_64-appimage'];
-              if (n.endsWith('.deb')) return ['linux-x86_64-deb'];
-              if (n.endsWith('-setup.exe')) return ['windows-x86_64-nsis', 'windows-x86_64'];
-              if (n.endsWith('.app.tar.gz')) return /aarch64|arm64/.test(n) ? ['darwin-aarch64-app', 'darwin-aarch64'] : ['darwin-x86_64-app', 'darwin-x86_64'];
-              return [];
-            };
-            const platforms = {};
+            const installers = [];
             for (const a of r.assets) {
-              const keys = keysFor(a.name);
               const sig = byName.get(a.name + '.sig');
-              if (!keys.length || !sig) continue;
-              const signature = await read(sig);
-              for (const k of keys) platforms[k] = { signature, url: a.browser_download_url };
+              if (!feed.keysFor(a.name).length || !sig) continue;
+              installers.push({ name: a.name, url: a.browser_download_url, signature: await read(sig) });
             }
-            if (!Object.keys(platforms).length) {
-              core.info('No signed installers on this release — no update key is configured — so the feed is left alone.');
+            if (!installers.length) {
+              core.info('No signed installers on this release (no update key is configured), so the feed is left alone.');
               return;
             }
-            core.info(`Feed for ${version}: ${Object.keys(platforms).join(', ')}`);
-            const feed = JSON.stringify({ version, notes: '', pub_date: r.published_at || new Date().toISOString(), platforms }, null, 2);
 
             const all = await github.paginate(github.rest.repos.listReleases, { ...context.repo, per_page: 100 });
             let home = all.find((x) => x.tag_name === 'updater');
@@ -805,19 +888,25 @@ jobs:
                 tag_name: 'updater',
                 target_commitish: context.sha,
                 name: 'Update feed (not an installer)',
-                body: 'RATA reads latest.json from here to learn when a newer version is out. The installers are on the version releases.',
+                body: 'RATA reads latest-<platform>.json, or latest.json, from here to learn when a newer version is out. The installers are on the version releases.',
                 prerelease: true,
               })).data;
             }
-            const old = home.assets.find((a) => a.name === 'latest.json');
-            if (old) {
-              const was = JSON.parse(await read(old)).version || '0';
-              const n = (v) => v.split(/[.-]/).map((x) => Number(x) || 0);
-              const [a, b] = [n(was), n(version)];
-              let cmp = 0;
-              for (let i = 0; i < Math.max(a.length, b.length) && !cmp; i++) cmp = (b[i] || 0) - (a[i] || 0);
-              if (cmp < 0) { core.info(`The feed already offers ${was}, newer than ${version}; left alone.`); return; }
-              await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: old.id });
+            // What the feed says now, read before anything is written.
+            const old = {};
+            for (const a of home.assets || []) {
+              if (!feed.FILES.includes(a.name)) continue;
+              try {
+                old[a.name] = JSON.parse(await read(a));
+              } catch (e) {
+                core.warning(`${a.name} on the updater release is not JSON (${e.message}); it is treated as absent.`);
+              }
             }
-            await github.rest.repos.uploadReleaseAsset({ ...context.repo, release_id: home.id, name: 'latest.json', data: feed, headers: { 'content-type': 'application/json' } });
-            core.info(`The update feed now offers ${version}.`);
+            const { write, log } = feed.plan({ version, pubDate: r.published_at || new Date().toISOString(), installers, old });
+            for (const line of log) core.info(line);
+            for (const [name, body] of Object.entries(write)) {
+              const was = (home.assets || []).find((a) => a.name === name);
+              if (was) await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: was.id });
+              await github.rest.repos.uploadReleaseAsset({ ...context.repo, release_id: home.id, name, data: JSON.stringify(body, null, 2), headers: { 'content-type': 'application/json' } });
+              core.info(`Wrote ${name} (${body.version}).`);
+            }
