@@ -343,6 +343,20 @@ pub struct Standing {
     /// True once the licence is inside its last week, so the app knows to try
     /// renewing rather than waiting for it to lapse.
     pub renew_soon: bool,
+    /// Present only in `set_licence`'s answer, when the key offered was not
+    /// kept because the licence already here is worth more (BUG-L). The rest
+    /// of the standing is that licence's, which is still the one in use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<Refused>,
+}
+
+/// A key `set_licence` would not put in place of the one it holds: why the
+/// key failed, and a sentence saying which licence was kept.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Refused {
+    pub reason: Reason,
+    pub message: String,
 }
 
 /// A licence inside its last week should be renewed while there is still time
@@ -370,13 +384,16 @@ impl Rata {
     /// Where the licence is read. Everything that costs money to run asks this
     /// first.
     pub fn standing(&self) -> Standing {
+        self.standing_at(now() as i64)
+    }
+
+    fn standing_at(&self, now_secs: i64) -> Standing {
         let used = self.mailboxes().len() as u32;
         let token = self
             .store
             .lock()
             .ok()
-            .and_then(|s| s.licence().map(str::to_string));
-        let now_secs = now() as i64;
+            .and_then(|s| s.licence().map(licence::clean));
 
         match licence::check(token.as_deref().unwrap_or(""), self.public_key, now_secs) {
             Ok(l) => {
@@ -397,6 +414,7 @@ impl Rata {
                     used,
                     limit: plan.mail,
                     renew_soon,
+                    refused: None,
                 }
             }
             Err(rejected) => Standing {
@@ -410,19 +428,90 @@ impl Rata {
                 limit: Some(0),
                 // An expired licence is the case renewal exists for.
                 renew_soon: rejected.reason == Reason::Expired,
+                refused: None,
             },
         }
     }
 
+    /// Keep a licence, or forget it with `None`.
+    ///
+    /// A key that does not work never takes the place of one that does, or of
+    /// one that can still renew itself (BUG-L). Both reach here from outside:
+    /// a renewal answer from a website signing with the wrong key, and a
+    /// paste of the wrong thing into the licence box. Either used to replace
+    /// a good licence on disk, and the customer lost a licence they had paid
+    /// for to a mistake that was not theirs, or to a slip of the mouse. The
+    /// rule is here rather than in the page so no page code can get it wrong.
+    /// The answer then carries `refused`, and is otherwise the standing of the
+    /// licence kept.
     pub fn set_licence(&self, token: Option<String>) -> Result<Standing, String> {
-        {
+        self.set_licence_at(token, now() as i64)
+    }
+
+    fn set_licence_at(&self, token: Option<String>, now_secs: i64) -> Result<Standing, String> {
+        let token = token.map(|t| licence::clean(&t));
+        let refused = {
             let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
-            store.set_licence(token);
-            store
-                .save()
-                .map_err(|e| format!("The licence could not be saved: {e}"))?;
+            let refused = match (&token, store.licence()) {
+                (Some(offered), Some(held)) => self.outweighs(held, offered, now_secs),
+                // Nothing held to lose, or the licence cleared on purpose.
+                _ => None,
+            };
+            if refused.is_none() {
+                store.set_licence(token);
+                store
+                    .save()
+                    .map_err(|e| format!("The licence could not be saved: {e}"))?;
+            }
+            refused
+        };
+        let mut standing = self.standing_at(now_secs);
+        standing.refused = refused;
+        Ok(standing)
+    }
+
+    /// Whether the licence `held` is worth more than the key `offered`, and so
+    /// stays: a working licence gives way only to another working one, and
+    /// one that can still renew itself only to a working one or to a genuine
+    /// one that expires no earlier. Anything else held (nothing genuine, or
+    /// expired too long ago to renew) is replaced, so a real key can always
+    /// put right a bad one.
+    fn outweighs(&self, held: &str, offered: &str, now_secs: i64) -> Option<Refused> {
+        let fresh = licence::check(offered, self.public_key, now_secs);
+        let why = match &fresh {
+            Ok(_) => return None,
+            Err(r) => r,
+        };
+        let kept = licence::check(held, self.public_key, now_secs);
+        if !licence::renewable(&kept, now_secs) {
+            return None;
         }
-        Ok(self.standing())
+        if let (Err(k), Some(new)) = (&kept, &why.licence) {
+            let old = k.licence.as_ref().map_or(i64::MAX, |l| l.exp);
+            if why.reason == Reason::Expired && new.exp >= old {
+                return None;
+            }
+        }
+        let what = match why.reason {
+            Reason::Expired => "That key has expired",
+            Reason::Missing => "There was no key to use",
+            Reason::Malformed | Reason::BadSignature | Reason::NoPublicKey => {
+                "That key could not be read"
+            }
+        };
+        let message = match &kept {
+            Ok(l) => format!(
+                "{what}, so RATA kept the licence it already has, which is good until {}.",
+                licence::on_day(l.exp)
+            ),
+            Err(_) => format!(
+                "{what}, so RATA kept the licence it already has. That one has expired, and RATA renews it by itself when this computer is online. If it cannot, sign in at mailrata.org to find your key."
+            ),
+        };
+        Some(Refused {
+            reason: why.reason,
+            message,
+        })
     }
 
     /// The one sentence every paid action shares.
@@ -3011,6 +3100,9 @@ mod tests {
         let app = rata(file.clone());
         linked(&app, "owner@example.com", "imap.example.com");
 
+        // The licence lapses. Cleared first: a lapsed key no longer replaces
+        // a working one (BUG-L, `a_bad_key_never_costs_a_good_licence`).
+        app.set_licence(None).unwrap();
         app.set_licence(Some(LAPSED.into())).unwrap();
         let s = app.standing();
         assert!(!s.licensed);
@@ -3124,6 +3216,131 @@ mod tests {
         assert!(s.licensed);
         // And it survives a restart.
         assert!(rata_reopen(&app).licensed);
+    }
+
+    /// What is on disk now, read back as a restart would.
+    fn stored(app: &Rata) -> Option<String> {
+        app.store.lock().unwrap().licence().map(str::to_string)
+    }
+
+    /// BUG-L, 3: a renewal answer the app cannot verify (a website signing
+    /// with the wrong key) or a paste of the wrong thing never replaces a
+    /// working licence. The standing that comes back is the kept licence's,
+    /// with `refused` saying why the key was not used.
+    #[test]
+    fn a_bad_key_never_costs_a_good_licence() {
+        let app = rata(tmpfile("keep-good"));
+        // Genuine, but signed by another key: what a misconfigured site sends.
+        let other_key = "v1.eyJ2IjoxLCJzdWIiOiJidXllckBleGFtcGxlLmNvbSIsInBsYW4iOiJwcm8iLCJpYXQiOjE3ODk1MTY4MDAsImV4cCI6MTc5MjEwODgwMH0.d8B8bwGISFtqh3wODGdMd6CCNqoa99GnHDzmY1tvNqR2O8vhuQSoe9BezQrry4bMIQXuFwfmfeEj4GALgwV5CA";
+        let forged = PRO.replace("cSIy", "XXXX");
+        for (bad, reason) in [
+            (other_key.to_string(), Reason::BadSignature),
+            (forged, Reason::BadSignature),
+            ("not a licence at all".to_string(), Reason::Malformed),
+            ("v1.a.b".to_string(), Reason::Malformed),
+            ("   ".to_string(), Reason::Missing),
+            // Genuine but expired: not worth a working licence either.
+            (LAPSED.to_string(), Reason::Expired),
+        ] {
+            let s = app.set_licence(Some(bad.clone())).unwrap();
+            let r = s
+                .refused
+                .as_ref()
+                .unwrap_or_else(|| panic!("{bad:?} was kept"));
+            assert_eq!(r.reason, reason, "{bad:?}");
+            assert!(r.message.contains("kept the licence"), "{}", r.message);
+            assert!(r.message.contains("good until"), "{}", r.message);
+            assert!(s.licensed, "the licence in use is still the good one");
+            assert_eq!(s.token.as_deref(), Some(PRO));
+            assert_eq!(
+                stored(&app).as_deref(),
+                Some(PRO),
+                "{bad:?} reached the disk"
+            );
+        }
+        assert!(rata_reopen(&app).licensed, "and still after a restart");
+        // A working key still replaces a working one: another plan, say.
+        let s = app.set_licence(Some(BASE.into())).unwrap();
+        assert!(s.refused.is_none() && s.licensed);
+        assert_eq!(s.plan.unwrap().label, "RATA Base");
+        // And clearing on purpose clears.
+        let s = app.set_licence(None).unwrap();
+        assert!(!s.licensed && s.refused.is_none());
+        assert_eq!(stored(&app), None);
+    }
+
+    /// BUG-L, 5: an expired licence that can still renew itself is kept
+    /// against a junk paste too, and the box can say so. Past the renewal
+    /// window it is worth nothing and anything may replace it.
+    #[test]
+    fn a_junk_paste_never_replaces_a_licence_that_can_renew() {
+        let app = unlicensed(tmpfile("keep-renewable"));
+        app.set_licence(Some(LAPSED.into())).unwrap();
+        let exp = app.standing().licence.unwrap().exp;
+        let day = 86_400;
+        let soon = exp + 10 * day;
+
+        for bad in ["v1.junk.junk", "hello", ""] {
+            let s = app.set_licence_at(Some(bad.into()), soon).unwrap();
+            let r = s
+                .refused
+                .as_ref()
+                .unwrap_or_else(|| panic!("{bad:?} was kept"));
+            assert!(
+                r.message.contains("kept the licence it already has")
+                    && r.message.contains("renews it by itself"),
+                "{}",
+                r.message
+            );
+            assert_eq!(s.reason, Some(Reason::Expired), "the kept one's standing");
+            assert_eq!(s.token.as_deref(), Some(LAPSED));
+            assert_eq!(stored(&app).as_deref(), Some(LAPSED));
+        }
+        let s = app
+            .set_licence_at(Some(PRO.replace("cSIy", "XXXX")), soon)
+            .unwrap();
+        assert_eq!(s.refused.unwrap().reason, Reason::BadSignature);
+        assert_eq!(stored(&app).as_deref(), Some(LAPSED));
+
+        // On the last day it can renew, still kept; a day later, not.
+        let last = exp + licence::RENEW_GRACE_DAYS * day;
+        assert!(
+            app.set_licence_at(Some("x".into()), last)
+                .unwrap()
+                .refused
+                .is_some()
+        );
+        let s = app.set_licence_at(Some("x".into()), last + day).unwrap();
+        assert!(s.refused.is_none(), "too old to renew is worth nothing");
+        assert_eq!(
+            s.reason,
+            Some(Reason::Malformed),
+            "the paste's own standing"
+        );
+        assert_eq!(stored(&app).as_deref(), Some("x"));
+
+        // A working key always replaces a renewable one.
+        app.set_licence(None).unwrap();
+        app.set_licence(Some(LAPSED.into())).unwrap();
+        let s = app.set_licence_at(Some(PRO.into()), soon).unwrap();
+        assert!(s.licensed && s.refused.is_none());
+    }
+
+    /// BUG-L, 4: a key with white space inside (a mail client wrapped it) is
+    /// the same key, and is stored without it.
+    #[test]
+    fn a_wrapped_key_is_stored_whole() {
+        let app = unlicensed(tmpfile("wrapped"));
+        let wrapped: String = PRO
+            .as_bytes()
+            .chunks(30)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let s = app.set_licence(Some(format!("  {wrapped}\n"))).unwrap();
+        assert!(s.licensed, "{}", s.message);
+        assert_eq!(s.token.as_deref(), Some(PRO), "presented for renewal whole");
+        assert_eq!(stored(&app).as_deref(), Some(PRO));
     }
 
     fn rata_reopen(app: &Rata) -> Standing {

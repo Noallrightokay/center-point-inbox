@@ -212,7 +212,15 @@
       /* `only` (0.1.35): the mailboxes to read — the one that said it has new
          mail, or the ones the timer finds due. Absent is all of them. */
       const only = Array.isArray(b.only) && b.only.length ? b.only.map(String) : null;
-      const res = await invoke('refresh_mail', { limit: 15, known: Array.isArray(b.known) ? b.known : null, only });
+      const ask = { limit: 15, known: Array.isArray(b.known) ? b.known : null, only };
+      let res = await invoke('refresh_mail', ask);
+      /* The licence lapsed while RATA was open (BUG-L): renew it now, and
+         read again if that worked, so mail carries on with no relaunch. If
+         it did not, settleLicence has put the licence box up. */
+      if (res.unlicensed) {
+        const after = await settleLicence().catch(() => null);
+        if (after && after.licensed) res = await invoke('refresh_mail', ask);
+      }
       /* Nothing was read, because this copy is not licensed. Said as an error
          so the interface leaves what it has alone — building an answer from
          the empty lists below would report every mailbox as live and freshly
@@ -354,13 +362,23 @@
       let standing = null;
       try { standing = await invoke('licence_status'); } catch { standing = null; }
       if (!standing || !standing.token) return { error: 'This copy of RATA has no licence to use AI with.' };
-      try {
+      const ask = async (token) => {
         const r = await fetch(AI, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(Object.assign({}, b, { licence: standing.token })),
+          body: JSON.stringify(Object.assign({}, b, { licence: token })),
         });
-        const d = await r.json().catch(() => ({}));
+        return { r, d: await r.json().catch(() => ({})) };
+      };
+      try {
+        let { r, d } = await ask(standing.token);
+        /* The relay says the licence has expired (BUG-L): renew it, once,
+           and ask again with the new one, rather than showing the customer
+           a sentence saying RATA does this by itself. */
+        if (d && d.reason === 'expired') {
+          const after = await settleLicence(true).catch(() => null);
+          if (after && after.licensed && after.token && after.token !== standing.token) ({ r, d } = await ask(after.token));
+        }
         if (!r.ok && !d.error) return { error: 'RATA\u2019s AI service could not answer (' + r.status + ').' };
         return d;
       } catch {
@@ -574,38 +592,114 @@
      security policy that allows it. */
   const RENEW = 'https://mailrata.org/api/licence/renew';
   const AI = 'https://mailrata.org/api/ai';
+  /* How often an open RATA looks at its licence (BUG-L). It used to look only
+     at launch, so a copy started more than a week before expiry and left
+     open past it stopped fetching mail with no word. The harness shortens
+     this with window.__RATA_RENEW_EVERY. */
+  const RENEW_EVERY = Number(window.__RATA_RENEW_EVERY) > 0 ? Number(window.__RATA_RENEW_EVERY) : 6 * 3600e3;
+  /* How long a renewal may take before it counts as unreachable. */
+  const RENEW_WAIT = 20e3;
 
+  /* Ask mailrata.org for a fresh licence. Answers the standing after a
+     renewal that worked, `{ licensed: false, message }` for a real refusal,
+     and null for anything else, which leaves the licence as it was. */
   async function renew(current) {
     if (!current) return null;
+    const stop = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = stop ? setTimeout(() => stop.abort(), RENEW_WAIT) : null;
     try {
       const r = await fetch(RENEW, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ licence: current }),
+        ...(stop ? { signal: stop.signal } : {}),
       });
       const d = await r.json();
-      if (d.licensed && d.licence) return invoke('set_licence', { licence: d.licence });
+      if (d.licensed && d.licence) {
+        /* Rust keeps the new token only if it verifies (set_licence): one
+           signed with the wrong key, from a website set up wrongly, is
+           refused and the licence already here stays in use. That is a
+           server having a bad morning, not an answer. */
+        const kept = await invoke('set_licence', { licence: d.licence });
+        return kept && kept.licensed && !kept.refused ? kept : null;
+      }
       /* A cancelled subscription is a real answer and the app should stop
          asking. So is a licence that expired too long ago to renew itself
          (RENEW_GRACE_DAYS on the website): only signing in gets a new one,
          and the server's sentence says so. A server having a bad morning is
          not — the licence still has days left on it, so nothing is touched
-         and it tries again tomorrow. */
+         and it tries again later. */
       if (d.reason === 'no-subscription' || d.reason === 'too-old') return { licensed: false, message: d.message };
       return null;
     } catch {
       /* Offline. Exactly the case the whole design exists for. */
       return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
-  /* Ask for the key, once, when there is no usable licence.
+  /* Check the licence, renew it if it is due, and tell the page: the
+     `rata-standing` event, and the licence box when there is still no usable
+     licence (or its removal once there is). At launch, every six hours, when
+     the connection comes back, when a refresh answers "unlicensed", when the
+     AI relay answers "expired" (`force`: renew even if this computer's clock
+     thinks the licence is good), and from the box. One at a time: a second
+     caller shares the one in flight. Asking first would put a box in front
+     of somebody whose licence was about to fix itself.
+
+     Answers the standing, with `renewal`: 'renewed', 'refused' (a real
+     answer from mailrata.org), 'unreachable', or 'none' (not due). */
+  let SETTLING = null;
+  function settleLicence(force) {
+    if (SETTLING) return SETTLING;
+    SETTLING = (async () => {
+      let standing = await invoke('licence_status');
+      let renewal = 'none';
+      if (standing.token && (force === true || standing.renewSoon || !standing.licensed)) {
+        const after = await renew(standing.token);
+        renewal = !after ? 'unreachable' : after.licensed ? 'renewed' : 'refused';
+        standing = after && after.licensed ? after : await invoke('licence_status');
+        /* Still not licensed after a real refusal: the licence box says why in
+           the server's words ("Sign in at mailrata.org to get a new one"),
+           not only that the licence has expired. */
+        if (after && !after.licensed && !standing.licensed && after.message) {
+          standing = Object.assign({}, standing, { message: after.message });
+        }
+      }
+      if (!standing.licensed) askForKey(standing);
+      else closeBox();
+      /* The interface asked at start too; a renewal just now may have changed
+         the answer (a plan changed at renewal, say), so it hears the latest. */
+      window.dispatchEvent(new CustomEvent('rata-standing', { detail: standing }));
+      return Object.assign({}, standing, { renewal });
+    })().finally(() => {
+      SETTLING = null;
+    });
+    return SETTLING;
+  }
+
+  /* What the box says when mailrata.org could not be reached. */
+  const UNREACHABLE = 'RATA could not reach mailrata.org to renew it. It tries again when the connection comes back, or press Try again.';
+
+  function closeBox() {
+    const box = document.getElementById('rata-licence');
+    if (box) box.remove();
+  }
+
+  /* Ask for the key when there is no usable licence, or say the latest in
+     the box already showing.
 
      Deliberately part of the desktop bridge rather than the interface: the
      website has no licence key to type, and giving app.html a field that only
      ever appears in one of the two builds is how one interface becomes two. */
   function askForKey(standing) {
-    if (document.getElementById('rata-licence')) return;
+    const shown = document.getElementById('rata-licence');
+    if (shown) {
+      shown.querySelector('#rata-licence-why').textContent = standing.message;
+      shown.querySelector('#rata-licence-retry').hidden = !standing.token;
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.id = 'rata-licence';
     /* Classes, never a style attribute. Tauri nonces the page's style-src, and
@@ -619,6 +713,7 @@
         <input id="rata-licence-input" placeholder="v1.…" autocomplete="off" spellcheck="false">
         <p class="rata-lic-error" id="rata-licence-error"></p>
         <button id="rata-licence-save">Use this licence</button>
+        <button id="rata-licence-retry" class="rata-lic-retry" hidden>Try again</button>
         <p class="rata-lic-note">
           Sign in at <a href="https://mailrata.org/account">mailrata.org</a>
           to find your key. RATA keeps working offline for thirty days at a time.
@@ -630,60 +725,93 @@
     const input = wrap.querySelector('#rata-licence-input');
     const err = wrap.querySelector('#rata-licence-error');
     const save = wrap.querySelector('#rata-licence-save');
+    const retry = wrap.querySelector('#rata-licence-retry');
+    /* Try again: renew the licence already here. Only offered when there is
+       one to renew. */
+    retry.hidden = !standing.token;
     input.focus();
+
+    /* Renew the licence here, and say what came of it. Answers true when
+       RATA is licensed afterwards (settleLicence has closed the box). */
+    async function renewHere(kept) {
+      const after = await settleLicence(true);
+      if (after.licensed) return true;
+      err.textContent = kept || (after.renewal === 'unreachable' ? UNREACHABLE : '');
+      return false;
+    }
 
     async function submit() {
       err.textContent = '';
       save.disabled = true;
+      retry.disabled = true;
+      /* A key wrapped by a mail client arrives with line breaks inside it;
+         white space is never part of one (Rust strips it too). */
+      const key = input.value.replace(/\s+/g, '');
       /* set_licence rejects when the key cannot be saved at all. Without the
          catch that rejection skipped both the re-enable and the message,
          leaving a dead button and a silent box. */
       try {
-        const next = await invoke('set_licence', { licence: input.value.trim() });
-        if (next.licensed) {
-          wrap.remove();
-          location.reload();
+        let next;
+        if (key) {
+          next = await invoke('set_licence', { licence: key });
+          if (next.licensed) {
+            wrap.remove();
+            location.reload();
+            return;
+          }
+        } else {
+          next = await invoke('licence_status');
+          if (!next.token) {
+            err.textContent = 'Paste the key from your mailrata.org account.';
+            return;
+          }
+        }
+        /* The box says RATA renews an expired licence by itself, so it does
+           so now, whether the licence is the one just pasted or the one RATA
+           kept (Rust never lets a bad paste replace one that can renew; the
+           answer's `refused` says so). */
+        const kept = next.refused ? next.refused.message : '';
+        if (next.reason === 'expired' && next.token) {
+          await renewHere(kept);
           return;
         }
-        err.textContent = next.message;
+        err.textContent = kept || next.message;
       } catch (e) {
         err.textContent = `That licence could not be saved: ${e}`;
       } finally {
         save.disabled = false;
+        retry.disabled = false;
       }
     }
     save.addEventListener('click', submit);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
     });
-  }
-
-  /* On launch: check, renew if it is getting on, and ask only if there is
-     still no licence after that. Asking first would put a box in front of
-     somebody whose licence was about to fix itself. */
-  async function settleLicence() {
-    let standing = await invoke('licence_status');
-    if (standing.token && (standing.renewSoon || !standing.licensed)) {
-      const after = await renew(standing.token);
-      if (after) standing = after.licensed ? after : await invoke('licence_status');
-      /* Still not licensed after a real refusal: the licence box says why in
-         the server's words ("Sign in at mailrata.org to get a new one"),
-         not only that the licence has expired. */
-      if (after && !after.licensed && !standing.licensed && after.message) {
-        standing = Object.assign({}, standing, { message: after.message });
+    retry.addEventListener('click', async () => {
+      err.textContent = '';
+      retry.disabled = true;
+      save.disabled = true;
+      try {
+        await renewHere('');
+      } catch (e) {
+        err.textContent = String(e);
+      } finally {
+        retry.disabled = false;
+        save.disabled = false;
       }
-    }
-    if (!standing.licensed) askForKey(standing);
-    /* The interface asked at start too; a renewal just now may have changed
-       the answer (a plan changed at renewal, say), so it hears the latest. */
-    window.dispatchEvent(new CustomEvent('rata-standing', { detail: standing }));
+    });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', settleLicence);
+    document.addEventListener('DOMContentLoaded', () => settleLicence());
   } else {
     settleLicence();
   }
+  /* While RATA is open: every six hours, and whenever the connection comes
+     back. Each renews only when the licence is due (its last week, or
+     expired); otherwise it only re-reads the standing. */
+  setInterval(() => settleLicence().catch(() => {}), RENEW_EVERY);
+  window.addEventListener('online', () => settleLicence().catch(() => {}));
 
   /* Every web link on the app's own page — the licence page, checkout, a
      link in the text of a message — opens in the browser. Followed in place,

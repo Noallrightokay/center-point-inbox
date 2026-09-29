@@ -12,7 +12,7 @@ const STORE_SOFT_CAP_JS = 3500000;
 let fails = 0;
 const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
 
-const MOCK = ({ licensed, ms, old }) => {
+const MOCK = ({ licensed, ms, old, lic }) => {
   // Playwright injects this into every frame; the app is only the top one.
   if (window !== window.top) return;
   window.__mock = {
@@ -28,7 +28,45 @@ const MOCK = ({ licensed, ms, old }) => {
     msDomains: [],
   };
   const M = window.__mock;
-  const standing = () => M.licensed
+  /* BUG-L: a licence with a clock, as core.rs judges one. `lic.token` is
+     what is on disk, `lic.now` this computer's clock (seconds), and
+     `lic.genuine` every token the fake key signed, with its expiry. An
+     expired licence refreshes nothing (refresh_mail answers `unlicensed`),
+     and set_licence keeps a working or still-renewable licence against a
+     key that does not work, answering `refused`. `lic.every` shortens the
+     bridge's six-hour renewal timer. */
+  M.lic = lic || null;
+  if (lic && lic.every) window.__RATA_RENEW_EVERY = lic.every;
+  const judge = (t) => {
+    if (!t) return { reason: 'missing' };
+    const exp = M.lic.genuine[t];
+    if (exp === undefined) return { reason: 'malformed' };
+    return exp >= M.lic.now ? { ok: true, exp } : { reason: 'expired', exp };
+  };
+  const worth = (j) => j.ok || (j.reason === 'expired' && M.lic.now - j.exp <= 90 * 86400);
+  const clocked = () => {
+    const j = judge(M.lic.token);
+    if (j.ok) return { licensed: true, message: 'Licensed for RATA Pro until day ' + j.exp + '.', plan: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
+      used: M.mailboxes.length, limit: null, renewSoon: j.exp - M.lic.now < 7 * 86400, token: M.lic.token, reason: null };
+    return { licensed: false, plan: null, token: M.lic.token || null, reason: j.reason, renewSoon: j.reason === 'expired', used: M.mailboxes.length, limit: 0,
+      message: j.reason === 'expired' ? 'This licence needs refreshing. Open RATA while online and it will renew itself.'
+        : j.reason === 'missing' ? 'Enter your licence key to use RATA on this computer. Sign in at mailrata.org to find it.'
+        : 'This licence could not be read. Sign in at mailrata.org to get a new one.' };
+  };
+  const setClocked = (given) => {
+    const t = given == null ? null : String(given).replace(/\s+/g, '');
+    try { sessionStorage.setItem('rata_set_licence', JSON.stringify(t)); } catch {}
+    if (t !== null && M.lic.token) {
+      const n = judge(t), h = judge(M.lic.token);
+      if (!n.ok && worth(h) && !(n.reason === 'expired' && !h.ok && n.exp >= h.exp)) {
+        return Object.assign(clocked(), { refused: { reason: n.reason, message: (n.reason === 'expired' ? 'That key has expired' : 'That key could not be read')
+          + ', so RATA kept the licence it already has.' + (h.ok ? '' : ' That one has expired, and RATA renews it by itself when this computer is online.') } });
+      }
+    }
+    M.lic.token = t || null;
+    return clocked();
+  };
+  const standing = () => M.lic ? clocked() : M.licensed
     ? { licensed: true, message: M.planMessage || 'Licensed for RATA Pro until 26 October 2026.', plan: M.plan || { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
         used: M.mailboxes.length, limit: M.plan && M.plan.mail !== undefined ? M.plan.mail : null, renewSoon: false, token: 'v1.test-licence.sig' }
     : old
@@ -41,6 +79,7 @@ const MOCK = ({ licensed, ms, old }) => {
       case 'licence_status': return standing();
       case 'set_licence':
         if (M.setLicenceRejects) throw 'The licence could not be written to disk';
+        if (M.lic) return setClocked(args.licence);
         return standing();
       case 'list_mailboxes': return M.mailboxes;
       case 'unlink_mailbox':
@@ -49,6 +88,7 @@ const MOCK = ({ licensed, ms, old }) => {
         return null;
       case 'refresh_mail':
         if (M.refreshDelay) await new Promise((r) => setTimeout(r, M.refreshDelay));
+        if (M.lic && !judge(M.lic.token).ok) return { messages: [], problems: [], skipped: [], unlicensed: clocked().message };
         return M.refresh || { messages: [], problems: [], skipped: [] };
       case 'older_mail': {
         if (M.olderFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
@@ -201,7 +241,10 @@ async function open(licensed, opts = {}) {
       const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST' };
       if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
       page.__renewals++;
-      return route.fulfill({ status: opts.renew.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(opts.renew.body) });
+      /* A function answers each request (BUG-L); `abort` is unreachable. */
+      const a = typeof opts.renew === 'function' ? opts.renew(JSON.parse(route.request().postData() || '{}')) : opts.renew;
+      if (a.abort) return route.abort('internetdisconnected');
+      return route.fulfill({ status: a.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(a.body) });
     });
   }
   /* What mailrata.org's AI relay answers (bridge.js '/api/ai'); every
@@ -217,7 +260,7 @@ async function open(licensed, opts = {}) {
       return route.fulfill({ status: a.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(a.body) });
     });
   }
-  await page.addInitScript(MOCK, { licensed, ms: !!opts.ms, old: !!opts.old });
+  await page.addInitScript(MOCK, { licensed, ms: !!opts.ms, old: !!opts.old, lic: opts.lic || null });
   await page.goto(B + '/app.html');
   await page.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
   /* A licensed app refreshes by itself a moment after start (0.1.27); let
@@ -1256,6 +1299,152 @@ console.log('\n— a licence too old to renew itself says what to do —');
   pg = await open(false, { old: true, renew: { status: 500, body: { error: 'The licence service is not configured.' } } });
   said = await why(pg);
   check(pg.__renewals === 1 && said === 'This licence expired on 1 March 2026.', `a server error keeps the app's own words: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
+  await pg.close();
+}
+
+console.log('\n— the licence renews while RATA is open (BUG-L) —');
+{
+  /* A copy started more than a week before its licence expires, and left
+     open past it: the licence used to renew only at launch, so every refresh
+     answered "unlicensed", the quiet refresh dropped it, and mail stopped with
+     no word. Now a refresh that answers "unlicensed" renews it and reads
+     again, with no relaunch. */
+  const DAY = 86400, T0 = 1_800_000_000;
+  const genuine = () => ({ 'v1.first.sig': T0 + 8 * DAY, 'v1.second.sig': T0 + 60 * DAY, 'v1.third.sig': T0 + 120 * DAY });
+  const NEXT = { 'v1.first.sig': 'v1.second.sig', 'v1.second.sig': 'v1.third.sig' };
+  let reach = true;
+  const renewal = (b) => !reach ? { abort: true }
+    : NEXT[b.licence] ? { body: { licensed: true, licence: NEXT[b.licence], message: 'Renewed.' } } : { status: 500, body: { error: 'x' } };
+  const mk = (uid) => ({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example', from_name: 'Ann', from_addr: 'ann@example.org',
+    to_name: '', to_addr: 'me@example.com', subject: 'After renewal ' + uid, preview: 'p', body: 'b', ts: Date.now(), unread: true, starred: false, uid, uidvalidity: 7,
+    message_id: 'r' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  const state = (pg) => pg.evaluate(() => ({ disk: __mock.lic.token, licensed: !!(LIC && LIC.licensed), token: LIC && LIC.token,
+    refreshes: __mock.calls.filter(([c]) => c === 'refresh_mail').length, box: !!document.getElementById('rata-licence'),
+    why: document.querySelector('#rata-licence-why')?.textContent || null, err: document.querySelector('#rata-licence-error')?.textContent || '',
+    retry: !!document.querySelector('#rata-licence-retry') && !document.querySelector('#rata-licence-retry').hidden }));
+
+  let pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine() }, renew: renewal });
+  let st = await state(pg);
+  check(pg.__renewals === 0 && st.licensed && !st.box, `eight days before expiry nothing is renewed at launch: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+  /* The licence expires while RATA is open. */
+  await pg.evaluate(async () => { __mock.lic.now = __mock.lic.genuine['v1.first.sig'] + 3600; __mock.calls = []; await autoSync(); });
+  st = await state(pg);
+  check(pg.__renewals === 1 && st.refreshes === 2 && st.disk === 'v1.second.sig' && st.licensed && st.token === 'v1.second.sig' && !st.box,
+    `a refresh that answers "unlicensed" renews the licence and reads again, with no relaunch: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+  /* And refreshes carry on: the next brings new mail. */
+  const got = await pg.evaluate(async (m) => {
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] };
+    await autoSync(); __mock.refresh = null;
+    return S.messages.some((x) => x.subj === 'After renewal 5');
+  }, mk(5));
+  check(got, 'the next refresh brings mail as before');
+  await pg.close();
+
+  /* Every six hours (shortened here): a licence that comes into its last
+     week while RATA is open renews with no refresh involved, and the page
+     hears the new one. Once renewed, it is not asked again. */
+  pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine(), every: 300 }, renew: renewal });
+  await pg.evaluate((t) => { __mock.lic.now = t; __mock.calls = []; }, T0 + 2 * DAY);
+  await pg.waitForFunction(() => LIC && LIC.token === 'v1.second.sig', null, { timeout: 5000 }).catch(() => {});
+  await pg.waitForTimeout(1200);
+  st = await state(pg);
+  check(pg.__renewals === 1 && st.disk === 'v1.second.sig' && st.token === 'v1.second.sig' && st.licensed && st.refreshes === 0,
+    `in its last week the timer renews it, once, and the page hears the new licence: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+  await pg.close();
+
+  /* Offline when it lapses: the licence box says so, the timer stops
+     refreshing, and the connection coming back renews it and mail resumes.
+     Try again does the same by hand. */
+  reach = false;
+  pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine() }, renew: renewal });
+  await pg.evaluate(async () => { __mock.lic.now = __mock.lic.genuine['v1.first.sig'] + 3600; await autoSync(); });
+  st = await state(pg);
+  const toastsNow = await toasts(pg);
+  check(st.box && !st.licensed && st.retry && /needs refreshing/.test(st.why) && pg.__renewals === 1 && !toastsNow.length,
+    `unreachable when it lapses: the licence box says so, with Try again, and no toast over it: ${JSON.stringify({ renewals: pg.__renewals, toasts: toastsNow, ...st })}`);
+  await pg.evaluate(async () => { __mock.calls = []; LAST_TRY.clear(); await autoTick(); });
+  st = await state(pg);
+  check(st.refreshes === 0, `while unlicensed the timer reads no mail: ${st.refreshes}`);
+  reach = true;
+  await pg.evaluate(() => { __mock.calls = []; window.dispatchEvent(new Event('online')); });
+  await pg.waitForFunction(() => !document.getElementById('rata-licence') && __mock.calls.some(([c]) => c === 'refresh_mail'), null, { timeout: 5000 }).catch(() => {});
+  st = await state(pg);
+  check(!st.box && st.licensed && st.disk === 'v1.second.sig' && st.refreshes >= 1,
+    `the connection coming back renews it, closes the box, and mail resumes: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+  /* It lapses again, still unreachable; Try again says it could not reach
+     mailrata.org, then works once it can. */
+  reach = false;
+  await pg.evaluate(async () => { __mock.lic.now = __mock.lic.genuine['v1.second.sig'] + 3600; await autoSync(); });
+  await pg.click('#rata-licence-retry');
+  await pg.waitForFunction(() => /could not reach mailrata\.org/.test(document.querySelector('#rata-licence-error')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  st = await state(pg);
+  check(st.box && /could not reach mailrata\.org/.test(st.err), `Try again while unreachable says so: ${JSON.stringify(st.err)}`);
+  reach = true;
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.click('#rata-licence-retry');
+  await pg.waitForFunction(() => !document.getElementById('rata-licence') && __mock.calls.some(([c]) => c === 'refresh_mail'), null, { timeout: 5000 }).catch(() => {});
+  st = await state(pg);
+  check(!st.box && st.licensed && st.disk === 'v1.third.sig' && st.refreshes >= 1, `and Try again renews it once it can, and mail resumes: ${JSON.stringify(st)}`);
+  await pg.close();
+
+  /* The licence box itself, on a licence that expired and can still renew.
+     A junk paste is refused and the licence kept (Rust's rule, mocked here
+     as core.rs has it), and the box tries to renew, saying what it kept. An
+     empty box with a renewable licence renews too. */
+  reach = false;
+  pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: renewal });
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  const before = pg.__renewals;
+  await pg.fill('#rata-licence-input', 'hello there');
+  await pg.click('#rata-licence-save');
+  await pg.waitForFunction(() => /kept the licence/.test(document.querySelector('#rata-licence-error')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  st = await state(pg);
+  check(st.box && st.disk === 'v1.first.sig' && /kept the licence it already has/.test(st.err) && pg.__renewals === before + 1,
+    `a junk paste over a renewable licence keeps it, says so, and tries to renew it: ${JSON.stringify({ renewals: pg.__renewals - before, ...st })}`);
+  reach = true;
+  await pg.fill('#rata-licence-input', '');
+  await pg.click('#rata-licence-save');
+  await pg.waitForFunction(() => !document.getElementById('rata-licence'), null, { timeout: 5000 }).catch(() => {});
+  st = await state(pg);
+  check(!st.box && st.licensed && st.disk === 'v1.second.sig', `Use this licence with the box empty renews the licence it has: ${JSON.stringify(st)}`);
+  await pg.close();
+
+  /* A key wrapped by a mail client: line breaks and spaces inside it are
+     taken out before it is used. */
+  pg = await open(false, { lic: { token: null, now: T0, genuine: genuine() } });
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  await pg.evaluate(() => { document.querySelector('#rata-licence-input').value = '  v1.sec\r\nond.\n s ig '; });
+  await Promise.all([pg.waitForNavigation({ timeout: 5000 }).catch(() => {}), pg.click('#rata-licence-save')]);
+  const used = await pg.evaluate(() => sessionStorage.getItem('rata_set_licence'));
+  check(used === JSON.stringify('v1.second.sig'), `a wrapped key is used without its white space, and RATA opens licensed: ${used}`);
+  await pg.close();
+
+  /* The AI relay says "expired" (this computer's clock is behind, say): the
+     licence is renewed once and the request asked again with the new one,
+     never more than once. */
+  let aiExpired = (b) => b.licence === 'v1.first.sig';
+  pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine() }, renew: renewal,
+    ai: (b) => aiExpired(b) ? { status: 401, body: { error: 'Your licence needs renewing — RATA does this itself when it is online.', reason: 'expired' } }
+      : { body: { text: 'A short summary.', cut: false, used: 0.1 } } });
+  await pg.evaluate(async (m) => {
+    S.settings.aiOk = true;
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true); __mock.refresh = null;
+    go('inbox'); openMail(m.id);
+    await new Promise((r) => setTimeout(r, 300));
+    OPENED.set(m.id, { text: 'Dear reader, the news of the week.', truncated: false, attachments: [] });
+    await summarizeMessage(m.id);
+  }, mk(7));
+  let asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
+  let shown = await pg.evaluate(() => document.querySelector('#md-summary .md-ai-text')?.textContent);
+  check(pg.__renewals === 1 && asked.join(',') === 'v1.first.sig,v1.second.sig' && shown === 'A short summary.',
+    `an "expired" answer from the relay renews the licence and asks again with the new one: ${JSON.stringify({ renewals: pg.__renewals, asked, shown })}`);
+  /* A relay that still says "expired" is asked once more, not again and again. */
+  aiExpired = () => true;
+  pg.__ai.length = 0;
+  await pg.evaluate(async () => { await summarizeMessage('me@example.com_7'); });
+  asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
+  check(asked.join(',') === 'v1.second.sig,v1.third.sig', `and only once: ${JSON.stringify(asked)}`);
   await pg.close();
 }
 
