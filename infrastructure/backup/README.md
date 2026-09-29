@@ -8,6 +8,7 @@ small, and it is what turns "paid" into "licensed".
 |---|---|---|
 | `auth.users` and the rest of the `auth` schema | website logins, kept by Supabase Auth: address, password hash, identities, sessions | nobody can sign in to `/account` to get or renew a licence |
 | `public.subscriptions` | one row per paying address: plan, status, Stripe customer id, add-ons, when Stripe last wrote it | licence issue (`/api/licence`) and renewal read it; nobody could renew |
+| `public.pending_subscriptions` | a Stripe subscription event that arrived before its checkout, keyed by Stripe customer id (plan, status, when; no address), deleted once the checkout applies it | a checkout mid-flight lands its plan on Stripe's next subscription event instead of at once |
 | `public.ai_usage` | per address and month, what AI cost and how many requests: a number, never text | this month's AI totals start again at zero, nothing worse |
 | `public.workspaces` | per account, the synced `settings`, `folders`, `rules` and `linked` mailbox entries (`CLOUD_FIELDS` in `app.html`); signatures and API keys are stripped before upload (`CLOUD_STRIP`) | a customer's settings on a new device |
 

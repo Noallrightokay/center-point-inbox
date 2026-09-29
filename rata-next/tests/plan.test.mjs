@@ -80,4 +80,23 @@ export default async function run(state) {
         `${status || '(none)'}: ${plan ? 'entitled' : 'not entitled'}, as the webhook reads it`);
     }
   }
+
+  console.log('\n— a purchase still being set up is not "no subscription" (BUG-S) —');
+  {
+    /* The checkout reached the webhook but the subscription has not named its
+       plan yet, or a bank transfer has not cleared: the row is incomplete,
+       with the customer the checkout wrote. /api/licence answers 'pending'
+       for it, and /account offers no second checkout. */
+    const setting = await entitlementsForUser(holding({ plan: 'base', status: 'incomplete', stripe_customer: 'cus_1', domain_addons: 0 }), 'a@b.com');
+    check(setting.plan === null && setting.pending === true, `incomplete with a customer: no plan yet, pending: ${JSON.stringify(setting)}`);
+    const handMade = await entitlementsForUser(holding({ plan: 'base', status: 'incomplete', stripe_customer: null, domain_addons: 0 }), 'a@b.com');
+    check(handMade.plan === null && !handMade.pending, 'incomplete with no customer (not written by a checkout): not pending');
+    for (const status of ['canceled', 'incomplete_expired', 'unpaid']) {
+      const r = await entitlementsForUser(holding({ plan: 'pro', status, stripe_customer: 'cus_1', domain_addons: 0 }), 'a@b.com');
+      check(r.plan === null && !r.pending, `${status}: ended, not pending`);
+    }
+    const live = await entitlementsForUser(holding({ plan: 'pro', status: 'active', stripe_customer: 'cus_1', domain_addons: 0 }), 'a@b.com');
+    check(live.plan === 'pro' && !live.pending, 'active: the plan, and not pending');
+    check(!(await entitlementsForUser(holding(null), 'a@b.com')).pending, 'no row: not pending');
+  }
 }

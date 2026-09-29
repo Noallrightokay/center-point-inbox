@@ -49,17 +49,59 @@ const readBody = (req) => new Promise((res) => { let b = ''; req.on('data', (d) 
    PostgREST's merge-duplicates, leaves a column the body does not name as it
    was, and like the table gives a new row plan 'base' and no add-ons), and
    the subscription branch's update by customer with its `or=(event_at.is.null,
-   event_at.lte.…)` guard. Every write is kept, so a test can say "nothing was
-   written", not only "the row looks the same". */
+   event_at.lte.…)` guard (or `lt`, for customer.subscription.created). Every
+   write is kept, so a test can say "nothing was written", not only "the row
+   looks the same".
+
+   And pending_subscriptions (database.sql section 6), keyed by customer: an
+   insert that ignores a duplicate (Prefer: resolution=ignore-duplicates) and
+   answers with the rows it inserted, the same guarded update, a select and a
+   delete. `state.pendingMissing` makes it answer as a database where
+   section 6 never ran (PostgREST's PGRST205). */
 async function fakeSubscriptions() {
   const rows = new Map();
+  const pending = new Map();
   const writes = [];
+  const pendingWrites = [];
+  const state = { pendingMissing: false };
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+  const guarded = (url, r) => {
+    const g = /event_at\.(lte|lt)\.([^,)]+)/.exec(url.searchParams.get('or') || '');
+    if (!g || !r.event_at) return true;
+    const a = new Date(r.event_at).getTime(), b = new Date(g[2]).getTime();
+    return g[1] === 'lt' ? a < b : a <= b;
+  };
   const server = await listen(async (req, res) => {
     const url = new URL(req.url, 'http://x');
-    if (!url.pathname.startsWith('/rest/v1/subscriptions')) { res.writeHead(404); res.end(); return; }
     const eq = (k) => (url.searchParams.get(k) || '').replace(/^eq\./, '');
+    if (url.pathname === '/rest/v1/pending_subscriptions') {
+      if (state.pendingMissing) {
+        req.resume();
+        return json(res, 404, { code: 'PGRST205', details: null, hint: null, message: "Could not find the table 'public.pending_subscriptions' in the schema cache" });
+      }
+      const c = eq('stripe_customer');
+      if (req.method === 'GET') { req.resume(); return json(res, 200, pending.has(c) ? [pending.get(c)] : []); }
+      if (req.method === 'POST') {
+        const body = JSON.parse(await readBody(req));
+        const ignore = /ignore-duplicates/.test(req.headers.prefer || '');
+        if (pending.has(body.stripe_customer) && ignore) return json(res, 201, []);
+        pendingWrites.push(body);
+        pending.set(body.stripe_customer, { plan: null, domain_addons: null, ...(pending.get(body.stripe_customer) || {}), ...body });
+        return json(res, 201, [{ stripe_customer: body.stripe_customer }]);
+      }
+      if (req.method === 'PATCH') {
+        const patch = JSON.parse(await readBody(req));
+        const r = pending.get(c);
+        if (!r || !guarded(url, r)) return json(res, 200, []);
+        pendingWrites.push({ stripe_customer: c, ...patch });
+        Object.assign(r, patch);
+        return json(res, 200, [{ stripe_customer: c }]);
+      }
+      if (req.method === 'DELETE') { req.resume(); const had = pending.delete(c); return json(res, 200, had ? [{ stripe_customer: c }] : []); }
+    }
+    if (!url.pathname.startsWith('/rest/v1/subscriptions')) { req.resume(); res.writeHead(404); res.end(); return; }
     if (req.method === 'GET') {
+      req.resume();
       if (url.searchParams.has('stripe_customer')) {
         const c = eq('stripe_customer');
         return json(res, 200, [...rows.values()].filter(r => r.stripe_customer === c));
@@ -78,16 +120,13 @@ async function fakeSubscriptions() {
     if (req.method === 'PATCH') {
       const patch = JSON.parse(await readBody(req));
       const c = eq('stripe_customer');
-      const guard = url.searchParams.get('or') || '';
-      const lte = /event_at\.lte\.([^,)]+)/.exec(guard);
-      const hit = [...rows.values()].filter(r => r.stripe_customer === c
-        && (!lte || !r.event_at || new Date(r.event_at) <= new Date(lte[1])));
+      const hit = [...rows.values()].filter(r => r.stripe_customer === c && guarded(url, r));
       for (const r of hit) { writes.push({ email: r.email, ...patch }); Object.assign(r, patch); }
-      return json(res, 200, hit.map(r => ({ email: r.email })));
+      return json(res, 200, hit.map(r => ({ email: r.email, stripe_customer: r.stripe_customer })));
     }
     res.writeHead(405); res.end();
   });
-  return { rows, writes, url: server.url, close: () => new Promise(r => server.srv.close(r)) };
+  return { rows, pending, writes, pendingWrites, state, url: server.url, close: () => new Promise(r => server.srv.close(r)) };
 }
 
 /* Events in the shape Stripe really sends them. A Checkout Session carries
@@ -302,6 +341,19 @@ export default async function run(state) {
 
     const checkout = rowForEvent({ ...checkoutEvent('a@b.com', ENV.STRIPE_PRICE_PRO), created: t }, ENV);
     check(!!checkout.event_at, 'checkout events are stamped too — they race the subscription ones');
+
+    /* BUG-S: created is strictly later than what it replaces; updated and
+       deleted may equal it, so a redelivery still applies. */
+    const at = new Date(t * 1000).toISOString();
+    check(stripe.orderGuard('customer.subscription.created', at) === `event_at.is.null,event_at.lt.${at}`,
+      'customer.subscription.created writes only over a row stamped strictly earlier');
+    for (const type of ['customer.subscription.updated', 'customer.subscription.deleted']) {
+      check(stripe.orderGuard(type, at) === `event_at.is.null,event_at.lte.${at}`, `${type} keeps lte`);
+    }
+    check(stripe.orderGuard('customer.subscription.created', null) === null, 'and an event with no time is not guarded, as isNewer treats it');
+    check(stripe.pendingBelongs({ event_at: at }, { stamp_at: new Date((t - 60) * 1000).toISOString() }) === true
+      && stripe.pendingBelongs({ event_at: at }, { stamp_at: new Date((t + 60) * 1000).toISOString() }) === false,
+      'a kept subscription event belongs to a checkout only when raised after the buyer opened it');
   }
 
   console.log('\n— a checkout never takes over another customer\'s live subscription —');
@@ -500,19 +552,26 @@ export default async function run(state) {
       check(s2.d.acted === true && db.rows.get(pro).plan === 'pro' && db.rows.get(pro).status === 'active',
         `and the subscription turning active, raised just before it, is not refused as stale: ${JSON.stringify(s2.d)}`);
 
-      /* Card, with the subscription event delivered first: there is no row
-         yet (409, Stripe retries), the checkout event makes one, and the
-         retry lands although it was raised before the checkout event. */
+      /* Card, with the subscription event delivered first, which is the
+         usual order (BUG-S): there is no row yet, so the event is kept
+         against its customer, and the checkout event that makes the row
+         applies it in the same request. No 409, no waiting for Stripe's
+         retry (hours in test mode). */
       const card = 'card-buyer@example.com';
       const early = realSubscription({ customer: 'cus_CARD', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 2 });
       const e1 = await deliver(early);
-      check(e1.status === 409, `a subscription event before its checkout finds no row and is retried: ${e1.status}`);
-      await deliver(realCheckout({ email: card, customer: 'cus_CARD', paid: true, sessionAt: t - 90, eventAt: t }));
-      check(db.rows.get(card)?.status === 'incomplete' && !LIVE_STATUSES.includes(db.rows.get(card).status),
-        `the checkout, paid but naming no plan, records the row but not as live, so /account issues no Base licence to a Pro buyer: ${JSON.stringify(db.rows.get(card))}`);
+      check(e1.status === 200 && e1.d.pending === true,
+        `a subscription event before its checkout is answered 200 and kept, not refused with 409: ${e1.status} ${JSON.stringify(e1.d)}`);
+      check(db.pending.get('cus_CARD')?.plan === 'pro' && db.pending.get('cus_CARD')?.status === 'active' && !db.rows.has(card),
+        `kept against its customer, with no row made up for an address it does not carry: ${JSON.stringify(db.pending.get('cus_CARD'))}`);
+      check(db.pendingWrites.every(w => !('email' in w)), 'and the kept event holds no address');
+      const c2 = await deliver(realCheckout({ email: card, customer: 'cus_CARD', paid: true, sessionAt: t - 90, eventAt: t }));
+      check(c2.status === 200 && db.rows.get(card)?.plan === 'pro' && db.rows.get(card)?.status === 'active',
+        `the checkout event lands it: the row is Pro and live after the first delivery of each: ${JSON.stringify(c2.d)} ${JSON.stringify(db.rows.get(card))}`);
+      check(!db.pending.has('cus_CARD'), 'and the kept event is cleared once applied');
       const e2 = await deliver(early);
-      check(e2.d.acted === true && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active',
-        `the retry then names the plan and makes it live: ${JSON.stringify(e2.d)} ${JSON.stringify(db.rows.get(card))}`);
+      check(e2.status === 200 && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active' && !db.pending.has('cus_CARD'),
+        `a redelivery of the subscription event changes nothing and keeps nothing: ${JSON.stringify(e2.d)}`);
       const again2 = await deliver(realCheckout({ email: card, customer: 'cus_CARD', paid: true, sessionAt: t - 90, eventAt: t + 5 }));
       check(again2.d.acted === true && db.rows.get(card).plan === 'pro' && db.rows.get(card).status === 'active',
         `and a redelivered checkout, which names no plan, leaves Pro, and live, alone: ${JSON.stringify(db.rows.get(card))}`);
@@ -547,6 +606,84 @@ export default async function run(state) {
       const t2 = await deliver(realCheckout({ email: twice, customer: 'cus_TWICE', paid: true, sessionAt: t - 60, eventAt: t }));
       check(t2.d.pending === true && db.writes.length === before4 && JSON.stringify(db.rows.get(twice)) === JSON.stringify(heldTwice),
         `a second checkout naming no plan leaves a live row as it is: ${JSON.stringify(t2.d)}`);
+
+      /* BUG-S: customer.subscription.created at the same second as an
+         updated. Nothing happens to a subscription before it is created, so
+         the updated is the later one; with an `lte` guard, a created
+         delivered after it landed on the tie and lowered a live row to
+         incomplete. */
+      const tie = 'tie@example.com';
+      await deliver(realCheckout({ email: tie, customer: 'cus_TIE', paid: true, sessionAt: t - 60, eventAt: t - 30 }));
+      const u1 = await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_TIE',
+        price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t }));
+      check(u1.d.acted === true && db.rows.get(tie).status === 'active', `the updated (active) lands: ${JSON.stringify(db.rows.get(tie))}`);
+      const cr = await deliver(realSubscription({ customer: 'cus_TIE', price: ENV.STRIPE_PRICE_PRO, status: 'incomplete', eventAt: t }));
+      check(cr.status === 200 && cr.d.stale === true && db.rows.get(tie).status === 'active',
+        `a created of the same second, delivered after it, is stale and does not lower the row: ${JSON.stringify(cr.d)} ${db.rows.get(tie).status}`);
+      const u2 = await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_TIE',
+        price: ENV.STRIPE_PRICE_PRO, status: 'past_due', eventAt: t }));
+      check(u2.d.acted === true && db.rows.get(tie).status === 'past_due',
+        `while an updated of the same second still applies (lte, so a redelivery is never lost): ${db.rows.get(tie).status}`);
+
+      /* The same rule between kept events, before any row exists. */
+      const tie2 = 'tie-first@example.com';
+      await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_TIE2',
+        price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 10 }));
+      const cr2 = await deliver(realSubscription({ customer: 'cus_TIE2', price: ENV.STRIPE_PRICE_PRO, status: 'incomplete', eventAt: t - 10 }));
+      check(cr2.status === 200 && db.pending.get('cus_TIE2')?.status === 'active',
+        `a kept updated is not replaced by a created of the same second: ${JSON.stringify(cr2.d)} ${JSON.stringify(db.pending.get('cus_TIE2'))}`);
+      await deliver(realCheckout({ email: tie2, customer: 'cus_TIE2', paid: true, sessionAt: t - 90, eventAt: t - 5 }));
+      check(db.rows.get(tie2)?.status === 'active' && db.rows.get(tie2)?.plan === 'pro',
+        `and the checkout applies the later of the two: ${JSON.stringify(db.rows.get(tie2))}`);
+
+      /* Bank transfer, subscription first: kept, applied to the unpaid
+         checkout's row, and made live when the money clears. */
+      const sepa = 'sepa@example.com';
+      await deliver(realSubscription({ customer: 'cus_SEPA', price: ENV.STRIPE_PRICE_PRO, status: 'incomplete', eventAt: t - 3 }));
+      await deliver(realCheckout({ email: sepa, customer: 'cus_SEPA', paid: false, sessionAt: t - 200, eventAt: t }));
+      check(db.rows.get(sepa)?.plan === 'pro' && db.rows.get(sepa)?.status === 'incomplete' && db.rows.get(sepa)?.stripe_customer === 'cus_SEPA',
+        `a transfer still clearing: the row names the plan and the customer, and is not live: ${JSON.stringify(db.rows.get(sepa))}`);
+      await deliver(realCheckout({ type: 'checkout.session.async_payment_succeeded', email: sepa, customer: 'cus_SEPA',
+        paid: true, sessionAt: t - 200, eventAt: t + 86400 }));
+      check(db.rows.get(sepa).plan === 'pro' && db.rows.get(sepa).status === 'active',
+        `and the money clearing makes it live, still Pro: ${JSON.stringify(db.rows.get(sepa))}`);
+
+      /* A kept event from before this checkout was opened belongs to an
+         earlier subscription of the same customer: not applied, and dropped. */
+      const oldp = 'old-pending@example.com';
+      await deliver(realSubscription({ type: 'customer.subscription.updated', customer: 'cus_OLDP',
+        price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 7200 }));
+      check(db.pending.has('cus_OLDP'), 'an event for a customer with no row is kept');
+      await deliver(realCheckout({ email: oldp, customer: 'cus_OLDP', paid: true, sessionAt: t - 60, eventAt: t }));
+      check(db.rows.get(oldp)?.status === 'incomplete' && db.rows.get(oldp)?.plan === 'base' && !db.pending.has('cus_OLDP'),
+        `one raised before the buyer opened this checkout is not applied to it, and is dropped: ${JSON.stringify(db.rows.get(oldp))}`);
+
+      /* Cancelled before the checkout event arrived: the row is written as
+         ended, never live. */
+      const quit = 'quit@example.com';
+      await deliver(realSubscription({ customer: 'cus_QUIT', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 50 }));
+      await deliver({ ...realSubscription({ type: 'customer.subscription.deleted', customer: 'cus_QUIT',
+        price: ENV.STRIPE_PRICE_PRO, status: 'canceled', eventAt: t - 10 }) });
+      await deliver(realCheckout({ email: quit, customer: 'cus_QUIT', paid: true, sessionAt: t - 90, eventAt: t - 40 }));
+      check(db.rows.get(quit)?.status === 'canceled' && !LIVE_STATUSES.includes(db.rows.get(quit).status),
+        `a subscription deleted before its checkout event landed is not made live by it: ${JSON.stringify(db.rows.get(quit))}`);
+
+      /* The one case still left to Stripe's retry: a database where
+         database.sql section 6 never ran has nowhere to keep the event. */
+      db.state.pendingMissing = true;
+      const noTable = await deliver(realSubscription({ customer: 'cus_NOTABLE', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 2 }));
+      check(noTable.status === 409, `without pending_subscriptions, a subscription event before its row is 409, so Stripe retries: ${noTable.status}`);
+      await new Promise(res => setTimeout(res, 200));
+      check(/database\.sql section 6/.test(s.log()) && !s.log().includes('cus_NOTABLE'),
+        'the server log says which section to run, and names no customer');
+      const nt = 'no-table@example.com';
+      const ntc = await deliver(realCheckout({ email: nt, customer: 'cus_NOTABLE', paid: true, sessionAt: t - 90, eventAt: t }));
+      check(ntc.status === 200 && db.rows.get(nt)?.status === 'incomplete',
+        `and a checkout still records its row there, as before: ${ntc.status} ${JSON.stringify(db.rows.get(nt))}`);
+      const ntRetry = await deliver(realSubscription({ customer: 'cus_NOTABLE', price: ENV.STRIPE_PRICE_PRO, status: 'active', eventAt: t - 2 }));
+      check(ntRetry.d.acted === true && db.rows.get(nt).plan === 'pro' && db.rows.get(nt).status === 'active',
+        `which Stripe's retry then completes: ${JSON.stringify(db.rows.get(nt))}`);
+      db.state.pendingMissing = false;
     } finally { await s.stop(); await db.close(); }
   }
 

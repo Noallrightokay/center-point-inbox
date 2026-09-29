@@ -197,8 +197,16 @@ export default async function run(state) {
        describes, and the AI usage table holds no text. */
     const sql = readFileSync(join(SITE, 'database.sql'), 'utf8');
     const tables = [...sql.matchAll(/create table if not exists public\.(\w+)/g)].map(m => m[1]).sort();
-    check(JSON.stringify(tables) === JSON.stringify(['ai_usage', 'subscriptions', 'workspaces']),
-      `the site keeps three tables, the ones the page lists: ${tables.join(', ')}`);
+    check(JSON.stringify(tables) === JSON.stringify(['ai_usage', 'pending_subscriptions', 'subscriptions', 'workspaces']),
+      `the site keeps four tables, the ones the page lists: ${tables.join(', ')}`);
+    /* pending_subscriptions (BUG-S) holds a subscription event that arrived
+       before its checkout: keyed by the Stripe customer, never an address. */
+    const kept = (sql.match(/create table if not exists public\.pending_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
+    const keptCols = [...kept.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz)/gm)].map(m => m[1]);
+    check(JSON.stringify(keptCols) === JSON.stringify(['stripe_customer', 'plan', 'domain_addons', 'status', 'event_at', 'updated_at']),
+      `a subscription event kept before its checkout is a customer id, a plan, a status and a time, no address: ${keptCols.join(', ')}`);
+    check(P.includes('kept under your Stripe customer id alone') && P.includes('no email address'),
+      'and the page says so, under the subscription record');
     const usage = (sql.match(/create table if not exists public\.ai_usage \(([\s\S]*?)\n\);/) || ['', ''])[1];
     const cols = [...usage.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz)/gm)].map(m => m[1]);
     check(JSON.stringify(cols) === JSON.stringify(['email', 'month', 'micro_usd', 'requests', 'updated_at']),

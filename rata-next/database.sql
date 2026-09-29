@@ -212,3 +212,39 @@ revoke all on function public.ai_reserve(text, text, bigint, bigint) from public
 revoke all on function public.ai_settle(text, text, bigint) from public, anon, authenticated;
 grant execute on function public.ai_reserve(text, text, bigint, bigint) to service_role;
 grant execute on function public.ai_settle(text, text, bigint) to service_role;
+
+-- ------------------------------------------------------------
+-- 6. PENDING_SUBSCRIPTIONS — a subscription event that arrived
+--    before its checkout.
+--
+--    Stripe raises customer.subscription.created before
+--    checkout.session.completed and delivers them in no promised
+--    order. A subscription event is keyed by the Stripe customer
+--    and carries no email, so when it arrives first there is no
+--    subscriptions row to update. The webhook keeps it here, one
+--    row per customer (the newest event, by the same ordering
+--    rule as subscriptions: `created` must be strictly later,
+--    `updated` and `deleted` no earlier), and the checkout event
+--    that writes the row applies it in the same request and
+--    removes it. Without this table the event waits for Stripe's
+--    retry (hours in test mode), and the webhook answers 409.
+--
+--    It holds a customer id, a plan, a count, a status and a
+--    time: no address, no name. Only the server (service role)
+--    touches it; no policy lets a signed-in user read it.
+-- ------------------------------------------------------------
+create table if not exists public.pending_subscriptions (
+  stripe_customer text primary key,
+  plan text,                                -- null when the event named none
+  domain_addons integer,                    -- null when the event named none
+  status text,
+  event_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.pending_subscriptions enable row level security;
+
+drop trigger if exists pending_subscriptions_touch on public.pending_subscriptions;
+create trigger pending_subscriptions_touch
+  before update on public.pending_subscriptions
+  for each row execute function public.touch_updated_at();

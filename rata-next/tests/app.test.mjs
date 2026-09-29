@@ -446,6 +446,41 @@ export default async function run(state) {
       await p2.close();
     }
 
+    /* ---- BUG-S: changing plan never goes through a second Payment Link ---- */
+    console.log('\n— a live plan switches in the billing portal, never through a Payment Link —');
+    {
+      /* A Payment Link makes a second Stripe customer, whose checkout the
+         webhook refuses as a conflict with the live subscription: charged
+         twice, and the switch never applies. */
+      const plan = async (have, portal) => page.evaluate(({ have, portal }) => {
+        localStorage.setItem(CFG_KEY, JSON.stringify(Object.assign({
+          stripeBase: 'https://buy.stripe.com/test_base', stripePro: 'https://buy.stripe.com/test_pro',
+        }, portal ? { stripePortal: 'https://billing.stripe.com/p/login/test' } : {})));
+        S.settings.plan = have; renderPlan();
+        const out = {
+          links: [...document.querySelectorAll('#plan-buttons a')].map(a => ({ href: a.href, text: a.textContent })),
+          none: getComputedStyle(document.getElementById('bill-nolinks')).display !== 'none' ? document.getElementById('bill-nolinks').textContent : null,
+          uid: SESSION && SESSION.uid, email: SESSION && SESSION.email,
+        };
+        localStorage.removeItem(CFG_KEY); S.settings.plan = null; renderPlan();
+        return out;
+      }, { have, portal });
+      const free = await plan(null, true);
+      check(free.links.length === 2 && free.links.every(l => /buy\.stripe\.com/.test(l.href)),
+        `no plan: the Payment Links: ${free.links.map(l => l.text).join(' / ')}`);
+      check(free.links.every(l => { const u = new URL(l.href); return u.searchParams.get('prefilled_email') === free.email && u.searchParams.get('client_reference_id') === free.uid; }),
+        `carrying the account's address and id, as the website's links do: ${free.links[0] && free.links[0].href}`);
+      check(free.links.every(l => !l.text.includes('—')), `with no em dash in the words: ${free.links.map(l => l.text).join(' / ')}`);
+      for (const have of ['base', 'pro']) {
+        const live = await plan(have, true);
+        check(live.links.length === 1 && /billing\.stripe\.com/.test(live.links[0].href) && !live.links.some(l => /buy\.stripe\.com/.test(l.href)),
+          `on ${have}: only the billing portal, no Payment Link: ${live.links.map(l => `${l.text} ${l.href}`).join(' / ')}`);
+        const bare = await plan(have, false);
+        check(bare.links.length === 0 && /billing portal/.test(bare.none || ''),
+          `on ${have} with no portal configured: still no Payment Link, and it says where switching happens: "${bare.none}"`);
+      }
+    }
+
     /* ---- as many inboxes on one screen as fit ---- */
     console.log('\n— inboxes side by side —');
     /* Four mailboxes with mail in each, which is the case this exists for:

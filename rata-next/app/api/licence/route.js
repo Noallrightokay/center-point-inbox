@@ -20,7 +20,19 @@ export async function GET(req) {
   if (error) return NextResponse.json({ error });
 
   const email = (user.email || '').toLowerCase();
-  const { plan } = await entitlementsForUser(sb, email);
+  const { plan, pending } = await entitlementsForUser(sb, email);
+
+  if (!plan && pending) {
+    /* Paid for, or being paid for, and not live yet: the checkout reached us
+       and the subscription has not named its plan, or a bank transfer has
+       not cleared. Its own answer, so /account says "setting up" rather than
+       offering a second checkout (which would be a second subscription). */
+    return NextResponse.json({
+      licensed: false,
+      reason: 'pending',
+      message: 'Your checkout has reached us and your licence is being set up. If you paid by bank transfer, the key is ready once the transfer clears.',
+    });
+  }
 
   if (!plan) {
     /* Not an error — this is the ordinary state of somebody who has signed up

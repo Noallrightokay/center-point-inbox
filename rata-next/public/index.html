@@ -334,9 +334,29 @@ const RC=window.RATA_CONFIG||{};
    that no longer exists — so both buttons fell through to their signup href and
    nobody could reach checkout at all. The failure was silent: a button that
    goes somewhere plausible looks like a working button. */
+/* Carry the signed-in address into a Stripe Payment Link. The licence is
+   keyed on the address paid with, so prefilled_email fills Stripe's field
+   with the account's; client_reference_id (Stripe keeps letters, digits, -
+   and _, up to 200) rides along so a payment can be matched to the account
+   if they change the address anyway. Only https links that leave this site:
+   a fallback to our own pricing section gains nothing from an address.
+   The same function in account.html and in app.html's renderPlan
+   (tests/account.test.mjs and app.test.mjs check each). */
+function buyLink(u, email, uid) {
+  if (!u) return u;
+  try {
+    const url = new URL(u);
+    if (url.protocol !== 'https:' || url.host === location.host || /(^|\.)mailrata\.org$/.test(url.hostname)) return u;
+    if (email) url.searchParams.set('prefilled_email', email);
+    if (uid && /^[A-Za-z0-9_-]{1,200}$/.test(uid)) url.searchParams.set('client_reference_id', uid);
+    return url.toString();
+  } catch (e) { return u; }
+}
+let WHO=null;
+try{WHO=JSON.parse(localStorage.getItem('centra_session')||'null')}catch(e){}
 const LINKS={base:RC.stripeBase||'',pro:RC.stripePro||''};
-if(LINKS.base)document.getElementById('buy-base').href=LINKS.base;
-if(LINKS.pro)document.getElementById('buy-pro').href=LINKS.pro;
+if(LINKS.base)document.getElementById('buy-base').href=buyLink(LINKS.base,WHO&&WHO.email,WHO&&WHO.uid);
+if(LINKS.pro)document.getElementById('buy-pro').href=buyLink(LINKS.pro,WHO&&WHO.email,WHO&&WHO.uid);
 /* Signed in already: Log in becomes the way to the licence. */
 try{
   if(localStorage.getItem('centra_session')){
