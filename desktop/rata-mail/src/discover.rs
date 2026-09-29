@@ -218,12 +218,13 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
     if under("outlook.com") || under("office365.com") {
         return serves(MS_IMAP, "Microsoft 365", MS_SIGN_IN);
     }
-    if under("zoho.com") || under("zoho.eu") || under("zoho.in") {
-        return serves(
-            "imap.zoho.com",
-            "Zoho Mail",
-            "accounts.zoho.com → Security → App passwords",
-        );
+    // Zoho keeps each account in one region's data centre, and only that
+    // region's servers know it: an EU or Indian domain signs in at
+    // imap.zoho.eu or imap.zoho.in, never imap.zoho.com. The MX says which.
+    for (region, imap, help) in ZOHO_REGIONS {
+        if under(region) {
+            return serves(imap, "Zoho Mail", help);
+        }
     }
     if under("messagingengine.com") {
         return serves(
@@ -324,6 +325,52 @@ pub fn mx_rule(exchange: &str) -> Option<MxRule> {
     None
 }
 
+/// Zoho's data centres: the MX domain, the IMAP host there, and where that
+/// region's app passwords live. Matched by whole labels, so `zoho.com` is
+/// not the end of `mx.zoho.com.au`.
+const ZOHO_REGIONS: [(&str, &str, &str); 8] = [
+    (
+        "zoho.eu",
+        "imap.zoho.eu",
+        "accounts.zoho.eu → Security → App passwords",
+    ),
+    (
+        "zoho.in",
+        "imap.zoho.in",
+        "accounts.zoho.in → Security → App passwords",
+    ),
+    (
+        "zoho.com.au",
+        "imap.zoho.com.au",
+        "accounts.zoho.com.au → Security → App passwords",
+    ),
+    (
+        "zoho.jp",
+        "imap.zoho.jp",
+        "accounts.zoho.jp → Security → App passwords",
+    ),
+    (
+        "zohocloud.ca",
+        "imap.zohocloud.ca",
+        "accounts.zohocloud.ca → Security → App passwords",
+    ),
+    (
+        "zoho.sa",
+        "imap.zoho.sa",
+        "accounts.zoho.sa → Security → App passwords",
+    ),
+    (
+        "zoho.com.cn",
+        "imap.zoho.com.cn",
+        "accounts.zoho.com.cn → Security → App passwords",
+    ),
+    (
+        "zoho.com",
+        "imap.zoho.com",
+        "accounts.zoho.com → Security → App passwords",
+    ),
+];
+
 /// The conventional names, for a domain that really does run its own server.
 /// Tried last, so a stale `imap.<domain>` cannot outrank what the MX says.
 pub fn conventional(email: &str) -> Vec<String> {
@@ -388,6 +435,26 @@ pub fn smtp_candidates(imap_host: &str, email: &str) -> Vec<String> {
 /// the clear and upgrades.
 pub const SMTP_PORTS: [(u16, bool); 2] = [(465, true), (587, false)];
 
+/// Submission hosts that document 587 (STARTTLS) as their port, and answer
+/// nothing on 465 — so trying 465 first there costs a timeout per address
+/// before the send even starts: Microsoft's two and iCloud's.
+const SUBMISSION_587: &[&str] = &[
+    "smtp-mail.outlook.com",
+    "smtp.office365.com",
+    "smtp.mail.me.com",
+];
+
+/// The ports to try on one submission host, best first: its documented port
+/// where RATA knows it, else [`SMTP_PORTS`].
+pub fn smtp_ports(host: &str) -> [(u16, bool); 2] {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    if SUBMISSION_587.contains(&h.as_str()) {
+        [(587, false), (465, true)]
+    } else {
+        SMTP_PORTS
+    }
+}
+
 /// "The server said no" and "there is no server" need different answers: the
 /// first means the password is wrong and trying again only pushes the account
 /// closer to being locked.
@@ -441,7 +508,7 @@ mod tests {
                 "outlook.office365.com",
                 "Microsoft 365",
             ),
-            ("mx.zoho.eu", "imap.zoho.com", "Zoho Mail"),
+            ("mx.zoho.eu", "imap.zoho.eu", "Zoho Mail"),
             (
                 "in1-smtp.messagingengine.com",
                 "imap.fastmail.com",
@@ -465,6 +532,56 @@ mod tests {
                 }
                 other => panic!("{mx} -> {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_zoho_domain_signs_in_at_its_own_region() {
+        for (mx, host) in [
+            ("mx.zoho.com", "imap.zoho.com"),
+            ("mx2.zoho.com", "imap.zoho.com"),
+            ("mx.zoho.eu", "imap.zoho.eu"),
+            ("mx3.zoho.eu", "imap.zoho.eu"),
+            ("mx.zoho.in", "imap.zoho.in"),
+            ("mx.zoho.com.au", "imap.zoho.com.au"),
+            ("mx.zoho.jp", "imap.zoho.jp"),
+            ("mx.zohocloud.ca", "imap.zohocloud.ca"),
+            ("mx.zoho.sa", "imap.zoho.sa"),
+            ("mx.zoho.com.cn", "imap.zoho.com.cn"),
+        ] {
+            match mx_rule(mx) {
+                Some(MxRule::Serves(h)) => {
+                    assert_eq!(h.host, host, "{mx}");
+                    assert_eq!(h.label, "Zoho Mail", "{mx}");
+                    let region = host.trim_start_matches("imap.");
+                    assert!(
+                        h.help.starts_with(&format!("accounts.{region} ")),
+                        "{mx}: {}",
+                        h.help
+                    );
+                }
+                other => panic!("{mx} -> {other:?}"),
+            }
+        }
+        // And sending follows: the region's own submission host.
+        assert_eq!(smtp_candidates("imap.zoho.eu", "a@b.de"), ["smtp.zoho.eu"]);
+        assert_eq!(smtp_candidates("imap.zoho.in", "a@b.in"), ["smtp.zoho.in"]);
+        // Not a region: a name that only ends the same way.
+        assert_eq!(mx_rule("mx.notzoho.eu"), None);
+    }
+
+    #[test]
+    fn microsoft_and_icloud_are_sent_to_on_587_first() {
+        for host in [
+            "smtp-mail.outlook.com",
+            "smtp.office365.com",
+            "smtp.mail.me.com",
+            "SMTP.Office365.com.",
+        ] {
+            assert_eq!(smtp_ports(host), [(587, false), (465, true)], "{host}");
+        }
+        for host in ["smtp.gmail.com", "smtp.zoho.eu", "mail.example.com"] {
+            assert_eq!(smtp_ports(host), SMTP_PORTS, "{host}");
         }
     }
 

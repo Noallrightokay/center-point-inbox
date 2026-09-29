@@ -1412,7 +1412,12 @@ function dropMessages(ids){
   if(keys.length>GONE_MAX){keys.sort((a,b)=>S.gone[a]-S.gone[b]).slice(0,keys.length-GONE_MAX).forEach(k=>delete S.gone[k])}
   return before-S.messages.length;
 }
-const isGone=id=>!!(S.gone&&S.gone[id]);
+/* Mail on its way out of a folder, while its mailbox is being told: off the
+   list at once, so the screen never waits on a server, but not in S.gone
+   until the mailbox says it has gone. A refresh meanwhile does not bring it
+   back; a refusal does (takeOff). */
+const LEAVING=new Set();
+const isGone=id=>!!(S.gone&&S.gone[id])||LEAVING.has(id);
 /* Older mail, a page at a time. A refresh brings the newest fifteen; this
    walks back from the oldest message RATA holds for each mailbox, fifty at a
    time, until the mailbox says there is nothing older. Desktop app only.
@@ -1724,25 +1729,69 @@ async function upgradeBodies(){
    per message. Messages fetched before RATA kept a server reference have none,
    and are changed in RATA only. Resolves to a list of problems, one line per
    mailbox that could not be updated. */
-async function serverAct(msgs,action){
-  if(!window.__RATA_NATIVE__)return [];
-  const groups=new Map();
+const actEmail=m=>(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
+/* Whether the server can be told about m: RATA holds where it is there. */
+const serverRef=m=>m.prov==='imap'&&!!m.uid&&!!m.uidvalidity&&!!actEmail(m);
+/* Each mailbox, folder and UIDVALIDITY's messages, told in one request, and
+   what each answered: [{email,msgs,r}]. */
+async function serverActGroups(msgs,action){
+  const groups=new Map(),held=new Map();
   for(const m of msgs){
-    if(m.prov!=='imap'||!m.uid||!m.uidvalidity)continue;
-    const email=(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
-    if(!email)continue;
+    if(!serverRef(m))continue;
+    const email=actEmail(m);
     const k=email+'|'+m.uidvalidity+'|'+JSON.stringify(folderArg(m));
-    if(!groups.has(k))groups.set(k,{email,folder:folderArg(m),uidvalidity:m.uidvalidity,uids:[]});
-    groups.get(k).uids.push(m.uid);
+    if(!groups.has(k)){groups.set(k,{email,folder:folderArg(m),uidvalidity:m.uidvalidity,uids:[]});held.set(k,[])}
+    groups.get(k).uids.push(m.uid);held.get(k).push(m);
   }
-  const problems=[];
-  for(const g of groups.values()){
+  const out=[];
+  for(const [k,g] of groups){
     let r;
     try{r=await apiFetch('/api/mail/act',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({action},g))})}
     catch(e){r={ok:false,error:String(e&&e.message||e)}}
-    if(!r||!r.ok)problems.push(g.email+': '+((r&&r.error)||'no answer'));
+    out.push({email:g.email,msgs:held.get(k),r:r||{ok:false}});
   }
-  return problems;
+  return out;
+}
+async function serverAct(msgs,action){
+  if(!window.__RATA_NATIVE__)return [];
+  return (await serverActGroups(msgs,action)).filter(x=>!x.r.ok).map(x=>x.email+': '+(x.r.error||'no answer'));
+}
+/* Messages the customer deleted, archived or moved (BUG-M). They leave the
+   list at once (shown() then redraws), but only what the mailbox says has
+   gone is recorded in S.gone. Anything its mailbox refused or never heard —
+   no Trash or Archive folder, a folder renamed since, a sign-in refused, no
+   network — comes back, text and all, so RATA never hides mail the server
+   kept. Out of Gmail's archive a move is a copy (the message stays
+   archived, r.copied), so it leaves without S.gone and the next refresh
+   files it where Gmail shows it. Mail with no server reference, and all
+   mail on the website, is RATA's own copy only and simply goes. Resolves to
+   {problems, back}: a line per mailbox that was not changed, and how many
+   messages came back. */
+async function takeOff(list,action,shown){
+  const copies=list.map(m=>Object.assign({},m));
+  const told=window.__RATA_NATIVE__?copies.filter(serverRef):[];
+  const own=copies.filter(m=>!told.includes(m));
+  /* Taking a message off the list takes its text off the disk too, so a
+     message that may come back has its text read first. */
+  const texts=told.length?await bodiesOf(told):new Map();
+  for(const m of told)LEAVING.add(m.id);
+  S.messages=S.messages.filter(m=>!LEAVING.has(m.id));
+  dropMessages(own.map(m=>m.id));
+  save();
+  if(shown)shown();
+  const problems=[];let back=0;
+  for(const {email,msgs,r} of await serverActGroups(told,action)){
+    for(const m of msgs)LEAVING.delete(m.id);
+    if(r.ok){if(!r.copied)dropMessages(msgs.map(m=>m.id));continue}
+    problems.push(email+': '+(r.error||'no answer'));
+    for(const m of msgs){
+      if(S.messages.some(x=>x.id===m.id))continue;
+      const b=texts.get(m.id);if(b!==undefined&&!('body' in m))m.body=b;
+      S.messages.push(m);back++;
+    }
+  }
+  if(told.length)save();
+  return {problems,back};
 }
 const contact=id=>S.contacts.find(c=>c.id===id);
 const msgFrom=m=>m.sent||m.draft?(S.settings.name+' (you)'):(contact(m.cid)?.name||m.fromName||'Unknown');
@@ -1842,17 +1891,22 @@ $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#s
 const canArchive=m=>m.prov==='imap'&&m.uid&&inInbox(m);
 const canGoHome=m=>m.prov==='imap'&&m.uid&&['archive','junk','named'].includes(folderOf(m));
 const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&!['sent','drafts'].includes(folderOf(m));
+const drawList=()=>{renderSyncAll();renderMailFilters();renderMail()};
+/* What a Delete, Archive or Move of several says once the mailboxes have
+   answered: how many went, and why the rest came back. */
+function leftSaying(verb,n,out,skipped){
+  const went=n-out.back;
+  if(!out.back)return verb+' \u2014 '+n+(skipped?' ('+skipped+' could not be)':'');
+  if(!went)return 'Nothing was changed \u2014 '+out.problems[0];
+  return verb+' \u2014 '+went+'; '+out.back+' could not be and '+(out.back===1?'is':'are')+' back in the list \u2014 '+out.problems[0];
+}
 async function bulkLeave(list,action,tag,verb){
   const n=SEL.size;
   if(!list.length){toast(verb+' \u2014 none of the '+n+' selected can be');return}
-  const picked=list.map(m=>Object.assign({},m));
-  dropMessages(picked.map(m=>m.id));SEL.clear();save();
-  await audit('mail.bulk',tag+' \u00d7 '+picked.length);
-  renderSyncAll();renderMailFilters();renderMail();
-  const skipped=n-picked.length;
-  const done=verb+' \u2014 '+picked.length+(skipped?' ('+skipped+' could not be)':'');
-  const problems=await serverAct(picked,action);
-  toast(problems.length?done+' in RATA, but your mailbox was not updated \u2014 '+problems[0]:done);
+  const out=await takeOff(list,action,()=>{SEL.clear();drawList()});
+  if(out.back)drawList();
+  if(list.length>out.back)await audit('mail.bulk',tag+' \u00d7 '+(list.length-out.back));
+  toast(leftSaying(verb,list.length,out,n-list.length));
 }
 function bulkFileMenu(){
   const el=$('#bulk-filemenu');
@@ -1890,25 +1944,29 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async e=>{
     return;
   }
   const n=SEL.size;
-  if(act==='del'&&!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
+  if(act==='del'){
+    if(!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
+    const list=chosen(),out=await takeOff(list,'trash',()=>{SEL.clear();drawList()});
+    if(out.back)drawList();
+    if(list.length>out.back)await audit('mail.bulk','del \u00d7 '+(list.length-out.back));
+    toast(leftSaying('Deleted',list.length,out,0));
+    return;
+  }
   const picked=S.messages.filter(m=>SEL.has(m.id)).map(m=>Object.assign({},m));
   const pending=[];
-  if(act==='del'){dropMessages([...SEL]);pending.push(serverAct(picked,'trash'))}
-  else{
-    for(const id of [...SEL]){
-      const i=S.messages.findIndex(m=>m.id===id);if(i<0)continue;
-      if(act==='read')S.messages[i].unread=false;
-      else if(act==='unread'){if(!S.messages[i].sent)S.messages[i].unread=true}
-      else if(act==='star')S.messages[i].starred=!S.messages[i].starred;
-    }
-    if(act==='read'||act==='unread')pending.push(serverAct(picked,act));
-    /* Star toggles each message, so the selection splits into two changes. */
-    if(act==='star'){pending.push(serverAct(picked.filter(m=>!m.starred),'star'));pending.push(serverAct(picked.filter(m=>m.starred),'unstar'))}
+  for(const id of [...SEL]){
+    const i=S.messages.findIndex(m=>m.id===id);if(i<0)continue;
+    if(act==='read')S.messages[i].unread=false;
+    else if(act==='unread'){if(!S.messages[i].sent)S.messages[i].unread=true}
+    else if(act==='star')S.messages[i].starred=!S.messages[i].starred;
   }
+  if(act==='read'||act==='unread')pending.push(serverAct(picked,act));
+  /* Star toggles each message, so the selection splits into two changes. */
+  if(act==='star'){pending.push(serverAct(picked.filter(m=>!m.starred),'star'));pending.push(serverAct(picked.filter(m=>m.starred),'unstar'))}
   SEL.clear();save();
   await audit('mail.bulk',act+' × '+n);
   renderSyncAll();renderMailFilters();renderMail();
-  const done=({read:'Marked read',unread:'Marked unread',star:'Star toggled',del:'Deleted'})[act]+' — '+n;
+  const done=({read:'Marked read',unread:'Marked unread',star:'Star toggled'})[act]+' — '+n;
   const problems=(await Promise.all(pending)).flat();
   toast(problems.length?done+' in RATA, but your mailbox was not updated — '+problems[0]:done);
 });
@@ -2671,14 +2729,14 @@ function openMail(id){
   if($('#md-trtoggle'))$('#md-trtoggle').onclick=()=>{tr.hidden=!tr.hidden;openMail(id)};
   if($('#md-star'))$('#md-star').onclick=()=>{m.starred=!m.starred;save();serverAct([m],m.starred?'star':'unstar');openMail(id);renderMail()};
   if($('#md-unread'))$('#md-unread').onclick=()=>{m.unread=true;save();serverAct([m],'unread');renderMail();toast('Marked unread')};
-  /* Delete and Archive take the message off the screen at once, then tell the
-     mailbox. If the mailbox cannot be told, say so — "gone from RATA but still
-     in your inbox" is worth knowing, and the next attempt will work. */
+  /* Delete, Archive and Move take the message off the screen at once, then
+     tell the mailbox. If the mailbox did not do it, the message comes back
+     and the toast says why (takeOff). */
   const leave=async(action,verb,tag=action)=>{
-    const copy=Object.assign({},m);
-    dropMessages([id]);selMail=null;save();audit('msg.'+tag,m.subj||m.prev.slice(0,40));d.classList.remove('open');renderResting();renderMail();
-    const problems=await serverAct([copy],action);
-    toast(problems.length?verb+' in RATA, but your mailbox was not updated — '+problems[0]:verb);
+    const out=await takeOff([m],action,()=>{selMail=null;d.classList.remove('open');renderResting();renderMail()});
+    if(out.back){renderSyncAll();renderMailFilters();renderMail();toast('Nothing was changed \u2014 '+out.problems[0]);return}
+    audit('msg.'+tag,m.subj||m.prev.slice(0,40));
+    toast(verb);
   };
   $('#md-del').onclick=()=>leave('trash','Deleted');
   if($('#md-archive'))$('#md-archive').onclick=()=>leave('archive','Archived');
@@ -4804,7 +4862,10 @@ async function absorbMail(res,quiet){
      device may have changed them. */
   if((res.flags||[]).length){
     const byId=new Map(S.messages.map(m=>[m.id,m]));
-    for(const f of res.flags){const have=byId.get(f.id);if(have){have.unread=!!f.unread;have.starred=!!f.starred}}
+    /* Never unread for mail the customer wrote: a draft or sent mail the
+       server has not marked seen (a draft RATA saved before it set Seen) is
+       still not news. */
+    for(const f of res.flags){const have=byId.get(f.id);if(have){if(!have.sent&&!have.draft)have.unread=!!f.unread;have.starred=!!f.starred}}
   }
   const take=m=>{
     if(isGone(m.id))return;
@@ -4819,7 +4880,7 @@ async function absorbMail(res,quiet){
     /* A draft RATA saved (F1), now seen in Drafts: an ordinary draft from here on. */
     if(have&&have.ownDraft){delete have.ownDraft;delete have.savedAt}
     if(have&&m.draftId)have.draftId=m.draftId;
-    if(have){have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
+    if(have){if(!have.sent&&!have.draft)have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));
     if(inInbox(m))added++;
     newIds.push(m.id);

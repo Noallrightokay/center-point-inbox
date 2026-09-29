@@ -139,6 +139,18 @@ const DRAFTS_NAMES: &[&str] = &["Drafts", "Draft", "INBOX.Drafts", "INBOX/Drafts
 /// past it is not a drafts folder anyone uses.
 const DRAFTS_MAX: usize = 5000;
 
+/// What Trash is called on servers that do not say which folder it is —
+/// GreenMail's, and many a small host's. Only ever by the whole name: a
+/// folder that merely contains the word ("Trash 2019", "Old Bin") is not it.
+const TRASH_NAMES: &[&str] = &[
+    "Trash",
+    "Deleted Items",
+    "Deleted Messages",
+    "Bin",
+    "INBOX.Trash",
+    "INBOX/Trash",
+];
+
 /// What Spam is called on servers that do not say which folder it is.
 const JUNK_NAMES: &[&str] = &[
     "Junk",
@@ -660,6 +672,11 @@ pub async fn verify_with(
     let mut tried: Vec<String> = Vec::new();
     let mut last_net: Option<String> = None;
     let mut blocked: Option<String> = None;
+    // The first provider RATA knows (from its table, or a recognised MX)
+    // that could not be reached, and why. Its server address is not in
+    // doubt, so a box asking for one would only send the customer looking
+    // for something they already have.
+    let mut known_down: Option<(Candidate, String)> = None;
 
     for cand in &hosts {
         // Recorded before the attempt, not after it. Only a host that reached
@@ -691,6 +708,9 @@ pub async fn verify_with(
                 continue;
             }
             Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
+                if known(cand) && known_down.is_none() {
+                    known_down = Some((cand.clone(), why.clone()));
+                }
                 last_net = Some(why);
                 continue;
             }
@@ -709,7 +729,7 @@ pub async fn verify_with(
             }
             // The password is wrong. Every remaining candidate is the same
             // password at another address, and providers count failures.
-            Err(Trouble::Auth(_)) => return Verify::Refused(refusal(cand)),
+            Err(Trouble::Auth(why)) => return Verify::Refused(refusal(cand, &why)),
             // The same token goes to every candidate, so the same answer
             // would come back from each.
             Err(Trouble::OAuth(why)) => {
@@ -724,6 +744,9 @@ pub async fn verify_with(
                 ));
             }
             Err(Trouble::Net(why) | Trouble::Host(why)) => {
+                if known(cand) && known_down.is_none() {
+                    known_down = Some((cand.clone(), why.clone()));
+                }
                 last_net = Some(why);
                 continue;
             }
@@ -738,6 +761,10 @@ pub async fn verify_with(
 
     if let Some(given) = host_override {
         return Verify::Failed(typed_host_failed(given, last_net.as_deref()));
+    }
+
+    if let Some((cand, why)) = known_down {
+        return Verify::Failed(known_host_failed(&cand, &why));
     }
 
     let domain = domain_of(email);
@@ -783,22 +810,57 @@ fn typed_host_failed(given: &str, why: Option<&str>) -> String {
     }
 }
 
+/// Whether a candidate's server is one RATA knows — from its own table of
+/// providers, or a provider it recognised in the domain's MX — rather than
+/// one it guessed or was told.
+fn known(cand: &Candidate) -> bool {
+    matches!(cand.source, Source::Table | Source::Mx)
+}
+
+/// What to tell someone whose provider RATA knows but could not reach. The
+/// server's address is not the problem, so this never asks for one: it names
+/// the server and says why, and what usually fixes it.
+fn known_host_failed(cand: &Candidate, why: &str) -> String {
+    let who = if cand.label.is_empty() {
+        cand.host.clone()
+    } else {
+        format!("{} ({})", cand.label, cand.host)
+    };
+    let why = why.trim().trim_end_matches('.');
+    if why.is_empty() {
+        format!("Could not reach {who}. Check your connection and try again in a few minutes.")
+    } else {
+        format!(
+            "Could not reach {who}: {why}. Check your connection and try again in a few minutes."
+        )
+    }
+}
+
 /// What to tell someone whose password was refused. Almost always the same
 /// cause — a normal account password where an app password is needed — so the
-/// sentence says that, and says where theirs lives.
-fn refusal(cand: &Candidate) -> String {
+/// sentence says that, and says where theirs lives. The server's own words
+/// follow (`said`: already one line, with no secret in it), because the
+/// exception is worth reading: Gmail's "IMAP access is disabled for your
+/// domain" has nothing to do with the password.
+fn refusal(cand: &Candidate, said: &str) -> String {
     let who = if cand.label.is_empty() {
         "The mail server"
     } else {
         &cand.label
     };
-    match &cand.help {
+    let advice = match &cand.help {
         Some(help) => format!(
             "{who} rejected the sign-in. Use an app password, not your normal account password — {help}."
         ),
         None => format!(
             "{who} rejected the sign-in. Use an app password, not your normal account password."
         ),
+    };
+    let said = said.trim();
+    if said.is_empty() {
+        advice
+    } else {
+        format!("{advice} The server said: {said}")
     }
 }
 
@@ -2955,6 +3017,15 @@ pub enum Acted {
         done: Vec<u32>,
         gone: Vec<u32>,
     },
+    /// Gmail's archive: `done` were copied where they were asked to go (a
+    /// label, to Gmail) and are still archived, since taking a message out
+    /// of All Mail deletes it everywhere. Nothing left the archive, so the
+    /// page must not remember them as gone: they come back under Archive,
+    /// as Gmail itself shows them.
+    Copied {
+        done: Vec<u32>,
+        gone: Vec<u32>,
+    },
     /// The mailbox was rebuilt since RATA read it, so its message numbers now
     /// mean something else — or RATA never had a server reference. Nothing was
     /// touched, which is the point.
@@ -3122,7 +3193,7 @@ where
         && places(session).await.all_mail
     {
         return match timeout(COMMAND, session.uid_copy(&set, &dest)).await {
-            Ok(Ok(())) => Acted::Done {
+            Ok(Ok(())) => Acted::Copied {
                 done: present,
                 gone,
             },
@@ -3189,26 +3260,57 @@ where
 /// out of the inbox is exactly what archiving means. So a server that
 /// declares nothing, and shows its "Archive" in RATA, can also be archived to.
 ///
-/// Trash is only ever the folder the server declares `\Trash` (RFC 6154) —
-/// "Trash", "Deleted Items", "[Gmail]/Bin" and "Papierkorb" alike — never a
-/// guess by name: a wrong guess there puts mail somewhere the customer did
-/// not ask for, and none at all is a refusal they can see.
+/// Trash is the folder the server declares `\Trash` (RFC 6154) — "Trash",
+/// "Deleted Items", "[Gmail]/Bin" and "Papierkorb" alike — else, on a server
+/// that declares none, one named exactly as [`TRASH_NAMES`] lists (see
+/// [`trash_in`]). None at all is still a refusal the customer can see, never
+/// a permanent delete.
 async fn destination<T>(session: &mut Session<T>, action: &Action) -> Option<String>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
 {
-    use async_imap::types::NameAttribute as A;
     match action {
         Action::Inbox => Some("INBOX".into()),
         Action::Move(to) => name_of(session, to).await,
         Action::Archive => name_of(session, &Folder::Archive).await,
-        Action::Trash => listing(session)
-            .await?
-            .into_iter()
-            .find(|n| n.attributes().contains(&A::Trash) && selectable(n))
-            .map(|n| n.name().to_string()),
+        Action::Trash => trash_in(&listing(session).await?),
         Action::Read | Action::Unread | Action::Star | Action::Unstar => None,
     }
+}
+
+/// The Trash in a LIST: the folder declared `\Trash`, else the first one
+/// named exactly as [`TRASH_NAMES`] lists that can be opened, is not the
+/// inbox, declares no other purpose, and is not what a refresh reads as
+/// Sent, Archive, Spam or Drafts.
+fn trash_in(listed: &[async_imap::types::Name]) -> Option<String> {
+    use async_imap::types::NameAttribute as A;
+    if let Some(n) = listed
+        .iter()
+        .find(|n| n.attributes().contains(&A::Trash) && selectable(n))
+    {
+        return Some(n.name().to_string());
+    }
+    let found = places_in(listed);
+    let other_purpose = |n: &async_imap::types::Name| {
+        n.attributes().iter().any(|a| {
+            matches!(
+                a,
+                A::All | A::Archive | A::Drafts | A::Flagged | A::Junk | A::Sent
+            )
+        })
+    };
+    TRASH_NAMES.iter().find_map(|want| {
+        listed
+            .iter()
+            .find(|n| {
+                n.name().eq_ignore_ascii_case(want)
+                    && selectable(n)
+                    && !n.name().eq_ignore_ascii_case("INBOX")
+                    && !other_purpose(n)
+                    && !found.holds(n.name())
+            })
+            .map(|n| n.name().to_string())
+    })
 }
 
 // -------------------------------------------------------------------- drafts
@@ -3277,9 +3379,10 @@ pub enum DraftSaved {
 ///
 /// The draft is rendered as it would be sent ([`compose::render_draft`]:
 /// attachments, Cc and Bcc kept) with `X-RATA-Draft: <draft_id>` and
-/// `X-RATA-Draft-Rev: <rev>`, and APPENDed with `\Draft` set. Its new UID
-/// is the server's `APPENDUID` answer where it gives one (UIDPLUS), else the
-/// newest message in Drafts carrying this id.
+/// `X-RATA-Draft-Rev: <rev>`, and APPENDed with `\Seen` and `\Draft` set:
+/// a draft is the customer's own, never unread. Its new UID is the server's
+/// `APPENDUID` answer where it gives one (UIDPLUS), else the newest message
+/// in Drafts carrying this id.
 ///
 /// `prior` is the copy saved before. It is permanently removed only when
 /// every check holds: Drafts has the same UIDVALIDITY, the message at that
@@ -3530,8 +3633,9 @@ enum Appended {
     Failed(String),
 }
 
-/// `APPEND` of `raw` to `mailbox`, flagged `\Draft`, reading the server's
-/// `APPENDUID` if it gives one — which async-imap's own `append` drops.
+/// `APPEND` of `raw` to `mailbox`, flagged `\Seen \Draft`, reading the
+/// server's `APPENDUID` if it gives one — which async-imap's own `append`
+/// drops.
 async fn append<T>(session: &mut Session<T>, mailbox: &str, raw: &str) -> Appended
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
@@ -3543,7 +3647,7 @@ where
     let lost = || Appended::Failed("the connection was lost".into());
     let run = async {
         let id = session
-            .run_command(format!("APPEND {name} (\\Draft) {{{}}}", raw.len()))
+            .run_command(format!("APPEND {name} (\\Seen \\Draft) {{{}}}", raw.len()))
             .await
             .map_err(|e| Appended::Failed(reason(&e)))?;
         // Go ahead — or a refusal before anything is uploaded.
@@ -4875,6 +4979,14 @@ mod tests {
         }
     }
 
+    /// What a move out of Gmail's archive is: a copy, still archived.
+    fn copied(uids: &[u32]) -> Acted {
+        Acted::Copied {
+            done: uids.to_vec(),
+            gone: vec![],
+        }
+    }
+
     #[test]
     fn a_bulk_action_touches_only_the_messages_still_there_on_one_connection() {
         rt_act().block_on(async {
@@ -5061,10 +5173,10 @@ mod tests {
     }
 
     #[test]
-    fn trash_still_needs_a_declared_trash_even_one_called_trash() {
+    fn delete_goes_to_a_folder_named_trash_on_a_server_that_declares_nothing() {
         rt_act().block_on(async {
-            // "Delete" never guesses: a folder merely named Trash might be
-            // anything, and a wrong guess loses mail somewhere unexpected.
+            // GreenMail and many a small host declare no \Trash. Refusing
+            // there left Delete doing nothing on the server at all (BUG-M).
             let (mut s, log) = scripted_session(Script {
                 caps: "MOVE UIDPLUS",
                 list: UNDECLARED,
@@ -5072,12 +5184,56 @@ mod tests {
                 present: &[42],
             })
             .await;
-            assert!(matches!(
+            assert_eq!(
                 apply(&mut s, &Folder::Inbox, &[42], 7, &Action::Trash).await,
-                Acted::NoPlace(_)
-            ));
-            assert!(changed(&log.lock().unwrap()).is_empty());
+                done(&[42])
+            );
+            assert_eq!(changed(&log.lock().unwrap()), vec!["UID MOVE 42 \"Trash\""]);
         });
+    }
+
+    #[test]
+    fn trash_by_name_is_the_whole_name_and_a_declared_trash_wins() {
+        let row = |attrs: &str, name: &str| format!("* LIST ({attrs}) \"/\" \"{name}\"\r\n");
+        let names = |rows: &[String]| {
+            let raw = format!("* LIST () \"/\" \"INBOX\"\r\n{}", rows.concat());
+            let list: &'static str = Box::leak(raw.into_boxed_str());
+            rt_act().block_on(async {
+                let (mut s, _) = scripted_session(Script {
+                    caps: "MOVE UIDPLUS",
+                    list,
+                    uidvalidity: 7,
+                    present: &[42],
+                })
+                .await;
+                trash_in(&listing(&mut s).await.expect("a listing"))
+            })
+        };
+        // Each of the names providers give it.
+        for n in [
+            "Trash",
+            "Deleted Items",
+            "Deleted Messages",
+            "Bin",
+            "INBOX/Trash",
+        ] {
+            assert_eq!(names(&[row("", n)]).as_deref(), Some(n), "{n}");
+        }
+        assert_eq!(names(&[row("", "trash")]).as_deref(), Some("trash"));
+        // Never a name that merely contains the word, one that cannot be
+        // opened, or one declared as something else.
+        for rows in [
+            vec![row("", "Trash 2019"), row("", "Old Bin")],
+            vec![row("\\Noselect", "Trash")],
+            vec![row("\\Sent", "Trash")],
+        ] {
+            assert_eq!(names(&rows), None, "{rows:?}");
+        }
+        // A declared Trash wins over one merely named so.
+        assert_eq!(
+            names(&[row("", "Trash"), row("\\Trash", "Papierkorb")]).as_deref(),
+            Some("Papierkorb")
+        );
     }
 
     #[test]
@@ -5347,10 +5503,108 @@ mod tests {
             help: Some("myaccount.google.com/apppasswords".into()),
             source: Source::Mx,
         };
-        let msg = refusal(&cand);
+        let msg = refusal(&cand, "");
         assert!(msg.contains("Google Workspace"), "{msg}");
         assert!(msg.contains("app password"), "{msg}");
         assert!(msg.contains("apppasswords"), "{msg}");
+        assert!(!msg.contains("The server said"), "{msg}");
+    }
+
+    #[test]
+    fn a_refusal_keeps_what_the_server_said() {
+        // Gmail's refusal when a Workspace administrator has turned IMAP off:
+        // nothing to do with the password, and only the server says so.
+        let cand = Candidate {
+            host: "imap.gmail.com".into(),
+            port: IMAP_PORT,
+            label: "Gmail".into(),
+            help: Some("myaccount.google.com/apppasswords".into()),
+            source: Source::Table,
+        };
+        let msg = refusal(
+            &cand,
+            "[ALERT] IMAP access is disabled for your domain. Please contact your domain administrator.",
+        );
+        assert!(msg.contains("app password"), "{msg}");
+        assert!(
+            msg.ends_with(
+                "The server said: [ALERT] IMAP access is disabled for your domain. Please contact your domain administrator."
+            ),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn a_refused_password_at_link_time_carries_the_servers_words_and_no_secret() {
+        // End to end through `login`: the words reach the sentence, and the
+        // password a server echoes does not.
+        rt_act().block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+                let (sock, _) = listener.accept().await.unwrap();
+                let (r, mut w) = sock.into_split();
+                let mut lines = BufReader::new(r).lines();
+                w.write_all(b"* OK ready\r\n").await.unwrap();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let tag = line.split(' ').next().unwrap_or("*").to_string();
+                    w.write_all(format!("{tag} NO [ALERT] IMAP access is disabled for your domain (you sent hunter2-secret)\r\n").as_bytes()).await.unwrap();
+                }
+            });
+            let tcp = TcpStream::connect(addr).await.unwrap();
+            let mut client = async_imap::Client::new(tcp);
+            client.read_response().await.unwrap();
+            let why = match sign_in(
+                client,
+                "me@example.com",
+                &Credential::Password("hunter2-secret".into()),
+            )
+            .await
+            {
+                Err(Trouble::Auth(why)) => why,
+                Err(other) => panic!("{other:?}"),
+                Ok(_) => panic!("signed in"),
+            };
+            let cand = Candidate {
+                host: "imap.gmail.com".into(),
+                port: IMAP_PORT,
+                label: "Gmail".into(),
+                help: None,
+                source: Source::Table,
+            };
+            let msg = refusal(&cand, &why);
+            assert!(msg.contains("IMAP access is disabled for your domain"), "{msg}");
+            assert!(!msg.contains("hunter2"), "{msg}");
+        });
+    }
+
+    #[test]
+    fn a_known_provider_that_cannot_be_reached_names_it_and_never_asks_for_a_host() {
+        let gmail = Candidate {
+            host: "imap.gmail.com".into(),
+            port: IMAP_PORT,
+            label: "Gmail".into(),
+            help: None,
+            source: Source::Table,
+        };
+        assert!(known(&gmail));
+        let msg = known_host_failed(&gmail, "failed to lookup address information.");
+        assert_eq!(
+            msg,
+            "Could not reach Gmail (imap.gmail.com): failed to lookup address information. Check your connection and try again in a few minutes."
+        );
+        assert!(!msg.contains("IMAP server address"), "{msg}");
+        assert!(known(&Candidate {
+            source: Source::Mx,
+            ..gmail.clone()
+        }));
+        for source in [Source::Srv, Source::Guess, Source::Override] {
+            assert!(!known(&Candidate {
+                source,
+                ..gmail.clone()
+            }));
+        }
     }
 
     #[test]
@@ -6830,7 +7084,7 @@ mod tests {
             let (mut s, log) = scripted_gmail(&[2, 4, 6, 9], true).await;
             assert_eq!(
                 apply(&mut s, &Folder::Archive, &[4], 9, &Action::Inbox).await,
-                done(&[4])
+                copied(&[4])
             );
             assert_eq!(changed(&log.lock().unwrap()), vec!["UID COPY 4 \"INBOX\""]);
         });
@@ -6846,7 +7100,7 @@ mod tests {
                     &Action::Move(Folder::Named("Receipts".into()))
                 )
                 .await,
-                done(&[4])
+                copied(&[4])
             );
             assert_eq!(
                 changed(&log.lock().unwrap()),
@@ -7602,7 +7856,7 @@ mod tests {
             let appends: Vec<_> = b.log.iter().filter(|c| c.starts_with("APPEND")).collect();
             assert_eq!(appends.len(), 1, "{:?}", b.log);
             assert!(
-                appends[0].starts_with("APPEND \"Drafts\" (\\Draft) {"),
+                appends[0].starts_with("APPEND \"Drafts\" (\\Seen \\Draft) {"),
                 "{appends:?}"
             );
             // The server said where it went, so nothing is searched for.
@@ -7830,7 +8084,7 @@ mod tests {
             assert!(
                 b.log
                     .iter()
-                    .any(|c| c.starts_with("APPEND \"[Gmail]/Drafts\" (\\Draft) {")),
+                    .any(|c| c.starts_with("APPEND \"[Gmail]/Drafts\" (\\Seen \\Draft) {")),
                 "{:?}",
                 b.log
             );
