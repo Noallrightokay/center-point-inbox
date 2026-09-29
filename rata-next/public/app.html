@@ -2829,14 +2829,12 @@ const TIERS={
   base:      {label:'RATA Base',      price:12.99,mail:2,sellable:true,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
   pro:       {label:'RATA Pro',       price:23.99,mail:null,sellable:true,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
   /* mail:null means no ceiling — Base is the only plan that has one.
-     ratamail is addresses RATA hosts at mailrata.org; domains is mail on a
-     domain the customer owns, which Pro buys at $1.50 a month each and
-     Enterprise includes without limit. */
+     ratamail and domains mirror lib/plan.js; nothing on this page reads
+     them, and RATA hosts no mail (lib/plan.js, NO_DOMAIN_HOSTING). */
   /* Not on sale — see lib/plan.js. Kept so an account that somehow holds it
      still resolves to a tier rather than to nothing. */
   enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true, ratamail:null,domains:null,sellable:false},
 };
-const DOMAIN_ADDON_PRICE=1.50;
 const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
 /* Which plan this is. On the website, the subscription the site recorded
    (S.settings.plan). In the desktop app, the licence on this computer — the

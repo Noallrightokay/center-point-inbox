@@ -30,17 +30,17 @@ steps, so the only mail you describe is mail you wrote for this test.
 ### Which release to install
 
 1. Open https://github.com/Noallrightokay/center-point-inbox/releases
-2. Take the newest release. This checklist is written for **v0.1.38**
-   (task [A1](MVP-PLAN.md#a1)). On v0.1.37, Gmail shows no Archive chip,
-   which is expected there. Rows X5 to X7 need v0.1.41 or later.
+2. Take the newest release. This checklist is written for **v0.1.41**,
+   the first with rows X5 to X7 (RATA's drafts saved to the mailbox).
 3. Install as in BETA.md §1:
    - Windows: `RATA_<version>_x64-setup.exe`. Install it with the setup
      program and start RATA from the Start menu. Row 16 needs the
      installed copy.
    - macOS: the `aarch64` dmg (Apple silicon) or `x64` dmg (Intel). Drag
      RATA to Applications, then right-click it, **Open**, **Open**.
-   - Linux: `sudo apt install ./RATA_<version>_amd64.deb`.
-4. Check the window title. It must read `RATA 0.1.38 beta` (or the version
+   - Linux: `sudo apt install ./RATA_<version>_amd64.deb`, or the
+     `RATA_<version>_amd64.AppImage` made executable (`chmod +x`).
+4. Check the window title. It must read `RATA 0.1.41 beta` (or the version
    you installed). Write that version in every result.
 
 ### The licence key
@@ -74,8 +74,8 @@ Microsoft turned off password sign-in over IMAP for Outlook.com in September
 page (**Sign in with Microsoft**, [C1](MVP-PLAN.md#c1) to
 [C3](MVP-PLAN.md#c3)). That button appears only in a build made with the
 owner's Microsoft client id (C4: the `RATA_MS_CLIENT_ID` repository
-variable, `rata-next/LAUNCH.md` §10). Until then, row 2 shows, in Add
-mailbox and before any password box, "Outlook.com, Hotmail and Live
+variable, `rata-next/LAUNCH.md` §10). Until then, row 2 shows, in the
+**＋ Email account** form and before any password box, "Outlook.com, Hotmail and Live
 mailboxes cannot be added to RATA yet. …": copied exactly, that is the
 expected result for this column, and rows 3 to 20 are `n/a`. From the first
 release built with the client id, this column is no longer expected to
@@ -454,7 +454,7 @@ RATA saves drafts on Gmail.
 3. Title: `[beta] Row <n> <row name>, <column>`, for example
    `[beta] Row 12 Archive, Yahoo`.
 4. Fill in:
-   - **Version**: from the window title, for example `RATA 0.1.38 beta`.
+   - **Version**: from the window title, for example `RATA 0.1.41 beta`.
    - **OS**: for example `Windows 11` or `macOS 15, Apple silicon`.
    - **Mail provider**: the column name.
    - **What I did**: the row number and its steps.
@@ -513,8 +513,8 @@ the password.
 ### After Remove (row 20)
 
 1. **Settings** → **Linked accounts** → **Remove** on the mailbox's row.
-2. Confirm. The question starts "Remove" and your address, and says the
-   messages already in RATA stay.
+2. Confirm. The question starts "Remove" and the mailbox's name, and says
+   "Messages already in your workspace stay".
 
 **Pass:** the row is gone. The keychain entry for that address is gone
 (the `cmdkey` or `security` command above now finds nothing), and
@@ -609,7 +609,7 @@ the rows count towards these MVP rows in MVP-PLAN Part 1:
 | M11 | the password never leaves the machine | 5, 20 |
 
 Rows 5 and 20 are also the "OS keychains" line of MVP-PLAN Part 3, and row
-16 is its "OS notifications" line. Rows X1 to X4 map to no MVP row.
+16 is its "OS notifications" line. Rows X1 to X7 map to no MVP row.
 
 Then:
 

@@ -38,6 +38,10 @@ export default async function run(state) {
   {
     check(DELETION_REMOVES.some(r => /login/i.test(r)) && DELETION_REMOVES.some(r => /subscription/i.test(r)),
       `removes: ${DELETION_REMOVES.length} things, including the subscription and the login`);
+    /* The route deletes the person's ai_usage rows too, so the notice has to
+       say so: a deletion that takes more than it lists is not honest either. */
+    check(DELETION_REMOVES.some(r => /\bAI usage\b/i.test(r)),
+      'and the AI usage record, which the route deletes as well');
     /* And no longer claims to remove a mailbox password, because there is not
        one here to remove — that is the whole point of the move to the device,
        and a deletion notice that overstates itself is worse than none. */
