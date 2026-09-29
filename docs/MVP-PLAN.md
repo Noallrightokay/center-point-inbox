@@ -75,7 +75,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   test passed on all four builds ([run 36574649823](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36574649823)).
 - **Merged for 0.1.43** (wave 5a, H3 of 5b, and the pre-launch audit's
   bug cards; not yet released: [G2](#g2) bumps the version in
-  [#PRNUM](https://github.com/Noallrightokay/center-point-inbox/pull/PRNUM)
+  [#102](https://github.com/Noallrightokay/center-point-inbox/pull/102)
   and the PM merges it once the owner confirms the licence signing key):
   the licence mint script, `infrastructure/licence/mint.sh` ([#90](https://github.com/Noallrightokay/center-point-inbox/pull/90));
   [H1](#h1), the privacy policy and terms ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)); [H2](#h2), the help
@@ -617,7 +617,7 @@ Runs: 0.1.42 folded in #80–#84 (docs notes, the review's P3 rows, the
 small follow-ups) and bumped the version; released and verified 2026-09-29.
 0.1.43 folded in #90–#101 (H1, H2, H3, H7, H8, BUG-A, BUG-D, BUG-L, BUG-M,
 BUG-R, BUG-S and the mint script), added the help, privacy and terms pages
-to `sw.js`'s shell, and bumped the version ([#PRNUM](https://github.com/Noallrightokay/center-point-inbox/pull/PRNUM));
+to `sw.js`'s shell, and bumped the version ([#102](https://github.com/Noallrightokay/center-point-inbox/pull/102));
 held for the owner's licence signing key, not yet released or verified. It
 is the first release through BUG-R's `gate`: watch that run.
 
