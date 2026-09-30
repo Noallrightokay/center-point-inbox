@@ -571,6 +571,14 @@ kbd.key{font-family:var(--mono);font-size:12px;min-width:22px;height:22px;paddin
 @media (prefers-reduced-motion:reduce){#keys-card{animation:none}}
 body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 .md-content a.md-link{color:var(--tint-deep);text-decoration:underline;overflow-wrap:anywhere}
+/* H12: a signature is secondary text; quoted text folds behind a quiet button. */
+.md-content .md-sig{color:var(--slate)}
+.md-content .md-part+.md-part,.md-content .md-quote+.md-part{margin-top:14px}
+.md-content .md-qbtn{display:flex;width:max-content;max-width:100%;align-items:center;min-height:28px;margin:14px 0 0;padding:3px 10px;border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--slate);font-family:inherit;font-size:12.5px;font-weight:500;line-height:1.2;cursor:pointer;white-space:nowrap}
+.md-content .md-qbtn:first-child{margin-top:0}
+.md-content .md-qbtn:hover{background:var(--fill-2);color:var(--ink)}
+.md-content .md-quote{color:var(--slate);margin-top:8px}
+.md-content .md-quote[hidden]{display:none}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
@@ -2601,9 +2609,21 @@ function renderResting(){
    address, in the composer here. In a formatted message the words can say
    anything, so a click asks first and names the real destination. */
 const LINK_RX=/\b(?:https?:\/\/|mailto:)[^\s<>"'`]+/gi;
-function linkify(text){
+/* A long web address is cut for showing (H12): its host whole, the start of
+   its path, then an ellipsis. What it opens, and its title, stay whole. */
+const LINK_SHOW=64;
+function linkShown(u){
+  if(u.length<=LINK_SHOW)return u;
+  const p=/^https?:\/\/([^/?#]*)(.*)$/i.exec(u);
+  if(!p)return u;
+  const keep=p[2].slice(0,Math.max(16,LINK_SHOW-16-p[1].length));
+  return keep.length<p[2].length?p[1]+keep+'…':u;
+}
+/* Puts the text into `el` as text nodes, with its web and mail addresses
+   as links. Built with DOM methods only: this is a stranger's text. */
+function linkify(el,text){
   text=String(text||'');
-  let out='',last=0;
+  let last=0;
   for(const mm of text.matchAll(LINK_RX)){
     if(mm.index<last)continue;
     let u=mm[0];
@@ -2611,10 +2631,128 @@ function linkify(text){
        the link opened the bracket itself. */
     while(u.length&&(/[.,;:!?'"\]}]$/.test(u)||(u.endsWith(')')&&u.split('(').length<u.split(')').length)))u=u.slice(0,-1);
     if(!/^(https?:\/\/[^/?#]|mailto:.+@)/i.test(u))continue;
-    out+=esc(text.slice(last,mm.index))+`<a class="md-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`;
+    if(mm.index>last)el.append(text.slice(last,mm.index));
+    const a=document.createElement('a');
+    a.className='md-link';a.href=u;a.target='_blank';a.rel='noopener noreferrer';
+    const shown=linkShown(u);
+    a.textContent=shown;
+    if(shown!==u)a.title=u;
+    /* A web address goes to the browser (bridge.js); a mail address to the
+       composer here. */
+    if(/^mailto:/i.test(u))a.onclick=e=>{e.preventDefault();const w=mailtoOf(u);if(w)writeTo(w.to,w.subject)};
+    el.append(a);
     last=mm.index+u.length;
   }
-  return out+esc(text.slice(last));
+  if(last<text.length)el.append(text.slice(last));
+}
+
+/* ---------------- QUOTED TEXT AND SIGNATURES (H12) ----------------
+   In the Text view the quoted part of a reply is folded behind Show quoted
+   text, and a signature after its "-- " line is shown lighter. Folded:
+   two or more lines starting ">" together (one alone may be code or maths);
+   an attribution ("On … wrote:", and the German, French, Spanish and Dutch
+   forms) with the ">" lines under it, or, when none follow, everything
+   after it; and Outlook's "-----Original Message-----" or From:/Sent:
+   header, to the end. Nothing is folded when that would leave nothing but a
+   signature showing. The formatted view is never touched. */
+const Q_LINE=/^[ \t]*>/;
+const Q_ATTRIB=[/^On\s.+\swrote:$/i,/^Am\s.+\sschrieb\b.*:$/i,/^Le\s.+\sa\s+[ée]crit\s*:$/i,/^El\s.+\sescribi[óo]\s*:$/i,/^Op\s.+\sschreef\b.*:$/i];
+const Q_ORIGINAL=/^-{2,}\s*Original Message\s*-{2,}$/i;
+const Q_FROM=/^(?:From|Von|De|Van):\s*\S/i,Q_SENT=/^(?:Sent|Gesendet|Envoy[ée]|Enviado|Verzonden):\s*\S/i;
+const Q_RULE=/^(?:_{8,}|-{8,})$/;
+const Q_SIG=/^--[ ]?$/;
+/* How many lines the attribution at line i takes: 1, 2 when a mail app
+   wrapped it (Gmail's "<\naddress> wrote:"), or 0 for none. */
+function qAttrib(lines,i){
+  const t=lines[i].trim();
+  if(!t||t.length>300||Q_LINE.test(t))return 0;
+  if(Q_ATTRIB.some(r=>r.test(t)))return 1;
+  const n=(lines[i+1]||'').trim();
+  if(n&&!Q_LINE.test(n)&&(t+' '+n).length<=300&&Q_ATTRIB.some(r=>r.test(t+' '+n)))return 2;
+  return 0;
+}
+function qOutlook(lines,i){
+  const t=lines[i].trim();
+  if(Q_ORIGINAL.test(t))return true;
+  if(!Q_FROM.test(t))return false;
+  for(let k=i+1;k<Math.min(lines.length,i+4);k++)if(Q_SENT.test(lines[k].trim()))return true;
+  return false;
+}
+/* Where a run of ">" lines starting at i ends, and how many ">" lines it
+   holds. A blank line between two of them belongs to the run. */
+function qRun(lines,i){
+  let j=i,n=0;
+  while(j<lines.length){
+    if(Q_LINE.test(lines[j])){n++;j++;continue}
+    if(!lines[j].trim()){let k=j;while(k<lines.length&&!lines[k].trim())k++;if(k<lines.length&&Q_LINE.test(lines[k])){j=k;continue}}
+    break;
+  }
+  return {end:j,n};
+}
+/* The text in parts, each {kind:'text'|'sig'|'quote', text}. */
+function readingParts(text){
+  const all=String(text||''),lines=all.split(/\r?\n/),len=lines.length,folds=[];
+  for(let i=0;i<len;){
+    if(Q_LINE.test(lines[i])){const r=qRun(lines,i);if(r.n>=2)folds.push([i,r.end]);i=r.end;continue}
+    const a=qAttrib(lines,i);
+    if(a){
+      let k=i+a;while(k<len&&!lines[k].trim())k++;
+      if(k<len&&Q_LINE.test(lines[k])){const r=qRun(lines,k);folds.push([i,r.end]);i=r.end;continue}
+      folds.push([i,len]);break;
+    }
+    if(qOutlook(lines,i)){
+      /* Outlook draws a rule of underscores above its header. */
+      const s=i>0&&Q_RULE.test(lines[i-1].trim())&&!(folds.length&&folds[folds.length-1][1]>i-1)?i-1:i;
+      folds.push([s,len]);break;
+    }
+    i++;
+  }
+  const inFold=k=>folds.some(([s,e])=>k>=s&&k<e);
+  let sig=-1;
+  for(let k=0;k<len;k++)if(!inFold(k)&&Q_SIG.test(lines[k])){sig=k;break}
+  const sigEnd=sig<0?-1:(folds.find(([s])=>s>sig)||[len])[0];
+  /* Folded only when something other than a signature stays in view. */
+  const shown=lines.some((l,k)=>l.trim()&&!inFold(k)&&!(sig>=0&&k>=sig&&k<sigEnd));
+  const use=shown?folds:[];
+  if(!use.length&&sig<0)return [{kind:'text',text:all}];
+  const parts=[];
+  const put=(kind,s,e)=>{
+    while(s<e&&!lines[s].trim())s++;
+    while(e>s&&!lines[e-1].trim())e--;
+    if(e>s)parts.push({kind,text:lines.slice(s,e).join('\n')});
+  };
+  const plain=(s,e)=>{
+    if(sig>=s&&sig<e){put('text',s,sig);put('sig',sig,Math.min(e,sigEnd));if(sigEnd<e)put('text',sigEnd,e)}
+    else put('text',s,e);
+  };
+  let at=0;
+  for(const [s,e] of use){plain(at,s);put('quote',s,e);at=e}
+  plain(at,len);
+  return parts;
+}
+/* The folds the customer opened this session, as "<key>#<n>", so a redraw
+   (a star, the text arriving from disk) keeps them open. */
+const QUOTE_OPEN=new Set();
+/* Fills the Text view's element with the text: links, the signature
+   lighter, each quoted part behind its own button. DOM methods only. */
+function fillReading(el,text,key){
+  el.textContent='';
+  const parts=readingParts(text);
+  if(parts.length===1&&parts[0].kind==='text'){linkify(el,parts[0].text);return}
+  let n=0;
+  for(const p of parts){
+    const box=document.createElement('div');
+    if(p.kind!=='quote'){box.className=p.kind==='sig'?'md-part md-sig':'md-part';linkify(box,p.text);el.append(box);continue}
+    const k=key+'#'+n,id='md-q-'+(n++);
+    const b=document.createElement('button');
+    b.type='button';b.className='md-qbtn';b.setAttribute('aria-controls',id);
+    box.className='md-quote';box.id=id;
+    linkify(box,p.text);
+    const show=open=>{box.hidden=!open;b.setAttribute('aria-expanded',String(open));b.textContent=open?'Hide quoted text':'Show quoted text'};
+    show(QUOTE_OPEN.has(k));
+    b.onclick=()=>{const open=box.hidden;if(open)QUOTE_OPEN.add(k);else QUOTE_OPEN.delete(k);show(open)};
+    el.append(b,box);
+  }
 }
 function mailtoOf(h){
   try{
@@ -2759,7 +2897,7 @@ function openMail(id){
     ${folderOf(m)==='junk'?'<div class="md-spam"><b>This was in your Spam folder.</b> Be careful with its links and attachments \u2014 the sender may not be who they say they are.</div>':''}
     ${whole&&whole.html?`<div class="md-viewbar"><div class="seg"><button data-vmode="html" class="${asHtml?'on':''}">Formatted</button><button data-vmode="text" class="${asHtml?'':'on'}">Text</button></div>${asHtml&&whole.remoteImages&&!SHOWIMG.has(id)?`<button class="btn" id="md-images">Load images</button><span class="why">Pictures from the internet are off: loading them tells the sender you opened this.</span>`:''}</div>`:''}
     ${asHtml?`<iframe class="md-html" id="md-html" title="Message" sandbox="allow-popups" referrerpolicy="no-referrer" srcdoc="${frameDoc(whole.html,SHOWIMG.has(id)).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}"></iframe>`
-      :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body">${linkify(showTr?tr.text:whole?whole.text:(body??''))}</div>
+      :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body"></div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
@@ -2829,14 +2967,11 @@ function openMail(id){
   if($('#md-home'))$('#md-home').onclick=()=>leave('inbox',folderOf(m)==='junk'?'Marked not spam — it appears in your inbox at the next refresh':'Moved to your inbox — it appears there at the next refresh');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
-  $$('#md-body a.md-link').forEach(a=>a.onclick=e=>{
-    const h=a.getAttribute('href')||'';
-    if(/^mailto:/i.test(h)){e.preventDefault();const w=mailtoOf(h);if(w)writeTo(w.to,w.subject)}
-  });
+  if($('#md-body'))fillReading($('#md-body'),showTr?tr.text:whole?whole.text:(body??''),showTr?id+':tr':id);
   $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
   if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
   if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
-  if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;$('#md-body').textContent=orig?m.orig:(body??'');$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
+  if(m.lang){let orig=false;$('#md-orig').onclick=()=>{orig=!orig;fillReading($('#md-body'),orig?m.orig:(body??''),orig?id+':orig':id);$('#md-orig').textContent=orig?'Show translation':'Show original';if(orig)audit('msg.view_original',(m.subj||m.prev.slice(0,40))+' ('+m.lang+')')}}
   renderMail();
 }
 
