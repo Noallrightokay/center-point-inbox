@@ -228,6 +228,14 @@ pub struct Message {
     /// none RATA would act on, and for mail stored before this field.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unsubscribe: Option<body::Unsubscribe>,
+    /// The last id of its `References` header — the message it answers, as
+    /// the whole chain names it — checked exactly like `message_id`
+    /// ([`thread_id`]), so nothing that could smuggle a header survives.
+    /// What links a message into its conversation when `In-Reply-To` is
+    /// missing or says something else. Empty when there is none, when the
+    /// last id fails the check, and for mail stored before this field.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub references_last: String,
 }
 
 /// What a successful link found.
@@ -3949,6 +3957,36 @@ fn thread_id(raw: &[u8]) -> String {
     if clean { id.to_string() } else { String::new() }
 }
 
+/// The last id of a message's `References`, from its own headers, checked
+/// like `message_id` ([`thread_id`]); empty when it has none or the last one
+/// fails. Read from the start of the message RATA already fetches
+/// (`BODY.PEEK[]<0.…>`, which begins with the headers): the ENVELOPE has no
+/// References, and asking for the header separately would add to every
+/// fetch for what the bytes already hold. Only the last id is kept — the
+/// message this one answers — and only that one: an earlier id is never
+/// used in its place, since a last id that fails is a header that was
+/// tampered with, not one to read around.
+fn references_last(raw: &[u8]) -> String {
+    let Some(value) = header_values(raw, "References").into_iter().next() else {
+        return String::new();
+    };
+    let last = if value.contains('<') {
+        // `<a@b> <c@d>`, spaced or not: what is between the last `<` and the
+        // `>` that closes it. Unclosed is malformed, and nothing.
+        match value.rsplit('<').next().and_then(|t| t.split_once('>')) {
+            Some((id, _)) => id.to_string(),
+            None => return String::new(),
+        }
+    } else {
+        value
+            .split_whitespace()
+            .last()
+            .unwrap_or_default()
+            .to_string()
+    };
+    thread_id(last.as_bytes())
+}
+
 /// A short, stable tag for one of the customer's own folders, for message ids:
 /// its name can hold anything, and the same UID in two folders must not
 /// collide.
@@ -4132,6 +4170,7 @@ fn build(
         },
         reply_to,
         unsubscribe: text.unsubscribe,
+        references_last: references_last(raw),
     }
 }
 
@@ -4748,6 +4787,9 @@ mod tests {
         /// UIDNEXT, when it is not the newest UID + 1: a folder emptied
         /// since mail was last there.
         next: Option<u32>,
+        /// Messages with a `References` header, and what it says, exactly
+        /// as it is written after the colon (folds and all).
+        references: &'static [(u32, &'static str)],
     }
 
     /// Where a test's fresh connections come from: another sign-in to the
@@ -4837,6 +4879,10 @@ mod tests {
                     )
                 } else {
                     String::new()
+                };
+                let list = match quirks.references.iter().find(|(u, _)| *u == uid) {
+                    Some((_, refs)) => format!("{list}References:{refs}\r\n"),
+                    None => list,
                 };
                 let body = format!(
                     "From: Ann <ann@example.org>\r\nSubject: Subject {uid}\r\n{list}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nBody of {uid} =E2=80=94 caf=C3=A9\r\n"
@@ -5962,6 +6008,93 @@ mod tests {
                     .any(|c| c.to_ascii_lowercase().contains("list.example")),
                 "{log:?}"
             );
+        });
+    }
+
+    // ------------------------------------------------------- conversations
+
+    #[test]
+    fn the_last_id_of_references_is_kept() {
+        let refs = |value: &str| {
+            references_last(
+                format!("From: a@b.example\r\nReferences:{value}\r\nSubject: x\r\n\r\nText\r\n")
+                    .as_bytes(),
+            )
+        };
+        assert_eq!(refs(" <root@a.example> <mid@b.example>"), "mid@b.example");
+        // Folded, as a long chain is, and with no space between ids.
+        assert_eq!(
+            refs(" <root@a.example>\r\n <one@b.example><two@c.example>"),
+            "two@c.example"
+        );
+        assert_eq!(refs(" <only@a.example>  "), "only@a.example");
+        // Without brackets, as a careless program writes it.
+        assert_eq!(refs(" root@a.example last@b.example"), "last@b.example");
+        // The header's name in any case.
+        assert_eq!(
+            references_last(b"REFERENCES: <x@y.example>\r\n\r\nText"),
+            "x@y.example"
+        );
+        // None at all, and none in the body.
+        assert_eq!(
+            references_last(b"Subject: x\r\n\r\nReferences: <b@c.example>\r\n"),
+            ""
+        );
+        assert_eq!(references_last(b""), "");
+    }
+
+    #[test]
+    fn a_references_id_that_could_smuggle_a_header_is_dropped() {
+        let refs = |value: &str| {
+            references_last(format!("Subject: x\r\nReferences:{value}\r\n\r\nText").as_bytes())
+        };
+        // A fold inside the last id, carrying a header of its own.
+        assert_eq!(
+            refs(" <root@a.example> <evil@x.example\r\n Bcc: all@example.com>"),
+            ""
+        );
+        // A control character, no `@`, unclosed, far too long.
+        assert_eq!(refs(" <root@a.example> <a\u{1}b@x.example>"), "");
+        assert_eq!(refs(" <root@a.example> <no-at-sign>"), "");
+        assert_eq!(refs(" <root@a.example> <open@x.example"), "");
+        assert_eq!(
+            refs(&format!(
+                " <root@a.example> <{}@x.example>",
+                "x".repeat(500)
+            )),
+            ""
+        );
+        // The last id is the one checked: an earlier good one never stands in
+        // for a last one that failed.
+        assert_eq!(refs(" <good@a.example> <bad id@x.example>"), "");
+    }
+
+    #[test]
+    fn a_refresh_carries_the_last_id_of_references() {
+        // What `fetch_newest` does once signed in, against a mailbox where
+        // one message answers another, one's References was tampered with,
+        // and one has none.
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                references: &[
+                    (8, " <root@example.org>\r\n <m7@example.org>"),
+                    (
+                        9,
+                        " <m7@example.org> <m8@example.org\r\n Bcc: all@example.com>",
+                    ),
+                ],
+                ..Quirks::default()
+            };
+            let (addr, _) = scripted_mailbox(&[7, 8, 9], 5, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut redial_to(addr), &me(), 15, &[])
+                .await
+                .unwrap_or_else(|e| panic!("the refresh failed: {e:?}"));
+            let by = |uid: u32| got.messages.iter().find(|m| m.uid == uid).unwrap();
+            assert_eq!(by(8).references_last, "m7@example.org");
+            assert_eq!(by(8).message_id, "m8@example.org");
+            assert_eq!(by(9).references_last, "");
+            assert_eq!(by(7).references_last, "");
         });
     }
 

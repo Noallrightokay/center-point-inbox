@@ -2260,6 +2260,7 @@ mod tests {
             html: false,
             reply_to: String::new(),
             unsubscribe: None,
+            references_last: String::new(),
         }
     }
 

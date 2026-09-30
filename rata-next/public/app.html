@@ -579,6 +579,22 @@ body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 .md-content .md-qbtn:hover{background:var(--fill-2);color:var(--ink)}
 .md-content .md-quote{color:var(--slate);margin-top:8px}
 .md-content .md-quote[hidden]{display:none}
+/* H5: the rest of this message's conversation, under its text. */
+.md-convo{background:var(--card);border-top:1px solid var(--hair-2);padding:16px 18px 16px;box-shadow:var(--edge)}
+.md-convo:last-child{border-radius:0 0 var(--r) var(--r)}
+.md-convo[hidden]{display:none}
+.md-convo h3{display:flex;align-items:baseline;gap:8px;margin:0 8px 8px;font-size:13px;font-weight:600;line-height:1.3;color:var(--ink)}
+.md-convo h3 .n{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--faint);font-variant-numeric:tabular-nums}
+.cv-list{position:relative;list-style:none;margin:0;padding:0;max-height:min(45vh,380px);overflow:auto}
+.cv-row{display:block;width:100%;min-width:0;text-align:left;border:0;background:none;color:inherit;font:inherit;padding:7px 8px;border-radius:var(--r-sm);cursor:pointer;transition:background .12s}
+button.cv-row:hover{background:var(--fill-2)}
+.cv-row.on{background:var(--tint-soft);cursor:default}
+.cv-line{display:flex;align-items:baseline;gap:10px;min-width:0}
+.cv-who{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.cv-here{font-size:12px;font-weight:500;color:var(--tint-deep);flex-shrink:0}
+.cv-when{margin-left:auto;flex-shrink:0;font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cv-words{display:block;font-size:13px;line-height:1.45;color:var(--slate);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.md-convo .cv-more{margin:8px 8px 0;font-size:12.5px;color:var(--faint)}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
@@ -2828,6 +2844,96 @@ $('#link-cancel').onclick=closeLink;
 $('#link-ov').addEventListener('click',e=>{if(e.target.id==='link-ov')closeLink()});
 $('#link-open').onclick=()=>{const u=LINK_PENDING;closeLink();if(u)openLink(u)};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&LINK_PENDING){e.preventDefault();closeLink()}});
+/* In this conversation (H5). Every held message linked to the open one by
+   ids alone, transitively: its messageId, inReplyTo or refsLast (the last id
+   of References) equal to one the conversation already holds. Never by
+   subject, which anyone can write. Each id was checked by the engine like
+   messageId (thread_id), and this list only compares them: it shows and
+   sends none. Sent mail joins: RATA's own record of a send carries the Message-ID
+   it wrote and what it answered, and the provider's copy from Sent carries
+   both. Spam never joins, nor has one (a forger can write any id), and
+   neither do drafts, which change as they are saved. Mail stored before
+   inReplyTo and refsLast reached the page has only messageId (drafts also
+   inReplyTo), and links by what it has. Built from what is
+   held in memory, and the walk stops at CONVO_MAX messages, the nearest
+   first, so a chain of thousands cannot hold the page up. */
+const CONVO_MAX=200;
+const convoKeys=m=>[m.messageId,m.inReplyTo,m.refsLast].filter(k=>typeof k==='string'&&k);
+const convoJoins=m=>!!m&&channelEnabled(m.ch)&&folderOf(m)!=='junk'&&!m.draft&&!isGone(m.id);
+function conversationOf(m){
+  const none={list:[],capped:false};
+  if(!m||folderOf(m)==='junk')return none;
+  const start=convoKeys(m);if(!start.length)return none;
+  const by=new Map();
+  for(const x of S.messages){
+    if(x===m||!convoJoins(x))continue;
+    for(const k of convoKeys(x)){const a=by.get(k);if(a)a.push(x);else by.set(k,[x])}
+  }
+  const keys=new Set(start),queue=start.slice(),held=new Map([[m.id,m]]);
+  let capped=false;
+  for(let i=0;i<queue.length&&!capped;i++){
+    for(const x of by.get(queue[i])||[]){
+      if(held.has(x.id))continue;
+      if(held.size>=CONVO_MAX){capped=true;break}
+      held.set(x.id,x);
+      for(const k of convoKeys(x))if(!keys.has(k)){keys.add(k);queue.push(k)}
+    }
+  }
+  /* One row per message: the same Message-ID twice is one message held
+     twice (a Gmail label's copy, or mail to two linked mailboxes). The open
+     one is kept, else a copy that is not in a folder of the customer's own. */
+  const one=new Map(),list=[];
+  for(const x of held.values()){
+    if(!x.messageId){list.push(x);continue}
+    const was=one.get(x.messageId);
+    if(!was||x===m||(was!==m&&folderOf(was)==='named'&&folderOf(x)!=='named'))one.set(x.messageId,x);
+  }
+  list.push(...one.values());
+  return {list:list.length>1?list.sort((a,b)=>(a.ts||0)-(b.ts||0)):[],capped};
+}
+function convoWhen(ts){
+  const d=new Date(ts||0),o={month:'short',day:'numeric',hour:'numeric',minute:'2-digit'};
+  if(d.getFullYear()!==new Date().getFullYear())o.year='numeric';
+  return d.toLocaleString(undefined,o);
+}
+/* The first words of a message: its text if it is to hand, else the
+   preview stored with it; never read from disk for this. */
+function convoWords(m){
+  const b=bodyNow(m),t=typeof b==='string'&&b.trim()?b:(m.prev||'');
+  return String(t).replace(/\s+/g,' ').trim().slice(0,140);
+}
+function fillConvo(el,m){
+  if(!el)return;
+  const {list,capped}=conversationOf(m);
+  el.textContent='';el.hidden=!list.length;
+  if(!list.length)return;
+  const h=document.createElement('h3');h.id='md-convo-h';
+  const n=document.createElement('span');n.className='n';n.textContent=String(list.length);
+  h.append('In this conversation ',n);
+  el.setAttribute('aria-labelledby','md-convo-h');
+  const ol=document.createElement('ol');ol.className='cv-list';
+  for(const x of list){
+    const li=document.createElement('li');
+    const on=x===m,row=document.createElement(on?'div':'button');
+    row.className='cv-row'+(on?' on':'');
+    if(on){row.setAttribute('aria-current','true');row.tabIndex=-1}
+    else{row.type='button';row.dataset.cv=x.id}
+    const line=document.createElement('span');line.className='cv-line';
+    const who=document.createElement('span');who.className='cv-who';who.textContent=msgFrom(x);
+    line.append(who);
+    if(on){const here=document.createElement('span');here.className='cv-here';here.textContent='Open';line.append(here)}
+    const when=document.createElement('span');when.className='cv-when';when.textContent=convoWhen(x.ts);
+    line.append(when);
+    const words=document.createElement('span');words.className='cv-words';words.textContent=convoWords(x)||'(no text)';
+    row.append(line,words);
+    if(!on)row.onclick=()=>{openMail(x.id);const c=$('#md-convo .cv-row.on');if(c)c.focus({preventScroll:true})};
+    li.append(row);ol.append(li);
+  }
+  el.append(h,ol);
+  if(capped){const p=document.createElement('p');p.className='cv-more';p.textContent='This conversation is longer than '+CONVO_MAX+' messages. These are the '+CONVO_MAX+' nearest this one.';el.append(p)}
+  const cur=ol.querySelector('.cv-row.on');
+  if(cur&&list.length>6)ol.scrollTop=Math.max(0,cur.offsetTop-ol.clientHeight/2);
+}
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
   selMail=id;
@@ -2900,6 +3006,7 @@ function openMail(id){
       :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body"></div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
+    <section class="md-convo" id="md-convo" hidden></section>
     ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
       ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}</span>`
       :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
@@ -2968,6 +3075,7 @@ function openMail(id){
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
   if($('#md-body'))fillReading($('#md-body'),showTr?tr.text:whole?whole.text:(body??''),showTr?id+':tr':id);
+  fillConvo($('#md-convo'),m);
   $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
   if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
   if(wantWhole)openWhole(m).then(()=>{if(selMail===id)openMail(id)});
@@ -4993,7 +5101,7 @@ async function deliver(it,sb){
   const {to,cc,bcc,subj,body}=it;
   const first=fieldAddrs(to)[0]||'';
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===first);
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),...(realSent&&it.replying?{inReplyTo:it.replying}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
     atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
   /* The draft this finished is sent: its copy in Drafts goes to the Trash,
      as every mail app does, rather than waiting there to be sent twice. */
