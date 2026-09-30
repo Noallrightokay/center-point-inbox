@@ -144,11 +144,20 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         if (M.readFails) throw { email: args.email, kind: 'too-large', error: 'huge.pdf is too large to convert in RATA (40 MB; the most is 25 MB). Save it and convert it elsewhere.' };
         const f = (M.readable || {})[args.index];
         if (!f) throw { email: args.email, kind: 'gone', error: 'That attachment is no longer in the message.' };
-        return f;
+        if ('picture' in f) return f;
+        /* As core::sniff_image: what the bytes are, never the name, and
+           nothing over core::PICTURE_MAX (5 MB). */
+        const head = atob(String(f.data).slice(0, 24));
+        const at = (s, o = 0) => head.slice(o, o + s.length) === s;
+        const picture = atob(f.data).length > 5 * 1024 * 1024 ? null
+          : at('\x89PNG\r\n\x1a\n') ? 'png' : at('\xFF\xD8\xFF') ? 'jpeg' : at('GIF87a') || at('GIF89a') ? 'gif'
+            : at('RIFF') && at('WEBP', 8) ? 'webp' : null;
+        return { ...f, picture };
       }
       case 'open_message':
         if (M.openFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
         if (M.openAtts && args.uid === 90) return { text: 'Please see the attached report.', truncated: false, attachments: M.openAtts };
+        if (M.openAttsBy && M.openAttsBy[args.uid]) return { text: 'Pictures from the weekend.', truncated: false, attachments: M.openAttsBy[args.uid] };
         /* 60 and up are HTML mail. The HTML here has NOT been through the Rust
            sanitiser, on purpose: it tests the frame's own lock. */
         if (args.uid >= 60) return { text: 'Your order shipped. Track it <https://shop.example/t>', truncated: false, attachments: [],
@@ -1730,6 +1739,153 @@ console.log('\n— a program named to look like a document is labelled, and aske
   await pg.evaluate(() => window.__conv);
   const reads = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_attachment').length);
   check(/Open it in the Format Bridge anyway\?$/.test(cq.title) && cq.go === 'Open anyway' && reads === 0, `Convert asks too, and Escape reads nothing: ${JSON.stringify({ cq, reads })}`);
+  await pg.close();
+}
+
+console.log('\n— picture attachments are shown in the message, by what their bytes are —');
+{
+  /* H11: a picture attachment shows as a thumbnail once the message is open,
+     as the type Rust found in its bytes (the mock sniffs as
+     core::sniff_image does); anything else named as a picture, a disguised
+     name, an SVG, and a picture known to be over 5 MB are listed only. */
+  const pg = await open(true);
+  const mkAtt = (index, name, size, extra) => Object.assign({ index, name, mime: 'image/png', size, disguised: false }, extra || {});
+  const atts = [
+    mkAtt(1, 'holiday.jpg', 2000, { mime: 'image/jpeg' }),
+    mkAtt(2, 'chart.png', 90),
+    mkAtt(3, 'invoice.pdf.exe', 4, { mime: 'application/octet-stream', disguised: true }),
+    mkAtt(4, 'logo.svg', 60, { mime: 'image/svg+xml' }),
+    mkAtt(5, 'poster.png', 6 * 1024 * 1024),
+    mkAtt(6, '<img src=x onerror=window.__pwned=2>.gif', 40, { mime: 'image/gif' }),
+    mkAtt(7, 'scan.jpeg', 3000, { mime: 'image/jpeg' }),
+    mkAtt(8, 'photo.webp', 3000, { mime: 'image/webp' }),
+    mkAtt(9, 'a.png', 900), mkAtt(10, 'b.png', 900), mkAtt(11, 'c.png', 900),
+  ];
+  await pg.evaluate(async (atts) => {
+    /* Real pictures, drawn here, so they decode and can be looked at. */
+    const draw = (type, w, h, hue) => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d');
+      x.fillStyle = `hsl(${hue} 45% 62%)`; x.fillRect(0, 0, w, h);
+      x.fillStyle = `hsl(${hue + 40} 50% 36%)`; x.fillRect(0, h * 0.62, w, h * 0.38);
+      x.fillStyle = '#f4efe2'; x.beginPath(); x.arc(w * 0.72, h * 0.3, h * 0.13, 0, 7); x.fill();
+      return c.toDataURL(type).split(',')[1];
+    };
+    const b64 = (s) => btoa(s);
+    const gif = 'R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=';
+    __mock.readable = {
+      1: { name: 'holiday.jpg', mime: 'image/jpeg', data: draw('image/png', 960, 600, 200) },
+      2: { name: 'chart.png', mime: 'image/png', data: b64('<html><body><img src=x onerror="parent.window.__pwned=\'chart\'"><script>parent.window.__pwned="script"</script></body></html>') },
+      3: { name: 'invoice.pdf.exe', mime: 'application/octet-stream', data: b64('MZ..') },
+      4: { name: 'logo.svg', mime: 'image/svg+xml', data: b64('<svg xmlns="http://www.w3.org/2000/svg" onload="parent.window.__pwned=1"/>') },
+      5: { name: 'poster.png', mime: 'image/png', data: draw('image/png', 10, 10, 10) },
+      6: { name: '<img src=x onerror=window.__pwned=2>.gif', mime: 'image/gif', data: gif },
+      7: { name: 'scan.jpeg', mime: 'image/jpeg', data: draw('image/jpeg', 480, 640, 30) },
+      8: { name: 'photo.webp', mime: 'image/webp', data: draw('image/webp', 640, 480, 140) },
+      9: { name: 'a.png', mime: 'image/png', data: draw('image/png', 300, 300, 260) },
+      10: { name: 'b.png', mime: 'image/png', data: draw('image/png', 300, 200, 320) },
+      11: { name: 'c.png', mime: 'image/png', data: draw('image/png', 200, 300, 90) },
+    };
+    __mock.openAttsBy = { 95: atts };
+    __mock.refresh = { messages: [{ id: 'me@example.com_95', folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+      from_name: 'Ann Lee', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Weekend pictures', preview: 'Pictures from the weekend.',
+      body: 'Pictures from the weekend.', ts: Date.now(), unread: true, starred: false, uid: 95, uidvalidity: 7, message_id: 'pics95@example.org',
+      reply_to: '', truncated: false, attachments: atts, html: false }], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    go('inbox');
+  }, atts);
+  const reads = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_attachment').map(([, a]) => ({ index: a.index, confirmed: a.confirmed })));
+  check((await reads()).length === 0, 'nothing is fetched for pictures until the message is opened');
+  await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail [data-att]').length === 11
+    && document.querySelectorAll('#mail-detail .md-pics img').length === 5 && !document.querySelector('#mail-detail .pic-wait'), null, { timeout: 8000 }).catch(() => {});
+  const seen = await pg.evaluate(() => [...document.querySelectorAll('#mail-detail .md-pics img')].map((i) => ({
+    alt: i.alt, kind: (i.src.match(/^data:image\/([a-z]+);base64,/) || [])[1] || i.src.slice(0, 30), lazy: i.loading, ok: i.complete && i.naturalWidth > 0,
+    w: Math.round(i.getBoundingClientRect().width), h: Math.round(i.getBoundingClientRect().height) })));
+  check(seen.length === 5 && seen[0].alt === 'holiday.jpg' && seen[0].kind === 'png',
+    `a PNG named holiday.jpg and declared a JPEG shows as the PNG it is: ${JSON.stringify(seen[0])}`);
+  check(JSON.stringify(seen.map((s) => s.kind)) === JSON.stringify(['png', 'gif', 'jpeg', 'webp', 'png']) && seen.every((s) => s.ok && s.lazy === 'lazy'),
+    `a GIF, a JPEG and a WebP show too, each decoded, each loading="lazy": ${JSON.stringify(seen.map((s) => [s.alt, s.kind, s.ok, s.lazy]))}`);
+  check(seen.every((s) => s.w <= 168 && s.h <= 168) && seen[0].w === 168,
+    `a thumbnail fits the --thumb square (168 px): ${JSON.stringify(seen.map((s) => [s.w, s.h]))}`);
+  const listed = await pg.evaluate(() => ({
+    tiles: [...document.querySelectorAll('#mail-detail [data-pic]')].map((b) => +b.dataset.pic),
+    cards: [...document.querySelectorAll('#mail-detail [data-att]')].map((b) => b.textContent.includes('chart.png') || b.textContent.includes('poster.png') || b.textContent.includes('logo.svg') || b.textContent.includes('invoice.pdf.exe')).filter(Boolean).length,
+    strayImg: document.querySelectorAll('img[src="x"], #mail-detail img:not([src^="data:image/"])').length,
+    pwned: window.__pwned || null,
+    htmlShown: [...document.querySelectorAll('img')].some((i) => i.src.includes(btoa('<html>').slice(0, 6))),
+  }));
+  check(!listed.tiles.includes(1) && listed.cards === 4 && !listed.htmlShown && listed.strayImg === 0 && listed.pwned === null,
+    `a web page named chart.png is listed and not shown, and no img is made from it or from any name: ${JSON.stringify(listed)}`);
+  const r1 = await reads();
+  const asked = r1.map((r) => r.index).sort((a, b) => a - b);
+  check(JSON.stringify(asked) === JSON.stringify([1, 2, 6, 7, 8, 9]) && r1.every((r) => r.confirmed === false),
+    `only the first six named as pictures are fetched, never the disguised program, the SVG or the one over 5 MB, and never "confirmed": ${JSON.stringify(r1)}`);
+  const more = await pg.evaluate(() => document.querySelector('#md-pics-more')?.textContent || null);
+  check(more === 'Show 2 more', `the rest wait behind a button: ${more}`);
+  // The picture, large, in the app: Escape, the button and the backdrop close it.
+  const before = pg.url();
+  await pg.click('#mail-detail [data-pic="0"]');
+  await pg.waitForSelector('#pic-ov.open', { timeout: 3000 }).catch(() => {});
+  const big = await pg.evaluate(() => ({ open: document.querySelector('#pic-ov').classList.contains('open'), kind: (document.querySelector('#pic-big').src.match(/^data:image\/([a-z]+);base64,/) || [])[1] || null,
+    alt: document.querySelector('#pic-big').alt, name: document.querySelector('#pic-name').textContent, focus: document.activeElement && document.activeElement.id,
+    w: Math.round(document.querySelector('#pic-big').getBoundingClientRect().width) }));
+  check(big.open && big.kind === 'png' && big.alt === 'holiday.jpg' && big.name === 'holiday.jpg' && big.focus === 'pic-close' && big.w > 168,
+    `a click opens it large as the same data: picture, Close focused: ${JSON.stringify(big)}`);
+  if (process.env.H11_SHOTS) { await pg.waitForTimeout(400); await pg.screenshot({ path: process.env.H11_SHOTS + '/h11-overlay-light.png' }); }
+  await pg.keyboard.press('j');
+  await pg.keyboard.press('Escape');
+  const after = await pg.evaluate(() => ({ open: document.querySelector('#pic-ov').classList.contains('open'), src: document.querySelector('#pic-big').getAttribute('src'),
+    msg: selMail, pane: document.querySelector('#mail-detail').classList.contains('open'), focus: document.activeElement && document.activeElement.dataset.pic }));
+  check(!after.open && after.src === null && after.msg === 'me@example.com_95' && after.pane && after.focus === '0',
+    `Escape closes the picture and only the picture (j did nothing behind it), and the keyboard goes back to the thumbnail: ${JSON.stringify(after)}`);
+  await pg.click('#mail-detail [data-pic="5"]');
+  await pg.waitForSelector('#pic-ov.open', { timeout: 3000 }).catch(() => {});
+  const gifAlt = await pg.evaluate(() => document.querySelector('#pic-big').alt);
+  await pg.click('#pic-close');
+  const byButton = await pg.evaluate(() => document.querySelector('#pic-ov').classList.contains('open'));
+  await pg.click('#mail-detail [data-pic="6"]');
+  await pg.mouse.click(5, 5);
+  const byBackdrop = await pg.evaluate(() => document.querySelector('#pic-ov').classList.contains('open'));
+  check(gifAlt === '<img src=x onerror=window.__pwned=2>.gif' && !byButton && !byBackdrop && pg.url() === before && pg.context().pages().length === 1,
+    `Close and the backdrop close it too; no navigation, no window, and a name like markup is only text: ${JSON.stringify({ gifAlt, byButton, byBackdrop, url: pg.url() === before, pages: pg.context().pages().length })}`);
+  await pg.click('#md-pics-more');
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail .md-pics img').length === 7, null, { timeout: 5000 }).catch(() => {});
+  const r2 = await reads();
+  const shownAll = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, more: !!document.querySelector('#md-pics-more') }));
+  check(shownAll.imgs === 7 && !shownAll.more && JSON.stringify(r2.slice(6).map((r) => r.index)) === JSON.stringify([10, 11]),
+    `"Show 2 more" fetches and shows the other two, and only them: ${JSON.stringify({ shownAll, r2: r2.map((r) => r.index) })}`);
+  // Open again: kept for the session, nothing fetched twice.
+  await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
+  await pg.waitForTimeout(150);
+  const again = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, reads: __mock.calls.filter(([c]) => c === 'read_attachment').length }));
+  check(again.imgs === 7 && again.reads === 0, `opening the message again shows them without fetching: ${JSON.stringify(again)}`);
+  if (process.env.H11_SHOTS) {
+    await pg.setViewportSize({ width: 1280, height: 900 });
+    await pg.evaluate(() => { PIC_MORE.delete('me@example.com_95'); openMail('me@example.com_95'); document.querySelector('#md-body').scrollIntoView({ block: 'start' }); });
+    await pg.waitForTimeout(400);
+    await pg.screenshot({ path: process.env.H11_SHOTS + '/h11-message-light.png' });
+    await pg.emulateMedia({ colorScheme: 'dark' });
+    await pg.waitForTimeout(400);
+    await pg.screenshot({ path: process.env.H11_SHOTS + '/h11-message-dark.png' });
+    await pg.click('#mail-detail [data-pic="6"]');
+    await pg.waitForTimeout(400);
+    await pg.screenshot({ path: process.env.H11_SHOTS + '/h11-overlay-dark.png' });
+    await pg.keyboard.press('Escape');
+    await pg.emulateMedia({ colorScheme: 'light' });
+  }
+  // A read that fails leaves the file listed and is tried again next time.
+  await pg.evaluate(() => {
+    const m = S.messages.find((x) => x.uid === 95);
+    [...PICS.keys()].forEach((k) => PICS.delete(k)); PIC_MORE.clear();
+    __mock.readFails = true; __mock.calls.length = 0; openMail(m.id);
+  });
+  await pg.waitForFunction(() => !document.querySelector('#mail-detail .md-pics [data-pic]'), null, { timeout: 5000 }).catch(() => {});
+  const failed = await pg.evaluate(() => ({ tiles: document.querySelectorAll('#mail-detail [data-pic]').length, cards: document.querySelectorAll('#mail-detail [data-att]').length,
+    reads: __mock.calls.filter(([c]) => c === 'read_attachment').length, kept: PICS.size }));
+  check(failed.tiles === 0 && failed.cards === 11 && failed.reads === 6 && failed.kept === 0,
+    `a read that fails drops the thumbnail, keeps the file listed, and remembers nothing: ${JSON.stringify(failed)}`);
+  await pg.evaluate(() => { __mock.readFails = false; });
   await pg.close();
 }
 

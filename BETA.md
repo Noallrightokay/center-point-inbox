@@ -149,6 +149,79 @@ Don't spend time reporting these; they are known and planned:
   Pro (it had been recorded as Base), your account page may say "not yet"
   for a short while after paying, and deleting your account waits 30 days
   after a subscription ends (the page gives the date).
+- **v0.1.43:**
+  - **Unsubscribe:** mail from a mailing list shows **Unsubscribe** beside
+    Archive (inbox mail only). A web address asks "Open this link in your
+    browser?" and names the site; a mail address opens a message to the
+    list for you to send. RATA itself contacts nobody. Mail you already had
+    shows the button only once RATA reads it again. Tell us about a list
+    whose button goes somewhere wrong, or a newsletter with no button.
+  - **Help & diagnostics** in Settings: **Copy diagnostics** puts a short
+    block on your clipboard (and shows it, so you see what you paste) with
+    your version, your system and each mailbox's servers and last error,
+    numbered, with no address, password or mail in it. Paste it into every
+    bug report (§6). If you find an address or anything private in it,
+    report that first. **Open help** and **Report a bug** open your
+    browser; the help page answers only once mailrata.org runs its new
+    version.
+  - **Address suggestions:** typing two letters in To, Cc or Bcc suggests
+    people from mail you already have and from People, never from spam.
+    Arrows move, Enter or Tab chooses, Escape closes the list. A choice goes
+    in as `"Name" <address>`. Tell us if someone is suggested who should
+    not be, or if a named address is refused when you send.
+  - **Keyboard shortcuts:** press **?** for the list. `j` and `k` move
+    through the list, Enter opens, `r` replies, `e` archives, `c` writes a
+    new message, `/` searches, Escape closes. They never fire while you
+    type in a field, and Settings → Workspace turns them off. Tell us about
+    a key that does something you did not expect.
+  - **Search on the server:** after a search, RATA offers **Search on the
+    server** for each mailbox, which finds matching mail RATA has not
+    downloaded yet (the newest 50, inbox only), labelled "Found on the
+    server". Tell us about a search that finds nothing you know is there,
+    with the provider.
+  - **Undo send:** after Send, a note says "Sending in 5 s · Undo" for
+    five seconds; Undo brings the whole message back to finish. Settings →
+    Workspace sets 0, 5 or 10 seconds. If RATA closes during the wait, the
+    message is sent at the next start, or, if it may already have gone, put
+    back with a note to look in Sent first; it is never sent twice. Tell us
+    if a message is sent twice, or never arrives.
+  - **Mail you delete, archive or file elsewhere now leaves RATA too**, at
+    the next refresh (it used to stay in RATA's inbox for good). On Gmail,
+    a message you archive on your phone moves to Archive instead of showing
+    in both. RATA only follows the newest 2 000 messages of each folder
+    this way. Tell us if mail disappears from RATA that is still in your
+    webmail, with the provider: that is the most important thing to report.
+  - **Replies read shorter:** in the Text view the quoted part of a reply
+    folds behind **Show quoted text**, the signature (after a `-- ` line)
+    is shown lighter, and a very long link is shortened on screen but opens
+    whole. Tell us about a reply whose quote did not fold, or a message
+    where something you needed to read was folded away.
+  - **The licence renews while RATA stays open**, every six hours and
+    whenever mail stops because it lapsed, not only at start; if
+    mailrata.org cannot be reached, the licence box says so and has **Try
+    again**. A key pasted with a line break still works, and pasting a bad
+    key never replaces one that works. Renewal needs mailrata.org's new
+    version; until then, report a licence box that appears while your key
+    is still in date.
+  - **Delete, Archive and Move never hide mail the server kept:** if your
+    provider refuses, the message comes back to the list and a note says
+    why ("Nothing was changed — …"). Copy that sentence into your report.
+  - **Delete works on servers that only name their Trash** (Trash, Deleted
+    Items, Deleted Messages, Bin); before, it was refused there. Tell us
+    your provider if Delete still says there is nowhere to put the message.
+  - **A refused password shows the server's own words** after RATA's
+    advice ("The server said: …"). Gmail's "IMAP access is disabled for
+    your domain", for one, is not about the password. Copy the whole
+    sentence into your report. A provider RATA knows but cannot reach now
+    says so and asks you to try again, rather than asking for a server
+    address; a Zoho mailbox outside the US now signs in at its own region.
+  - **Sending from Outlook, Microsoft 365 and iCloud is faster:** RATA
+    tries the port they use first, and remembers which one worked for each
+    mailbox. Tell us if a send takes more than a few seconds.
+  - **AI on long mail:** Summarize and Translate send only the start of a
+    very long message (such as a newsletter), and Translate says so; a
+    briefing that ran out of room says to try again and keeps your flags.
+    AI still needs mailrata.org's new version.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
@@ -308,7 +381,7 @@ Running the full check on real mailboxes, provider by provider? Follow
 
 What makes a report fixable in minutes rather than days:
 
-1. **Settings → Copy diagnostics** (releases after 0.1.42), pasted into the
+1. **Settings → Copy diagnostics** (from v0.1.43), pasted into the
    report. It gives your version, your OS, and for each mailbox its servers,
    how it signs in and its last error, with no addresses, passwords, licence
    key or message text (you see the whole block before you paste it).
