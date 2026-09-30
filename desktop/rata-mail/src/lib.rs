@@ -56,9 +56,9 @@ pub use discover::{
 pub use guard::{HostVerdict, check_literal, check_resolved, is_public};
 pub use imap::{
     ARCHIVE_WINDOW, Account, Acted, Action, Archived, DraftRef, DraftSaved, Fetched, Flags, Folder,
-    Gap, IDLE_FOR, Known, Listed, Message, Newest, OwnFolder, Prior, Verified, Verify, Watch,
-    Watched, Whole, act, fetch_folder, fetch_newest, fetch_older, fetch_uids, fetch_whole,
-    list_folders, save_draft, verify, verify_with, watch,
+    Gap, IDLE_FOR, Known, Listed, Message, Newest, OwnFolder, PRESENT_WINDOW, Present, Prior,
+    Verified, Verify, Watch, Watched, Whole, act, fetch_folder, fetch_newest, fetch_older,
+    fetch_uids, fetch_whole, list_folders, save_draft, verify, verify_with, watch,
 };
 // Searching the server (H6).
 pub use imap::{SEARCH_LIMIT, SEARCH_QUERY_MAX, Searched, search_folder, search_query};
