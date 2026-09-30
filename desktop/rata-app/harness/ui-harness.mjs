@@ -157,7 +157,7 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'open_message':
         if (M.openFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
         if (M.openAtts && args.uid === 90) return { text: 'Please see the attached report.', truncated: false, attachments: M.openAtts };
-        if (M.openAttsBy && M.openAttsBy[args.uid]) return { text: 'Pictures from the weekend.', truncated: false, attachments: M.openAttsBy[args.uid] };
+        if (M.openAttsBy && M.openAttsBy[args.uid]) return { text: (M.openTextBy || {})[args.uid] || 'Pictures from the weekend.', truncated: false, attachments: M.openAttsBy[args.uid] };
         /* 60 and up are HTML mail. The HTML here has NOT been through the Rust
            sanitiser, on purpose: it tests the frame's own lock. */
         if (args.uid >= 60) return { text: 'Your order shipped. Track it <https://shop.example/t>', truncated: false, attachments: [],
@@ -2788,6 +2788,240 @@ console.log('\n— In this conversation: linked by ids, never by subject —');
   check(p && p.rows.length === 200 && p.more && ids.includes('k150') && Math.min(...nums) >= 50 && Math.max(...nums) <= 250 && nums.every((n, i) => !i || n > nums[i - 1]) && t < 1000,
     `a chain of 300 stops at the 200 nearest, in order, and says so, in ${Math.round(t)} ms: ${JSON.stringify({ n: p && p.rows.length, more: p && p.more, lo: Math.min(...nums), hi: Math.max(...nums) })}`);
   await pg.close();
+}
+
+console.log('\n— accessibility: axe at five points, and the list, dialogs and toasts by keyboard (H10) —');
+{
+  /* axe-core, as @axe-core/playwright runs it, at the points the card
+     names. Any serious or critical rule fails the check; lesser ones are
+     printed with where they are. */
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  const axe = async (pg, where) => {
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  /* AxeBuilder needs a page made from a context of its own. */
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx });
+  const now = Date.now();
+  const mk = (folder, uid, extra) => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Sender ' + uid, from_addr: 's' + uid + '@example.org', to_name: '', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '', subject: 'Subject ' + uid, preview: 'Preview of ' + uid, body: 'Body ' + uid,
+    ts: now - uid * 60e3, unread: uid % 3 === 0, starred: uid % 5 === 0, uid, uidvalidity: 7, message_id: 'h' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const REPLY = ['Thursday works, and here are the pictures.', '', '-- ', 'Bo Li', '', 'On Mon, 28 Sep 2026 at 09:00, Ann <ann@example.org> wrote:', '> Lunch on Thursday?', '> And bring the pictures.'].join('\n');
+  const atts = [{ index: 1, name: 'holiday.png', mime: 'image/png', size: 2000, disguised: false }, { index: 2, name: 'notes.pdf', mime: 'application/pdf', size: 900, disguised: false }];
+  const msgs = [
+    mk('inbox', 91, { from_name: 'Ann', from_addr: 'ann@example.org', subject: 'Lunch', message_id: 'a@example.org', body: 'Lunch on Thursday?', ts: now - 3 * 3600e3, unread: false }),
+    mk('inbox', 95, { from_name: 'Bo Li', from_addr: 'bo@example.org', subject: 'Re: Lunch', in_reply_to: 'a@example.org', body: REPLY, attachments: atts, unread: true, ts: now - 1000 }),
+  ];
+  for (let u = 1; u <= 40; u++) msgs.push(mk('inbox', u));
+  await pg.evaluate(async ({ msgs, atts, REPLY }) => {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 48;
+    const x = c.getContext('2d'); x.fillStyle = '#4a7'; x.fillRect(0, 0, 64, 48);
+    __mock.readable = { 1: { name: 'holiday.png', mime: 'image/png', data: c.toDataURL('image/png').split(',')[1] } };
+    __mock.openAttsBy = { 95: atts };
+    __mock.openTextBy = { 95: REPLY };
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    go('inbox'); mailFilter = 'all'; renderMailFilters(); renderMail();
+  }, { msgs, atts, REPLY });
+  await pg.waitForTimeout(300);
+  await axe(pg, 'the inbox with messages');
+
+  await pg.evaluate(() => openMail('me@example.com_95'));
+  await pg.waitForFunction(() => document.querySelector('#mail-detail .md-pics img') && !document.querySelector('#md-convo').hidden && document.querySelector('#md-body .md-qbtn'), null, { timeout: 8000 }).catch(() => {});
+  const shown = await pg.evaluate(() => ({ pic: !!document.querySelector('#mail-detail .md-pics img'), convo: !document.querySelector('#md-convo').hidden, quote: !!document.querySelector('#md-body .md-qbtn') }));
+  check(shown.pic && shown.convo && shown.quote, `the open message has a picture, a conversation and a folded quote: ${JSON.stringify(shown)}`);
+  await axe(pg, 'an open message with a conversation, a picture and a folded quote');
+
+  await pg.evaluate(() => { newDraft(); openCompose(); });
+  await pg.click('#cmp-to');
+  await pg.keyboard.type('an');
+  await pg.waitForTimeout(300);
+  const sugg = await pg.evaluate(() => !document.querySelector('#cmp-sugg').hidden);
+  check(sugg, 'the composer is open with its suggestion list showing');
+  await axe(pg, 'the composer with the suggestion list open');
+  await pg.keyboard.press('Escape');
+  await pg.evaluate(() => closeCompose());
+
+  await pg.evaluate(() => go('set'));
+  await pg.waitForTimeout(200);
+  await axe(pg, 'Settings');
+
+  await pg.evaluate(() => { go('inbox'); askToOpen('https://example.org/a/very/long/path', 'example.org'); });
+  await axe(pg, 'the link question');
+  await pg.evaluate(() => closeLink());
+  await pg.evaluate(() => { askDisguised({ n: 'invoice.pdf.exe' }, true); });
+  await axe(pg, 'the disguised-program question');
+  await pg.evaluate(() => closeWarn(false));
+  await pg.evaluate(() => openKeys());
+  await axe(pg, 'the keyboard sheet');
+  await pg.evaluate(() => closeKeys());
+
+  /* The same two screens in the dark, where DESIGN.md gives its own
+     contrast figures. */
+  await pg.emulateMedia({ colorScheme: 'dark' });
+  await pg.evaluate(() => { go('inbox'); selMail = null; renderMail(); renderResting(); });
+  await axe(pg, 'the inbox, dark');
+  await pg.evaluate(() => openMail('me@example.com_95'));
+  await pg.waitForTimeout(300);
+  await axe(pg, 'an open message, dark');
+  await pg.emulateMedia({ colorScheme: 'light' });
+  /* Between 901 and 1200 px the rail is icons only: still named. */
+  await pg.setViewportSize({ width: 1000, height: 720 });
+  const rail = await pg.evaluate(() => [...document.querySelectorAll('#rail .nav-item')].filter((b) => b.getClientRects().length).map((b) => b.querySelector('.nav-label') && getComputedStyle(b.querySelector('.nav-label')).display !== 'none' && b.querySelector('.nav-label').getBoundingClientRect().width <= 1));
+  check(rail.length >= 4 && rail.every(Boolean), `icons-only, each rail button still carries its word for a screen reader: ${JSON.stringify(rail)}`);
+  await axe(pg, 'the inbox with the rail as icons only');
+  await pg.setViewportSize({ width: 1280, height: 720 });
+
+  /* Landmarks, each named. */
+  const marks = await pg.evaluate(() => ({
+    main: document.querySelectorAll('main').length,
+    nav: document.querySelector('#rail').tagName === 'NAV' && document.querySelector('#rail').getAttribute('aria-label'),
+    list: document.querySelector('#view-inbox .side-list').getAttribute('role') + ':' + document.querySelector('#view-inbox .side-list').getAttribute('aria-label'),
+    pane: document.querySelector('#mail-detail').getAttribute('role') + ':' + document.querySelector('#mail-detail').getAttribute('aria-label'),
+    composer: document.querySelector('#compose').getAttribute('role') + ':' + document.querySelector('#compose').getAttribute('aria-labelledby'),
+  }));
+  check(marks.main === 1 && marks.nav === 'Sections' && marks.list === 'region:Message list' && marks.pane === 'region:Reading pane' && marks.composer === 'dialog:cmp-title',
+    `the navigation, the list, the reading pane and the composer are landmarks with names: ${JSON.stringify(marks)}`);
+
+  /* The list is a listbox of options that know their place in the whole
+     list, however few are drawn, with one Tab stop. */
+  await pg.evaluate(() => { go('inbox'); selMail = null; KEY_AT = null; renderMail(); document.activeElement && document.activeElement.blur(); });
+  const lb = () => pg.evaluate(() => {
+    const sc = document.querySelector('#mail-scroll'), win = sc.querySelector('.vl-win'), opts = [...win.querySelectorAll('[role=option]')];
+    const a = document.activeElement;
+    return { role: win.getAttribute('role'), label: win.getAttribute('aria-label'), n: VL.get(sc).pool.length, drawn: opts.length,
+      sizes: [...new Set(opts.map((o) => o.getAttribute('aria-setsize')))], pos: opts.map((o) => +o.getAttribute('aria-posinset')),
+      stops: opts.filter((o) => o.tabIndex === 0).map((o) => o.dataset.id), focus: a && a.classList.contains('mail-row') ? a.dataset.id : a && (a.id || a.className || a.tagName),
+      focusPos: a && a.getAttribute('aria-posinset'), ring: a && a.classList.contains('mail-row') ? getComputedStyle(a).outlineStyle : null,
+      selected: opts.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.dataset.id), at: KEY_AT, sel: selMail };
+  });
+  let l = await lb();
+  check(l.role === 'listbox' && l.label === 'Messages' && l.n === 42 && l.drawn < l.n && l.sizes.join() === '42' && l.pos.every((p, i) => i === 0 || p === l.pos[i - 1] + 1) && l.stops.length === 1,
+    `the mail list is a listbox; each drawn row an option of 42 at its own place, one of them the Tab stop: ${JSON.stringify({ role: l.role, label: l.label, n: l.n, drawn: l.drawn, sizes: l.sizes, stops: l.stops })}`);
+  await pg.focus('#mail-sort');
+  for (let k = 0; k < 6 && !(await pg.evaluate(() => document.activeElement.classList.contains('mail-row'))); k++) await pg.keyboard.press('Tab');
+  l = await lb();
+  check(l.focus === l.stops[0] && l.focusPos === '1' && l.ring === 'solid', `Tab reaches the list at its one stop, the first row, with the focus ring: ${JSON.stringify({ focus: l.focus, pos: l.focusPos, ring: l.ring })}`);
+  for (let k = 0; k < 3; k++) await pg.keyboard.press('ArrowDown');
+  l = await lb();
+  check(l.focusPos === '4' && l.at === l.focus && l.stops.join() === l.focus && l.sel === null, `Down moves the focus row by row, the Tab stop with it, opening nothing: ${JSON.stringify({ pos: l.focusPos, at: l.at, stops: l.stops, sel: l.sel })}`);
+  await pg.keyboard.press('j'); await pg.keyboard.press('j'); await pg.keyboard.press('k');
+  l = await lb();
+  check(l.focusPos === '5' && l.at === l.focus, `j and k move the focus too: ${JSON.stringify({ pos: l.focusPos, at: l.at })}`);
+  await pg.keyboard.press('End');
+  await pg.waitForTimeout(100);
+  l = await lb();
+  check(l.focusPos === '42' && l.at === l.focus && l.stops.join() === l.focus, `End goes to the last of the 42, drawing it: ${JSON.stringify({ pos: l.focusPos, at: l.at })}`);
+  await pg.keyboard.press('Home');
+  await pg.waitForTimeout(100);
+  l = await lb();
+  const firstId = l.focus;
+  check(l.focusPos === '1', `Home goes back to the first: ${l.focusPos}`);
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(150);
+  l = await lb();
+  check(l.sel === firstId && l.focus === firstId && l.selected.join() === firstId, `Enter opens the focused message; the row keeps the focus and says it is selected: ${JSON.stringify({ sel: l.sel, focus: l.focus, selected: l.selected })}`);
+  /* A redraw (a star from elsewhere) keeps the focus on the row. */
+  await pg.evaluate(() => renderMail());
+  l = await lb();
+  check(l.focus === firstId, `a redraw of the list keeps the focus where it was: ${l.focus}`);
+  /* A click on a row still opens it, and the row takes the focus. */
+  await pg.click('#mail-scroll [aria-posinset="3"]');
+  l = await lb();
+  check(l.sel === l.focus && l.focusPos === '3', `a click opens a row and gives it the focus: ${JSON.stringify({ sel: l.sel, focus: l.focus, pos: l.focusPos })}`);
+
+  /* Unread and starred are more than a colour: a weight and a dot, a star,
+     and the words for a screen reader. */
+  const cue = await pg.evaluate(() => {
+    const row = (id) => document.querySelector(`#mail-scroll [data-id="${id}"]`);
+    const un = row('me@example.com_3'), star = row('me@example.com_5');
+    return { unWords: un && un.querySelector('.vh') && un.querySelector('.vh').textContent, unWeight: un && getComputedStyle(un.querySelector('.m-from')).fontWeight,
+      dot: un && getComputedStyle(un, '::before').width, starWords: star && star.querySelector('.vh') && star.querySelector('.vh').textContent,
+      starGlyph: star && star.querySelector('.clip.star') && star.querySelector('.clip.star').textContent };
+  });
+  check(/Unread/.test(cue.unWords) && cue.unWeight === '600' && cue.dot === '6px' && /Starred/.test(cue.starWords) && cue.starGlyph === '★',
+    `unread is bold with a dot and says "Unread"; starred has a star and says "Starred": ${JSON.stringify(cue)}`);
+
+  /* Toasts are announced, and take no focus. */
+  const t = await pg.evaluate(() => { const before = document.activeElement; toast('Checked'); const el = document.querySelector('#toast');
+    return { role: el.getAttribute('role'), live: el.getAttribute('aria-live'), kept: document.activeElement === before, send: document.querySelector('#send-toast').getAttribute('role') }; });
+  check(t.role === 'status' && t.live === 'polite' && t.kept && t.send === 'status', `a toast is a polite status that leaves the focus where it was: ${JSON.stringify(t)}`);
+
+  /* Every overlay is a modal dialog with a name. */
+  const dl = await pg.evaluate(() => ['#link-ov', '#warn-ov', '#pic-ov', '#keys-ov', '#welcome-ov', '#compose', '#assist'].map((s) => {
+    const el = document.querySelector(s), by = el.getAttribute('aria-labelledby');
+    return s + ':' + /^(alert)?dialog$/.test(el.getAttribute('role')) + ':' + el.getAttribute('aria-modal') + ':' + !!(by && document.getElementById(by));
+  }));
+  check(dl.every((d) => d.endsWith(':true:true:true')), `every overlay is a modal dialog labelled by its heading: ${JSON.stringify(dl)}`);
+
+  /* The keyboard stays in the dialog on top, and comes back to where it
+     was when the dialog closes. */
+  const inside = (sel) => pg.evaluate((sel) => document.querySelector(sel).contains(document.activeElement), sel);
+  const focusId = () => pg.evaluate(() => document.activeElement && document.activeElement.id);
+  const round = async (sel, n) => { let ok = true; for (let k = 0; k < n; k++) { await pg.keyboard.press(k % 3 === 2 ? 'Shift+Tab' : 'Tab'); ok = ok && await inside(sel); } return ok; };
+  await pg.evaluate(() => openMail('me@example.com_95'));
+  await pg.focus('#md-forward');
+  await pg.evaluate(() => askToOpen('https://example.org/x', 'example.org'));
+  let kept = await round('#link-ov', 6);
+  await pg.keyboard.press('Escape');
+  check(kept && (await focusId()) === 'md-forward', `the link question keeps Tab inside it, and Escape gives the focus back: ${kept}`);
+  await pg.focus('#md-forward');
+  const warned = pg.evaluate(() => askDisguised({ n: 'invoice.pdf.exe' }, true));
+  kept = await round('#warn-ov', 5);
+  await pg.keyboard.press('Escape');
+  await warned;
+  check(kept && (await focusId()) === 'md-forward', `the disguised-program question too: ${kept}`);
+  await pg.focus('#compose-btn');
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(150);
+  kept = await round('#compose-ov', 16);
+  await pg.evaluate(() => document.activeElement.blur());
+  await pg.keyboard.press('Escape');
+  check(kept && (await focusId()) === 'compose-btn', `the composer keeps Tab inside it, and closing it gives the focus back to Compose: ${JSON.stringify({ kept, focus: await focusId() })}`);
+  await pg.focus('#assist-fab');
+  await pg.keyboard.press('Enter');
+  const asIn = await inside('#assist');
+  kept = await round('#assist-ov', 4);
+  await pg.keyboard.press('Escape');
+  check(asIn && kept && (await focusId()) === 'assist-fab', `Assist takes the focus, keeps it, and gives it back: ${JSON.stringify({ asIn, kept })}`);
+  await pg.focus('#assist-fab');
+  await pg.evaluate(() => showWelcome({ name: 'Ann' }));
+  const wIn = await focusId();
+  kept = await round('#welcome-ov', 4);
+  await pg.keyboard.press('Escape');
+  const wOpen = await pg.evaluate(() => document.querySelector('#welcome-ov').classList.contains('open'));
+  check(wIn === 'w-enter' && kept && !wOpen && (await focusId()) === 'assist-fab', `the welcome takes the focus, keeps it, closes on Escape and gives it back: ${JSON.stringify({ wIn, kept, wOpen })}`);
+  await pg.evaluate(() => go('set'));
+  await pg.click('#btn-delete');
+  const dIn = await focusId();
+  await pg.keyboard.press('Escape');
+  const dShown = await pg.evaluate(() => getComputedStyle(document.querySelector('#del-confirm')).display !== 'none');
+  check(dIn === 'del-email' && !dShown && (await focusId()) === 'btn-delete', `Delete account's confirmation takes the focus; Escape keeps the account and gives it back: ${JSON.stringify({ dIn, dShown })}`);
+
+  /* Less motion, when the system asks. */
+  await pg.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await pg.evaluate(() => {
+    newDraft(); openCompose();
+    const c = getComputedStyle(document.querySelector('#compose')), tt = getComputedStyle(document.querySelector('#toast'));
+    const r = { compose: c.animationName, toast: tt.transitionDuration, glide: glide() };
+    closeCompose(); return r;
+  });
+  check(still.compose === 'none' && /^(0s|1e-05s|0\.00001s)$/.test(still.toast.split(',')[0]) && still.glide === 'auto', `reduced motion stops what moves: ${JSON.stringify(still)}`);
+  await pg.emulateMedia({ reducedMotion: 'no-preference' });
+  await ctx.close();
+
+  const lctx = await browser.newContext();
+  const lp = await open(false, { context: lctx });
+  await lp.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  await axe(lp, 'the licence box');
+  const lic = await lp.evaluate(() => { const b = document.querySelector('#rata-licence'); return b && [b.getAttribute('role'), b.getAttribute('aria-modal'), document.getElementById(b.getAttribute('aria-labelledby'))?.textContent].join(':'); });
+  let licIn = true;
+  for (let k = 0; k < 5; k++) { await lp.keyboard.press('Tab'); licIn = licIn && await lp.evaluate(() => document.querySelector('#rata-licence').contains(document.activeElement)); }
+  check(lic === 'dialog:true:Your licence key' && licIn, `the licence box is a modal dialog named by its heading, and Tab stays in it: ${JSON.stringify({ lic, licIn })}`);
+  await lctx.close();
 }
 
 await browser.close();

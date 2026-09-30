@@ -738,12 +738,18 @@
        a nonce in style-src makes CSP ignore 'unsafe-inline' — style attributes
        cannot carry a nonce, so they are dropped. See ui-src/bridge.css. */
     wrap.className = 'rata-lic';
+    /* A dialog to a screen reader too (H10): modal, named by its heading,
+       its errors announced. app.html keeps Tab inside it. */
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.setAttribute('aria-labelledby', 'rata-licence-title');
+    wrap.setAttribute('aria-describedby', 'rata-licence-why');
     wrap.innerHTML = `
       <div class="rata-lic-card">
-        <h2>Your licence key</h2>
+        <h2 id="rata-licence-title">Your licence key</h2>
         <p id="rata-licence-why"></p>
-        <input id="rata-licence-input" placeholder="v1.…" autocomplete="off" spellcheck="false">
-        <p class="rata-lic-error" id="rata-licence-error"></p>
+        <input id="rata-licence-input" aria-label="Licence key" placeholder="v1.…" autocomplete="off" spellcheck="false">
+        <p class="rata-lic-error" id="rata-licence-error" role="alert"></p>
         <button id="rata-licence-save">Use this licence</button>
         <button id="rata-licence-retry" class="rata-lic-retry" hidden>Try again</button>
         <p class="rata-lic-note">
