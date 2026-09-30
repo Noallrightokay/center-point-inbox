@@ -417,6 +417,75 @@ async fn refresh_downloads_only_new_mail_and_brings_flag_changes() {
     assert!(next.gaps.is_empty());
 }
 
+/// Mail deleted or moved on another device leaves RATA (BUG-C): the next
+/// refresh lists what each folder still holds, and a message expunged by a
+/// second connection is not in it.
+#[tokio::test]
+async fn a_message_expunged_elsewhere_is_missing_from_the_next_listing() {
+    let r = resolver();
+    let me = user("present");
+    let acct = account(&me);
+    let mut s = seed(&me).await;
+    put(&mut s, &me, "INBOX", 4, None).await;
+    put(&mut s, &me, "Sent", 2, Some("(\\Seen)")).await;
+    s.logout().await.unwrap();
+
+    let first = fetch_newest(&r, &acct, 50, &[]).await.unwrap();
+    let listed = |n: &rata_mail::Newest, f: &Folder| {
+        n.present
+            .iter()
+            .find(|p| p.folder == *f)
+            .cloned()
+            .unwrap_or_else(|| panic!("{f:?} not listed: {:?}", n.present))
+    };
+    let (validity, held) = {
+        let mut s = seed(&me).await;
+        let got = uids(&mut s, "INBOX").await;
+        s.logout().await.unwrap();
+        got
+    };
+    let p = listed(&first, &Folder::Inbox);
+    assert_eq!((p.uidvalidity, p.floor), (validity, 1));
+    assert_eq!(p.uids, held);
+    assert!(p.next > *held.last().unwrap());
+    assert_eq!(listed(&first, &Folder::Sent).uids.len(), 2);
+    let known = [Known {
+        folder: Folder::Inbox,
+        uidvalidity: validity,
+        since: *held.last().unwrap(),
+    }];
+
+    // The phone deletes the second message for good, and a Sent one.
+    let mut s = seed(&me).await;
+    s.select("INBOX").await.unwrap();
+    s.uid_store(held[1].to_string(), "+FLAGS.SILENT (\\Deleted)")
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    s.expunge().await.unwrap().collect::<Vec<_>>().await;
+    let (_, sent) = uids(&mut s, "Sent").await;
+    s.uid_store(sent[0].to_string(), "+FLAGS.SILENT (\\Deleted)")
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    s.expunge().await.unwrap().collect::<Vec<_>>().await;
+    s.logout().await.unwrap();
+
+    let next = fetch_newest(&r, &acct, 50, &known).await.unwrap();
+    let p = listed(&next, &Folder::Inbox);
+    assert_eq!(p.uidvalidity, validity);
+    assert!(p.floor <= held[0]);
+    assert!(!p.uids.contains(&held[1]), "{p:?}");
+    assert_eq!(p.uids, vec![held[0], held[2], held[3]]);
+    assert!(
+        next.messages.iter().all(|m| m.folder != Folder::Inbox),
+        "nothing new was downloaded"
+    );
+    assert_eq!(listed(&next, &Folder::Sent).uids, vec![sent[1]]);
+}
+
 // ---------------------------------------------------------------- older mail
 
 #[tokio::test]
