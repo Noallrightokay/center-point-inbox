@@ -29,7 +29,7 @@ convenient.
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 127 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (240 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (261 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -1015,6 +1015,28 @@ for all at once); results are stored like older mail, labelled with the
 mailbox and "Found on the server", and marked `srvFound`, which
 `oldestRef` and `heldKnown` skip so no mail in between is missed; Load
 older mail, or a refresh that brings the message, takes the mark off.
+**Undo send (H9, v0.1.43).** In the app, Send closes the composer and holds
+the message `S.settings.undoSend` seconds (Settings → Workspace: 0, 5 or
+10; default 5; the website always 0), with "Sending in N s · Undo" in
+`#send-toast` (`role=status`; the focus goes to it, so Tab reaches Undo).
+Undo brings the whole draft back (`snapCompose`/`restoreCompose`: every
+address line and whether Cc and Bcc show, subject, text, files, forward
+references, the thread, `CMP_DRAFT`, `CMP_SRV`, `CMP_SIG`, From), and
+nothing is trashed at Undo. The count ending calls `deliver()`, the same
+path as a no-wait Send; RATA's Drafts copy goes to the Trash only after
+success (`sentAfter`), and a failure puts the draft back. Sends go one at
+a time in order (`OUTBOX`, `obRun`); a draft that finds the composer busy
+waits in `HELD` until Compose finds it empty (`composeNew`). **Never
+twice:** `rata_outbox_<uid>` in localStorage is written at Send (with the
+files' base64 when they fit), marked `sending` just before `send_mail`
+and removed after; on `pagehide`/`beforeunload` everything waiting goes at
+once, and the next licensed start (`outboxResume`) sends `waiting` records
+once and puts `sending` ones back in the composer ("Look in Sent before
+sending it again"), never resending them. Not seen in a packaged build:
+closing the only window exits the app and probably drops a send in
+flight, which the outbox then puts back. Harness: `open()` sets
+`undoSend = 0` unless `{undo: true}`; `window.__RATA_SEND_SECOND`
+shortens a second of the count.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an

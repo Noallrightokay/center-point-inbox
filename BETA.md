@@ -179,6 +179,12 @@ Don't spend time reporting these; they are known and planned:
     downloaded yet (the newest 50, inbox only), labelled "Found on the
     server". Tell us about a search that finds nothing you know is there,
     with the provider.
+  - **Undo send:** after Send, a note says "Sending in 5 s · Undo" for
+    five seconds; Undo brings the whole message back to finish. Settings →
+    Workspace sets 0, 5 or 10 seconds. If RATA closes during the wait, the
+    message is sent at the next start, or, if it may already have gone, put
+    back with a note to look in Sent first; it is never sent twice. Tell us
+    if a message is sent twice, or never arrives.
   - **The licence renews while RATA stays open**, every six hours and
     whenever mail stops because it lapsed, not only at start; if
     mailrata.org cannot be reached, the licence box says so and has **Try
