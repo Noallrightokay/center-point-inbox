@@ -137,6 +137,11 @@ pub struct Refreshed {
     /// interface fetches what it does not hold and drops what has left
     /// (`rata_mail::Archived`).
     pub archives: Vec<MailArchive>,
+    /// Which messages the inbox, Sent, Spam and Archive of each mailbox read
+    /// hold now, near their top (`rata_mail::Present`): the interface drops
+    /// what it holds there that is not listed, since it left the folder on
+    /// another device. A folder the server would not list is not here.
+    pub present: Vec<MailPresent>,
     /// One per mailbox that did not sync, for showing next to that account
     /// rather than as a single "sync failed".
     pub problems: Vec<Problem>,
@@ -194,6 +199,14 @@ pub struct MailArchive {
     pub email: String,
     #[serde(flatten)]
     pub archived: rata_mail::Archived,
+}
+
+/// What one folder of one mailbox holds now, near its top.
+#[derive(Debug, Serialize)]
+pub struct MailPresent {
+    pub email: String,
+    #[serde(flatten)]
+    pub present: rata_mail::Present,
 }
 
 /// What the interface already holds of one folder of one mailbox: the newest
@@ -921,6 +934,11 @@ impl Rata {
                             email: email.clone(),
                             gap,
                         }));
+                        out.present
+                            .extend(found.present.into_iter().map(|present| MailPresent {
+                                email: email.clone(),
+                                present,
+                            }));
                         if let Some(archived) = found.archived {
                             out.archives.push(MailArchive {
                                 email: email.clone(),
@@ -3624,6 +3642,26 @@ mod tests {
         assert_eq!(
             r["archives"],
             serde_json::json!([{"email": "a@gmail.com", "uidvalidity": 9, "floor": 1, "uids": [2, 4]}])
+        );
+        // What a folder still holds, near its top: the interface drops
+        // what it has there that is not listed.
+        let r = serde_json::to_value(Refreshed {
+            present: vec![MailPresent {
+                email: "a@b.example".into(),
+                present: rata_mail::Present {
+                    folder: Folder::Sent,
+                    uidvalidity: 8,
+                    floor: 1,
+                    next: 13,
+                    uids: vec![11],
+                },
+            }],
+            ..Refreshed::default()
+        })
+        .unwrap();
+        assert_eq!(
+            r["present"],
+            serde_json::json!([{"email": "a@b.example", "folder": "sent", "uidvalidity": 8, "floor": 1, "next": 13, "uids": [11]}])
         );
         let d = serde_json::to_value(Delivered {
             via: "smtp.b.example:465".into(),

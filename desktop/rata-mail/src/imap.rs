@@ -925,7 +925,37 @@ pub struct Newest {
     pub drafts: Option<Vec<String>>,
     /// Gmail's archive, listed, when it was read: see [`Archived`].
     pub archived: Option<Archived>,
+    /// Which messages the inbox, Sent, Spam and Archive (not Gmail's, which
+    /// is [`Archived`]) hold now, near their top: see [`Present`]. One per
+    /// folder whose listing the server answered; none for the others.
+    pub present: Vec<Present>,
 }
+
+/// Which messages of one folder are there now: every UID from `floor` up to,
+/// not including, `next` (the folder's UIDNEXT when it was opened) that the
+/// server listed.
+///
+/// A refresh downloads only what is new and the flags of what is still
+/// there, so nothing else would tell the interface that a message it holds
+/// was deleted, archived or filed on the phone or in webmail: it stayed in
+/// RATA's inbox for good. With this, one it holds in that range and does not
+/// see listed has left the folder. Only a listing the server answered with a
+/// tagged OK is sent; a refusal or failure sends nothing, so nothing is
+/// taken away on a guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Present {
+    pub folder: Folder,
+    pub uidvalidity: u32,
+    pub floor: u32,
+    pub next: u32,
+    pub uids: Vec<u32>,
+}
+
+/// How many of a folder's newest messages a refresh lists as [`Present`]:
+/// all of a folder that holds no more, else the newest this many, whatever
+/// their UIDs. At most this many numbers come back, about 12 KB.
+pub const PRESENT_WINDOW: u32 = 2000;
 
 /// Which messages of Gmail's All Mail are archived, among those whose UID is
 /// at least `floor`.
@@ -1029,6 +1059,11 @@ async fn newest_everywhere<C: Connect>(
         held(&Folder::Inbox),
     )
     .await?;
+    if !dial.dead {
+        found
+            .present
+            .extend(present_in(session, &Folder::Inbox, &mailbox, &mut dial.dead).await);
+    }
     // The other folders are a bonus: any that is missing, will not open or
     // fails partway is left out, and the inbox still arrives. So is the rest
     // of them when a reply RATA could not read has left the connection
@@ -1062,6 +1097,15 @@ async fn newest_everywhere<C: Connect>(
             if folder == Folder::Drafts && !dial.dead {
                 found.drafts = all_ids(session, acct, &folder).await;
             }
+            // Drafts are listed whole just above, and Gmail's archive by
+            // `refresh_archived`.
+            let listed_already =
+                folder == Folder::Drafts || (folder == Folder::Archive && places.all_mail);
+            if !listed_already && !dial.dead {
+                found
+                    .present
+                    .extend(present_in(session, &folder, &mailbox, &mut dial.dead).await);
+            }
         }
     }
     found.messages.sort_by(|a, b| b.ts.cmp(&a.ts));
@@ -1091,6 +1135,80 @@ where
             _ => {}
         }
     }
+}
+
+/// Which of the newest [`PRESENT_WINDOW`] messages of the folder just
+/// selected (as `mailbox`) are there now — or nothing if the server would not
+/// say, which must never read as "they have all gone".
+///
+/// The floor is found by position, not by counting down from UIDNEXT: a
+/// folder of no more than the window is listed whole with no extra command,
+/// and a bigger one asks for the UID at position EXISTS − window + 1 (one
+/// line back). UIDNEXT − window would be free, but UIDs are sparse where
+/// mail is archived or deleted often, so it could cover only the last few
+/// days of an inbox and leave everything RATA holds below it unchecked.
+/// Only UIDs below the UIDNEXT seen when the folder was opened are judged,
+/// so mail that arrives meanwhile, or that a search on the server has just
+/// brought, is never taken for gone. A listing that timed out leaves a reply
+/// owed on the connection, so `dead` is set and no more is asked of it.
+async fn present_in<T>(
+    session: &mut Session<T>,
+    folder: &Folder,
+    mailbox: &async_imap::types::Mailbox,
+    dead: &mut bool,
+) -> Option<Present>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    let uidvalidity = mailbox.uid_validity.filter(|v| *v != 0)?;
+    // UIDNEXT 1: nothing was ever there to have gone.
+    let next = mailbox.uid_next.filter(|n| *n > 1)?;
+    let shown = |floor: u32, uids: Vec<u32>| {
+        Some(Present {
+            folder: folder.clone(),
+            uidvalidity,
+            floor,
+            next,
+            uids,
+        })
+    };
+    // Opened empty (a tagged OK said so): everything below UIDNEXT has gone.
+    if mailbox.exists == 0 {
+        return shown(1, vec![]);
+    }
+    let floor = if mailbox.exists <= PRESENT_WINDOW {
+        1
+    } else {
+        let at = mailbox.exists - PRESENT_WINDOW + 1;
+        let got = match answered(session.fetch(at.to_string(), "(UID)")).await {
+            Ok(got) => got,
+            Err(None) => {
+                *dead = true;
+                return None;
+            }
+            Err(Some(_)) => return None,
+        };
+        got.iter().find(|f| f.message == at).and_then(|f| f.uid)?
+    };
+    if floor >= next {
+        return None;
+    }
+    let Ok(found) = timeout(
+        COMMAND,
+        search(session, &format!("UID {floor}:{}", next - 1)),
+    )
+    .await
+    else {
+        *dead = true;
+        return None;
+    };
+    let mut uids: Vec<u32> = found?
+        .into_iter()
+        .filter(|u| *u >= floor && *u < next)
+        .collect();
+    uids.sort_unstable();
+    uids.dedup();
+    shown(floor, uids)
 }
 
 /// Every message of the folder just selected, by id — or nothing if the
@@ -1208,8 +1326,7 @@ async fn refresh_in<C: Connect>(
         messages,
         flags,
         gaps,
-        drafts: None,
-        archived: None,
+        ..Newest::default()
     })
 }
 
@@ -1282,6 +1399,7 @@ async fn refresh_archived<C: Connect>(
             floor,
             uids: listed,
         }),
+        present: vec![],
     })
 }
 
@@ -4625,6 +4743,11 @@ mod tests {
         /// `List-Unsubscribe`, folded across lines, and a one-click
         /// `List-Unsubscribe-Post`.
         listed: &'static [u32],
+        /// `UID SEARCH` is refused (NO), as a server may refuse any command.
+        refuse_search: bool,
+        /// UIDNEXT, when it is not the newest UID + 1: a folder emptied
+        /// since mail was last there.
+        next: Option<u32>,
     }
 
     /// Where a test's fresh connections come from: another sign-in to the
@@ -4740,9 +4863,32 @@ mod tests {
                     .unwrap_or("");
                 let body = if up.starts_with("SELECT") {
                     format!(
-                        "* {} EXISTS\r\n* OK [UIDVALIDITY {uidvalidity}] ok\r\n",
-                        uids.len()
+                        "* {} EXISTS\r\n* OK [UIDVALIDITY {uidvalidity}] ok\r\n* OK [UIDNEXT {}] ok\r\n",
+                        uids.len(),
+                        quirks.next.unwrap_or(uids.last().map_or(1, |u| u + 1))
                     )
+                } else if up.starts_with("UID SEARCH") && quirks.refuse_search {
+                    let _ = w
+                        .write_all(format!("{tag} NO Search refused\r\n").as_bytes())
+                        .await;
+                    continue;
+                } else if up.starts_with("UID SEARCH UID ") {
+                    // UID SEARCH UID lo:hi — what is there in that range.
+                    let (lo, hi) = arg_of(cmd, 3).split_once(':').unwrap();
+                    let lo: u32 = lo.parse().unwrap();
+                    let hi: u32 = hi.parse().unwrap_or(u32::MAX);
+                    let found: Vec<String> = uids
+                        .iter()
+                        .filter(|u| **u >= lo && **u <= hi)
+                        .map(u32::to_string)
+                        .collect();
+                    format!("* SEARCH {}\r\n", found.join(" "))
+                } else if up.starts_with("FETCH") && !arg.contains(':') {
+                    // One position's UID.
+                    let at: usize = arg.parse().unwrap();
+                    uids.get(at.wrapping_sub(1))
+                        .map(|u| format!("* {at} FETCH (UID {u})\r\n"))
+                        .unwrap_or_default()
                 } else if up.starts_with("UID FETCH") && up.contains("RFC822.SIZE") {
                     // UID 99 is a message far too large to download.
                     let want: u32 = arg.parse().unwrap_or(0);
@@ -4852,6 +4998,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The `n`th word of a command, or nothing.
+    fn arg_of(cmd: &str, n: usize) -> &str {
+        cmd.split_whitespace().nth(n).unwrap_or("")
     }
 
     fn me() -> Account {
@@ -6075,9 +6226,11 @@ mod tests {
                     let name = cmd[6..].trim().trim_matches('"');
                     in_sent = name == sent;
                     if in_sent {
-                        "* 2 EXISTS\r\n* OK [UIDVALIDITY 8] ok\r\n".to_string()
+                        "* 2 EXISTS\r\n* OK [UIDVALIDITY 8] ok\r\n* OK [UIDNEXT 13] ok\r\n"
+                            .to_string()
                     } else {
-                        "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n".to_string()
+                        "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n* OK [UIDNEXT 4] ok\r\n"
+                            .to_string()
                     }
                 } else if up.starts_with("FETCH") {
                     let uids: &[u32] = if in_sent { &[11, 12] } else { &[1, 2, 3] };
@@ -6794,6 +6947,175 @@ mod tests {
         });
     }
 
+    // ------------------------------------- what is still there (BUG-C)
+
+    fn listed_in(found: &Newest, folder: &Folder) -> Option<Present> {
+        found.present.iter().find(|p| p.folder == *folder).cloned()
+    }
+
+    #[test]
+    fn a_refresh_lists_what_the_inbox_still_holds() {
+        rt_act().block_on(async {
+            // RATA holds 1..=20; 7 and 12 were deleted on the phone since.
+            let left: &'static [u32] = Box::leak(
+                (1..=20)
+                    .filter(|u| *u != 7 && *u != 12)
+                    .collect::<Vec<u32>>()
+                    .into_boxed_slice(),
+            );
+            let (mut s, log) = scripted_inbox(left, 42).await;
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(42, 20))
+                .await
+                .unwrap();
+            assert!(got.messages.is_empty());
+            assert_eq!(
+                got.present,
+                vec![Present {
+                    folder: Folder::Inbox,
+                    uidvalidity: 42,
+                    floor: 1,
+                    next: 21,
+                    uids: left.to_vec(),
+                }],
+                "a folder no bigger than the window is listed whole, under its UIDVALIDITY"
+            );
+            let log = log.lock().unwrap();
+            assert!(log.iter().any(|c| c == "UID SEARCH UID 1:20"), "{log:?}");
+            // No text for the listing, and no position asked for.
+            assert!(bodies_fetched(&log).is_empty());
+            assert!(!log.iter().any(|c| c.ends_with(" (UID)")), "{log:?}");
+        });
+    }
+
+    #[test]
+    fn a_big_folder_is_listed_over_its_newest_window_by_position() {
+        rt_act().block_on(async {
+            // 2 500 messages with every other UID gone: counting down from
+            // UIDNEXT would cover only the newest thousand.
+            let even: &'static [u32] = Box::leak(
+                (1..=2500)
+                    .map(|n: u32| n * 2)
+                    .collect::<Vec<u32>>()
+                    .into_boxed_slice(),
+            );
+            let (mut s, log) = scripted_inbox(even, 7).await;
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 5000))
+                .await
+                .unwrap();
+            let p = listed_in(&got, &Folder::Inbox).expect("the inbox is listed");
+            assert_eq!(p.floor, 1002, "the UID at position 2 500 - 2 000 + 1");
+            assert_eq!(p.next, 5001);
+            assert_eq!(p.uids.len(), PRESENT_WINDOW as usize);
+            assert_eq!(p.uids.first(), Some(&1002));
+            assert_eq!(p.uids.last(), Some(&5000));
+            let log = log.lock().unwrap();
+            assert!(log.iter().any(|c| c == "FETCH 501 (UID)"), "{log:?}");
+            assert!(
+                log.iter().any(|c| c == "UID SEARCH UID 1002:5000"),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_refused_listing_sends_nothing_and_the_mail_still_comes() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                refuse_search: true,
+                ..Quirks::default()
+            };
+            let (addr, log) = scripted_mailbox(&TWENTY, 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 17))
+                .await
+                .unwrap();
+            // "Nothing found" from a refusal would take every message away.
+            assert!(got.present.is_empty(), "{:?}", got.present);
+            assert_eq!(sorted_uids(&got.messages), vec![18, 19, 20]);
+            assert_eq!(got.flags.len(), 2);
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter().any(|c| c.starts_with("UID SEARCH UID")),
+                "{log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_folder_emptied_elsewhere_is_listed_empty_without_a_search() {
+        rt_act().block_on(async {
+            let quirks = Quirks {
+                next: Some(31),
+                ..Quirks::default()
+            };
+            let (addr, log) = scripted_mailbox(&[], 7, quirks).await;
+            let mut s = scripted_login(addr).await;
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(7, 30))
+                .await
+                .unwrap();
+            assert_eq!(
+                got.present,
+                vec![Present {
+                    folder: Folder::Inbox,
+                    uidvalidity: 7,
+                    floor: 1,
+                    next: 31,
+                    uids: vec![],
+                }]
+            );
+            let log = log.lock().unwrap();
+            assert!(!log.iter().any(|c| c.starts_with("UID SEARCH")), "{log:?}");
+        });
+    }
+
+    #[test]
+    fn a_rebuilt_folder_is_listed_under_its_new_uidvalidity() {
+        rt_act().block_on(async {
+            // RATA held the inbox under 9; the server rebuilt it as 7. The
+            // listing says 7, so nothing RATA holds under 9 is judged by it.
+            let (mut s, _) = scripted_inbox(&TWENTY, 7).await;
+            let got = newest_everywhere(&mut s, &mut no_redial(), &me(), 5, &inbox_known(9, 20))
+                .await
+                .unwrap();
+            let p = listed_in(&got, &Folder::Inbox).unwrap();
+            assert_eq!(p.uidvalidity, 7);
+            assert_eq!(p.uids, TWENTY.to_vec());
+        });
+    }
+
+    #[test]
+    fn sent_is_listed_too_under_its_own_uidvalidity() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_folders(OUTLOOK, "Sent Items").await;
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
+            let inbox = listed_in(&found, &Folder::Inbox).unwrap();
+            assert_eq!((inbox.uidvalidity, inbox.uids), (7, vec![1, 2, 3]));
+            let sent = listed_in(&found, &Folder::Sent).unwrap();
+            assert_eq!(
+                (sent.uidvalidity, sent.floor, sent.next, sent.uids),
+                (8, 1, 13, vec![11, 12])
+            );
+        });
+    }
+
+    #[test]
+    fn gmail_lists_its_inbox_but_leaves_all_mail_to_the_archive_listing() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_gmail(&[4, 6], true).await;
+            let found = newest_everywhere(&mut s, &mut no_redial(), &me(), 15, &[])
+                .await
+                .unwrap();
+            // A message archived on the phone leaves the inbox's listing
+            // (and turns up in the archive's): it is not shown in both.
+            let inbox = listed_in(&found, &Folder::Inbox).unwrap();
+            assert_eq!((inbox.uidvalidity, inbox.uids), (7, vec![1, 2, 3]));
+            assert!(listed_in(&found, &Folder::Archive).is_none());
+            assert!(found.archived.is_some());
+        });
+    }
+
     // ---------------------------------------------------- Gmail's archive
 
     /// Gmail, with one label of the customer's own.
@@ -6870,6 +7192,18 @@ mod tests {
                     let lo: u32 = lo.parse().unwrap();
                     let hi: u32 = hi.parse().unwrap_or(u32::MAX);
                     let found: Vec<String> = archived
+                        .iter()
+                        .filter(|u| **u >= lo && **u <= hi)
+                        .map(u32::to_string)
+                        .collect();
+                    format!("* SEARCH {}\r\n", found.join(" "))
+                } else if up.starts_with("UID SEARCH UID ") {
+                    // What the folder open holds in UID lo:hi.
+                    let range = cmd.split_whitespace().nth(3).unwrap_or("1:*");
+                    let (lo, hi) = range.split_once(':').unwrap();
+                    let lo: u32 = lo.parse().unwrap();
+                    let hi: u32 = hi.parse().unwrap_or(u32::MAX);
+                    let found: Vec<String> = held
                         .iter()
                         .filter(|u| **u >= lo && **u <= hi)
                         .map(u32::to_string)

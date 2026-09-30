@@ -1542,10 +1542,14 @@ async function loadOlder(only,quiet){
   if(!window.__RATA_NATIVE__)return;
   /* Mail a refresh had to leave out comes first: it is newer than anything
      below. */
+  /* Gaps that brought nothing (closed, their mailbox gone or parked, or
+     offline) do not stop the rest: older mail below what RATA holds still
+     loads in the same press (BUG-C). */
+  let gapError='',gapTried=false;
   if(!only&&(S.gaps||[]).length){
     const got=await fillGaps();
-    if(!quiet)toast(got.error?'Older mail did not load \u2014 '+got.error:got.added?got.added+' older message'+(got.added===1?'':'s')+' loaded':'That\u2019s everything that arrived while RATA was closed');
-    return;
+    if(got.added){if(!quiet)toast(got.added+' older message'+(got.added===1?'':'s')+' loaded');return}
+    gapTried=true;gapError=got.error;
   }
   if(!MS&&JSON.stringify(S).length>STORE_SOFT_CAP){
     if(!quiet)toast('RATA\u2019s storage on this computer is nearly full, so older mail was not loaded. Deleting old messages frees space.');
@@ -1572,9 +1576,11 @@ async function loadOlder(only,quiet){
     }
   }
   save();renderSyncAll();renderMailFilters();renderMail();
+  if(gapError&&!notes.includes(gapError))notes.unshift(gapError);
   if(notes.length){if(!quiet||added)toast((added?added+' older loaded, but ':'Older mail did not load — ')+notes[0]);return}
   if(added){toast(added+' older message'+(added===1?'':'s')+' loaded');return}
   if(!quiet&&finished)toast('That\u2019s everything in your inbox');
+  else if(!quiet&&gapTried)toast('That\u2019s everything that arrived while RATA was closed');
 }
 /* 0.1.28. A refresh downloads at most 200 new messages a folder; when more
    arrived — RATA closed through a busy week — the app says which are still
@@ -1592,13 +1598,20 @@ function addGaps(list){
 }
 async function fillGaps(){
   let added=0,error='';
-  for(const g of (S.gaps||[]).slice()){
+  /* A gap of a mailbox no longer linked can never be filled; kept, it
+     stood in front of Load older mail for every mailbox (BUG-C). */
+  const linked=new Set(mailAddrs());
+  S.gaps=(S.gaps||[]).filter(g=>linked.has(g.email));
+  for(const g of S.gaps.slice()){
     let r;
     try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:g.email,folder:g.folder,beforeUid:g.top,uidvalidity:g.uidvalidity,limit:OLDER_PAGE})})}
     catch(e){r={error:String(e&&e.message||e)}}
     /* A mailbox rebuilt since has new numbers: there is no gap to fill in
        them, and the next refresh reads it afresh. */
     if(r&&r.kind==='stale'){S.gaps=S.gaps.filter(x=>x!==g);continue}
+    /* Not linked in the app (removed there, or elsewhere): nothing to fill.
+       A mailbox parked for its password keeps its gap for when it is back. */
+    if(r&&r.kind==='unknown'){S.gaps=S.gaps.filter(x=>x!==g);continue}
     if(!r||r.error){error=error||g.email+': '+((r&&r.error)||'no answer');continue}
     const got=r.messages||[];
     for(const m of got){
@@ -5063,6 +5076,8 @@ async function removeLinked(id){
   }
   const i=S.linked.findIndex(x=>x.id===id);if(i<0)return;
   S.linked.splice(i,1);
+  /* Its gaps can never be filled now (BUG-C). */
+  if(l.type==='mail')S.gaps=(S.gaps||[]).filter(g=>g.email!==String(l.label).toLowerCase());
   save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
   renderLinked();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
@@ -5294,6 +5309,35 @@ async function settleArchives(list){
   if(selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
   return got;
 }
+/* Mail that left a folder on another device (BUG-C). A refresh downloads
+   only what is new, so until now a message deleted, archived or filed on
+   the phone stayed in RATA's inbox for good, and Delete on it said
+   "Deleted" while nothing happened. Each refresh now lists, per mailbox, the
+   UIDs the inbox, Sent, Spam and Archive (not Gmail's, which settleArchives
+   has) still hold from `floor` up to `next` (the folder's UIDNEXT when it
+   was opened). A message RATA holds in that range, under the same
+   UIDVALIDITY, that is not listed has left, and goes, not through S.gone:
+   nothing was deleted here. Spared: mail on its way out (LEAVING), a draft
+   RATA saved (ownDraft), anything below the floor or at or above `next`
+   (a search on the server may have brought it since), and what this very
+   refresh brought (`fresh`). A folder the server would not list sends
+   nothing, so nothing goes; a rebuilt folder has another UIDVALIDITY, and
+   is read afresh by the refresh instead. */
+const PRESENT_FOLDERS=['inbox','sent','junk','archive'];
+function settlePresent(list,fresh){
+  let gone=0;
+  for(const p of (list||[])){
+    if(!p||!p.email||!PRESENT_FOLDERS.includes(p.folder)||!Array.isArray(p.uids)||!p.uidvalidity||!(p.floor>=1)||!(p.next>p.floor))continue;
+    const email=String(p.email).toLowerCase(),listed=new Set(p.uids);
+    const left=m=>m.prov==='imap'&&!!m.uid&&m.uidvalidity===p.uidvalidity&&folderOf(m)===p.folder&&mailEmailOf(m)===email
+      &&m.uid>=p.floor&&m.uid<p.next&&!listed.has(m.uid)&&!LEAVING.has(m.id)&&!m.ownDraft&&!fresh.has(m.id);
+    const before=S.messages.length;
+    S.messages=S.messages.filter(m=>!left(m));
+    gone+=before-S.messages.length;
+  }
+  if(gone&&selMail&&!S.messages.some(m=>m.id===selMail)){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
+  return gone;
+}
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
    says so by name rather than sinking the whole refresh. */
@@ -5356,7 +5400,11 @@ async function absorbMail(res,quiet){
   };
   (res.messages||[]).forEach(take);
   /* After this refresh's own mail is in, so what it brought counts as held. */
-  (await settleArchives(res.archives)).forEach(take);
+  const archived=await settleArchives(res.archives);
+  archived.forEach(take);
+  /* What left a folder elsewhere leaves here too (BUG-C); never what this
+     refresh itself brought. */
+  settlePresent(res.present,new Set([...(res.messages||[]),...archived].map(m=>m.id)));
   save();
   setTimeout(upgradeBodies,0);
   const msStuck=f=>f.signIn==='microsoft'||msLinked(linkedFind('mail',f.email));

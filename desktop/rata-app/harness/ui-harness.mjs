@@ -91,7 +91,12 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         if (M.lic && !judge(M.lic.token).ok) return { messages: [], problems: [], skipped: [], unlicensed: clocked().message };
         return M.refresh || { messages: [], problems: [], skipped: [] };
       case 'older_mail': {
+        M.olderAsked = (M.olderAsked || []).concat([args.email]);
         if (M.olderFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
+        /* As core::usable: a mailbox the app does not have, and one parked
+           for its password (BUG-C's gap checks). */
+        if ((M.olderUnknown || []).includes(args.email)) throw { email: args.email, kind: 'unknown', error: args.email + ' is not linked in RATA.' };
+        if ((M.olderParked || []).includes(args.email)) throw { email: args.email, kind: 'auth', error: args.email + ' refused its app password. Relink it in Settings.' };
         if (args.folder === 'sent') return (M.sentOlder || []).filter((m) => m.uid < args.beforeUid);
         if (args.folder && args.folder.named) return (M.folderOlder || []).filter((m) => m.uid < args.beforeUid);
         const inbox = M.inbox || [];
@@ -1342,6 +1347,112 @@ console.log('\n— Gmail\'s archive: mail archived later arrives, mail moved out
   check(r.held.join() === '5,45,50' && r.reads.length === 0, `a listing under another UIDVALIDITY changes nothing: ${JSON.stringify(r)}`);
   const toast = (await toasts(pg)).filter((t) => /new message/.test(t));
   check(toast.length === 0, `archived mail never announces itself as new: ${JSON.stringify(toast)}`);
+  await pg.close();
+}
+
+console.log('\n— mail that left a folder on another device leaves RATA too (BUG-C) —');
+{
+  const pg = await open(true);
+  const mk = (uid, folder = 'inbox', extra) => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Bo', to_addr: 'bo@example.org', subject: 'Here ' + uid, preview: 'p', body: 'b',
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'p' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const sync = (msgs, present, before) => pg.evaluate(async ({ msgs, present, before }) => {
+    if (before === 'leaving') LEAVING.add('me@example.com_4');
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], ...(present ? { present } : {}) };
+    await serverSync('mail', true);
+    LEAVING.delete('me@example.com_4');
+    const of = (f) => S.messages.filter((m) => folderOf(m) === f && m.mailbox === 'me@example.com' && m.uid).map((m) => m.uid).sort((a, b) => a - b).join();
+    return { inbox: of('inbox'), sent: of('sent'), gone: Object.keys(S.gone || {}).filter((k) => k.startsWith('me@example.com_')) };
+  }, { msgs, present, before });
+  const inbox = (floor, next, uids, extra) => Object.assign({ email: 'me@example.com', folder: 'inbox', uidvalidity: 7, floor, next, uids }, extra || {});
+  let r = await sync([1, 2, 3, 4, 5].map((u) => mk(u)).concat([mk(11, 'sent'), mk(12, 'sent')]), [inbox(1, 6, [1, 2, 3, 4, 5])]);
+  check(r.inbox === '1,2,3,4,5' && r.sent === '11,12', `a listing of everything held changes nothing: ${JSON.stringify(r)}`);
+  await pg.evaluate(() => openMail('me@example.com_3'));
+  r = await sync([], [inbox(1, 6, [1, 2, 4, 5])]);
+  const pane = await pg.evaluate(() => ({ sel: selMail, open: $('#mail-detail').classList.contains('open') }));
+  check(r.inbox === '1,2,4,5' && r.gone.length === 0, `a message gone from the listing leaves the inbox, and not through S.gone: ${JSON.stringify(r)}`);
+  check(pane.sel === null && !pane.open, `and the reading pane it was open in closes: ${JSON.stringify(pane)}`);
+  r = await sync([], [inbox(4, 6, [5])]);
+  check(r.inbox === '1,2,5', `below the listing's floor nothing is judged, and one above it that is not listed goes: ${JSON.stringify(r)}`);
+  r = await sync([], null);
+  check(r.inbox === '1,2,5', `a refresh whose listing the server refused removes nothing: ${JSON.stringify(r)}`);
+  r = await sync([], [inbox(1, 6, [], { uidvalidity: 8 })]);
+  check(r.inbox === '1,2,5', `a listing under another UIDVALIDITY (the folder rebuilt) drops nothing: ${JSON.stringify(r)}`);
+  r = await sync([mk(6), mk(4)], [inbox(1, 6, [1, 2, 5])]);
+  check(r.inbox === '1,2,4,5,6', `what this refresh brought itself is never dropped by it, nor anything at or above UIDNEXT: ${JSON.stringify(r)}`);
+  r = await sync([], [inbox(1, 7, [1, 2, 5, 6])], 'leaving');
+  check(r.inbox === '1,2,4,5,6', `mail on its way out, which the page has told the server about, is left to that: ${JSON.stringify(r)}`);
+  r = await sync([], [{ email: 'me@example.com', folder: 'sent', uidvalidity: 7, floor: 1, next: 13, uids: [12] }]);
+  check(r.sent === '12' && r.inbox === '1,2,4,5,6', `Sent is judged by its own listing, and the inbox by nothing else: ${JSON.stringify(r)}`);
+  r = await sync([], [inbox(1, 7, [], { email: 'work@example.net' })]);
+  check(r.inbox === '1,2,4,5,6', `another mailbox's listing touches none of this one's mail: ${JSON.stringify(r)}`);
+  /* One found by a search on the server (H6) below the floor stays; the
+     next refresh would otherwise skip everything between. */
+  await sync([mk(1001), mk(1700)], null);
+  await pg.evaluate(() => { for (const id of ['me@example.com_1001', 'me@example.com_1700']) S.messages.find((m) => m.id === id).srvFound = true; });
+  r = await sync([], [inbox(1500, 1600, [])]);
+  check(r.inbox === '1,2,4,5,6,1001,1700', `messages a server search brought, below the floor or above UIDNEXT, stay: ${JSON.stringify(r)}`);
+  await pg.close();
+}
+
+console.log('\n— a gap that cannot be filled no longer stops Load older mail (BUG-C) —');
+{
+  const pg = await open(true);
+  const clear = () => pg.evaluate(() => {
+    __mock.inbox = [10, 20, 30, 40];
+    __mock.mk = (u) => ({ id: 'me@example.com_' + u, folder: 'inbox', acct: 'me@example.com', acct_label: 'me@example.com', from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com',
+      subject: 'Page ' + u, preview: 'p', body: 'b', ts: Date.parse('2025-01-01T10:00:00Z') + u * 60000, unread: false, starred: false, uid: u, uidvalidity: 7, message_id: 'g' + u + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+    S.messages = S.messages.filter((m) => m.mailbox !== 'me@example.com');
+    S.linked.forEach((l) => { delete l.historyDone; });
+  });
+  /* Held as a refresh brings it, through the bridge. */
+  const setup = async () => {
+    await clear();
+    await pg.evaluate(async () => { S.gaps = []; __mock.refresh = { messages: [__mock.mk(40)], flags: [], problems: [], skipped: [] }; await serverSync('mail', true); __mock.olderAsked = []; });
+  };
+  const held = () => pg.evaluate(() => S.messages.filter((m) => m.mailbox === 'me@example.com' && m.uid).map((m) => m.uid).sort((a, b) => a - b).join());
+  /* A mailbox removed in the app while the page still lists it: the app
+     says it is not linked, and the gap goes. */
+  await setup();
+  await pg.evaluate(() => {
+    S.linked.push({ id: 'lk_old', type: 'mail', label: 'old@example.net', status: 'live' });
+    __mock.olderUnknown = ['old@example.net'];
+    S.gaps = [{ email: 'old@example.net', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }];
+  });
+  await pg.evaluate(() => loadOlder());
+  let g = await pg.evaluate(() => ({ gaps: S.gaps.length, asked: __mock.olderAsked }));
+  check(g.gaps === 0, `a gap whose mailbox the app does not have is dropped: ${JSON.stringify(g)}`);
+  check((await held()) === '10,20,30,40', `and Load older mail goes on to page the others in the same press: ${await held()}`);
+  /* A gap left from a mailbox no longer in the page at all is not even asked about. */
+  await setup();
+  await pg.evaluate(() => { S.gaps = [{ email: 'long-gone@example.net', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }]; });
+  await pg.evaluate(() => loadOlder());
+  g = await pg.evaluate(() => ({ gaps: S.gaps.length, asked: __mock.olderAsked }));
+  check(g.gaps === 0 && !g.asked.includes('long-gone@example.net') && (await held()) === '10,20,30,40', `nor is a gap of a mailbox that is not linked at all, and it asks nothing for it: ${JSON.stringify(g)}`);
+  /* Remove takes the mailbox's gaps with it. */
+  await pg.evaluate(() => {
+    __mock.mailboxes.push({ email: 'side@example.net', host: 'imap.example.net', port: 993, label: 'Side' });
+    S.linked.push({ id: 'lk_side', type: 'mail', label: 'side@example.net', status: 'live' });
+    S.gaps = [{ email: 'side@example.net', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }, { email: 'me@example.com', folder: 'sent', uidvalidity: 7, top: 50, floor: 10 }];
+  });
+  await pg.evaluate(() => removeLinked('lk_side'));
+  g = await pg.evaluate(() => S.gaps.map((x) => x.email));
+  check(g.join() === 'me@example.com', `Remove takes that mailbox's gaps with it and leaves the others: ${JSON.stringify(g)}`);
+  /* A mailbox parked for its password keeps its gap for later, and Load
+     older mail still pages the rest. */
+  await setup();
+  await pg.evaluate(() => {
+    __mock.mailboxes.push({ email: 'parked@example.net', host: 'imap.example.net', port: 993, label: 'Parked' });
+    S.linked.push({ id: 'lk_parked', type: 'mail', label: 'parked@example.net', status: 'error' });
+    __mock.olderParked = ['parked@example.net'];
+    S.gaps = [{ email: 'parked@example.net', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }];
+    window.__toasts = [];
+  });
+  await pg.evaluate(() => loadOlder());
+  g = await pg.evaluate(() => ({ gaps: S.gaps.map((x) => x.email), toasts: window.__toasts.slice() }));
+  check(g.gaps.join() === 'parked@example.net', `a parked mailbox's gap is kept: ${JSON.stringify(g.gaps)}`);
+  check((await held()) === '10,20,30,40' && g.toasts.some((t) => /^3 older loaded, but parked@example\.net/.test(t)),
+    `and older mail of the others still loads, saying what did not: ${JSON.stringify(g.toasts)}`);
   await pg.close();
 }
 

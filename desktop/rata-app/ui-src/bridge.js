@@ -269,6 +269,9 @@
         gaps: res.gaps || [],
         drafts: res.drafts || [],
         archives: res.archives || [],
+        /* What each folder read still holds near its top (BUG-C), so mail
+           deleted or moved on another device leaves RATA too. */
+        present: res.present || [],
         accounts,
         ...(failures.length ? { partial: failures } : {}),
       };
