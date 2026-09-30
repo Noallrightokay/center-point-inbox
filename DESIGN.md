@@ -35,7 +35,7 @@ Light:
 | `--fill-2` | `#F1F2F4` | hover, quiet wells | |
 | `--ink` | `#15171C` | text | 17.5 |
 | `--slate` | `#51565F` | secondary text | 7.2 |
-| `--faint` | `#6B717B` | tertiary text, timestamps | 4.8 |
+| `--faint` | `#6B717B` | tertiary text, timestamps, on `--card` or `--bg` only | 4.8 |
 | `--tint` | `#2B4FC7` | accent | 6.7 (and white on it 6.7) |
 | `--tint-deep` | `#233FA3` | accent text on `--tint-soft` | |
 | `--tint-btn` | `#2B4FC7`, hover `#233FA3` | filled buttons | |
@@ -56,6 +56,12 @@ Dark (`prefers-color-scheme: dark`):
 | `--tint` | `#8FA6F2` (text, rings) | 7.5 |
 | `--tint-btn` | `#3E5FD6` (filled buttons; white text 5.4), hover `#4A6BE0` | |
 | `--red` / `--green` / `--amber` | `#F07A7F` / `#4CC38A` / `#E0A94A` | 6.6 / 8.0 / 8.4 |
+
+`--faint` holds 4.5:1 only on `--card` and `--bg`. On the selection tint or a
+fill it falls short (4.16 on `--tint-soft`, 4.22 on `--fill`, 4.38 on
+`--fill-2`, measured by axe in H10, v0.1.44), so text there uses `--slate`: a
+selected row's time, preview and 📎, the open row's date in *In this
+conversation*, the ⌘K hint, a locked item.
 
 Never pure black or pure white. Shadows are tinted with the ink colour and
 kept small; there are no coloured glows and no gradients on controls.
@@ -90,6 +96,11 @@ page is square.** Buttons, inputs, chips, menu items and list selections: 8 px.
 Cards, the reading pane, dialogs, menus: 12 px. Avatars are rounded squares
 (30 % radius). Nothing is a pill except the unread count and the switch.
 
+`--thumb` (168 px) is the largest a picture thumbnail is drawn in a message
+(H11): the picture keeps its proportions inside that square, with 8 px
+(`--r-sm`) corners and the `--edge` hairline, and a tiny one sits in a
+72 px tile.
+
 ## Elevation
 
 Flat by default: surfaces are separated by a 1 px `--hair` border (drawn as
@@ -105,7 +116,8 @@ dialogs, toasts, the composer.
 Hover and press only: background/colour 120 ms ease, and a 1 px press
 (`translateY(1px)`). Dialogs and menus fade and rise 4 px in 160 ms. No
 springs, no looping animation, no scroll effects. Everything collapses to
-instant under `prefers-reduced-motion`.
+instant under `prefers-reduced-motion`, including the 1 px press and every
+scroll the app makes (`glide()`).
 
 ## Components
 
@@ -121,6 +133,9 @@ instant under `prefers-reduced-motion`.
   `0 0 0 3px var(--tint-soft)` plus a `--tint` border.
 - **Focus**: every interactive element shows `:focus-visible` as a 2 px
   `--tint` outline, 2 px offset. Never remove an outline without that.
+  List rows are the exception in where it sits: their ring is drawn 2 px
+  *inside* (`outline-offset: -2px`), because the scrolling list clips a ring
+  drawn outside.
 - **List row**: no card per message, rows separated by space; selection is
   `--tint-soft`, unread is weight 600 and a 6 px `--tint` dot. Three lines
   (sender with badges and time, subject, preview), always: the list sizes

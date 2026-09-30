@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 294 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 127 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 297 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 130 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (297 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (358 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -76,6 +76,19 @@ names `needs.gate.result == 'success'` because its `always()` turns off the
 implicit check. A merge without a bump still stops at `plan`. Keep gate's
 steps in step with `desktop-ci.yml`. The first real run of the gate is
 v0.1.43's.
+
+apt never waits on a stalled download (#111, first released in v0.1.44).
+Before each of the seven steps that install with apt (`apt-get install`,
+or `playwright install --with-deps`: three in `desktop-ci.yml`, one in
+`rata-next-ci.yml`, three in `release.yml`, on Linux runners only), a step
+*Make apt retry a stalled download instead of hanging* writes
+`/etc/apt/apt.conf.d/80-rata-retries` (`Acquire::Retries "3"`, 30 s http
+and https timeouts), and each of those seven has `timeout-minutes: 8`, so
+a real hang fails under its own name instead of using up the job. The
+installed-app smoke's `xvfb` install runs later in the same installers job,
+so the settings cover it too, under that step's own 10 minutes. On #110 two
+jobs had spent their whole 20 minutes in apt before any test ran, and a
+session here cannot re-run a job. A new apt step gets both.
 
 The version lives in four places, bumped together: `tauri.conf.json`
 (`version` *and* the window `title`, which is how testers report their build),
@@ -175,7 +188,11 @@ or Archive is refused, finds Trash by name, keeps the server's own words
 when it refuses a password, sends to Outlook and iCloud on 587 first, sends
 the AI relay only the start of a long message, and is the first release
 built behind the `gate` job, with an update feed file per kind of
-installation (BUG-R). An
+installation (BUG-R); v0.1.44 shows picture attachments in the message
+and opens them large (H11), lists the rest of a conversation under an open
+message, linked by ids only (H5), and makes the list, dialogs and toasts
+work by keyboard and screen reader, checked by axe, with pinch zoom no
+longer blocked (H10); its CI retries a stalled apt download instead of hanging. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -338,6 +355,36 @@ fetching newest messages from INBOX across several mailboxes, sending, a
 `Message.message_id`, which `thread_id` refuses if it could smuggle a header)
 and goes to the sender's Reply-To, and a guard stopping a hostile server
 redirecting the app at the local network.
+
+**Conversation view (H5, v0.1.44).** `Message.references_last`
+(`serde(default)`) is the last id of `References`, read from the headers at
+the start of the body a refresh already fetches (`BODY.PEEK[]<0.65536>`;
+the ENVELOPE has no References, so there is no extra FETCH item) with
+`header_values`, and checked by `thread_id` like `message_id`. A last id
+that fails the check leaves it empty; an earlier id is never used instead.
+The bridge passes it as `refsLast`, and now `inReplyTo` for all mail (it
+had been drafts only, so received and sent mail never reached the page
+with it). The reading pane shows **In this conversation** under the text
+and above the attachments (`#md-convo`, `fillConvo`, `conversationOf`,
+headed by an `h3` that labels the section): every held message linked
+transitively by `messageId`, `inReplyTo` or `refsLast` (`convoKeys`), never
+by subject, oldest first, each row the sender, date and first 140
+characters (`bodyNow` or else the preview; never `m.body`, never the disk).
+The other rows are buttons that open that message, and the focus goes to
+its row; the open one is a `div` with `aria-current` and "Open". Sent mail
+joins, and RATA's own record of a sent reply now carries `inReplyTo`
+(`deliver()`). Spam never joins and an open spam message shows none;
+drafts and gone mail are left out (`convoJoins`); the same Message-ID held
+twice is one row (a Gmail label's copy loses to the inbox's). The walk is a
+breadth-first search over an index built from `S.messages`, stopping at
+`CONVO_MAX` (200), nearest first, and says so when it stops (a chain of 300
+in ~50 ms in the harness). The section stays hidden when nothing else is
+linked. Mail stored before 0.1.44 has only `messageId` (drafts also
+`inReplyTo`) and links by what it has until it is fetched again; there is
+no backfill, and a message listed from its envelope alone (`UNREADABLE`)
+has no References. Any sender who knows a Message-ID can place mail in a
+conversation by writing `In-Reply-To`, as in every mail client; each row
+names its sender, and spam is kept out.
 
 **Email only.** v0.1.6 removed Slack, Discord, texts, Google/Microsoft sign-in,
 translation, the AI brief, the Extras/Connections/launcher screens and the
@@ -793,6 +840,31 @@ base64 instead of writing them, capped at `READ_MAX` (25 MB, kind
 `too-large`). The page asks by message and index only; the bytes go to
 `brIngest` as a `File`, through the same readers as a dropped file, and
 nothing is saved until the customer converts.
+**Pictures in the message (H11, v0.1.44).** In the app, once the whole
+message is in, an attachment named `.png`, `.jpg`, `.jpeg`, `.gif` or
+`.webp`, not `disguised`, and not known to be over 5 MB (`b`, its size in
+bytes, which `asAttachment` now passes) shows as a thumbnail above the
+attachment list (`pictureable`). At most `PIC_SHOW` (6) show, then "Show N
+more". Each is fetched through `read_attachment` with `confirmed:false`,
+one at a time (each is a whole-message fetch, so a sign-in), and kept in
+`PICS` for the session, at most `PIC_KEEP` (48); a failed read is not kept,
+so opening the message again tries again, and until then the tile goes and
+the file stays listed. **What a picture is comes from the bytes alone:**
+`core::sniff_image` reads the magic numbers (PNG, JPEG, GIF87a/89a,
+RIFF…WEBP), and `hand_fetched` sets `Handed.picture` only for one of those
+four at `PICTURE_MAX` (5 MB) or less; `commands::read_attachment` and the
+bridge pass `picture`, null otherwise. The page draws only
+`data:image/<picture>;base64,` in an `<img>` built through the DOM, never
+from the name or the declared type, and refuses data longer than 5 MB
+would encode to; an SVG or an HTML file named `.png` stays listed and is not
+shown. The alt text and caption are the name without control, bidi or
+invisible characters (`picName`). A click opens `#pic-ov` with the same
+`data:` image: no navigation, no window, no `blob:`. Escape, Close and the
+backdrop close it, Escape closes only the picture (not the message), the
+focus goes back to the thumbnail, and `keyDialog` counts it as open, so
+message keys do nothing behind it. The CSP is unchanged (`img-src data:` was
+already allowed), and so is saving. `--thumb` (168 px) is the thumbnail's
+size. Not seen in a packaged build.
 **The Sent folder (v0.1.22).** A refresh reads the newest mail of the
 inbox and then of Sent, on the same connection (`fetch_newest`); a mailbox
 without a Sent folder, or whose Sent will not open, still brings its inbox.
@@ -1080,6 +1152,53 @@ end. Never folded: a single `>` line (code, maths), Gmail's "Forwarded
 message" block, or anything when only a signature or nothing would be
 left. A line that is exactly `-- ` or `--` starts the signature, shown in
 `--slate`, never hidden. A translation folds the same way.
+**Accessibility (H10, v0.1.44).** *The list is a listbox:* `.vl-win` is
+`role=listbox`, labelled "Messages" ("Messages in <mailbox>" in Side by
+side), and each row an option with `aria-selected` (the open message),
+`aria-checked` in Select mode, and `aria-posinset`/`aria-setsize` counted
+against the whole pool, so they stay right when only a screenful is drawn.
+Exactly one row has `tabindex=0`: the one focused last, else `KEY_AT`, else
+the open message, else the first on screen; `vlist`/`vlDraw` put the focus
+back on the same row after a redraw (`vlFocus`/`vlRefocus`), or on the
+listbox while that row is scrolled out of the drawn window. On a focused
+row, Arrows, Home and End move the focus (`rowStep`, through `keyMark` in
+the main list so `KEY_AT` follows), Enter and Space do what a click does,
+and j/k move the focus when it is in the list; the drawing half of
+`keyMark` is `rowShow`. The ring is 2 px `--tint`, drawn inside
+(`outline-offset:-2px`), because the scroller clips one outside. *Dialogs:*
+every overlay, the composer, Assist and the welcome are `role=dialog
+aria-modal` labelled by their heading (`#warn-ov` stays an alertdialog, and
+bridge.js's licence box is one too, described by its reason, errors
+`role=alert`); `topDialog()` (`DLG_ORDER`, licence box first) keeps Tab
+inside the top one after every other handler, honouring
+`defaultPrevented` so H3's Tab-to-choose still works; `dlgOpen`/`dlgClose`
+give the focus back unless the closing code already put it somewhere (the
+Undo toast, H9). The picture overlay and the shortcut sheet keep their own
+trap and return. Delete account is an inline labelled `role=group`, not a
+dialog: focus in, Escape out, Cancel returns to Delete account. *Toasts,
+landmarks, words:* `#toast` is `role=status aria-live=polite aria-atomic`
+and takes no focus; `<main>` replaces `div#main`, both navs are
+"Sections" with `aria-current=page`, `.side-list` is region "Message list",
+`#mail-detail` "Reading pane", `#person-detail` "Person", the bulk bar a
+named group; unread, starred and the 📎 count carry words in the `.vh`
+visually-hidden class, so none relies on colour; icon-only buttons are
+named, and the rail's labels are visually hidden, not `display:none`, in the
+901–1200 px icons-only band. *Motion and contrast:* under reduced motion
+the 1 px press goes and every `scrollIntoView` is instant (`glide()`);
+`--faint` becomes `--slate` wherever it sits on a tint or fill (axe measured
+4.16:1 on `--tint-soft`), and More is no longer dimmed. *Zoom:* the
+viewport no longer sets `maximum-scale=1.0, user-scalable=no`, which is
+what a browser's pinch zoom obeys; the desktop app has no zoom keys, since
+`tauri.conf.json` does not set `zoomHotkeysEnabled` (H10's note said "zoom
+allowed"; that is the website's page, not the app's keys). *The
+harness runs axe* (`@axe-core/playwright`, a rata-next dev dependency; it
+needs a page from `browser.newContext()`) at the inbox, an open message
+with a conversation, a picture and a folded quote, the composer with
+suggestions open, Settings, and the link, disguised-program, shortcut and
+licence dialogs, plus the inbox and a message in dark and the icons-only
+rail, and fails on any serious or critical rule; no rule or selector is
+excluded. Not seen in a packaged build (markup, CSS and page JS only, no
+new inline `style=`).
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an

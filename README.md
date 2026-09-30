@@ -68,7 +68,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 294 tests, no network required
+cargo test --all-targets   # 297 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -103,7 +103,7 @@ Never enable it in `rata-app`.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
-cargo test          # 127 tests
+cargo test          # 130 tests
 ```
 
 On Linux you need the system webview first:
@@ -121,8 +121,10 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (297 checks). CI runs it as *Desktop interface, driven*, together
-with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
+policy (358 checks, among them axe-core accessibility scans of the inbox, an
+open message, the composer, Settings and the dialogs, in light and dark,
+failing on any serious or critical rule). CI runs it as *Desktop interface,
+driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
 repository root:
 
 ```bash
@@ -285,6 +287,18 @@ Be realistic about this before promising anything to a customer.
   mailboxes at once, downloading only what is new
 - Replying from the message itself, threaded with `In-Reply-To` and sent to
   the sender's Reply-To address when they gave one
+- **In this conversation** under an open message (v0.1.44): every message
+  RATA holds that is linked to it by Message-ID, In-Reply-To or References,
+  inbox and Sent together, oldest first, one click to open; never by
+  subject, and never spam
+- Picture attachments (PNG, JPEG, GIF, WebP up to 5 MB) shown as thumbnails
+  in the message and opened large with a click (v0.1.44); what counts as a
+  picture is decided from the file's bytes, never its name
+- Keyboard and screen-reader use (v0.1.44): the message list is a listbox
+  moved with the arrow keys, every dialog keeps the focus and gives it back,
+  toasts are announced, unread and starred are said as well as coloured, and
+  the page no longer blocks pinch zoom (the desktop app has no zoom keys
+  yet); checked by axe in the harness
 - Drafts saved to the mailbox's Drafts folder (v0.1.41) when the composer
   closes and every two minutes while you write, replacing only RATA's own
   earlier copy, so a draft can be finished on a phone
