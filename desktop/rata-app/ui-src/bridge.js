@@ -25,13 +25,15 @@
   /* An attachment as the interface draws it: a short type label, the name,
      a readable size, the index a download asks for, and whether it is a
      program named to look like a document (rata_mail::names::looks_disguised),
-     which the page labels and asks about before saving. */
+     which the page labels and asks about before saving. `b` is the size in
+     bytes (0 when the engine could not tell), which decides whether a
+     picture is small enough to show in the message (H11). */
   function asAttachment(a) {
     const ext = (String(a.name || '').match(/\.([A-Za-z0-9]{1,5})$/) || [])[1];
     const kind = (ext || String(a.mime || '').split('/')[1] || 'file').replace(/[^A-Za-z0-9]/g, '').slice(0, 5).toUpperCase() || 'FILE';
     const n = Number(a.size) || 0;
     const size = !n ? '' : n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
-    return { i: a.index, n: a.name, f: kind, s: size, mime: a.mime, disguised: a.disguised === true };
+    return { i: a.index, n: a.name, f: kind, s: size, b: n, mime: a.mime, disguised: a.disguised === true };
   }
 
   function asMessage(m) {
@@ -472,12 +474,16 @@
       }
     },
 
-    /* One attachment's bytes, for the Format Bridge (core::read_attachment). */
+    /* One attachment's bytes, for the Format Bridge or to show as a picture
+       (core::read_attachment). `picture` is what Rust found the bytes to be
+       (png, jpeg, gif or webp, and small enough to show), else null: the
+       page shows a picture by this alone, never by the name or the type the
+       message declared. */
     async '/api/mail/attachment/read'(opts) {
       const b = body(opts);
       try {
         const got = await invoke('read_attachment', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity, index: b.index, confirmed: b.confirmed === true });
-        return { ok: true, name: got.name, mime: got.mime, data: got.data };
+        return { ok: true, name: got.name, mime: got.mime, data: got.data, picture: got.picture || null };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }

@@ -355,10 +355,11 @@ fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
         .or_else(|| paths.home_dir().ok().map(|h| h.join("Downloads")))
 }
 
-/// An attachment's bytes, for the Format Bridge to convert: as base64, since
-/// the bridge carries text. The interface asks by message and index only,
-/// and says `confirmed` when the customer answered the question a disguised
-/// program needs.
+/// An attachment's bytes, for the Format Bridge to convert or for the page to
+/// show as a picture in the message (H11, only by the `picture` Rust judged
+/// from the bytes): as base64, since the bridge carries text. The interface
+/// asks by message and index only, and says `confirmed` when the customer
+/// answered the question a disguised program needs.
 #[tauri::command]
 pub async fn read_attachment(
     app: App<'_>,
@@ -382,15 +383,19 @@ pub async fn read_attachment(
         name: got.name,
         mime: got.mime,
         data: rata_mail::words::base64_encode(&got.data),
+        picture: got.picture,
     })
 }
 
-/// An attachment on its way to the page.
+/// An attachment on its way to the page. `picture` is `null` unless the
+/// bytes are a PNG, JPEG, GIF or WebP small enough to show in the message
+/// (`core::sniff_image`, `core::PICTURE_MAX`); the page shows nothing else.
 #[derive(serde::Serialize)]
 pub struct Handed {
     name: String,
     mime: String,
     data: String,
+    picture: Option<&'static str>,
 }
 
 /// A file the interface made (a conversion, an export), into Downloads. The
