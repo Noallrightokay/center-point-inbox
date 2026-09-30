@@ -2986,6 +2986,12 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
   check(kept && (await focusId()) === 'md-forward', `the link question keeps Tab inside it, and Escape gives the focus back: ${kept}`);
   await pg.focus('#md-forward');
   const warned = pg.evaluate(() => askDisguised({ n: 'invoice.pdf.exe' }, true));
+  /* askDisguised's promise settles only when the question closes, so it is
+     not awaited here; wait instead until the question is open and holds the
+     focus. Without this the first Tab could reach the page before the
+     question opened (it did on the 0.1.44 release gate), moving the focus
+     off Forward, which the question then gave back to on Escape. */
+  await pg.waitForFunction(() => document.querySelector('#warn-ov').contains(document.activeElement));
   kept = await round('#warn-ov', 5);
   await pg.keyboard.press('Escape');
   await warned;
