@@ -262,13 +262,40 @@ pub const RECIPIENTS_MAX: usize = 100;
 /// be saved.
 pub const READ_MAX: usize = 25 * 1024 * 1024;
 
+/// The most a picture attachment may be for the page to show it in the
+/// message (H11). A bigger one is still listed, saved and converted.
+pub const PICTURE_MAX: usize = 5 * 1024 * 1024;
+
 /// An attachment handed to the interface: its name as the sender gave it
-/// (only ever shown or used to pick a reader, never a path), type and bytes.
+/// (only ever shown or used to pick a reader, never a path), type and bytes,
+/// and `picture`: the kind of picture the bytes are (`sniff_image`) when the
+/// page may show them in the message, which is when they are one of the four
+/// and no more than `PICTURE_MAX`.
 #[derive(Debug)]
 pub struct Handed {
     pub name: String,
     pub mime: String,
     pub data: Vec<u8>,
+    pub picture: Option<&'static str>,
+}
+
+/// What kind of picture `bytes` are, from their first bytes alone: `png`,
+/// `jpeg`, `gif` or `webp`, the subtype of the `data:image/…` URL the page
+/// shows it as. Never from the file's name or the type the message declares,
+/// both of which the sender wrote. Anything else is `None` and is listed,
+/// not shown: SVG above all, which is a document that can carry script.
+pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
 }
 
 /// A message that went: by whom, and the Message-ID written into it — how
@@ -2132,10 +2159,12 @@ fn hand_fetched(
             ),
         });
     }
+    let picture = sniff_image(&bytes).filter(|_| bytes.len() <= PICTURE_MAX);
     Ok(Handed {
         name: info.name,
         mime: info.mime,
         data: bytes,
+        picture,
     })
 }
 
@@ -2950,6 +2979,93 @@ mod tests {
         let big = vec![0u8; READ_MAX + 1];
         let e = hand_fetched(who, listed("a.pdf.exe"), big, true).unwrap_err();
         assert_eq!(e.kind, "too-large");
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+    const JPEG: &[u8] = b"\xFF\xD8\xFF\xE0\0\x10JFIF\0";
+    const GIF: &[u8] = b"GIF89a\x01\0\x01\0\x80\0\0";
+    const WEBP: &[u8] = b"RIFF\x24\0\0\0WEBPVP8 ";
+
+    #[test]
+    fn a_picture_is_known_by_its_first_bytes() {
+        assert_eq!(sniff_image(PNG), Some("png"));
+        assert_eq!(sniff_image(JPEG), Some("jpeg"));
+        assert_eq!(sniff_image(GIF), Some("gif"));
+        assert_eq!(sniff_image(b"GIF87a\x01\0"), Some("gif"));
+        assert_eq!(sniff_image(WEBP), Some("webp"));
+    }
+
+    #[test]
+    fn anything_that_is_not_one_of_the_four_pictures_is_not_one() {
+        // A web page, an SVG (a document that can carry script, in any
+        // spelling), nothing at all, and every header cut short.
+        for bytes in [
+            &b"<!doctype html><img src=x onerror=alert(1)>"[..],
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>",
+            b"<?xml version=\"1.0\"?><svg/>",
+            b"",
+            b"\x89PNG\r\n\x1a",
+            b"\xFF\xD8",
+            b"GIF89",
+            b"GIF88a......",
+            b"RIFF\x24\0\0\0WEB",
+            b"RIFF\x24\0\0\0WAVEfmt ",
+            b"MZ\x90\0",
+            b"%PDF-1.7",
+        ] {
+            assert_eq!(
+                sniff_image(bytes),
+                None,
+                "{:?}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn the_page_is_told_what_the_bytes_are_never_what_the_name_says() {
+        let who = "owner@example.com";
+        let as_named = |name: &str, mime: &str, bytes: &[u8]| {
+            let info = body::Attachment {
+                mime: mime.into(),
+                ..listed(name)
+            };
+            hand_fetched(who, info, bytes.to_vec(), false).unwrap()
+        };
+        // A PNG named .jpg and declared as a JPEG is a PNG.
+        let got = as_named("holiday.jpg", "image/jpeg", PNG);
+        assert_eq!(got.picture, Some("png"));
+        assert_eq!(got.name, "holiday.jpg");
+        assert_eq!(got.data, PNG);
+        for (name, bytes, kind) in [
+            ("scan.jpeg", JPEG, "jpeg"),
+            ("wave.gif", GIF, "gif"),
+            ("photo.webp", WEBP, "webp"),
+        ] {
+            assert_eq!(as_named(name, "image/png", bytes).picture, Some(kind));
+        }
+        // A web page and an SVG named and declared as a PNG are no picture;
+        // they are still handed over for converting, as before.
+        let page = as_named("chart.png", "image/png", b"<html><script>alert(1)</script>");
+        assert_eq!(page.picture, None);
+        assert_eq!(page.data, b"<html><script>alert(1)</script>");
+        assert_eq!(
+            as_named("logo.png", "image/svg+xml", b"<svg onload=alert(1)/>").picture,
+            None
+        );
+        assert_eq!(as_named("empty.png", "image/png", b"").picture, None);
+        assert_eq!(as_named("cut.png", "image/png", &PNG[..5]).picture, None);
+        // A picture past PICTURE_MAX is listed, not shown, but still read.
+        let mut big = PNG.to_vec();
+        big.resize(PICTURE_MAX + 1, 0);
+        let got = as_named("poster.png", "image/png", &big);
+        assert_eq!(got.picture, None);
+        assert_eq!(got.data.len(), PICTURE_MAX + 1);
+        big.truncate(PICTURE_MAX);
+        assert_eq!(
+            as_named("poster.png", "image/png", &big).picture,
+            Some("png")
+        );
     }
 
     #[test]

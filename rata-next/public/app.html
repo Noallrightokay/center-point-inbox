@@ -48,6 +48,8 @@
   --pop:ease;
   --lift:background-color .12s ease,color .12s ease,box-shadow .12s ease;
   --r:12px; --r-sm:8px; --r-lg:12px; --r-bubble:8px;
+  /* A picture attachment's thumbnail under the message fits this square (H11). */
+  --thumb:168px;
   --mono:'Geist Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
   --sans:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 }
@@ -261,6 +263,19 @@ button.att-card{border:0;font:inherit;color:inherit;cursor:pointer;text-align:le
 button.att-card:hover{background:var(--tint-soft)}
 button.att-card:disabled{opacity:.6;cursor:progress}
 .att-warn{font-size:11.5px;font-weight:600;color:var(--red);background:var(--red-soft);padding:2px 7px;border-radius:5px;white-space:nowrap}
+/* Picture attachments (H11): thumbnails above the list, each a button that
+   opens the picture large (#pic-ov). */
+.md-pics{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px}
+.pic{border:0;padding:0;font:inherit;color:inherit;max-width:var(--thumb);min-width:72px;min-height:72px;display:grid;place-items:center;overflow:hidden;background:var(--fill-2);border-radius:var(--r-sm);box-shadow:var(--edge);cursor:zoom-in}
+.pic img{display:block;max-width:var(--thumb);max-height:var(--thumb);width:auto;height:auto}
+.pic-wait{font-size:12px;color:var(--faint);padding:0 10px;width:var(--thumb);height:calc(var(--thumb)*.6);display:grid;place-items:center}
+.pic-more{align-self:center}
+#pic-ov{position:fixed;inset:0;background:rgba(14,16,20,.72);display:none;z-index:61;align-items:center;justify-content:center;padding:20px}
+#pic-ov.open{display:flex}
+#pic-card{max-width:100%;max-height:100%;display:flex;flex-direction:column;gap:10px;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:12px 12px 14px;animation:up .16s ease-out}
+.pic-head{display:flex;align-items:center;gap:12px;min-width:0}
+#pic-name{flex:1;min-width:0;font-size:13px;color:var(--slate);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:4px}
+#pic-big{display:block;margin:0 auto;max-width:calc(100vw - 64px);max-height:calc(100vh - 116px);width:auto;height:auto;border-radius:var(--r-sm);background:var(--fill-2)}
 .md-back{display:none}
 
 /* ---------- people thread ---------- */
@@ -1042,6 +1057,14 @@ body.send-counting #toast{bottom:76px}
   </div>
 </div>
 
+<!-- A picture attachment, large (H11): a data: image, never a navigation -->
+<div id="pic-ov" role="dialog" aria-modal="true" aria-labelledby="pic-name">
+  <div id="pic-card">
+    <div class="pic-head"><span id="pic-name"></span><button class="cmp-close" id="pic-close" aria-label="Close">✕</button></div>
+    <img id="pic-big" alt="">
+  </div>
+</div>
+
 <!-- Keyboard shortcuts (H4): drawn from KEYS, the table the keys obey -->
 <div id="keys-ov" role="dialog" aria-modal="true" aria-labelledby="keys-title">
   <div id="keys-card">
@@ -1746,6 +1769,91 @@ async function convertAttachment(m,a,btn,confirmed){
   document.querySelector('.bridge-card').scrollIntoView({behavior:'smooth',block:'start'});
   toast(a.n+', from \u201c'+(m.subj||'(no subject)')+'\u201d, is ready \u2014 choose what to turn it into');
 }
+/* Picture attachments shown in the message (H11). An attachment named as a
+   PNG, JPEG, GIF or WebP, not disguised, and not known to be over 5 MB is
+   fetched through read_attachment once the message is open, at most
+   PIC_SHOW a message until "Show N more". Rust decides what the bytes are
+   (core::sniff_image, `picture`), never the name or the declared type, and
+   answers null for anything else, SVG included, or for a picture over 5 MB
+   (core::PICTURE_MAX): that one stays listed and is not shown. A picture is
+   only ever a data: image in an <img>, which the app CSP already allows;
+   opening it large is the same data: image in #pic-ov, no navigation and no
+   window. Kept for the session only, like OPENED. */
+const PIC_EXT=/\.(png|jpe?g|gif|webp)$/i,PIC_TYPES=['png','jpeg','gif','webp'],PIC_MAX=5*1024*1024,PIC_SHOW=6,PIC_KEEP=48;
+const PICS=new Map(),PIC_MORE=new Set();
+let PIC_FROM=null;
+const pictureable=a=>!!(a&&a.i!==undefined&&!a.disguised&&PIC_EXT.test(String(a.n||'').trim())&&!(Number(a.b)>PIC_MAX));
+const picKey=(m,a)=>m.id+'\u0000'+a.i;
+/* The name as alt text and caption: one line, without the invisible and
+   direction-changing characters a sender can hide in it. */
+const picName=n=>String(n||'').replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,'').replace(/\s+/g,' ').trim().slice(0,120)||'Picture';
+/* Not a picture after all, not one small enough, or not fetched: the tile
+   goes, and the file is still in the list below, to save or convert. */
+function dropPicture(k){
+  const tile=document.querySelector('#mail-detail [data-pic="'+k+'"]');
+  if(!tile)return;
+  const row=tile.parentElement;tile.remove();
+  if(row&&!row.querySelector('.pic,.pic-more'))row.remove();
+}
+function drawPicture(k,m,a){
+  const tile=document.querySelector('#mail-detail [data-pic="'+k+'"]');
+  if(!tile)return;
+  const got=PICS.get(picKey(m,a));
+  if(!got||got.pending)return;
+  if(!got.type){dropPicture(k);return}
+  const img=document.createElement('img');
+  img.alt=picName(a.n);img.loading='lazy';img.decoding='async';
+  img.src='data:image/'+got.type+';base64,'+got.data;
+  tile.replaceChildren(img);
+  tile.title='Show '+picName(a.n)+' larger';
+}
+async function loadPictures(m,atts,shown){
+  const id=m.id,todo=[];
+  for(const a of shown){const k=atts.indexOf(a);if(PICS.has(picKey(m,a)))drawPicture(k,m,a);else todo.push([k,a])}
+  /* One at a time: each is a fetch of the message from the mailbox. */
+  for(const [k,a] of todo){
+    if(selMail!==id)return;
+    const key=picKey(m,a);
+    if(PICS.has(key)){drawPicture(k,m,a);continue}
+    PICS.set(key,{pending:true});
+    let r;
+    try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:false})})}
+    catch(e){r={ok:false}}
+    /* A failure is not an answer: forgotten, so opening the message again
+       tries again. Until then the tile goes and the file stays listed. */
+    if(!r||!r.ok){PICS.delete(key);if(selMail===id)dropPicture(k);continue}
+    const type=PIC_TYPES.includes(r.picture)&&typeof r.data==='string'&&r.data.length<=Math.ceil(PIC_MAX/3)*4?r.picture:null;
+    PICS.set(key,type?{type,data:r.data}:{});
+    while(PICS.size>PIC_KEEP)PICS.delete(PICS.keys().next().value);
+    if(selMail===id)drawPicture(k,m,a);
+  }
+}
+function openPicture(m,a,from){
+  const got=a&&PICS.get(picKey(m,a));
+  if(!got||!got.type)return;
+  PIC_FROM=from||null;
+  const big=$('#pic-big');
+  big.alt=picName(a.n);big.src='data:image/'+got.type+';base64,'+got.data;
+  $('#pic-name').textContent=picName(a.n);
+  $('#pic-ov').classList.add('open');
+  $('#pic-close').focus();
+}
+function closePicture(){
+  if(!$('#pic-ov').classList.contains('open'))return;
+  $('#pic-ov').classList.remove('open');
+  $('#pic-big').removeAttribute('src');
+  const from=PIC_FROM;PIC_FROM=null;
+  if(from&&from.isConnected)from.focus();
+}
+$('#pic-close').onclick=closePicture;
+$('#pic-ov').addEventListener('click',e=>{if(e.target.id==='pic-ov')closePicture()});
+/* Escape closes the picture and nothing behind it (not the message); the
+   keyboard stays on the Close button while it is open. */
+window.addEventListener('keydown',e=>{
+  if(!$('#pic-ov').classList.contains('open'))return;
+  if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closePicture()}
+  else if(e.key==='Tab'){e.preventDefault();$('#pic-close').focus()}
+},true);
 /* Message bodies are decoded from MIME since 0.1.7 (bodyV 2). Mail stored by an
    earlier build holds the raw wire text — boundaries, =20s, base64 — and a
    refresh only re-fetches the newest few, so it would stay unreadable. It is
@@ -2865,6 +2973,10 @@ function openMail(id){
   const note=wantWhole?'Loading the rest of this message\u2026'
     :whole&&whole.error?'Only the start of this message could be shown \u2014 '+whole.error
     :(whole?whole.truncated:m.truncated)?'This is the start of a very long message. The rest is in your mailbox \u2014 open it in your provider\u2019s own app to read all of it.':'';
+  /* Picture attachments as thumbnails (H11), once the whole message is in. */
+  const pics=savable&&!wantWhole?atts.filter(pictureable):[];
+  const picsOn=PIC_MORE.has(id)?pics:pics.slice(0,PIC_SHOW);
+  const picsHTML=pics.length?`<div class="md-pics">${picsOn.map(a=>`<button class="pic" data-pic="${atts.indexOf(a)}" aria-label="${esc('Show '+picName(a.n)+' larger')}"><span class="pic-wait">Loading picture\u2026</span></button>`).join('')}${pics.length>picsOn.length?`<button class="btn pic-more" id="md-pics-more">Show ${pics.length-picsOn.length} more</button>`:''}</div>`:'';
   d.innerHTML=`<div class="md-inner">
     <button class="md-back" id="md-back">← Messages</button>
     <div class="md-head">
@@ -2900,7 +3012,7 @@ function openMail(id){
       :`${tr?`<div class="md-trbar"><span>${showTr?`Translated into ${esc(langName(tr.to))} by AI${tr.cut?' \u2014 only the start of this long message':''}`:'Showing the original'}</span><button class="btn" id="md-trtoggle">${showTr?'Show original':'Show translation'}</button></div>`:''}<div class="md-content" id="md-body"></div>
     ${note?`<div class="md-note">${esc(note)}</div>`:''}`}
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
-    ${atts.length?`<div class="md-atts">${atts.map((a,k)=>savable&&a.i!==undefined
+    ${atts.length?`<div class="md-atts">${picsHTML}${atts.map((a,k)=>savable&&a.i!==undefined
       ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}</span>`
       :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
@@ -2967,6 +3079,9 @@ function openMail(id){
   if($('#md-home'))$('#md-home').onclick=()=>leave('inbox',folderOf(m)==='junk'?'Marked not spam — it appears in your inbox at the next refresh':'Moved to your inbox — it appears there at the next refresh');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
+  $$('#mail-detail [data-pic]').forEach(b=>b.onclick=()=>openPicture(m,atts[+b.dataset.pic],b));
+  if($('#md-pics-more'))$('#md-pics-more').onclick=()=>{PIC_MORE.add(id);openMail(id)};
+  if(picsOn.length)loadPictures(m,atts,picsOn);
   if($('#md-body'))fillReading($('#md-body'),showTr?tr.text:whole?whole.text:(body??''),showTr?id+':tr':id);
   $$('#mail-detail [data-vmode]').forEach(b=>b.onclick=()=>{VIEWMODE.set(id,b.dataset.vmode);openMail(id)});
   if($('#md-images'))$('#md-images').onclick=()=>{SHOWIMG.add(id);audit('msg.images',m.subj||m.prev.slice(0,40));openMail(id)};
@@ -3348,9 +3463,10 @@ function keyTyping(el){
   return [el,document.activeElement].some(x=>x&&x.nodeType===1&&(x.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName)));
 }
 /* A question on screen has the keyboard to itself: opening a link, saving
-   a disguised program, deleting the account, the licence box, the welcome. */
+   a disguised program, deleting the account, the licence box, the welcome,
+   a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||['#link-ov','#warn-ov','#welcome-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||['#link-ov','#warn-ov','#welcome-ov','#pic-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
