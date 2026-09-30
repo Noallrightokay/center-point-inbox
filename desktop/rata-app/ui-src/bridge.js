@@ -83,6 +83,11 @@
          answers to go when that is not the From address. */
       messageId: m.message_id || '',
       replyTo: m.reply_to || '',
+      /* What links it into its conversation (H5): the id it answers, and the
+         last id of its References, each checked by the engine exactly like
+         messageId. Absent when there is none. */
+      ...(m.in_reply_to ? { inReplyTo: String(m.in_reply_to) } : {}),
+      ...(m.references_last ? { refsLast: String(m.references_last) } : {}),
       /* How to leave the list it came from (List-Unsubscribe): a web address
          Rust has checked as a link, and/or a mailto: it rebuilt. Absent when
          there is none, and on mail stored before it was read. */

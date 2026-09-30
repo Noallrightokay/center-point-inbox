@@ -2687,6 +2687,109 @@ console.log('\n— the Text view folds quoted text, lightens a signature and cut
   await pg.close();
 }
 
+console.log('\n— In this conversation: linked by ids, never by subject —');
+{
+  /* H5: a reply chain across the inbox and Sent, as Rust sends it: A (inbox)
+     ← B (Sent, In-Reply-To A) ← C (inbox, no In-Reply-To, only References'
+     last id B). A stranger with the same subject, and spam that names A. */
+  const pg = await open(true);
+  const now = Date.now();
+  const mk = (folder, uid, extra) => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '', subject: 'Re: Lunch', preview: 'p' + uid, body: 'Body ' + uid,
+    ts: now - 3600e3, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'm' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+  }, [
+    mk('inbox', 91, { subject: 'Lunch', message_id: 'a@example.org', body: 'Lunch on Thursday?', preview: 'Lunch on Thursday?', ts: now - 3 * 3600e3 }),
+    mk('sent', 21, { from_name: 'Me', from_addr: 'me@example.com', to_name: 'Ann', to_addr: 'ann@example.org', message_id: 'b@example.com', in_reply_to: 'a@example.org', body: 'Thursday works.', preview: 'Thursday works.', ts: now - 2 * 3600e3 }),
+    mk('inbox', 92, { message_id: 'c@example.org', references_last: 'b@example.com', body: 'Great, see you at noon.', preview: 'Great, see you at noon.', ts: now - 3600e3 }),
+    mk('inbox', 93, { from_name: 'Stranger', from_addr: 'x@example.net', message_id: 's@example.net', body: 'Same subject, other talk.', ts: now - 1800e3 }),
+    mk('junk', 94, { from_name: 'Ann', from_addr: 'ann@example.org', message_id: 'spam@example.net', in_reply_to: 'a@example.org', body: 'Claim your prize', ts: now - 900e3 }),
+  ]);
+  const A = 'me@example.com_91', B = 'me@example.com_sent_21', C = 'me@example.com_92';
+  const pane = (id) => pg.evaluate((id) => {
+    if (id) openMail(id);
+    const sec = document.querySelector('#md-convo');
+    if (!sec) return null;
+    const h = sec.querySelector('h3');
+    return { hidden: sec.hidden, heading: h ? h.textContent : null, labelled: sec.getAttribute('aria-labelledby') === (h && h.id),
+      rows: [...sec.querySelectorAll('.cv-row')].map((r) => ({ id: r.dataset.cv || null, on: r.getAttribute('aria-current') === 'true', button: r.tagName === 'BUTTON',
+        who: r.querySelector('.cv-who').textContent, when: r.querySelector('.cv-when').textContent, words: r.querySelector('.cv-words').textContent })),
+      more: !!sec.querySelector('.cv-more'),
+      below: !!sec.compareDocumentPosition && !!document.querySelector('#md-body') && !!(document.querySelector('#md-body').compareDocumentPosition(sec) & Node.DOCUMENT_POSITION_FOLLOWING) };
+  }, id);
+  let p = await pane(A);
+  check(p && !p.hidden && /^In this conversation/.test(p.heading) && p.labelled && p.below, `an opened message shows "In this conversation" under its text, with a heading: ${JSON.stringify(p && { hidden: p.hidden, heading: p.heading, labelled: p.labelled, below: p.below })}`);
+  check(p && p.rows.length === 3 && p.rows[0].on && !p.rows[0].button && p.rows[1].id === B && p.rows[2].id === C && p.rows[1].button && p.rows[2].button,
+    `the three-message chain across the inbox and Sent, oldest first, the open one marked: ${JSON.stringify(p && p.rows)}`);
+  check(p && /\(you\)$/.test(p.rows[1].who) && p.rows[1].words === 'Thursday works.' && p.rows[2].who === 'Ann' && p.rows[2].words === 'Great, see you at noon.' && p.rows.every((r) => r.when),
+    `each row has the sender, the date and the first words: ${JSON.stringify(p && p.rows)}`);
+  check(p && !p.rows.some((r) => r.id === 'me@example.com_93'), 'a stranger with the same subject is not pulled in');
+  check(p && !p.rows.some((r) => r.id === 'me@example.com_junk_94'), 'spam that names a message of the chain is not pulled in');
+  p = await pane('me@example.com_junk_94');
+  check(p && p.hidden && p.rows.length === 0, 'an open spam message shows no conversation');
+  p = await pane('me@example.com_93');
+  check(p && p.hidden && p.rows.length === 0, 'a message linked to nothing shows no conversation');
+  /* From the other end, by References alone. */
+  p = await pane(C);
+  check(p && p.rows.map((r) => r.id || 'on').join() === `${A},${B},on` && p.rows[2].on, `the chain is found from its last message too, through References: ${JSON.stringify(p && p.rows.map((r) => r.id))}`);
+
+  /* One click opens a row; the keyboard reaches it and Enter opens it too. */
+  await pg.evaluate((A) => openMail(A), A);
+  await pg.click(`#md-convo [data-cv="${C}"]`);
+  let st = await pg.evaluate(() => ({ sel: selMail, cur: (document.querySelector('#md-convo .cv-row.on') || {}).textContent || '', focus: document.activeElement && document.activeElement.classList.contains('on') }));
+  check(st.sel === C && /Great, see you/.test(st.cur) && st.focus, `a click opens that message, which the list then marks, with the focus on it: ${JSON.stringify(st)}`);
+  await pg.evaluate((B) => document.querySelector(`#md-convo [data-cv="${B}"]`).focus(), B);
+  await pg.keyboard.press('Enter');
+  st = await pg.evaluate(() => selMail);
+  check(st === B, `Enter on a focused row opens it: ${st}`);
+
+  /* Mail stored before the field: only messageId, which is what it links by. */
+  await pg.evaluate(() => {
+    const acct = S.messages.find((m) => m.id === 'me@example.com_91').acct;
+    S.messages.push({ id: 'old-1', ch: 'email', prov: 'imap', acct, mailbox: 'me@example.com', fromName: 'Dee', fromAddr: 'dee@example.org', subj: 'Plan', prev: 'The old plan', body: 'The old plan', ts: 1000, unread: false, starred: false, atts: [], uid: 5, uidvalidity: 7, bodyV: 2, messageId: 'old@example.org' });
+    S.messages.push({ id: 'old-2', ch: 'email', prov: 'imap', acct, mailbox: 'me@example.com', fromName: 'Eve', fromAddr: 'eve@example.org', subj: 'Re: Plan', prev: 'Agreed', body: 'Agreed', ts: 2000, unread: false, starred: false, atts: [], uid: 6, uidvalidity: 7, bodyV: 2, messageId: 'e@example.org', inReplyTo: 'old@example.org' });
+  });
+  p = await pane('old-1');
+  check(p && p.rows.length === 2 && p.rows[1].id === 'old-2', `mail stored before the field links by the id it has: ${JSON.stringify(p && p.rows.map((r) => r.id))}`);
+
+  /* A reply sent from RATA joins at once: its own record carries the
+     Message-ID it wrote and what it answered. */
+  await pg.evaluate((C) => openMail(C), C);
+  await pg.click('#md-reply');
+  await pg.fill('#cmp-body', 'Noon it is.');
+  await pg.click('#cmp-send');
+  await pg.waitForFunction(() => (__mock.sent || []).length > 0 && S.messages.some((m) => String(m.id).startsWith('x') && m.sent), null, { timeout: 5000 }).catch(() => {});
+  p = await pane(A);
+  const mine = await pg.evaluate(() => { const m = S.messages.find((x) => String(x.id).startsWith('x') && x.sent); return m && { id: m.id, inReplyTo: m.inReplyTo, messageId: m.messageId }; });
+  check(mine && mine.inReplyTo === 'c@example.org' && mine.messageId && p.rows.length === 4 && p.rows[3].id === mine.id,
+    `a reply RATA sent joins the conversation: ${JSON.stringify({ mine, rows: p && p.rows.map((r) => r.id) })}`);
+  if (process.env.H5_SHOTS) {
+    await pg.evaluate((A) => { openMail(A); document.querySelector('#mail-detail').scrollTop = 1e6; }, A);
+    await pg.screenshot({ path: process.env.H5_SHOTS + '/h5-light.png' });
+    await pg.emulateMedia({ colorScheme: 'dark' });
+    await pg.waitForTimeout(400);
+    await pg.screenshot({ path: process.env.H5_SHOTS + '/h5-dark.png' });
+    await pg.emulateMedia({ colorScheme: 'light' });
+  }
+
+  /* A chain of 300: the walk stops at 200, the nearest first, and says so,
+     without holding the page up. */
+  const t = await pg.evaluate(() => {
+    const acct = S.messages.find((m) => m.id === 'me@example.com_91').acct;
+    for (let i = 0; i < 300; i++) S.messages.push({ id: 'k' + i, ch: 'email', prov: 'imap', acct, mailbox: 'me@example.com', fromName: 'Kay', fromAddr: 'kay@example.org', subj: 'Long', prev: 'Part ' + i, ts: 10000 + i * 1000, unread: false, starred: false, atts: [], uid: 1000 + i, uidvalidity: 7, bodyV: 2,
+      messageId: 'k' + i + '@example.org', ...(i ? (i % 2 ? { inReplyTo: 'k' + (i - 1) + '@example.org' } : { refsLast: 'k' + (i - 1) + '@example.org' }) : {}) });
+    const t0 = performance.now(); openMail('k150'); return performance.now() - t0;
+  });
+  p = await pane();
+  const ids = p ? p.rows.map((r) => r.id || 'k150') : [];
+  const nums = ids.map((x) => +x.slice(1));
+  check(p && p.rows.length === 200 && p.more && ids.includes('k150') && Math.min(...nums) >= 50 && Math.max(...nums) <= 250 && nums.every((n, i) => !i || n > nums[i - 1]) && t < 1000,
+    `a chain of 300 stops at the 200 nearest, in order, and says so, in ${Math.round(t)} ms: ${JSON.stringify({ n: p && p.rows.length, more: p && p.more, lo: Math.min(...nums), hi: Math.max(...nums) })}`);
+  await pg.close();
+}
+
 await browser.close();
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);
