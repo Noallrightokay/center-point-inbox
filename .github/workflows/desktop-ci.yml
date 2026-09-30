@@ -86,7 +86,7 @@ jobs:
   loopback:
     name: Mail layer against real servers
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: desktop/rata-mail
@@ -127,7 +127,9 @@ jobs:
 
       # apt waits on a stalled download almost for ever, which once used up
       # a whole job's time limit before any test ran (#110). Give up on a
-      # stalled fetch after 30 s and try again, three times.
+      # stalled fetch after 30 s and try again, three times. A slow mirror
+      # (about 100 KB/s on 2026-09-30) still takes minutes for the webview's
+      # 100 MB, so each install step has 15 minutes, not the job's whole time.
       - name: Make apt retry a stalled download instead of hanging
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
@@ -135,7 +137,7 @@ jobs:
       # Installing the package starts the system's own Dovecot on 143 and 993;
       # servers.sh runs one of its own there instead.
       - name: Install Dovecot
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dovecot-imapd
@@ -161,19 +163,21 @@ jobs:
   app:
     name: Desktop shell
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
       # apt waits on a stalled download almost for ever, which once used up
       # a whole job's time limit before any test ran (#110). Give up on a
-      # stalled fetch after 30 s and try again, three times.
+      # stalled fetch after 30 s and try again, three times. A slow mirror
+      # (about 100 KB/s on 2026-09-30) still takes minutes for the webview's
+      # 100 MB, so each install step has 15 minutes, not the job's whole time.
       - name: Make apt retry a stalled download instead of hanging
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
 
       - name: Install the system webview
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -226,7 +230,7 @@ jobs:
   harness:
     name: Desktop interface, driven
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -246,7 +250,9 @@ jobs:
 
       # apt waits on a stalled download almost for ever, which once used up
       # a whole job's time limit before any test ran (#110). Give up on a
-      # stalled fetch after 30 s and try again, three times.
+      # stalled fetch after 30 s and try again, three times. A slow mirror
+      # (about 100 KB/s on 2026-09-30) still takes minutes for the webview's
+      # 100 MB, so each install step has 15 minutes, not the job's whole time.
       - name: Make apt retry a stalled download instead of hanging
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
@@ -256,7 +262,7 @@ jobs:
       # revision it downloads is the one the harness launches. Neither step
       # sets PLAYWRIGHT_BROWSERS_PATH, so both use the default cache.
       - name: Install Chromium
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: npx playwright install --with-deps chromium
         working-directory: rata-next
 

@@ -26,7 +26,7 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,13 +43,15 @@ jobs:
 
       # apt waits on a stalled download almost for ever, which once used up
       # a whole job's time limit before any test ran (#110). Give up on a
-      # stalled fetch after 30 s and try again, three times.
+      # stalled fetch after 30 s and try again, three times. A slow mirror
+      # (about 100 KB/s on 2026-09-30) still takes minutes for the webview's
+      # 100 MB, so each install step has 15 minutes, not the job's whole time.
       - name: Make apt retry a stalled download instead of hanging
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
 
       - name: Install Chromium
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: npx playwright install --with-deps chromium
 
       - name: Build Next.js application
