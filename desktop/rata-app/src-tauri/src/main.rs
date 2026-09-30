@@ -180,6 +180,7 @@ fn main() {
             commands::save_draft,
             commands::change_messages,
             commands::older_mail,
+            commands::search_mail,
             commands::reread_mail,
             commands::list_folders,
             commands::folder_mail,

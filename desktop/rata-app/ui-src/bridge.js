@@ -318,6 +318,24 @@
       }
     },
 
+    /* Search one mailbox on its server (H6): the newest messages whose
+       sender, subject or text has the words in them, and how many matched.
+       The inbox only in this version; Rust checks the query and sends it as
+       a literal, so the page's words can never change the command. */
+    async '/api/mail/search'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('search_mail', {
+          email: String(b.email || ''),
+          folder: b.folder || 'inbox',
+          query: String(b.query || ''),
+        });
+        return { messages: (got.messages || []).map(asMessage), matched: got.matched || 0 };
+      } catch (e) {
+        return { error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
     async '/api/mail/open'(opts) {
       const b = body(opts);
       try {

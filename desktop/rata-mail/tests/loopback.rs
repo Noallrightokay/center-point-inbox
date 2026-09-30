@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_imap::types::Flag;
 use futures::StreamExt;
 use mail_parser::MimeHeaders;
+use rata_mail::search_folder;
 use rata_mail::{
     Account, Acted, Action, Address, Credential, DraftSaved, Fetched, File, Folder, HostVerdict,
     Known, Listed, Outgoing, Prior, Resolver, Sent, Source, Verify, Watched, act, check_literal,
@@ -451,6 +452,57 @@ async fn older_mail_pages_back_by_position() {
         pages,
         [vec!["INBOX 1", "INBOX 2", "INBOX 3"], vec!["INBOX 0"]]
     );
+}
+
+// ------------------------------------------------------------ server search
+
+#[tokio::test]
+async fn a_server_search_finds_a_message_by_a_word_in_its_body() {
+    let r = resolver();
+    let me = user("search");
+    let acct = account(&me);
+    let mut s = seed(&me).await;
+    put(&mut s, &me, "INBOX", 4, None).await;
+    // The words searched for are only in the text, which is quoted-printable,
+    // as most mail programs send it.
+    let raw = format!(
+        "From: Bo Li <bo@rata.test>\r\nTo: <{me}>\r\nSubject: Lunch\r\nMessage-ID: <lunch@rata.test>\r\nDate: Thu, 1 Jan 2026 11:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nThe zanzibar figures are in, and so is the caf=C3=A9 bill.\r\n"
+    );
+    s.append("INBOX", None, Some(&date(30)), raw).await.unwrap();
+    s.logout().await.unwrap();
+
+    let got = search_folder(&r, &acct, Folder::Inbox, "Zanzibar", 50)
+        .await
+        .unwrap();
+    assert_eq!(got.matched, 1, "{got:?}");
+    assert_eq!(in_folder(&got.messages, &Folder::Inbox), ["Lunch"]);
+    assert!(got.messages[0].body.contains("zanzibar figures"));
+    assert!(got.messages[0].uid > 0 && got.messages[0].uidvalidity > 0);
+
+    // A letter outside ASCII goes with CHARSET UTF-8, and Dovecot finds it
+    // in the decoded text.
+    let got = search_folder(&r, &acct, Folder::Inbox, "café", 50)
+        .await
+        .unwrap();
+    assert_eq!(in_folder(&got.messages, &Folder::Inbox), ["Lunch"]);
+
+    // By sender, and every message by a word they all share.
+    let got = search_folder(&r, &acct, Folder::Inbox, "bo@rata.test", 50)
+        .await
+        .unwrap();
+    assert_eq!(in_folder(&got.messages, &Folder::Inbox), ["Lunch"]);
+    let got = search_folder(&r, &acct, Folder::Inbox, "INBOX", 2)
+        .await
+        .unwrap();
+    assert_eq!(got.matched, 4, "every seeded subject: {got:?}");
+    assert_eq!(got.messages.len(), 2, "only the newest are fetched");
+
+    // A query that would widen the search were it inside a quoted string is
+    // looked for as it stands, and is in no message.
+    let got = search_folder(&r, &acct, Folder::Inbox, "x\" OR ALL \"", 50)
+        .await
+        .unwrap();
+    assert_eq!(got.matched, 0, "{got:?}");
 }
 
 // ---------------------------------------------------------------------- act

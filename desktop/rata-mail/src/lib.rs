@@ -60,6 +60,8 @@ pub use imap::{
     Watched, Whole, act, fetch_folder, fetch_newest, fetch_older, fetch_uids, fetch_whole,
     list_folders, save_draft, verify, verify_with, watch,
 };
+// Searching the server (H6).
+pub use imap::{SEARCH_LIMIT, SEARCH_QUERY_MAX, Searched, search_folder, search_query};
 pub use key::{domain_of, mail_key};
 pub use names::{looks_disguised, safe_file_name};
 pub use resolve::{Discovery, Resolver, check_host, discover, resolve_public};
