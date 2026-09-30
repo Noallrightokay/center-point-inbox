@@ -2863,6 +2863,11 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
      contrast figures. */
   await pg.emulateMedia({ colorScheme: 'dark' });
   await pg.evaluate(() => { go('inbox'); selMail = null; renderMail(); renderResting(); });
+  /* Let the theme settle before measuring: .top-search fades its background
+     over .15s while its text colour changes at once, so axe run inside that
+     fade (as it was on a slower CI runner) measures dark-mode text on a
+     still-light background, which no one sees once the switch is done. */
+  await pg.waitForTimeout(300);
   await axe(pg, 'the inbox, dark');
   await pg.evaluate(() => openMail('me@example.com_95'));
   await pg.waitForTimeout(300);
