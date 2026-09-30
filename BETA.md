@@ -222,6 +222,36 @@ Don't spend time reporting these; they are known and planned:
     very long message (such as a newsletter), and Translate says so; a
     briefing that ran out of room says to try again and keeps your flags.
     AI still needs mailrata.org's new version.
+- **v0.1.44:**
+  - **Pictures in the message:** when you open a message with a PNG, JPEG,
+    GIF or WebP attached (up to 5 MB), the pictures show as small previews
+    above the attachment list, six at first and then **Show N more**. Click
+    one to see it large; Escape, **Close** or a click outside puts it away.
+    RATA decides what is a picture from the file itself, not its name, so a
+    file named like a picture that is not one stays in the list and is not
+    shown; saving works as before. Each picture is fetched from your mailbox
+    when you open the message, so a message with many can take a moment.
+    Tell us about a picture that does not show, or one that shows wrongly,
+    with the file type and provider.
+  - **In this conversation:** under an open message, RATA lists the other
+    messages of the same conversation that it holds, from the inbox and
+    Sent together, oldest first, with who wrote each, when, and how it
+    begins; click one to open it. It links messages by the ids mail
+    programs write into replies, never by subject, and never includes spam
+    or drafts. Mail RATA downloaded before this version may be missing from
+    a conversation until it is fetched again. Tell us about a message that
+    clearly belongs and is missing, or one that does not belong and is
+    there (with the provider and, if you can, who sent it).
+  - **Keyboard and screen readers:** Tab reaches the message list as one
+    stop; the arrow keys, Home and End move through it and Enter or Space
+    opens a message. Dialogs keep the keyboard inside them and give it back
+    where it was when they close. Notes at the bottom are read out by
+    screen readers without taking the focus, and unread and starred
+    messages are said, not only shown in colour. The website's app page no
+    longer stops a phone or tablet from zooming; in the desktop app, Ctrl
+    or Cmd and + does not zoom yet (tell us if you need it). Tell us about anything you cannot reach or do by
+    keyboard, anything a screen reader reads wrongly or not at all (which
+    one, on which system), and any text that is hard to read.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.

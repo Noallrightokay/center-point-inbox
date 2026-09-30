@@ -39,18 +39,19 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
 
 ---
 
-## Part 2. State of play (checked 2026-09-28, updated 2026-09-29)
+## Part 2. State of play (checked 2026-09-28, updated 2026-09-30)
 
 ### Done, and how it was checked
 
-- **The desktop app** has been built through v0.1.42. The feature list is
+- **The desktop app** has been built through v0.1.43 (0.1.44 is merged
+  for release, below). The feature list is
   `CLAUDE.md` → Status: licence, adding a mailbox, sync, IDLE, folders,
   Sent/Archive/Spam/Drafts, Gmail's archive, compose with Cc/Bcc and
   attachments, reply and forward, HTML mail in a locked-down frame, the
   Format Bridge, notifications, signatures, the updater code, the
   redesign, Sign in with Microsoft (live once [C4](#c4) is done), saved
   files marked as downloads, and RATA's own drafts saved to the mailbox.
-- **Releases** v0.1.0 to v0.1.42 are published on GitHub. v0.1.2 onwards are
+- **Releases** v0.1.0 to v0.1.43 are published on GitHub. v0.1.2 onwards are
   pre-releases. v0.1.37 was downloaded and checked: 5 assets, the licence
   public key embedded, no font CDN, and it launches as "RATA 0.1.37 beta".
 - **v0.1.38** (Gmail's archive) is [PR #52](https://github.com/Noallrightokay/center-point-inbox/pull/52).
@@ -92,8 +93,26 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   subscription event that comes before its checkout ([#98](https://github.com/Noallrightokay/center-point-inbox/pull/98)). Each is
   done in code; none is verified in a release yet. The website halves
   (H1, H2, BUG-A, BUG-S, BUG-L's renew route) reach mailrata.org only at
-  [D4](#d4), and BUG-S needs `database.sql` §6 run first. Still open in
-  wave 5: H4, H5, H6, H9, H10, H11, H12.
+  [D4](#d4), and BUG-S needs `database.sql` §6 run first. Left for
+  0.1.44: H5, H10, H11.
+- **Merged for 0.1.44** (the rest of wave 5c, which completes
+  Workstream H; [PR "Release 0.1.44"](https://github.com/Noallrightokay/center-point-inbox/pulls?q=is%3Apr+%22Release+0.1.44%22),
+  not yet merged, released or verified): [H11](#h11), picture attachments
+  shown in the message and opened large, the type read from the bytes in
+  Rust ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108));
+  [H5](#h5), **In this conversation** under an open message, linked by
+  Message-ID, In-Reply-To and the last id of References, never by subject
+  ([#110](https://github.com/Noallrightokay/center-point-inbox/pull/110));
+  CI's apt steps retry a stalled download and give up after 8 minutes
+  instead of hanging a job ([#111](https://github.com/Noallrightokay/center-point-inbox/pull/111));
+  [H10](#h10), the accessibility pass: the list a listbox with one Tab
+  stop, dialogs trapped and labelled, toasts announced, zoom allowed, and
+  axe in the harness failing on any serious or critical rule
+  ([#112](https://github.com/Noallrightokay/center-point-inbox/pull/112));
+  and this plan's update ([#109](https://github.com/Noallrightokay/center-point-inbox/pull/109)).
+  Each is done in code and in the harness; none is seen in a packaged
+  build or a release yet. The screenshots in `public/shots` were retaken
+  by H10 after the last interface change.
 - **Merged for 0.1.42:** D5's public half, `rata-next/scripts/live-check.sh`
   ([#80](https://github.com/Noallrightokay/center-point-inbox/pull/80));
   TIDY-1, a docs sweep against the code ([#81](https://github.com/Noallrightokay/center-point-inbox/pull/81));
@@ -129,12 +148,13 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
   asking before a disguised program is saved), and 4 is [D8](#d8).
-- **Tests** (counted on the 0.1.43 branch, 2026-09-29). Engine (294, plus
-  16 against real Dovecot and GreenMail), shell (127) and website (785)
+- **Tests** (counted on the 0.1.44 branch, 2026-09-30). Engine (297, plus
+  16 against real Dovecot and GreenMail), shell (130) and website (785)
   suites run in CI (`desktop-ci.yml`, `rata-next-ci.yml`), and from 0.1.43
   also in `release.yml`'s `gate` before anything is built. The **desktop
-  UI harness** (297 checks that drive
-  the real interface against a fake backend, in `desktop/rata-app/harness/`)
+  UI harness** (358 checks that drive
+  the real interface against a fake backend, in `desktop/rata-app/harness/`,
+  among them axe-core accessibility scans since H10)
   runs in CI as *Desktop interface, driven* ([A3](#a3),
   [#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)).
 - **The server side** is in code: licence issue (`/api/licence`), renewal
@@ -620,6 +640,12 @@ BUG-R, BUG-S and the mint script), added the help, privacy and terms pages
 to `sw.js`'s shell, and bumped the version ([#102](https://github.com/Noallrightokay/center-point-inbox/pull/102));
 held for the owner's licence signing key, not yet released or verified. It
 is the first release through BUG-R's `gate`: watch that run. 0.1.43 released and verified 2026-09-30 ([run 36725730252](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36725730252)): the new `gate` passed first, all four installers were installed and launched, `verify-release.sh v0.1.43` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.43 beta".
+0.1.44 folded in #108–#112 (H11, H5, the CI apt retries, H10, and the plan
+update #109), with DESIGN.md's `--thumb`, `--faint`-on-tint and inset list
+focus ring, and bumped the version (PR "Release 0.1.44", 2026-09-30);
+engine 297, shell 130, harness 358, website 785, all green on the branch.
+The screenshots are H10's, taken after the last interface change. Not yet
+merged, released or verified: the PM merges.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
@@ -627,6 +653,11 @@ is the first release through BUG-R's `gate`: watch that run. 0.1.43 released and
 announce.
 
 ### Workstream H: complete and better (wave 5, 2026-09-29)
+
+*State: **complete in code.** Every card, H1 to H12, is merged: H1–H4,
+H6–H9 and H12 released in 0.1.43; H5, H10 and H11 merged for 0.1.44 and
+not yet released. What is left is proof on real providers ([B2](#b2)) and
+a packaged-build look at H5, H10 and H11.*
 
 What a first paying customer expects of a mail client and a paid website,
 and what beta support needs, that RATA does not have at 0.1.42. Found by
@@ -719,6 +750,7 @@ sheet matches the code (one table, read by both). Hot file: `app.html`.
 *State: **done** in code ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)), released in 0.1.43.*
 
 #### H5
+*State: **done** in code ([#110](https://github.com/Noallrightokay/center-point-inbox/pull/110)), merged for 0.1.44; not yet released.*
 **Conversation view.** Who: agent (Rust engine + app + interface) ·
 Needs: H4 merged · Do: the engine keeps the last id of `References`
 on `Message` (`references_last`, `serde(default)`, checked like
@@ -820,6 +852,7 @@ row send two. Done when: those pass. Hot file: `app.html` (send path).
 *State: **done** in code ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)), released in 0.1.43.*
 
 #### H10
+*State: **done** in code ([#112](https://github.com/Noallrightokay/center-point-inbox/pull/112)), merged for 0.1.44; not yet released.*
 **Accessibility pass, checked by axe.** Who: agent (interface + harness)
 · Needs: every other H card that touches `app.html` merged (runs last,
 alone) · Do: every icon-only button gets a name (`aria-label`), the mail
@@ -835,6 +868,7 @@ clean at those four points and the harness is green. Hot file:
 `app.html` (wide).
 
 #### H11
+*State: **done** in code ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108)), merged for 0.1.44; not yet released.*
 **Picture attachments shown in the message.** Who: agent (Rust +
 interface) · Needs: H7 merged (same region) · Do: an attachment whose
 name ends in png, jpg, jpeg, gif or webp and is under 5 MB shows as a
