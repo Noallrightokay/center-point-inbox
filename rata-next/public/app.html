@@ -411,6 +411,13 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .res-title{font-size:14px;font-weight:600}
 .res-title mark,.res-sub mark{background:rgba(255,204,0,.35);color:inherit;padding:0 1px;border-radius:3px}
 .res-sub{font-size:12.5px;color:var(--faint)}
+/* Search on the server (H6): above the results, one row per mailbox. */
+.srv-bar{margin:4px 4px 10px;padding:12px 14px;border-radius:var(--r);box-shadow:var(--edge);background:var(--card)}
+.srv-say{font-size:13px;color:var(--slate);margin-bottom:8px}
+.srv-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 0}
+.srv-box{font-size:13px;font-weight:500;min-width:0;overflow-wrap:anywhere;flex:1}
+.srv-err{flex-basis:100%;font-size:12.5px;color:var(--red)}
+.srv-all{margin-top:6px}
 
 /* ---------- compose ---------- */
 #compose-ov{position:fixed;inset:0;background:rgba(14,16,20,.38);display:none;z-index:50}
@@ -1508,6 +1515,8 @@ function oldestRef(email,folder='inbox'){
   let best=null;const want=String(email).toLowerCase();
   for(const m of S.messages){
     if(m.prov!=='imap'||!m.uid||!m.uidvalidity||folderOf(m)!==folder||mailEmailOf(m)!==want)continue;
+    /* Found by a search on the server (H6): not where history reaches yet. */
+    if(m.srvFound)continue;
     if(!best||m.uid<best.uid)best=m;
   }
   return best;
@@ -1536,7 +1545,11 @@ async function loadOlder(only,quiet){
     const got=r.messages||[];
     if(!got.length){l[FOLDER_DONE[folder]]=true;if(folder==='inbox')finished++;continue}
     for(const m of got){
-      if(isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
+      if(isGone(m.id))continue;
+      /* One a search on the server brought (H6) is reached now: from here it
+         counts as history, or the next page would be this one again. */
+      const had=S.messages.find(x=>x.id===m.id);
+      if(had){if(had.srvFound)delete had.srvFound;continue}
       S.messages.push(mailRecord(m));
       if(inInbox(m))added++;
     }
@@ -2901,6 +2914,77 @@ function searchAcctName(m){
   const label=l?l.label:(m.acctLabel||m.acct||'');
   return label?' · <span class="badge">'+esc(label)+'</span>':'';
 }
+/* Search on the server (H6). A search runs on this computer first; in the
+   app it then offers to ask each linked mailbox's server, which can look
+   through the whole inbox, older mail included. One mailbox at a time (each
+   is a sign-in), the inbox only: not the customer's own folders nor Gmail's
+   archive in this version (the engine refuses both). What comes back is
+   absorbed and stored like older mail, and shown in the results labelled
+   with its mailbox, however the server matched it. The state is this
+   query's; a new query starts afresh.
+   A message found this way can sit far below the oldest message RATA held,
+   or above the newest a refresh has seen, so it is marked `srvFound` and
+   neither Load older mail (oldestRef) nor a refresh (heldKnown) counts it:
+   counting it would skip everything between. Load older mail clears the
+   mark when it reaches the message. */
+let SRV_SEARCH={q:'',res:{},ids:new Set()};
+const srvBoxes=()=>window.__RATA_NATIVE__?S.linked.filter(l=>l.type==='mail'&&l.label):[];
+function srvSaid(r){
+  if(r.busy)return 'Searching…';
+  if(r.error)return 'Search on the server again';
+  if(!r.done)return 'Search on the server';
+  if(!r.n)return 'Nothing found on the server';
+  return r.matched>r.n?`Newest ${r.n} of ${r.matched} found`:`${r.n} found on the server`;
+}
+function srvBarHTML(){
+  const boxes=srvBoxes();if(!boxes.length||!SRV_SEARCH.q)return '';
+  const st=SRV_SEARCH,of=l=>st.res[l.label.toLowerCase()]||{};
+  const rows=boxes.map(l=>{const r=of(l);return `<div class="srv-row"><span class="srv-box">${esc(l.label)}</span>`
+    +`<button class="btn" data-srv="${esc(l.label)}"${r.busy||r.done?' disabled':''}>${srvSaid(r)}</button>`
+    +(r.error?`<span class="srv-err" role="alert">${esc(r.error)}</span>`:'')+'</div>'}).join('');
+  const idle=boxes.filter(l=>{const r=of(l);return !r.busy&&!r.done});
+  const all=boxes.length>1&&idle.length?`<button class="btn srv-all" data-srv="*">Search all ${boxes.length} on the server</button>`:'';
+  return `<div class="srv-bar" id="srv-bar" aria-live="polite"><div class="srv-say">Searched the mail on this computer. Your mail server can search the whole inbox, older mail included.</div>${rows}${all}</div>`;
+}
+function paintSrvBar(){
+  const b=$('#srv-bar');if(!b)return;
+  b.outerHTML=srvBarHTML();wireSrvBar();
+}
+function wireSrvBar(){
+  const b=$('#srv-bar');if(!b)return;
+  b.querySelectorAll('[data-srv]').forEach(x=>x.onclick=()=>{
+    const want=x.dataset.srv==='*'
+      ?srvBoxes().filter(l=>{const r=SRV_SEARCH.res[l.label.toLowerCase()]||{};return !r.busy&&!r.done}).map(l=>l.label)
+      :[x.dataset.srv];
+    serverSearch(SRV_SEARCH.q,want);
+  });
+}
+async function serverSearch(q,emails){
+  const st=SRV_SEARCH;if(!q||st.q!==q||!emails.length)return;
+  for(const e of emails)st.res[e.toLowerCase()]={busy:true};
+  paintSrvBar();
+  let added=0,came=0;
+  for(const e of emails){
+    const k=e.toLowerCase();let r;
+    try{r=await apiFetch('/api/mail/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:e,folder:'inbox',query:q})})}
+    catch(err){r={error:String(err&&err.message||err)}}
+    if(st!==SRV_SEARCH)return;
+    if(!r||r.error){st.res[k]={error:(r&&r.error)||'The server did not answer.'};paintSrvBar();continue}
+    let n=0;
+    for(const m of (r.messages||[])){
+      if(!m||isGone(m.id))continue;
+      n++;st.ids.add(String(m.id));
+      if(S.messages.some(x=>x.id===m.id))continue;
+      S.messages.push(Object.assign(mailRecord(m),{srvFound:true}));added++;
+    }
+    came+=n;
+    st.res[k]={done:true,n,matched:Math.max(+r.matched||0,n)};
+    paintSrvBar();
+  }
+  if(added){tidyAccts();save();renderMailFilters();renderMail()}
+  audit('search.server',`${emails.length} mailbox(es) — ${came} found, ${added} new to RATA`);
+  if(st===SRV_SEARCH&&$('#search-input').value.trim()===q)doSearch();
+}
 /* Message text is on disk, not in memory, so a search reads through it
    there; a newer search makes an older one's answer moot. */
 let SEARCH_RUN=0;
@@ -2908,6 +2992,8 @@ async function doSearch(){
   const q=$('#search-input').value.trim();
   if(!q)return;
   const ql=q.toLowerCase(),run=++SEARCH_RUN;
+  if(SRV_SEARCH.q!==q)SRV_SEARCH={q,res:{},ids:new Set()};
+  const srvIds=SRV_SEARCH.ids;
   $('#res-pane').innerHTML='<div class="empty"><b>Searching\u2026</b>Reading through your mail on this computer.</div>';
   const inText=await bodiesMatching(q);
   if(run!==SEARCH_RUN)return;
@@ -2916,7 +3002,8 @@ async function doSearch(){
     if(!channelEnabled(m.ch))continue;
     const nm=msgFrom(m);
     const hay=(nm+' '+(m.subj||'')+' '+(m.orig||'')+' '+m.atts.map(a=>a.n).join(' ')).toLowerCase();
-    if(hay.includes(ql)||inText.has(String(m.id)))hits.push({type:'msg',ref:m});
+    /* Or the server found it (H6), in a header or in text past what RATA keeps. */
+    if(hay.includes(ql)||inText.has(String(m.id))||srvIds.has(String(m.id)))hits.push({type:'msg',ref:m});
   }
   for(const d of S.documents){
     if((d.name+' '+d.prov+' '+(d.content||'')).toLowerCase().includes(ql))hits.push({type:'doc',ref:d});
@@ -2929,11 +3016,12 @@ async function doSearch(){
   const mk=t=>esc(t).replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'),'<mark>$1</mark>');
   const rp=$('#res-pane');
   rp.innerHTML=hits.length?hits.map((h,i)=>h.type==='msg'
-    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}${folderName(h.ref)?' · <span class="badge">'+esc(folderName(h.ref))+'</span>':''}</div></div></div>`
+    ?`<div class="res-row" data-i="${i}"><span class="res-type email">${chan(h.ref.ch).label.toUpperCase()}</span><div><div class="res-title">${mk(h.ref.subj||h.ref.prev.slice(0,60))}</div><div class="res-sub">${mk(msgFrom(h.ref))} · ${rel(h.ref.ts)}${searchAcctName(h.ref)}${folderName(h.ref)?' · <span class="badge">'+esc(folderName(h.ref))+'</span>':''}${srvIds.has(String(h.ref.id))?' · <span class="badge srv-hit">Found on the server</span>':''}</div></div></div>`
     :h.type==='doc'
     ?`<div class="res-row" data-i="${i}"><span class="res-type doc">FILE</span><div><div class="res-title">${mk(h.ref.name)}</div><div class="res-sub">${h.ref.fmt} · ${h.ref.size} · <span class="badge ${h.ref.prov}">${h.ref.prov}</span></div></div></div>`
     :`<div class="res-row" data-i="${i}"><span class="res-type email">PERSON</span><div><div class="res-title">${mk(h.ref.nick||h.ref.name)}</div><div class="res-sub">${mk(h.ref.addr||'No email address')} · ${personMsgs(h.ref.id).length} messages</div></div></div>`
   ).join(''):'<div class="empty"><b>No matches</b>Nothing across your channels, people, or files matched that query.</div>';
+  rp.insertAdjacentHTML('afterbegin',srvBarHTML());wireSrvBar();
   rp.querySelectorAll('.res-row').forEach(r=>r.onclick=()=>{
     const h=hits[+r.dataset.i];
     if(h.type==='msg'){go('inbox');openMail(h.ref.id)}
@@ -4831,6 +4919,9 @@ function heldKnown(){
     /* A draft RATA saved (F1) and no refresh has seen yet: counting it would
        skip a draft another device saved just before it. */
     if(m.ownDraft)continue;
+    /* Found by a search on the server (H6), perhaps newer than anything a
+       refresh has read: counting it would skip what arrived before it. */
+    if(m.srvFound)continue;
     const folder=folderOf(m);if(!FOLDERS.includes(folder))continue;
     const email=mailEmailOf(m),k=email+'|'+folder,b=best.get(k);
     if(!b||m.uid>b.since)best.set(k,{email,folder,uidvalidity:m.uidvalidity,since:m.uid});
@@ -5011,6 +5102,10 @@ async function absorbMail(res,quiet){
     const have=S.messages.find(x=>x.id===m.id);
     /* A draft RATA saved (F1), now seen in Drafts: an ordinary draft from here on. */
     if(have&&have.ownDraft){delete have.ownDraft;delete have.savedAt}
+    /* One a search on the server brought (H6), now read by a refresh. A
+       refresh reads only mail newer than what it held, or the newest block
+       whole, so everything between is read too: from here on it counts. */
+    if(have&&have.srvFound)delete have.srvFound;
     if(have&&m.draftId)have.draftId=m.draftId;
     if(have){if(!have.sent&&!have.draft)have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));

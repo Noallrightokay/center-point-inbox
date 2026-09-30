@@ -2132,6 +2132,257 @@ async fn older_in<C: Connect>(
     }
 }
 
+// -------------------------------------------------------------- server search
+
+/// The longest search RATA sends a server, in characters. A search is a few
+/// words; this keeps a pasted page from going out three times as literals.
+pub const SEARCH_QUERY_MAX: usize = 200;
+
+/// How many of the messages a server search finds are fetched: the newest.
+pub const SEARCH_LIMIT: u32 = 50;
+
+/// How long a server may take over a search. Longer than any other command:
+/// a server without a text index reads every message to answer `TEXT`.
+const SEARCH_TIME: Duration = Duration::from_secs(90);
+
+/// What a search of one folder on the server found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Searched {
+    /// The newest of them, whole, newest first: at most the `limit` asked for.
+    pub messages: Vec<Message>,
+    /// How many messages matched in all.
+    pub matched: u32,
+}
+
+/// The query as it will be searched for, trimmed, or why it will not be.
+/// Refused: nothing, more than [`SEARCH_QUERY_MAX`] characters, or a control
+/// character. The query goes as a literal, so no character in it could
+/// change the command, but a line break or a NUL is never something a
+/// customer meant to look for, and a server may read one badly.
+pub fn search_query(query: &str) -> Result<&str, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("Type something to search for.".into());
+    }
+    if q.chars().count() > SEARCH_QUERY_MAX {
+        return Err(format!(
+            "A search on the server can be at most {SEARCH_QUERY_MAX} characters."
+        ));
+    }
+    if q.chars().any(char::is_control) {
+        return Err("A search cannot contain a line break or another control character.".into());
+    }
+    Ok(q)
+}
+
+/// Messages in `folder` whose sender, subject or text contains `query`, as
+/// the server finds them: one `UID SEARCH`, then the newest `limit` of what
+/// it found, fetched whole by UID as [`fetch_uids`] fetches them, on the
+/// same connection.
+///
+/// For mail RATA does not hold, older than anything it has read. The server
+/// decides what matches (most ignore case; some match whole words only), and
+/// RATA believes the answer only when the server says the search worked (the
+/// rule of [`search`]): a refused search is an error, never "nothing found".
+///
+/// Not for one of the customer's own folders, nor for Gmail's archive, in
+/// this version: a named folder is read only from its own view, and Gmail's
+/// archive is All Mail searched for what is archived, so searching it would
+/// take both searches in one. Both are refused before anything is searched.
+pub async fn search_folder(
+    resolver: &Resolver,
+    acct: &Account,
+    folder: Folder,
+    query: &str,
+    limit: u32,
+) -> Result<Searched, Fetched> {
+    let query = search_query(query).map_err(Fetched::Net)?;
+    if matches!(folder, Folder::Named(_)) {
+        return Err(Fetched::Net(not_searchable(&folder)));
+    }
+    let port = if acct.port == 0 { IMAP_PORT } else { acct.port };
+    let client = match open(resolver, &acct.host, port).await {
+        Ok(c) => c,
+        Err(Trouble::Host(why)) => return Err(Fetched::Host(why)),
+        Err(Trouble::Net(why) | Trouble::Auth(why) | Trouble::OAuth(why)) => {
+            return Err(Fetched::Net(unreachable_msg(acct, &why)));
+        }
+    };
+    let mut session = match sign_in(client, &acct.email, &acct.credential).await {
+        Ok(s) => s,
+        Err(Trouble::Auth(why)) => return Err(Fetched::Auth(revoked_msg(acct, &why))),
+        Err(Trouble::OAuth(why)) => return Err(Fetched::OAuth(oauth_msg(acct, &why))),
+        Err(Trouble::Net(why) | Trouble::Host(why)) => {
+            return Err(Fetched::Net(unreachable_msg(acct, &why)));
+        }
+    };
+    let mut dial = Redial::new(Server { resolver, acct });
+    let found = search_in(&mut session, &mut dial, acct, &folder, query, limit).await;
+    let _ = timeout(COMMAND, session.logout()).await;
+    found
+}
+
+/// The part of [`search_folder`] that talks to a signed-in session.
+async fn search_in<C: Connect>(
+    session: &mut Session<C::Stream>,
+    dial: &mut Redial<C>,
+    acct: &Account,
+    folder: &Folder,
+    query: &str,
+    limit: u32,
+) -> Result<Searched, Fetched> {
+    let nothing = || Searched {
+        messages: vec![],
+        matched: 0,
+    };
+    let query = search_query(query).map_err(Fetched::Net)?;
+    if matches!(folder, Folder::Named(_))
+        || (*folder == Folder::Archive && places(session).await.all_mail)
+    {
+        return Err(Fetched::Net(not_searchable(folder)));
+    }
+    let mailbox = match select(session, folder).await {
+        Selected::Open(m) => m,
+        // A folder this mailbox does not have holds nothing to find.
+        Selected::Missing => return Ok(nothing()),
+        Selected::Failed => return Err(Fetched::Net(unreachable_msg(acct, &cannot_open(folder)))),
+    };
+    let generation = mailbox.uid_validity.unwrap_or(0);
+    if mailbox.exists == 0 || limit == 0 {
+        return Ok(nothing());
+    }
+    let mut uids = match timeout(SEARCH_TIME, text_search(session, query)).await {
+        Ok(Ok(uids)) => uids,
+        Ok(Err(why)) => {
+            return Err(Fetched::Net(format!(
+                "{} would not search {}. {why}",
+                acct.email,
+                place(folder)
+            )));
+        }
+        Err(_) => {
+            return Err(Fetched::Net(unreachable_msg(
+                acct,
+                "the search took too long to answer",
+            )));
+        }
+    };
+    uids.retain(|u| *u != 0);
+    uids.sort_unstable();
+    uids.dedup();
+    let matched = u32::try_from(uids.len()).unwrap_or(u32::MAX);
+    let newest = tail(&uids, limit);
+    let messages = by_uid(session, dial, acct, folder, &newest, generation).await?;
+    Ok(Searched { messages, matched })
+}
+
+/// `UID SEARCH OR OR FROM q SUBJECT q TEXT q`, with the query sent each time
+/// as an IMAP literal (`{n}`, the server's go-ahead, then exactly n bytes),
+/// never inside a quoted string, so nothing in it (a `"`, a `\`, a letter
+/// outside ASCII) is ever read as part of the command.
+///
+/// `CHARSET UTF-8` goes with a query that is not ASCII, and only then:
+/// every server searches US-ASCII without being told, and ASCII is already
+/// UTF-8, so an ASCII query never needs it and never has it refused. A
+/// server that refuses `CHARSET UTF-8` (a `NO [BADCHARSET]` or a `BAD`)
+/// cannot search for a query that is not ASCII at all, since without it the
+/// bytes would be read as US-ASCII, so there is no second try.
+///
+/// As in [`search`], only a tagged OK is believed; anything else, before or
+/// after a literal, is a refusal, carrying the server's sentence as one line.
+async fn text_search<T>(session: &mut Session<T>, query: &str) -> Result<Vec<u32>, String>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send,
+{
+    use async_imap::imap_proto::types::{MailboxDatum, Response, Status};
+    let lost = || "The connection was lost.".to_string();
+    let n = query.len();
+    let charset = if query.is_ascii() {
+        ""
+    } else {
+        "CHARSET UTF-8 "
+    };
+    let id = session
+        .run_command(format!("UID SEARCH {charset}OR OR FROM {{{n}}}"))
+        .await
+        .map_err(|e| reason(&e))?;
+    for next in [
+        format!("{query} SUBJECT {{{n}}}"),
+        format!("{query} TEXT {{{n}}}"),
+        query.to_string(),
+    ] {
+        // The go-ahead for the literal, or a refusal before it is sent.
+        loop {
+            let data = session
+                .read_response()
+                .await
+                .map_err(|e| io_reason(&e))?
+                .ok_or_else(lost)?;
+            match data.parsed() {
+                Response::Continue { .. } => break,
+                Response::Done {
+                    tag,
+                    code,
+                    information,
+                    ..
+                } if *tag == id => return Err(refused_search(code, information.as_deref())),
+                _ => {}
+            }
+        }
+        // The literal, and what follows it up to the next one or the CRLF
+        // that ends the command.
+        session
+            .run_command_untagged(next)
+            .await
+            .map_err(|e| reason(&e))?;
+    }
+    let mut found = Vec::new();
+    loop {
+        let data = session
+            .read_response()
+            .await
+            .map_err(|e| io_reason(&e))?
+            .ok_or_else(lost)?;
+        match data.parsed() {
+            Response::MailboxData(MailboxDatum::Search(uids)) => found.extend(uids.iter().copied()),
+            Response::Done {
+                tag,
+                status,
+                code,
+                information,
+            } if *tag == id => {
+                return if *status == Status::Ok {
+                    Ok(found)
+                } else {
+                    Err(refused_search(code, information.as_deref()))
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A server's reason for refusing a search, as one line of its own words.
+fn refused_search(
+    code: &Option<async_imap::imap_proto::types::ResponseCode<'_>>,
+    said: Option<&str>,
+) -> String {
+    use async_imap::imap_proto::types::ResponseCode;
+    if matches!(code, Some(ResponseCode::BadCharset(_))) {
+        return "It cannot search for letters outside plain ASCII.".into();
+    }
+    let said = one_line(said.unwrap_or_default());
+    if said.is_empty() {
+        "It gave no reason.".into()
+    } else {
+        format!("It said: {said}")
+    }
+}
+
+fn not_searchable(folder: &Folder) -> String {
+    format!("RATA cannot search {} on the server yet.", place(folder))
+}
+
 /// FETCH one range of sequence numbers and turn it into messages, newest
 /// first. Shared by the newest-first refresh and paging back through history.
 async fn read_range<C: Connect>(
@@ -4007,6 +4258,343 @@ mod tests {
                     || u.contains("EXPUNGE")
             })
             .collect()
+    }
+
+    // ---------------------------------------------------- server search tests
+    //
+    // A scripted server that reads each command as bytes, literals and all,
+    // and gives the go-ahead a literal waits for, so a test can say exactly
+    // what RATA put on the wire. What is under test is that nothing a
+    // customer types can become part of the command.
+
+    /// How the scripted server answers `UID SEARCH`.
+    #[derive(Clone, Copy)]
+    enum SearchReply {
+        /// `* SEARCH` with these UIDs, then OK.
+        Found(&'static [u32]),
+        /// This tagged answer (`NO …` or `BAD …`) once the command is whole.
+        Refuse(&'static str),
+        /// This tagged answer to the command's first line, with no go-ahead.
+        RefuseAtOnce(&'static str),
+    }
+
+    /// The length of the literal a command line ends with (`… {n}`).
+    fn literal_at_end(line: &[u8]) -> Option<usize> {
+        let line = line.strip_suffix(b"\r\n")?.strip_suffix(b"}")?;
+        let open = line.iter().rposition(|b| *b == b'{')?;
+        std::str::from_utf8(&line[open + 1..]).ok()?.parse().ok()
+    }
+
+    async fn scripted_search(
+        inbox: &'static [u32],
+        list: &'static str,
+        reply: SearchReply,
+    ) -> (Session<TcpStream>, Arc<std::sync::Mutex<Vec<Vec<u8>>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, mut w) = sock.into_split();
+            let mut r = BufReader::new(r);
+            w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+            let full = |seq: usize, uid: u32| {
+                let body = format!(
+                    "From: Ann <ann@example.org>\r\nSubject: Found {uid}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nThe invoice, number {uid}\r\n"
+                );
+                format!(
+                    "* {seq} FETCH (UID {uid} FLAGS (\\Seen) INTERNALDATE \"01-Jan-2026 10:{:02}:00 +0000\" ENVELOPE (\"Thu, 1 Jan 2026 10:00:00 +0000\" \"Found {uid}\" ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((\"Ann\" NIL \"ann\" \"example.org\")) ((NIL NIL \"me\" \"example.com\")) NIL NIL NIL \"<f{uid}@example.org>\") BODY[]<0> {{{}}}\r\n{body})\r\n",
+                    uid % 60,
+                    body.len()
+                )
+            };
+            loop {
+                // One command: its first line, and each literal with the
+                // line that follows it.
+                let mut cmd = Vec::new();
+                let mut first = true;
+                let mut early = false;
+                loop {
+                    let mut line = Vec::new();
+                    if r.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    cmd.extend_from_slice(&line);
+                    let Some(n) = literal_at_end(&line) else {
+                        break;
+                    };
+                    let searching = String::from_utf8_lossy(&line)
+                        .to_ascii_uppercase()
+                        .contains(" UID SEARCH ");
+                    if first && searching && matches!(reply, SearchReply::RefuseAtOnce(_)) {
+                        early = true;
+                        break;
+                    }
+                    first = false;
+                    w.write_all(b"+ go ahead\r\n").await.unwrap();
+                    let mut bytes = vec![0; n];
+                    r.read_exact(&mut bytes).await.unwrap();
+                    cmd.extend_from_slice(&bytes);
+                }
+                let space = cmd.iter().position(|b| *b == b' ').unwrap_or(cmd.len());
+                let tag = String::from_utf8_lossy(&cmd[..space]).to_string();
+                let rest = cmd.get(space + 1..).unwrap_or_default().to_vec();
+                log.lock().unwrap().push(rest.clone());
+                let up = String::from_utf8_lossy(&rest).to_ascii_uppercase();
+                let answer = if up.starts_with("LOGIN") {
+                    format!("{tag} OK LOGIN done\r\n")
+                } else if up.starts_with("LIST") {
+                    format!("{list}{tag} OK LIST done\r\n")
+                } else if up.starts_with("SELECT") {
+                    format!(
+                        "* {} EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n{tag} OK [READ-WRITE] SELECT done\r\n",
+                        inbox.len()
+                    )
+                } else if up.starts_with("UID SEARCH") {
+                    match reply {
+                        SearchReply::Found(uids) => format!(
+                            "* SEARCH {}\r\n{tag} OK SEARCH done\r\n",
+                            join(uids).replace(',', " ")
+                        ),
+                        SearchReply::Refuse(said) => format!("{tag} {said}\r\n"),
+                        SearchReply::RefuseAtOnce(said) => {
+                            assert!(early);
+                            format!("{tag} {said}\r\n")
+                        }
+                    }
+                } else if up.starts_with("UID FETCH") {
+                    let arg = up.split_whitespace().nth(2).unwrap_or("").to_string();
+                    let want: Vec<u32> = arg.split(',').filter_map(|u| u.parse().ok()).collect();
+                    let found: String = inbox
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, u)| want.contains(u))
+                        .map(|(i, u)| full(i + 1, *u))
+                        .collect();
+                    format!("{found}{tag} OK FETCH done\r\n")
+                } else if up.starts_with("LOGOUT") {
+                    format!("* BYE\r\n{tag} OK LOGOUT done\r\n")
+                } else {
+                    format!("{tag} OK done\r\n")
+                };
+                if w.write_all(answer.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        (scripted_login(addr).await, seen)
+    }
+
+    const INBOX_ONLY: &str = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n";
+
+    /// The one `UID SEARCH` sent, exactly as it went, after its tag.
+    fn the_search(log: &Arc<std::sync::Mutex<Vec<Vec<u8>>>>) -> Vec<u8> {
+        let log = log.lock().unwrap();
+        let searches: Vec<&Vec<u8>> = log
+            .iter()
+            .filter(|c| c.starts_with(b"UID SEARCH"))
+            .collect();
+        assert_eq!(searches.len(), 1, "one search, never a second try: {log:?}");
+        searches[0].clone()
+    }
+
+    fn searched_uids(got: &Searched) -> Vec<u32> {
+        got.messages.iter().map(|m| m.uid).collect()
+    }
+
+    #[test]
+    fn a_server_search_sends_the_query_as_literals_and_fetches_the_newest_found() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_search(
+                &[3, 5, 8, 13, 21],
+                INBOX_ONLY,
+                SearchReply::Found(&[21, 3, 8, 13]),
+            )
+            .await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, " invoice ", 2)
+                .await
+                .unwrap();
+            assert_eq!(got.matched, 4, "every match is counted");
+            assert_eq!(searched_uids(&got), vec![21, 13], "the newest two, newest first");
+            assert_eq!(got.messages[0].subject, "Found 21");
+            assert_eq!(
+                the_search(&log),
+                b"UID SEARCH OR OR FROM {7}\r\ninvoice SUBJECT {7}\r\ninvoice TEXT {7}\r\ninvoice\r\n"
+                    .to_vec(),
+                "trimmed, and no CHARSET for plain ASCII"
+            );
+            let log = log.lock().unwrap();
+            assert!(
+                log.iter().any(|c| c.starts_with(b"UID FETCH 13,21 ")),
+                "only the newest two are fetched: {log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_quote_or_a_backslash_goes_as_bytes_of_a_literal() {
+        rt_act().block_on(async {
+            // Inside a quoted string, `a" OR ALL "` would have ended the
+            // string and searched for everything.
+            let q = r#"a" OR ALL "\b"#;
+            let (mut s, log) =
+                scripted_search(&[1, 2], INBOX_ONLY, SearchReply::Found(&[2])).await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, q, 50)
+                .await
+                .unwrap();
+            assert_eq!(searched_uids(&got), vec![2]);
+            let n = q.len();
+            assert_eq!(
+                the_search(&log),
+                format!(
+                    "UID SEARCH OR OR FROM {{{n}}}\r\n{q} SUBJECT {{{n}}}\r\n{q} TEXT {{{n}}}\r\n{q}\r\n"
+                )
+                .into_bytes()
+            );
+        });
+    }
+
+    #[test]
+    fn an_accented_query_says_its_charset_and_counts_its_bytes() {
+        rt_act().block_on(async {
+            let (mut s, log) =
+                scripted_search(&[1, 2], INBOX_ONLY, SearchReply::Found(&[1])).await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, "café", 50)
+                .await
+                .unwrap();
+            assert_eq!(searched_uids(&got), vec![1]);
+            // Five bytes, not four characters.
+            assert_eq!(
+                the_search(&log),
+                "UID SEARCH CHARSET UTF-8 OR OR FROM {5}\r\ncafé SUBJECT {5}\r\ncafé TEXT {5}\r\ncafé\r\n"
+                    .as_bytes()
+                    .to_vec()
+            );
+        });
+    }
+
+    #[test]
+    fn a_line_break_in_a_query_is_refused_before_anything_is_sent() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_search(&[1], INBOX_ONLY, SearchReply::Found(&[1])).await;
+            for q in [
+                "x\r\nA2 DELETE INBOX",
+                "x\nDELETE",
+                "tab\there",
+                "nul\0",
+                "",
+            ] {
+                let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, q, 50).await;
+                assert!(matches!(got, Err(Fetched::Net(_))), "{q:?}: {got:?}");
+            }
+            let long = "a".repeat(SEARCH_QUERY_MAX + 1);
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, &long, 50).await;
+            assert!(matches!(got, Err(Fetched::Net(_))), "{got:?}");
+            // Two hundred accented letters are two hundred characters.
+            assert!(search_query(&"é".repeat(SEARCH_QUERY_MAX)).is_ok());
+            let log = log.lock().unwrap();
+            assert!(
+                log.len() == 1 && log[0].starts_with(b"LOGIN "),
+                "nothing after signing in: {log:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_refused_search_is_an_error_never_nothing_found() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_search(
+                &[1, 2],
+                INBOX_ONLY,
+                SearchReply::Refuse("NO [BADCHARSET (US-ASCII)] UTF-8 not supported"),
+            )
+            .await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, "café", 50).await;
+            let Err(Fetched::Net(why)) = got else {
+                panic!("{got:?}")
+            };
+            assert!(why.contains("outside plain ASCII"), "{why}");
+            assert!(why.contains("me@example.com"), "{why}");
+            // One search: without CHARSET the bytes would be read as ASCII.
+            the_search(&log);
+            {
+                let log = log.lock().unwrap();
+                assert!(!log.iter().any(|c| c.starts_with(b"UID FETCH")), "{log:?}");
+            }
+
+            let (mut s, _) =
+                scripted_search(&[1], INBOX_ONLY, SearchReply::Refuse("BAD Invalid search")).await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, "plain", 50).await;
+            let Err(Fetched::Net(why)) = got else {
+                panic!("{got:?}")
+            };
+            assert!(why.contains("It said: Invalid search"), "{why}");
+        });
+    }
+
+    #[test]
+    fn a_search_refused_at_its_first_line_sends_no_literal() {
+        rt_act().block_on(async {
+            let (mut s, log) = scripted_search(
+                &[1],
+                INBOX_ONLY,
+                SearchReply::RefuseAtOnce("NO Search is switched off"),
+            )
+            .await;
+            let got = search_in(
+                &mut s,
+                &mut no_redial(),
+                &me(),
+                &Folder::Inbox,
+                "secret",
+                50,
+            )
+            .await;
+            let Err(Fetched::Net(why)) = got else {
+                panic!("{got:?}")
+            };
+            assert!(why.contains("Search is switched off"), "{why}");
+            assert_eq!(the_search(&log), b"UID SEARCH OR OR FROM {6}\r\n".to_vec());
+            // The session is still usable: the next command is a command.
+            assert!(s.noop().await.is_ok());
+        });
+    }
+
+    #[test]
+    fn named_folders_and_gmails_archive_are_not_searched_yet() {
+        rt_act().block_on(async {
+            let gmail = "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n* LIST (\\All \\HasNoChildren) \"/\" \"[Gmail]/All Mail\"\r\n";
+            let (mut s, log) = scripted_search(&[1], gmail, SearchReply::Found(&[1])).await;
+            for folder in [Folder::Named("Receipts".into()), Folder::Archive] {
+                let got = search_in(&mut s, &mut no_redial(), &me(), &folder, "x", 50).await;
+                let Err(Fetched::Net(why)) = got else {
+                    panic!("{got:?}")
+                };
+                assert!(why.contains("cannot search"), "{why}");
+            }
+            let log = log.lock().unwrap();
+            assert!(!log.iter().any(|c| c.starts_with(b"UID SEARCH")), "{log:?}");
+            assert!(!log.iter().any(|c| c.starts_with(b"SELECT")), "{log:?}");
+        });
+    }
+
+    #[test]
+    fn nothing_found_is_an_empty_answer() {
+        rt_act().block_on(async {
+            let (mut s, _) = scripted_search(&[1, 2], INBOX_ONLY, SearchReply::Found(&[])).await;
+            let got = search_in(&mut s, &mut no_redial(), &me(), &Folder::Inbox, "zzz", 50)
+                .await
+                .unwrap();
+            assert_eq!(
+                got,
+                Searched {
+                    messages: vec![],
+                    matched: 0
+                }
+            );
+        });
     }
 
     // ------------------------------------------------------- older-mail tests

@@ -18,6 +18,7 @@ use tauri::{AppHandle, Manager, State};
 
 use rata_mail::{Action, DraftRef, File, Folder, Message, OwnFolder};
 
+use crate::core::ServerFound;
 use crate::core::{
     AttachmentAt, Changed, Delivered, Draft, Drafted, Forwarded, Found, Held, Linked, Opened,
     Problem, Rata, Refreshed, Saved, Standing,
@@ -236,6 +237,19 @@ pub async fn older_mail(
         limit.unwrap_or(50),
     )
     .await
+}
+
+/// Search one mailbox on its server: the newest messages whose sender,
+/// subject or text has `query` in it, and how many matched. The inbox unless
+/// the page names another fixed folder.
+#[tauri::command]
+pub async fn search_mail(
+    app: App<'_>,
+    email: String,
+    folder: Option<Folder>,
+    query: String,
+) -> Result<ServerFound, Problem> {
+    app.search(&email, folder.unwrap_or_default(), &query).await
 }
 
 /// A system notification that new mail has arrived. The page chooses what
