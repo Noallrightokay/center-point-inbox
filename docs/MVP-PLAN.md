@@ -95,9 +95,9 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   (H1, H2, BUG-A, BUG-S, BUG-L's renew route) reach mailrata.org only at
   [D4](#d4), and BUG-S needs `database.sql` §6 run first. Left for
   0.1.44: H5, H10, H11.
-- **Merged for 0.1.44** (the rest of wave 5c, which completes
+- **Released in 0.1.44** (the rest of wave 5c, which completes
   Workstream H; [#113](https://github.com/Noallrightokay/center-point-inbox/pull/113),
-  not yet merged, released or verified): [H11](#h11), picture attachments
+  released and verified 2026-09-30): [H11](#h11), picture attachments
   shown in the message and opened large, the type read from the bytes in
   Rust ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108));
   [H5](#h5), **In this conversation** under an open message, linked by
@@ -645,7 +645,7 @@ update #109), with DESIGN.md's `--thumb`, `--faint`-on-tint and inset list
 focus ring, and bumped the version ([#113](https://github.com/Noallrightokay/center-point-inbox/pull/113), 2026-09-30);
 engine 297, shell 130, harness 358, website 785, all green on the branch.
 The screenshots are H10's, taken after the last interface change. Not yet
-merged, released or verified: the PM merges.
+merged, released or verified: the PM merges. 0.1.44 released and verified 2026-09-30 ([run 36749751360](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36749751360)): the first run's gate caught a harness race on the disguised-program question ([run 36748146906](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36748146906), fixed in [#115](https://github.com/Noallrightokay/center-point-inbox/pull/115)), and the website moved to Next.js 16.3.8 for a critical advisory first ([#114](https://github.com/Noallrightokay/center-point-inbox/pull/114)); `verify-release.sh v0.1.44` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.44 beta".
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
@@ -655,8 +655,8 @@ announce.
 ### Workstream H: complete and better (wave 5, 2026-09-29)
 
 *State: **complete in code.** Every card, H1 to H12, is merged: H1–H4,
-H6–H9 and H12 released in 0.1.43; H5, H10 and H11 merged for 0.1.44 and
-not yet released. What is left is proof on real providers ([B2](#b2)) and
+H6–H9 and H12 released in 0.1.43; H5, H10 and H11 released in 0.1.44.
+What is left is proof on real providers ([B2](#b2)) and
 a packaged-build look at H5, H10 and H11.*
 
 What a first paying customer expects of a mail client and a paid website,
@@ -750,7 +750,7 @@ sheet matches the code (one table, read by both). Hot file: `app.html`.
 *State: **done** in code ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)), released in 0.1.43.*
 
 #### H5
-*State: **done** in code ([#110](https://github.com/Noallrightokay/center-point-inbox/pull/110)), merged for 0.1.44; not yet released.*
+*State: **done** in code ([#110](https://github.com/Noallrightokay/center-point-inbox/pull/110)), released in 0.1.44.*
 **Conversation view.** Who: agent (Rust engine + app + interface) ·
 Needs: H4 merged · Do: the engine keeps the last id of `References`
 on `Message` (`references_last`, `serde(default)`, checked like
@@ -852,7 +852,7 @@ row send two. Done when: those pass. Hot file: `app.html` (send path).
 *State: **done** in code ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)), released in 0.1.43.*
 
 #### H10
-*State: **done** in code ([#112](https://github.com/Noallrightokay/center-point-inbox/pull/112)), merged for 0.1.44; not yet released.*
+*State: **done** in code ([#112](https://github.com/Noallrightokay/center-point-inbox/pull/112)), released in 0.1.44.*
 **Accessibility pass, checked by axe.** Who: agent (interface + harness)
 · Needs: every other H card that touches `app.html` merged (runs last,
 alone) · Do: every icon-only button gets a name (`aria-label`), the mail
@@ -868,7 +868,7 @@ clean at those four points and the harness is green. Hot file:
 `app.html` (wide).
 
 #### H11
-*State: **done** in code ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108)), merged for 0.1.44; not yet released.*
+*State: **done** in code ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108)), released in 0.1.44.*
 **Picture attachments shown in the message.** Who: agent (Rust +
 interface) · Needs: H7 merged (same region) · Do: an attachment whose
 name ends in png, jpg, jpeg, gif or webp and is under 5 MB shows as a
