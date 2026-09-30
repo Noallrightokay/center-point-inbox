@@ -611,6 +611,21 @@ body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 /* ---------- toast ---------- */
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:var(--bg);padding:10px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
+/* Undo send (H9): the count before a message goes, with its Undo. Always in
+   the accessibility tree (role=status), so what it says is announced; empty
+   and out of reach when there is nothing to undo. */
+#send-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:8px 8px 8px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw}
+#send-toast.show{opacity:1;transform:translateX(-50%);pointer-events:auto}
+#send-toast:not(.show){padding:0;box-shadow:none}
+#send-toast:focus{outline:none}
+#send-toast .st-sep{opacity:.55}
+#send-toast button{font:inherit;font-weight:600;color:inherit;background:transparent;border:1px solid currentColor;border-radius:var(--r-sm);padding:4px 12px;cursor:pointer;transition:background .12s ease}
+#send-toast button:hover{background:rgba(127,127,127,.28)}
+#send-toast button:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+.st-say{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+body.send-counting #toast{bottom:76px}
+/* Over the composer's own buttons it would be in the way: at the top, then. */
+#compose-ov.open~#send-toast{bottom:auto;top:24px}
 /* A newer RATA, ready to install (desktop app). */
 /* Above the licence prompt (bridge.css, 99999): an update may be exactly what a
    copy whose licence check fails needs. */
@@ -916,6 +931,7 @@ body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
           <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
+          <div class="set-row" id="undo-row" style="display:none"><div class="grow"><b>Undo send</b><span>How long Send waits, so a message can be taken back</span></div><select class="sel" id="set-undo" aria-label="Undo send"><option value="0">Off, send at once</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></div>
           <div class="set-row" id="keys-row"><div class="grow"><b>Keyboard shortcuts</b><span>Press ? to see them all. They never act while you are typing in a field.</span></div><button class="btn" id="keys-show">Show shortcuts</button><input type="checkbox" id="set-keys" aria-label="Keyboard shortcuts on"></div>
         </div>
         <div class="comp-sec" id="sig-sec" style="display:none">
@@ -1065,6 +1081,7 @@ body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
   </div>
 </div>
 
+<div id="send-toast" role="status" tabindex="-1"><span class="st-say" id="st-say"></span><span id="st-count" aria-hidden="true"></span><span class="st-sep" id="st-sep" aria-hidden="true" hidden>·</span><button type="button" id="st-undo" hidden>Undo</button></div>
 <div id="toast"></div>
 
 <script src="config.js"></script>
@@ -3086,7 +3103,7 @@ const KEYS=[
   {keys:['s'],where:'msg',what:'Star or unstar',run:()=>keyPress('#md-star')},
   {keys:['u'],where:'msg',what:'Mark unread',run:()=>keyPress('#md-unread')},
   {keys:['m'],where:'msg',what:'Move to a folder',run:keyFile},
-  {keys:['c'],where:'any',what:'Compose',run:()=>{openCompose();return true}},
+  {keys:['c'],where:'any',what:'Compose',run:()=>{composeNew();return true}},
   {keys:['/'],where:'any',what:'Search',run:keySearch},
   {keys:['g i'],where:'any',what:'Go to the inbox',run:()=>{go('inbox');return true}},
   {keys:['Escape'],where:'any',what:'Close the message or the composer',run:keyEscape},
@@ -3281,6 +3298,7 @@ function takeStanding(st){
        resumes now, not at the next five-minute turn. */
     if(autoOn&&!was)setTimeout(()=>autoSync(),0);
     startAutoSync();
+    outboxResume();
   }
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
@@ -3510,6 +3528,7 @@ async function installUpdate(){
 function renderSettings(){
   $('#set-name').value=S.settings.name;
   if($('#notify-row')){$('#notify-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-notify').value=notifyMode()}
+  if($('#undo-row')){$('#undo-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-undo').value=String(sendDelay())}
   $('#set-keys').checked=keysOn();
   renderSigs();
   renderPlan();
@@ -3568,6 +3587,7 @@ function renderSigs(){
   $('#set-sigreplies').checked=S.settings.sigReplies!==false;
 }
 $('#set-sigreplies').addEventListener('change',e=>{S.settings.sigReplies=e.target.checked;save();toast(e.target.checked?'Replies and forwards get your signature':'Only new messages get your signature')});
+$('#set-undo').addEventListener('change',e=>{S.settings.undoSend=Number(e.target.value);save();toast(e.target.value==='0'?'Messages send as soon as you press Send':'Send waits '+e.target.value+' seconds, so you can undo it')});
 $('#set-notify').addEventListener('change',e=>{S.settings.notify=e.target.value;save();toast(e.target.value==='off'?'New-mail notifications are off':'New-mail notifications are on')});
 function renderLinked(){
   const el=$('#linked-list');if(!el)return;
@@ -4292,13 +4312,14 @@ function newDraft(){
   $('#cmp-from').value='';
   renderCmpFiles();
 }
-function openCompose(){
+/* `keep`: a draft put back whole (Undo send), which gets nothing added. */
+function openCompose(keep){
   /* Only the app can send, so only the app offers to attach. */
   const at=$('#cmp-attach');if(at)at.style.display=window.__RATA_NATIVE__?'':'none';
   SUGG_POOL=null;
   fillComposeFrom();
   /* A new, empty message starts with the signature, and the cursor above it. */
-  const b=$('#cmp-body'),sig=!CMP_SIG&&DRAFT.kind==='new'&&!b.value?sigOf($('#cmp-from').value):'';
+  const b=$('#cmp-body'),sig=keep!==true&&!CMP_SIG&&DRAFT.kind==='new'&&!b.value?sigOf($('#cmp-from').value):'';
   if(sig){b.value='\n\n'+sig;CMP_SIG=sig}
   renderCmpFiles();liveScan();renderDraftHead();
   ov.classList.add('open');
@@ -4333,7 +4354,7 @@ $('#cmp-discard').onclick=async()=>{
     :CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
     :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
   srv.discarded=true;
-  newDraft();openCompose();
+  newDraft();composeNew();
   /* A save of it may still be on its way; its copy goes too. */
   await DRAFT_SAVING;
   const rec=srv.rec;if(!rec)return;
@@ -4394,7 +4415,7 @@ $('#folder-new').onclick=()=>{
   renderFolders();renderDocs();toast(`Folder "${name}" created`);
 };
 
-$('#compose-btn').onclick=openCompose;
+$('#compose-btn').onclick=()=>composeNew();
 /* The webview checks spelling only where it is asked to, in the language
    RATA speaks to the customer in (H4). */
 ['#cmp-subj','#cmp-body'].forEach(s=>{$(s).spellcheck=true;$(s).lang=userLang()});
@@ -4600,7 +4621,252 @@ function suggChoose(i){
 $('#cmp-sugg').addEventListener('mousedown',e=>e.preventDefault());
 $('#cmp-sugg').addEventListener('click',e=>{const o=e.target.closest('[role=option]');if(o)suggChoose(+o.dataset.i)});
 $('#cmp-sugg').addEventListener('mousemove',e=>{const o=e.target.closest('[role=option]');if(o&&+o.dataset.i!==SUGG.active)suggMark(+o.dataset.i)});
+/* ---------------- UNDO SEND (H9) ----------------
+   In the app, Send closes the composer and holds the message a few seconds
+   (Settings → Undo send: 0, 5 or 10; 5 unless set) with "Sending in 5 s ·
+   Undo" on screen. Undo puts the whole draft back in the composer — To, Cc,
+   Bcc, subject, text, files, what it forwards, the thread it answers, the
+   Drafts copy it finishes, From and the signature — and nothing is sent.
+   When the count ends the message goes to send_mail exactly as a Send with
+   no wait sends it (deliver), and a failure then says why and puts the
+   draft back, as a failed Send always has. Messages sent in a row wait
+   their turn and go in order. RATA's copy of the draft in Drafts (F1) goes
+   to the Trash only once the send has succeeded, never at Undo. 0 seconds,
+   and the website (which cannot send), send at once as before.
+
+   A waiting message is also written to this computer (OB_KEY, localStorage)
+   the moment Send is pressed, and again with its files once they are read,
+   so a window closed during the count cannot lose it: on pagehide every
+   waiting message goes at once, and whatever had not yet been handed to
+   the app by then is sent at the next start. The record says 'sending'
+   from the moment it is handed to the app; one still saying so at the next
+   start may have gone, so it is never sent again: it is put back in the
+   composer with a word to look in Sent first. So a message goes once at
+   most, and is never silently dropped. */
+const UNDO_SECS=[0,5,10];
+const sendDelay=()=>{
+  if(!window.__RATA_NATIVE__)return 0;
+  const n=Number(S.settings.undoSend);
+  return S.settings.undoSend!=null&&UNDO_SECS.includes(n)?n:5;
+};
+const OB_KEY='rata_outbox_'+(SESSION?SESSION.uid:'anon');
+/* The length of one second of the count; the harness shortens it. */
+const obSecond=()=>Number(window.__RATA_SEND_SECOND)||1000;
+let OUTBOX=[],OB_RUN=false,OB_WAKE=null,OB_TICK=null,OB_RESUMED=false;
+/* Drafts waiting for the composer: one undone or failed while another was
+   being written, or the one Undo took the composer from. Compose brings
+   the first back once the composer is empty. In memory only; one a Drafts
+   folder can hold is saved there as it is put aside. */
+let HELD=[];
+function obRead(){try{const v=JSON.parse(localStorage.getItem(OB_KEY)||'[]');return Array.isArray(v)?v:[]}catch(e){return []}}
+function obWrite(list){
+  try{if(list.length)localStorage.setItem(OB_KEY,JSON.stringify(list));else localStorage.removeItem(OB_KEY);return true}catch(e){return false}
+}
+/* Files too large for this computer's storage are left out of the record,
+   which then cannot be sent whole after a restart (outboxResume says so). */
+function obPut(rec){
+  const list=obRead().filter(x=>x.id!==rec.id);list.push(rec);
+  if(obWrite(list))return true;
+  list[list.length-1]=Object.assign({},rec,{data:null});
+  return obWrite(list);
+}
+function obDrop(id){const list=obRead(),rest=list.filter(x=>x.id!==id);if(rest.length!==list.length)obWrite(rest)}
+function obState(id,state){const list=obRead(),r=list.find(x=>x.id===id);if(r){r.state=state;obWrite(list)}}
+/* What a Drafts record needs to be found and sent to the Trash later. */
+const draftRef=m=>m?{id:m.id,prov:m.prov,acct:m.acct,mailbox:m.mailbox,uid:m.uid,uidvalidity:m.uidvalidity,folder:m.folder,box:m.box,draftId:m.draftId,draft:true,subj:m.subj}:null;
+function obRecord(it,data){
+  const s=it.snap;
+  return {id:it.id,at:it.at,state:'waiting',acctId:it.acctId,real:it.real,to:it.to,cc:it.cc,bcc:it.bcc,subj:it.subj,body:it.body,
+    replying:it.replying,fwd:it.fwd,finished:draftRef(it.finished),files:it.files.map(f=>({name:f.name,type:f.type,size:f.size})),data:data||null,
+    look:{to:s.to,cc:s.cc,bcc:s.bcc,subj:s.subj,ccOn:s.ccOn,bccOn:s.bccOn,sig:s.sig,draft:s.draft}};
+}
+const readFiles=files=>Promise.all(files.map(f=>fileBase64(f)));
+const b64File=(d,f)=>new File([Uint8Array.from(atob(d),c=>c.charCodeAt(0))],f.name,{type:f.type||''});
+/* The composer, whole, and back again. */
+function snapCompose(){
+  return {to:$('#cmp-to').value,cc:$('#cmp-cc').value,bcc:$('#cmp-bcc').value,subj:$('#cmp-subj').value,body:$('#cmp-body').value,
+    from:$('#cmp-from').value,ccOn:!$('#cmp-cc').hidden,bccOn:!$('#cmp-bcc').hidden,files:CMP_FILES.slice(),
+    fwd:CMP_FWD?Object.assign({},CMP_FWD,{atts:CMP_FWD.atts.slice()}):null,replying:REPLYING,cmpDraft:CMP_DRAFT,sig:CMP_SIG,
+    draft:Object.assign({},DRAFT),srv:CMP_SRV};
+}
+function restoreCompose(s){
+  newDraft();fillComposeFrom();
+  REPLYING=s.replying;CMP_FILES=s.files.slice();CMP_FWD=s.fwd?Object.assign({},s.fwd,{atts:s.fwd.atts.slice()}):null;
+  /* A save to Drafts that landed while it was away filed a newer copy. */
+  CMP_DRAFT=s.srv.rec||s.cmpDraft;CMP_SIG=s.sig;DRAFT=Object.assign({},s.draft);CMP_SRV=s.srv;
+  $('#cmp-to').value=s.to;$('#cmp-cc').value=s.cc;$('#cmp-bcc').value=s.bcc;$('#cmp-subj').value=s.subj;$('#cmp-body').value=s.body;
+  showCc(s.ccOn);showBcc(s.bccOn);
+  if([...$('#cmp-from').options].some(o=>o.value===s.from))$('#cmp-from').value=s.from;
+  openCompose(true);
+}
+/* A draft back to the composer: at once when the composer is empty, or
+   `swap` (Undo, which the customer is waiting to see) puts the draft being
+   written aside instead; otherwise it waits for Compose. */
+function putBack(s,say,swap){
+  if(draftHasAnything()){
+    if(!swap){HELD.push(s);toast((say?say+' ':'')+'It is kept: press Compose once the message you are writing is sent or closed.');return}
+    queueDraftSave('timer');
+    HELD.push(snapCompose());
+    say=(say?say+' ':'')+'The message you were writing is kept: press Compose once this one is sent.';
+  }
+  restoreCompose(s);
+  if(say)toast(say);
+}
+function composeNew(){
+  if(HELD.length&&!draftHasAnything()){restoreCompose(HELD.shift());return}
+  openCompose();
+}
+function obKick(){const w=OB_WAKE;OB_WAKE=null;if(w)w()}
+const obSleep=ms=>new Promise(r=>{const t=setTimeout(()=>{OB_WAKE=null;r()},ms);OB_WAKE=()=>{clearTimeout(t);r()}});
+/* The toast speaks for the newest message still waiting, which is the one
+   Undo takes back; pressing it again takes back the one before. */
+function renderSendToast(){
+  const el=$('#send-toast'),waiting=OUTBOX.filter(x=>x.state==='waiting'),it=waiting[waiting.length-1];
+  if(!OUTBOX.length){
+    clearInterval(OB_TICK);OB_TICK=null;
+    el.classList.remove('show');document.body.classList.remove('send-counting');
+    $('#st-count').textContent='';$('#st-say').textContent='';$('#st-sep').hidden=true;$('#st-undo').hidden=true;el.dataset.for='';
+    return;
+  }
+  if(!OB_TICK)OB_TICK=setInterval(renderSendToast,Math.max(50,obSecond()/4));
+  el.classList.add('show');document.body.classList.add('send-counting');
+  const n=it?Math.max(0,Math.ceil((it.due-Date.now())/obSecond())):0;
+  $('#st-count').textContent=!it?'Sending…':n?`Sending in ${n} s`:'Waiting to send';
+  $('#st-sep').hidden=$('#st-undo').hidden=!it;
+  /* Said once for each message, not at every tick. */
+  const say=!it?'Sending.':it.secs>0?`Sending “${it.subj}” in ${it.secs} seconds. Undo is the next button.`:`Sending “${it.subj}”.`;
+  if(el.dataset.for!==(it?it.id:'-')){el.dataset.for=it?it.id:'-';$('#st-say').textContent=say}
+}
+function undoSend(){
+  const waiting=OUTBOX.filter(x=>x.state==='waiting'),it=waiting[waiting.length-1];if(!it)return;
+  OUTBOX=OUTBOX.filter(x=>x!==it);it.state='undone';obDrop(it.id);
+  obKick();renderSendToast();
+  putBack(it.snap,'',true);
+}
+$('#st-undo').onclick=undoSend;
+/* Sends what is waiting, one at a time, in the order Send was pressed. */
+async function obRun(){
+  if(OB_RUN)return;OB_RUN=true;
+  try{
+    while(OUTBOX.length){
+      const it=OUTBOX[0],wait=it.due-Date.now();
+      if(wait>0){await obSleep(wait);continue}
+      it.state='sending';renderSendToast();
+      let r;
+      try{r=await deliver(it)}catch(e){r={ok:false,error:'Send failed — '+(e&&e.message||e)}}
+      OUTBOX=OUTBOX.filter(x=>x!==it);obDrop(it.id);renderSendToast();
+      if(r.ok){renderMail();await sentAfter(r)}
+      else putBack(it.snap,r.error);
+    }
+  }finally{OB_RUN=false}
+}
+function obQueue(it,secs){
+  it.secs=secs;it.due=Date.now()+secs*obSecond();it.state='waiting';
+  if(!it.ready&&it.files.length)it.ready=readFiles(it.files);
+  it.persisted=obPut(obRecord(it,null));
+  if(it.persisted&&it.ready)it.ready.then(data=>{if(it.state==='waiting'&&obRead().some(x=>x.id===it.id))obPut(obRecord(it,data))}).catch(()=>{});
+  OUTBOX.push(it);renderSendToast();obRun();
+}
+/* The window is closing: nothing waits any longer. What had not reached the
+   app when the page went is in the outbox for the next start. */
+function sendNowAll(){
+  if(!OUTBOX.some(x=>x.state==='waiting'))return;
+  for(const it of OUTBOX)it.due=0;
+  obKick();obRun();
+}
+addEventListener('pagehide',sendNowAll);
+addEventListener('beforeunload',sendNowAll);
+/* At start, once the licence is good: what the last session left waiting
+   goes now, in order; what it had handed to the app is put back instead. */
+function snapFromRecord(r,files){
+  const L=r.look||{};
+  const fin=r.finished?(S.messages.find(m=>m.id===r.finished.id)||r.finished):null;
+  const srv=newSrv();
+  if(fin&&fin.draftId){srv.draftId=fin.draftId;srv.ref={email:mailEmailOf(fin),uid:fin.uid,uidvalidity:fin.uidvalidity,draftId:fin.draftId};srv.rec=fin}
+  else if(fin)srv.other=fin;
+  return {to:L.to??r.to,cc:L.cc??r.cc,bcc:L.bcc??r.bcc,subj:L.subj??r.subj,body:r.body,from:r.acctId,ccOn:!!L.ccOn,bccOn:!!L.bccOn,files:files||[],
+    fwd:r.fwd?Object.assign({},r.fwd,{atts:r.fwd.atts.slice()}):null,replying:r.replying?{id:null,messageId:r.replying}:null,
+    cmpDraft:fin,sig:L.sig||null,draft:L.draft||{kind:'new'},srv};
+}
+function outboxResume(){
+  if(OB_RESUMED||!S||!window.__RATA_NATIVE__||!(LIC&&LIC.licensed))return;
+  OB_RESUMED=true;
+  let n=0;
+  for(const r of obRead()){
+    if(!r||!r.id)continue;
+    const whole=!(r.files||[]).length||(Array.isArray(r.data)&&r.data.length===r.files.length);
+    let files=[];
+    try{files=whole?(r.files||[]).map((f,i)=>b64File(r.data[i],f)):[]}catch(e){}
+    if(r.state!=='waiting'||!whole||files.length!==(r.files||[]).length){
+      obDrop(r.id);
+      putBack(snapFromRecord(r,files),r.state!=='waiting'
+        ?`RATA closed while “${r.subj}” was being sent, so it may have gone. Look in Sent before sending it again.`
+        :`“${r.subj}” was not sent: RATA closed before it went, and its files were too large to keep. Attach ${(r.files||[]).map(f=>f.name).join(', ')} again.`);
+      continue;
+    }
+    const fin=r.finished?(S.messages.find(m=>m.id===r.finished.id)||r.finished):null;
+    const it={id:r.id,at:r.at,acctId:r.acctId,real:!!r.real,to:r.to,cc:r.cc,bcc:r.bcc,subj:r.subj,body:r.body,replying:r.replying,files,
+      fwd:r.fwd,finished:fin,snap:snapFromRecord(r,files),ready:Promise.resolve(r.data||[]),state:'waiting',secs:0,due:0,persisted:true};
+    OUTBOX.push(it);n++;
+  }
+  if(n){toast(n===1?'Sending the message RATA closed on':'Sending the '+n+' messages RATA closed on');renderSendToast();obRun()}
+}
+/* One message out, as Send has always sent it: through the linked mailbox,
+   or recorded here only when From is not one. {ok, error} — the error is
+   the sentence to show. `sb`: the Send button, when the composer is waiting
+   on this (no count). */
+async function deliver(it,sb){
+  const acct=S.linked.find(l=>l.id===it.acctId),mAcct=acct&&acct.type==='mail'?acct:null;
+  if(it.real&&!mAcct)return {ok:false,error:'Send failed — the mailbox it was going from is no longer linked. Choose one in From.'};
+  let realSent=false,sentId='';
+  const fwd=it.fwd,files=it.files;
+  if(mAcct){
+    if(sb){sb.disabled=true;sb.textContent=files.length?'Attaching…':'Sending…'}
+    try{
+      const data=await (it.ready||(it.ready=readFiles(files)));
+      const attachments=files.map((f,i)=>({name:f.name,mime:f.type||'application/octet-stream',data:data[i]}));
+      if(sb)sb.textContent='Sending…';
+      /* Handed to the app from here: if RATA closes now, the next start
+         cannot tell whether it went, so it never sends it again. */
+      if(it.persisted)obState(it.id,'sending');
+      const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({from:mAcct.label,to:it.to,cc:it.cc,bcc:it.bcc,subject:it.subj,body:it.body,inReplyTo:it.replying,attachments,
+          forward:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
+      if(!r.ok)throw new Error(r.error||'send failed');
+      realSent=true;sentId=r.messageId||'';
+    }catch(e){
+      if(sb){sb.disabled=false;sb.textContent='Send'}
+      return {ok:false,error:e.message==='needs-the-app'
+        ? 'Sending from a linked mailbox happens in the RATA app — download it at mailrata.org.'
+        : 'Send failed — '+(e.message||'reconnect and try again')};
+    }
+    if(sb){sb.disabled=false;sb.textContent='Send'}
+  }
+  const {to,cc,bcc,subj,body}=it;
+  const first=fieldAddrs(to)[0]||'';
+  const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===first);
+  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
+    atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
+  /* The draft this finished is sent: its copy in Drafts goes to the Trash,
+     as every mail app does, rather than waiting there to be sent twice. */
+  const finished=realSent&&it.finished&&it.finished.uid?it.finished:null;
+  if(finished)dropMessages([finished.id]);
+  save();
+  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''}${bcc?' (+'+bcc.split(',').filter(x=>x.trim()).length+' Bcc)':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
+  return {ok:true,realSent,mAcct,finished};
+}
+async function sentAfter(r){
+  toast(r.realSent?('Sent from '+r.mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
+  const finished=r.finished;
+  if(finished){
+    if(selMail===finished.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
+    renderMailFilters();renderMail();
+    const problems=await serverAct([finished],'trash');
+    if(problems.length)toast('Sent from '+r.mAcct.label+', but the draft is still in your Drafts folder — '+problems[0]);
+  }
+}
 $('#cmp-send').onclick=async()=>{
+  if(SENDING)return;
   /* A chosen suggestion leaves ", " after it for the next (H3); a list
      that ends there is sent without it. */
   const line=id=>$(id).value.replace(/[\s,]+$/,'').trim();
@@ -4616,60 +4882,36 @@ $('#cmp-send').onclick=async()=>{
     return;
   }
   if(lastFindings.length){S.counters.warned++;await audit('dlp.warn',`Email to ${to} sent with ${lastFindings.length} warning(s)`)}
-  /* A save of this draft to Drafts may be on its way (F1). It lands first,
-     so the copy that goes to the Trash below is the latest, and no save
-     starts while this is sending. */
-  SENDING=true;
-  await DRAFT_SAVING;
-  try{
-  const first=fieldAddrs(to)[0]||'';
-  const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===first);
-  const acctSel=prov;
-  const acct=S.linked.find(l=>l.id===acctSel);
-  const mAcct=acct&&acct.type==='mail'?acct:null;
-  let realSent=false,sentId='';
-  const files=CMP_FILES.slice();
-  const fwd=CMP_FWD&&CMP_FWD.atts.length?CMP_FWD:null;
+  const acct=S.linked.find(l=>l.id===prov),mAcct=acct&&acct.type==='mail'?acct:null;
+  const files=CMP_FILES.slice(),fwd=CMP_FWD&&CMP_FWD.atts.length?CMP_FWD:null;
   if((files.length||fwd)&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
   if(files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX){toast('Those files are too large to send together — most providers refuse mail over 25 MB. Remove some, or send a link instead.');return}
-  if(mAcct){
-    if(!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
-    const sb=$('#cmp-send');sb.disabled=true;sb.textContent=files.length?'Attaching…':'Sending…';
-    try{
-      const attachments=[];
-      for(const f of files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
-      sb.textContent='Sending…';
-      const r=await apiFetch('/api/send/mail',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({from:mAcct.label,to,cc,bcc,subject:subj,body,inReplyTo:(REPLYING&&REPLYING.messageId)||null,attachments,
-          forward:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,indexes:fwd.atts.map(a=>a.i)}:null})});
-      if(!r.ok)throw new Error(r.error||'send failed');
-      realSent=true;sentId=r.messageId||'';
-    }catch(e){
-      sb.disabled=false;sb.textContent='Send';
-      toast(e.message==='needs-the-app'
-        ? 'Sending from a linked mailbox happens in the RATA app — download it at mailrata.org.'
-        : 'Send failed — '+(e.message||'reconnect and try again'));
+  if(mAcct&&!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
+  /* A save of this draft to Drafts may be on its way (F1). It lands first,
+     so the copy that goes to the Trash after is the latest, and no save
+     starts while this is sending. */
+  SENDING=true;
+  try{
+    await DRAFT_SAVING;
+    const it={id:newDraftId(),at:Date.now(),acctId:prov,real:!!mAcct,to,cc,bcc,subj,body,replying:(REPLYING&&REPLYING.messageId)||null,files,
+      fwd:fwd?{email:fwd.email,folder:fwd.folder||'inbox',uid:fwd.uid,uidvalidity:fwd.uidvalidity,atts:fwd.atts.slice()}:null,
+      finished:CMP_DRAFT&&CMP_DRAFT.uid?CMP_DRAFT:null,snap:snapCompose()};
+    const secs=sendDelay();
+    /* No wait: sent while the composer waits, as it always was — unless
+       another message is still counting, which this one goes after. */
+    if(!secs&&!OUTBOX.length){
+      const r=await deliver(it,$('#cmp-send'));
+      if(!r.ok){toast(r.error);return}
+      newDraft();liveScan();closeCompose();renderMail();
+      await sentAfter(r);
       return;
     }
-    sb.disabled=false;sb.textContent='Send';
-  }
-  S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
-    atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
-  /* The draft this finished is sent: its copy in Drafts goes to the Trash,
-     as every mail app does, rather than waiting there to be sent twice. */
-  const finished=realSent&&CMP_DRAFT&&CMP_DRAFT.uid?CMP_DRAFT:null;
-  if(finished)dropMessages([finished.id]);
-  save();
-  await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''}${bcc?' (+'+bcc.split(',').filter(x=>x.trim()).length+' Bcc)':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
-  newDraft();
-  liveScan();closeCompose();renderMail();
-  toast(realSent?('Sent from '+mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
-  if(finished){
-    if(selMail===finished.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
-    renderMailFilters();renderMail();
-    const problems=await serverAct([finished],'trash');
-    if(problems.length)toast('Sent from '+mAcct.label+', but the draft is still in your Drafts folder \u2014 '+problems[0]);
-  }
+    const held=document.activeElement;
+    newDraft();liveScan();closeCompose();renderMail();
+    obQueue(it,secs);
+    /* The keyboard goes to the toast, so Tab reaches Undo next; Enter on
+       the toast itself does nothing. */
+    if(!held||held===document.body||ov.contains(held)||!held.isConnected)$('#send-toast').focus({preventScroll:true});
   }finally{SENDING=false}
 };
 
