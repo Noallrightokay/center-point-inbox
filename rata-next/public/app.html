@@ -4220,7 +4220,7 @@ function openCompose(){
   if(sig)b.setSelectionRange(0,0);
 }
 /* Closing keeps the draft here and, in the app, saves it to Drafts when
-   something in it is new (F1). Escape calls this with nothing open. */
+   something in it is new (F1). Safe to call with nothing open. */
 function closeCompose(){
   suggClose();SUGG_POOL=null;
   const was=ov.classList.contains('open');
