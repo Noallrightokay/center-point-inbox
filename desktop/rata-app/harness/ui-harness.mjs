@@ -2797,6 +2797,17 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
      printed with where they are. */
   const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
   const axe = async (pg, where) => {
+    /* Measure the settled screen: wait for every CSS transition and
+       animation still running (a theme switch or a resize starts them) to
+       finish. Twice on CI a fade in progress was measured as poor contrast
+       (#top-search-btn: its background fades over .15s while its text
+       colour changes at once), which nobody sees once the fade is done. */
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations()
+        .filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity)
+        .map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
     const r = await new AxeBuilder({ page: pg }).analyze();
     const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
