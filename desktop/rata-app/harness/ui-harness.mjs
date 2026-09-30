@@ -237,7 +237,9 @@ const browser = await chromium.launch();
 import { readFileSync as _read } from 'node:fs';
 const APP_CSP = JSON.parse(_read(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8')).app.security.csp;
 async function open(licensed, opts = {}) {
-  const page = await browser.newPage();
+  /* `context`: a page in the same browser profile as another (its
+     localStorage too), as RATA started again on the same computer. */
+  const page = opts.context ? await opts.context.newPage() : await browser.newPage();
   await page.route('**/app.html', async (route) => {
     const resp = await route.fetch();
     await route.fulfill({ response: resp, headers: { ...resp.headers(), 'content-security-policy': APP_CSP } });
@@ -281,6 +283,9 @@ async function open(licensed, opts = {}) {
     const t = toast;
     toast = (m) => { window.__toasts.push(String(m)); return t(m); };
   });
+  /* Send goes at once here, as it did before Undo send (H9), unless a
+     check is about the wait. */
+  if (!opts.undo) await page.evaluate(() => { S.settings.undoSend = 0; });
   return page;
 }
 const row = (page) => page.evaluate(() => S.linked.find((l) => l.type === 'mail' && l.label === 'me@example.com') || null);
@@ -2097,6 +2102,197 @@ console.log('\n— a search can ask each mailbox’s server too (H6) —');
   await pg.click('#search-go');
   await pg.waitForFunction(() => !/Searching/.test(document.querySelector('#res-pane').textContent), null, { timeout: 5000 }).catch(() => {});
   check(await pg.evaluate(() => !window.__RATA_NATIVE__ && !document.querySelector('#srv-bar')), 'on the website a search offers no server search');
+  await pg.close();
+}
+
+console.log('\n— Undo send: a message waits a few seconds before it goes (H9) —');
+{
+  const ctx = await browser.newContext();
+  const pg = await open(true, { undo: true, context: ctx });
+  const sends = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => a.draft));
+  const trashes = () => pg.evaluate(() => __mock.calls.map(([c, a], i) => [i, c, a]).filter(([, c, a]) => c === 'change_messages' && a.action === 'trash').map(([i, , a]) => ({ i, folder: a.folder, uids: a.uids })));
+  const order = () => pg.evaluate(() => __mock.calls.map(([c]) => c).filter((c) => c === 'send_mail' || c === 'change_messages'));
+  const reset = () => pg.evaluate(() => { __mock.calls = []; window.__toasts = []; __mock.sendFails = false; });
+  const outbox = () => pg.evaluate(() => JSON.parse(localStorage.getItem(OB_KEY) || '[]'));
+  /* One second of the count is 100 ms here: 5 s is half a second. */
+  await pg.evaluate(() => { window.__RATA_SEND_SECOND = 100; window.__RATA_DRAFT_EVERY = 60e3; });
+  await pg.evaluate(() => go('set'));
+  const setting = await pg.evaluate(() => ({ shown: getComputedStyle(document.querySelector('#undo-row')).display !== 'none', value: document.querySelector('#set-undo').value,
+    options: [...document.querySelectorAll('#set-undo option')].map((o) => o.value).join() }));
+  check(setting.shown && setting.value === '5' && setting.options === '0,5,10', `Settings offers 0, 5 or 10 seconds, 5 unless changed: ${JSON.stringify(setting)}`);
+  await pg.evaluate(() => go('inbox'));
+
+  /* A draft with everything in it: To, Cc, Bcc, subject, text with the
+     signature, a picked file, a forward's attachment, the thread it answers,
+     the Drafts copy it finishes, From and what it is. */
+  const fill = (subj) => pg.evaluate((subj) => {
+    const acct = S.linked.find((l) => l.type === 'mail').id;
+    const rec = { id: 'me@example.com_drafts_90', folder: 'drafts', draft: true, prov: 'imap', acct, mailbox: 'me@example.com', uid: 90, uidvalidity: 7, subj, ts: Date.now(), unread: false, starred: false, ch: 'email' };
+    S.messages = S.messages.filter((m) => m.id !== rec.id); S.messages.push(rec);
+    newDraft(); openCompose();
+    $('#cmp-to').value = 'bo@example.org'; showCc(true); $('#cmp-cc').value = 'cy@example.org'; showBcc(true); $('#cmp-bcc').value = 'di@example.org';
+    $('#cmp-subj').value = subj; $('#cmp-body').value = 'Words for ' + subj + '\n\n-- \nAnn'; CMP_SIG = '-- \nAnn';
+    CMP_FILES = [new File(['hello'], 'a.txt', { type: 'text/plain' })];
+    CMP_FWD = { email: 'me@example.com', folder: 'inbox', uid: 5, uidvalidity: 7, atts: [{ i: 1, n: 'q.pdf', f: 'PDF', s: '1 KB' }] };
+    REPLYING = { id: 'me@example.com_5', messageId: 'orig@example.org' };
+    CMP_DRAFT = rec; DRAFT = { kind: 'reply', to: 'Bo' }; CMP_SRV.draftId = 'kept-draft-id';
+    renderCmpFiles(); renderDraftHead();
+    window.__srvWas = CMP_SRV; window.__fileWas = CMP_FILES[0];
+  }, subj);
+  const state = () => pg.evaluate(() => ({ open: document.querySelector('#compose-ov').classList.contains('open'), to: $('#cmp-to').value, cc: $('#cmp-cc').value, bcc: $('#cmp-bcc').value,
+    ccOn: !$('#cmp-cc').hidden, bccOn: !$('#cmp-bcc').hidden, subj: $('#cmp-subj').value, body: $('#cmp-body').value, from: $('#cmp-from').value, sig: CMP_SIG,
+    file: CMP_FILES.length === 1 && CMP_FILES[0] === window.__fileWas, fwd: JSON.stringify(CMP_FWD), replying: REPLYING && REPLYING.messageId, draft: CMP_DRAFT && CMP_DRAFT.id,
+    kind: DRAFT.kind, srv: CMP_SRV === window.__srvWas, title: $('#cmp-title').textContent }));
+  await fill('Undo me');
+  const before = await state();
+  await reset();
+  await pg.click('#cmp-send');
+  const toast1 = await pg.evaluate(() => ({ open: document.querySelector('#compose-ov').classList.contains('open'), shown: document.querySelector('#send-toast').classList.contains('show'),
+    role: document.querySelector('#send-toast').getAttribute('role'), count: document.querySelector('#st-count').textContent, undo: !document.querySelector('#st-undo').hidden,
+    say: document.querySelector('#st-say').textContent, sent: __mock.calls.filter(([c]) => c === 'send_mail').length }));
+  check(!toast1.open && toast1.shown && toast1.role === 'status' && toast1.count === 'Sending in 5 s' && toast1.undo && toast1.sent === 0 && /Undo me/.test(toast1.say),
+    `Send closes the composer and says "Sending in 5 s" with Undo, announced, and sends nothing yet: ${JSON.stringify(toast1)}`);
+  const rec = (await outbox())[0];
+  check(rec && rec.state === 'waiting' && rec.subj === 'Undo me', `the waiting message is kept on this computer at once: ${JSON.stringify(rec && { state: rec.state, subj: rec.subj })}`);
+  /* The keyboard: Tab reaches Undo, Enter presses it. */
+  await pg.keyboard.press('Tab');
+  const focused = await pg.evaluate(() => document.activeElement && document.activeElement.id);
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(900);
+  const after = await state();
+  check(focused === 'st-undo', `Tab from the closed composer reaches Undo: ${focused}`);
+  const same = Object.keys(before).filter((k) => before[k] !== after[k]);
+  check(after.open && same.length === 0, `Undo puts the whole draft back exactly as it was: ${same.length ? JSON.stringify({ before, after }) : 'every field the same'}`);
+  check((await sends()).length === 0 && (await trashes()).length === 0 && (await outbox()).length === 0,
+    `Undo sends nothing, leaves the Drafts copy where it is, and clears the waiting record: ${JSON.stringify({ s: (await sends()).length, t: await trashes() })}`);
+  check(await pg.evaluate(() => !document.querySelector('#send-toast').classList.contains('show') && document.querySelector('#st-undo').hidden), 'and the toast goes');
+
+  /* The count ending sends it once, whole; the Drafts copy goes to the
+     Trash only after. Shortcuts pressed meanwhile neither undo nor send. */
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.evaluate(() => document.querySelector('#send-toast').focus());
+  await pg.keyboard.press('Enter');
+  await pg.keyboard.press('Escape');
+  await pg.keyboard.press('j');
+  await pg.waitForTimeout(150);
+  const early = { s: (await sends()).length, t: (await trashes()).length, waiting: await pg.evaluate(() => OUTBOX.length) };
+  check(early.s === 0 && early.t === 0 && early.waiting === 1, `while it counts, Enter on the toast, Escape and j neither send nor undo: ${JSON.stringify(early)}`);
+  await pg.waitForTimeout(900);
+  let s = await sends();
+  const t = await trashes();
+  const o = await order();
+  check(s.length === 1 && s[0].to === 'bo@example.org' && s[0].cc === 'cy@example.org' && s[0].bcc === 'di@example.org' && s[0].subject === 'Undo me'
+    && s[0].body === 'Words for Undo me\n\n-- \nAnn' && s[0].inReplyTo === 'orig@example.org' && s[0].attachments.length === 1 && s[0].attachments[0].name === 'a.txt'
+    && s[0].attachments[0].data === 'aGVsbG8=' && s[0].forward && s[0].forward.indexes.join() === '1' && s[0].forward.uid === 5,
+    `the count ending sends it exactly once, with everything: ${JSON.stringify(s.map((x) => ({ ...x, attachments: x.attachments.map((a) => a.name) })))}`);
+  check(t.length === 1 && t[0].folder === 'drafts' && t[0].uids.join() === '90' && o.indexOf('send_mail') < o.indexOf('change_messages'),
+    `its copy in Drafts goes to the Trash after the send succeeded: ${JSON.stringify({ t, o })}`);
+  check((await outbox()).length === 0 && (await toasts(pg)).includes('Sent from me@example.com'), 'the record is cleared and it says Sent');
+
+  /* Two in a row: the second waits behind the first; both go, in order. */
+  await reset();
+  for (const subj of ['First', 'Second']) {
+    await pg.evaluate((subj) => { newDraft(); openCompose(); $('#cmp-to').value = 'bo@example.org'; $('#cmp-subj').value = subj; $('#cmp-body').value = subj + ' words'; }, subj);
+    await pg.click('#cmp-send');
+  }
+  const two = await pg.evaluate(() => ({ n: OUTBOX.length, say: document.querySelector('#st-say').textContent }));
+  await pg.waitForTimeout(1500);
+  s = await sends();
+  check(two.n === 2 && /Second/.test(two.say) && s.map((x) => x.subject).join() === 'First,Second', `two sends in a row send two, in order: ${JSON.stringify({ two, sent: s.map((x) => x.subject) })}`);
+
+  /* A failure after the count says why and puts the draft back whole;
+     the Drafts copy stays. */
+  await fill('Will fail');
+  await reset();
+  await pg.evaluate(() => { __mock.sendFails = true; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(900);
+  const failed = await state();
+  const ft = await toasts(pg);
+  check((await sends()).length === 1 && ft.includes('Send failed — smtp.example.com refused the message') && failed.open && failed.subj === 'Will fail' && failed.file && failed.draft === 'me@example.com_drafts_90'
+    && (await trashes()).length === 0 && (await outbox()).length === 0,
+    `a send that fails after the count says why, keeps the draft and its Drafts copy: ${JSON.stringify({ ft, failed })}`);
+  await pg.evaluate(() => { __mock.sendFails = false; });
+
+  /* Undo while another message is being written: the undone one comes back,
+     the other is kept for Compose. */
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.evaluate(() => { __mock.calls = []; newDraft(); openCompose(); $('#cmp-to').value = 'gi@example.org'; $('#cmp-subj').value = 'Another'; });
+  await pg.click('#st-undo');
+  const swap = await pg.evaluate(() => ({ subj: $('#cmp-subj').value, held: HELD.map((h) => h.subj) }));
+  await pg.evaluate(() => { newDraft(); closeCompose(); composeNew(); });
+  const back = await pg.evaluate(() => $('#cmp-subj').value);
+  check(swap.subj === 'Will fail' && swap.held.join() === 'Another' && back === 'Another' && (await sends()).length === 0,
+    `Undo while writing another puts the undone one in the composer and keeps the other for Compose: ${JSON.stringify({ swap, back })}`);
+
+  /* The window closing while it counts sends it at once. */
+  await pg.evaluate(() => { HELD = []; newDraft(); openCompose(); $('#cmp-to').value = 'bo@example.org'; $('#cmp-subj').value = 'Closing'; S.settings.undoSend = 10; });
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })));
+  await pg.waitForTimeout(150);
+  s = await sends();
+  check(s.length === 1 && s[0].subject === 'Closing' && (await outbox()).length === 0, `closing the window sends a waiting message at once, not after 10 s: ${JSON.stringify(s.map((x) => x.subject))}`);
+
+  /* 0 seconds sends at once, from the open composer, as before. */
+  await pg.evaluate(() => { S.settings.undoSend = 0; newDraft(); openCompose(); $('#cmp-to').value = 'bo@example.org'; $('#cmp-subj').value = 'Now'; });
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(100);
+  s = await sends();
+  check(s.length === 1 && s[0].subject === 'Now' && !(await pg.evaluate(() => document.querySelector('#send-toast').classList.contains('show'))) && (await outbox()).length === 0,
+    `0 seconds sends at once, with no count: ${JSON.stringify(s.map((x) => x.subject))}`);
+
+  /* RATA closed during the count, before anything reached the app (the
+     webview gone without a pagehide): the next start sends it, once. */
+  await pg.evaluate(() => { S.settings.undoSend = 10; save(); newDraft(); openCompose(); $('#cmp-to').value = 'bo@example.org'; $('#cmp-subj').value = 'After restart';
+    CMP_FILES = [new File(['hello'], 'a.txt', { type: 'text/plain' })]; renderCmpFiles(); });
+  await reset();
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(300);
+  const kept = await outbox();
+  check(kept.length === 1 && kept[0].state === 'waiting' && Array.isArray(kept[0].data) && kept[0].data[0] === 'aGVsbG8=', `the waiting record holds its files once read: ${JSON.stringify(kept.map((r) => ({ state: r.state, data: r.data })))}`);
+  await pg.evaluate(() => { OUTBOX = []; });
+  await pg.close();
+  const pg2 = await open(true, { undo: true, context: ctx });
+  await pg2.waitForTimeout(400);
+  const s2 = await pg2.evaluate(() => ({ sent: __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => ({ subject: a.draft.subject, files: a.draft.attachments.map((f) => f.name + ':' + f.data) })),
+    box: localStorage.getItem(OB_KEY) }));
+  check(s2.sent.length === 1 && s2.sent[0].subject === 'After restart' && s2.sent[0].files.join() === 'a.txt:aGVsbG8=' && s2.box === null,
+    `the next start sends it once, with its file, and clears the record: ${JSON.stringify(s2)}`);
+  await pg2.close();
+  const pg3 = await open(true, { undo: true, context: ctx });
+  await pg3.waitForTimeout(400);
+  check((await pg3.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').length)) === 0, 'and the start after that sends nothing: never twice');
+  /* One already handed to the app may have gone: never sent again, put back
+     with a word to look in Sent. */
+  await pg3.evaluate(() => {
+    const acct = S.linked.find((l) => l.type === 'mail').id;
+    localStorage.setItem(OB_KEY, JSON.stringify([{ id: 'r1', at: Date.now(), state: 'sending', acctId: acct, real: true, to: 'bo@example.org', cc: '', bcc: '', subj: 'Maybe gone', body: 'b',
+      replying: null, fwd: null, finished: null, files: [], data: [], look: { to: 'bo@example.org', cc: '', bcc: '', subj: 'Maybe gone', ccOn: false, bccOn: false, sig: null, draft: { kind: 'new' } } }]));
+  });
+  await pg3.close();
+  const pg4 = await open(true, { undo: true, context: ctx });
+  await pg4.waitForTimeout(400);
+  const s4 = await pg4.evaluate(() => ({ sent: __mock.calls.filter(([c]) => c === 'send_mail').length, open: document.querySelector('#compose-ov').classList.contains('open'),
+    subj: $('#cmp-subj').value, box: localStorage.getItem(OB_KEY) }));
+  const t4 = await toasts(pg4);
+  check(s4.sent === 0 && s4.open && s4.subj === 'Maybe gone' && s4.box === null,
+    `one RATA closed on while it was being handed over is not sent again; it is put back: ${JSON.stringify({ s4, t4 })}`);
+  await pg4.close();
+  await ctx.close();
+}
+{
+  /* The website cannot send, so it never counts. */
+  const pg = await browser.newPage();
+  pg.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  await pg.addInitScript(() => { localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' })); });
+  await pg.goto(B + '/app.html');
+  await pg.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+  const web = await pg.evaluate(() => { go('set'); return { delay: sendDelay(), row: getComputedStyle(document.querySelector('#undo-row')).display }; });
+  check(web.delay === 0 && web.row === 'none', `on the website Send never waits, and Settings does not offer it: ${JSON.stringify(web)}`);
   await pg.close();
 }
 
