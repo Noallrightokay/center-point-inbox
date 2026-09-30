@@ -169,6 +169,11 @@ Don't spend time reporting these; they are known and planned:
     Arrows move, Enter or Tab chooses, Escape closes the list. A choice goes
     in as `"Name" <address>`. Tell us if someone is suggested who should
     not be, or if a named address is refused when you send.
+  - **Keyboard shortcuts:** press **?** for the list. `j` and `k` move
+    through the list, Enter opens, `r` replies, `e` archives, `c` writes a
+    new message, `/` searches, Escape closes. They never fire while you
+    type in a field, and Settings → Workspace turns them off. Tell us about
+    a key that does something you did not expect.
   - **The licence renews while RATA stays open**, every six hours and
     whenever mail stops because it lapsed, not only at start; if
     mailrata.org cannot be reached, the licence box says so and has **Try

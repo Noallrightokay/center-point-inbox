@@ -121,7 +121,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (188 checks). CI runs it as *Desktop interface, driven*, together
+policy (227 checks). CI runs it as *Desktop interface, driven*, together
 with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
 repository root:
 
