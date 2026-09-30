@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 279 tests, plus 14 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 126 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 287 tests, plus 15 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 127 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (227 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (240 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -996,6 +996,25 @@ already took the key (`defaultPrevented`, which is how H3's suggestion
 list keeps Down and Escape). Settings → Workspace turns them off
 (`S.settings.keys`); Escape closing the composer does not depend on it. The
 composer's subject and body carry `spellcheck` and `lang` (`userLang()`).
+**Search the server (H6, v0.1.43).** `rata_mail::imap::search_folder`
+sends one `UID SEARCH [CHARSET UTF-8] OR OR FROM {n} SUBJECT {n} TEXT {n}`
+with the query as three IMAP literals, waiting for the server's go-ahead
+before each, so a `"`, `\`, CRLF or non-ASCII letter can never change the
+command; `CHARSET UTF-8` goes only with a non-ASCII query, and a server
+that refuses it is reported as unable to search outside plain ASCII (an
+ASCII query never carries CHARSET, so there is nothing to retry). Only a
+tagged OK is believed; a NO or BAD is an error with the server's sentence,
+never "nothing found". `search_query` trims and refuses an empty query,
+one over 200 characters, or a control character, before any connection
+(kind `query`). The newest 50 matches come through the `fetch_uids` path;
+inbox only (Gmail's archive and named folders are refused before a
+select). `Rata::search` is behind `usable` and `signed`, results go
+through `as_links`, command `search_mail`, bridge `/api/mail/search`. In
+the app a local search shows **Search on the server** per mailbox (and
+for all at once); results are stored like older mail, labelled with the
+mailbox and "Found on the server", and marked `srvFound`, which
+`oldestRef` and `heldKnown` skip so no mail in between is missed; Load
+older mail, or a refresh that brings the message, takes the mark off.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an

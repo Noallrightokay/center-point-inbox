@@ -174,6 +174,11 @@ Don't spend time reporting these; they are known and planned:
     new message, `/` searches, Escape closes. They never fire while you
     type in a field, and Settings → Workspace turns them off. Tell us about
     a key that does something you did not expect.
+  - **Search on the server:** after a search, RATA offers **Search on the
+    server** for each mailbox, which finds matching mail RATA has not
+    downloaded yet (the newest 50, inbox only), labelled "Found on the
+    server". Tell us about a search that finds nothing you know is there,
+    with the provider.
   - **The licence renews while RATA stays open**, every six hours and
     whenever mail stops because it lapsed, not only at start; if
     mailrata.org cannot be reached, the licence box says so and has **Try
