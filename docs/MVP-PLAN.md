@@ -73,10 +73,10 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   `.deb` and the Windows exe, no font CDN, and it launches as "RATA 0.1.42
   beta" (`verify-release.sh`, 2026-09-29). The install-and-launch smoke
   test passed on all four builds ([run 36574649823](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36574649823)).
-- **Merged for 0.1.43** (wave 5a, all of 5b (H3, H6, H9, H12), H4 of 5c, and the pre-launch audit's
-  bug cards; not yet released: [G2](#g2) bumps the version in
-  [#102](https://github.com/Noallrightokay/center-point-inbox/pull/102)
-  and the PM merges it once the owner confirms the licence signing key):
+- **Released in 0.1.43** (wave 5a, all of 5b (H3, H6, H9, H12), H4 of 5c, and the pre-launch audit's
+  bug cards; [#102](https://github.com/Noallrightokay/center-point-inbox/pull/102),
+  merged as `85da389` once the owner's `mint.sh check` said OK, and
+  verified 2026-09-30):
   the licence mint script, `infrastructure/licence/mint.sh` ([#90](https://github.com/Noallrightokay/center-point-inbox/pull/90));
   [H1](#h1), the privacy policy and terms ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)); [H2](#h2), the help
   page at `/help` ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)); [H4](#h4), keyboard shortcuts ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)); [H6](#h6), search on the server ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)); [H9](#h9), undo send ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)); BUG-C, RATA's copy follows the server ([#106](https://github.com/Noallrightokay/center-point-inbox/pull/106)); [H12](#h12), quoted text folded ([#107](https://github.com/Noallrightokay/center-point-inbox/pull/107)); [H3](#h3), address suggestions and named
@@ -619,7 +619,7 @@ small follow-ups) and bumped the version; released and verified 2026-09-29.
 BUG-R, BUG-S and the mint script), added the help, privacy and terms pages
 to `sw.js`'s shell, and bumped the version ([#102](https://github.com/Noallrightokay/center-point-inbox/pull/102));
 held for the owner's licence signing key, not yet released or verified. It
-is the first release through BUG-R's `gate`: watch that run.
+is the first release through BUG-R's `gate`: watch that run. 0.1.43 released and verified 2026-09-30 ([run 36725730252](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36725730252)): the new `gate` passed first, all four installers were installed and launched, `verify-release.sh v0.1.43` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.43 beta".
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
@@ -641,7 +641,7 @@ them in the order under *Waves* and each agent starts from the `main`
 that holds the cards before it.
 
 #### H1
-*State: **done** in code ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)), released in 0.1.43.*
 **Privacy policy and terms of service on the website.** Who: agent
 (website) · Needs: nothing to start; the [owner] reviews before launch ·
 Do: `rata-next/public/privacy.html` and `terms.html` in DESIGN.md's
@@ -666,7 +666,7 @@ Done when: the pages are live in the repo with every unknown marked
 the suite is green. Not: legal advice; the owner reads it before D6.
 
 #### H2
-*State: **done** in code ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)), released in 0.1.43.*
 **A help page: app passwords per provider, what errors mean, how to
 report.** Who: agent (website) · Needs: nothing · Do:
 `rata-next/public/help.html`, DESIGN.md's voice: for Gmail, iCloud,
@@ -686,7 +686,7 @@ provider's own domain. Done when: the page is in, linked, and the suite
 is green. Not: the in-app Help link (H8 adds it).
 
 #### H3
-*State: **done** in code ([#99](https://github.com/Noallrightokay/center-point-inbox/pull/99)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#99](https://github.com/Noallrightokay/center-point-inbox/pull/99)), released in 0.1.43.*
 **Address suggestions in the composer.** Who: agent (interface) · Needs:
 nothing · Do: To, Cc and Bcc suggest people RATA has seen (every From,
 To and Cc of held mail, plus the People list), as you type, in a
@@ -716,7 +716,7 @@ only when asked. Harness checks for each key, and that typing `j` in
 the composer types a `j`. Done when: the harness checks pass and the
 sheet matches the code (one table, read by both). Hot file: `app.html`.
 
-*State: **done** in code ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)), released in 0.1.43.*
 
 #### H5
 **Conversation view.** Who: agent (Rust engine + app + interface) ·
@@ -754,10 +754,10 @@ against Dovecot; harness check for the button and the label. Done when:
 those pass. Hot files: `imap.rs`, `core.rs`, `bridge.js`, `app.html`
 (search region).
 
-*State: **done** in code ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)), released in 0.1.43.*
 
 #### H7
-*State: **done** in code ([#95](https://github.com/Noallrightokay/center-point-inbox/pull/95)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#95](https://github.com/Noallrightokay/center-point-inbox/pull/95)), released in 0.1.43.*
 **Unsubscribe.** Who: agent (Rust engine + interface) · Needs: nothing
 (reading-pane actions region; H11 follows it) · Do: `body::read` keeps
 `List-Unsubscribe` as `Message.unsubscribe: Option<Unsubscribe { https:
@@ -778,7 +778,7 @@ files: `imap.rs` (or `body.rs`), `core.rs`, `bridge.js`, `app.html`
 (reading-pane actions).
 
 #### H8
-*State: **done** in code ([#96](https://github.com/Noallrightokay/center-point-inbox/pull/96)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#96](https://github.com/Noallrightokay/center-point-inbox/pull/96)), released in 0.1.43.*
 **Copy diagnostics, and a Help link, in Settings.** Who: agent (Rust +
 interface) · Needs: nothing (Settings region) · Do: a Rust command
 `diagnostics` that returns one plain-text block: app version, OS and
@@ -817,7 +817,7 @@ counting down queues behind it. Harness checks: Undo restores every
 field and sends nothing; the count ending sends once; two sends in a
 row send two. Done when: those pass. Hot file: `app.html` (send path).
 
-*State: **done** in code ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)), released in 0.1.43.*
 
 #### H10
 **Accessibility pass, checked by axe.** Who: agent (interface + harness)
@@ -860,7 +860,7 @@ URLs in the Text view are cut for display but open whole. Nothing
 changes in the formatted (HTML) view. Harness checks with a reply that
 has all three. Done when: they pass. Hot file: `app.html` (text view).
 
-*State: **done** in code ([#107](https://github.com/Noallrightokay/center-point-inbox/pull/107)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#107](https://github.com/Noallrightokay/center-point-inbox/pull/107)), released in 0.1.43.*
 
 #### Bug cards from the pre-launch audit (2026-09-29)
 Ten finders read the MVP journey at 0.1.42 and reported 47 findings. The
@@ -869,7 +869,7 @@ finder text is in the PM's notes, not the repository. Each card is one
 branch and one PR, with a failing test first where the code allows.
 
 ##### BUG-L
-*State: **done** in code ([#100](https://github.com/Noallrightokay/center-point-inbox/pull/100)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#100](https://github.com/Noallrightokay/center-point-inbox/pull/100)), released in 0.1.43.*
 **The licence renews while RATA is open, and a bad paste never costs a
 good licence.** Who: agent (bridge + shell + interface) · Needs: H7 and
 H8 merged (same files) · Found: `renew()` runs only from
@@ -893,7 +893,7 @@ for each, with the fake backend's clock. Done when: those pass and a
 licence left open across its expiry renews with no relaunch.
 
 ##### BUG-S
-*State: **done** in code ([#98](https://github.com/Noallrightokay/center-point-inbox/pull/98)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#98](https://github.com/Noallrightokay/center-point-inbox/pull/98)), released in 0.1.43.*
 **From paying to the key on `/account`, without a dead end.** Who:
 agent (website) · Needs: H1 merged (same pages) · Found: in the common
 event order (`customer.subscription.created` before the checkout) the
@@ -925,7 +925,7 @@ those pass and a checkout whose subscription event arrives first shows
 the key within the page's wait, with no Stripe retry.
 
 ##### BUG-M
-*State: **done** in code ([#101](https://github.com/Noallrightokay/center-point-inbox/pull/101)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#101](https://github.com/Noallrightokay/center-point-inbox/pull/101)), released in 0.1.43.*
 **Delete, sign-in errors and sending on real providers.** Who: agent
 (engine) · Needs: H7 merged (`imap.rs`) · Found: Trash is found only by
 the `\Trash` attribute, with no name fallback as Sent, Spam, Drafts and
@@ -948,7 +948,7 @@ mailbox; Zoho's regional hosts from the MX. Tests on the scripted
 server, loopback for Trash by name on GreenMail. Done when: those pass.
 
 ##### BUG-A
-*State: **done** in code ([#94](https://github.com/Noallrightokay/center-point-inbox/pull/94)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#94](https://github.com/Noallrightokay/center-point-inbox/pull/94)), released in 0.1.43.*
 **The AI relay on long mail and long answers.** Who: agent (website +
 interface) · Needs: nothing · Found: Summarize and Translate send an
 opened message whole, and the route refuses any body over 80 000
@@ -965,7 +965,7 @@ switched on for RATA yet." with a server log line. Tests in
 `rata-next/tests/ai.test.mjs` and a harness check. Done when: those pass.
 
 ##### BUG-R
-*State: **done** in code ([#93](https://github.com/Noallrightokay/center-point-inbox/pull/93)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#93](https://github.com/Noallrightokay/center-point-inbox/pull/93)), released in 0.1.43.*
 **Release pipeline and update feed.** Who: agent (CI + shell) · Needs:
 nothing · Found: `release.yml` builds and publishes with no test having
 passed, and `main` has no branch protection; the update feed is rebuilt
@@ -984,7 +984,7 @@ the shell tests pass, and a dry run of the feed step on a fixture keeps a
 missing platform.
 
 ##### BUG-D
-*State: **done** in code ([#97](https://github.com/Noallrightokay/center-point-inbox/pull/97)), merged for 0.1.43; not yet released.*
+*State: **done** in code ([#97](https://github.com/Noallrightokay/center-point-inbox/pull/97)), released in 0.1.43.*
 **Words that are not true yet, on the site and in the docs.** Who:
 agent (website copy + docs) · Needs: H1 and H2 merged (`index.html`,
 BETA.md) · Found: `manifest.json` (the install dialog's name) still
