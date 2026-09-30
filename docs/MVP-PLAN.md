@@ -96,7 +96,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   [D4](#d4), and BUG-S needs `database.sql` §6 run first. Left for
   0.1.44: H5, H10, H11.
 - **Merged for 0.1.44** (the rest of wave 5c, which completes
-  Workstream H; [PR "Release 0.1.44"](https://github.com/Noallrightokay/center-point-inbox/pulls?q=is%3Apr+%22Release+0.1.44%22),
+  Workstream H; [#113](https://github.com/Noallrightokay/center-point-inbox/pull/113),
   not yet merged, released or verified): [H11](#h11), picture attachments
   shown in the message and opened large, the type read from the bytes in
   Rust ([#108](https://github.com/Noallrightokay/center-point-inbox/pull/108));
@@ -642,7 +642,7 @@ held for the owner's licence signing key, not yet released or verified. It
 is the first release through BUG-R's `gate`: watch that run. 0.1.43 released and verified 2026-09-30 ([run 36725730252](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36725730252)): the new `gate` passed first, all four installers were installed and launched, `verify-release.sh v0.1.43` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.43 beta".
 0.1.44 folded in #108–#112 (H11, H5, the CI apt retries, H10, and the plan
 update #109), with DESIGN.md's `--thumb`, `--faint`-on-tint and inset list
-focus ring, and bumped the version (PR "Release 0.1.44", 2026-09-30);
+focus ring, and bumped the version ([#113](https://github.com/Noallrightokay/center-point-inbox/pull/113), 2026-09-30);
 engine 297, shell 130, harness 358, website 785, all green on the branch.
 The screenshots are H10's, taken after the last interface change. Not yet
 merged, released or verified: the PM merges.
