@@ -68,7 +68,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 287 tests, no network required
+cargo test --all-targets   # 294 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -79,7 +79,7 @@ Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
 
-A second suite, `tests/loopback.rs` (15 tests), runs the engine against a
+A second suite, `tests/loopback.rs` (16 tests), runs the engine against a
 real Dovecot (IMAP) and GreenMail (SMTP, and IMAPS for a server that
 declares no special-use folders) on 127.0.0.1. CI runs it on every PR as
 *Mail layer against real servers*. Locally (needs `dovecot-imapd`, Java and
@@ -121,7 +121,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (261 checks). CI runs it as *Desktop interface, driven*, together
+policy (278 checks). CI runs it as *Desktop interface, driven*, together
 with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
 repository root:
 

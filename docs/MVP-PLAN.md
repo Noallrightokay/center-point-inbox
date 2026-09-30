@@ -79,7 +79,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   and the PM merges it once the owner confirms the licence signing key):
   the licence mint script, `infrastructure/licence/mint.sh` ([#90](https://github.com/Noallrightokay/center-point-inbox/pull/90));
   [H1](#h1), the privacy policy and terms ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)); [H2](#h2), the help
-  page at `/help` ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)); [H4](#h4), keyboard shortcuts ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)); [H6](#h6), search on the server ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)); [H9](#h9), undo send ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)); [H3](#h3), address suggestions and named
+  page at `/help` ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)); [H4](#h4), keyboard shortcuts ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)); [H6](#h6), search on the server ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)); [H9](#h9), undo send ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)); BUG-C, RATA's copy follows the server ([#106](https://github.com/Noallrightokay/center-point-inbox/pull/106)); [H3](#h3), address suggestions and named
   addresses in the engine ([#99](https://github.com/Noallrightokay/center-point-inbox/pull/99)); [H7](#h7), Unsubscribe ([#95](https://github.com/Noallrightokay/center-point-inbox/pull/95));
   [H8](#h8), Copy diagnostics and Help in Settings ([#96](https://github.com/Noallrightokay/center-point-inbox/pull/96));
   [BUG-A](#bug-a), the AI relay on long mail ([#94](https://github.com/Noallrightokay/center-point-inbox/pull/94)); [BUG-D](#bug-d),
@@ -129,11 +129,11 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   2 is fixed ([#71](https://github.com/Noallrightokay/center-point-inbox/pull/71),
   with [#75](https://github.com/Noallrightokay/center-point-inbox/pull/75)
   asking before a disguised program is saved), and 4 is [D8](#d8).
-- **Tests** (counted on the 0.1.43 branch, 2026-09-29). Engine (287, plus
-  15 against real Dovecot and GreenMail), shell (127) and website (785)
+- **Tests** (counted on the 0.1.43 branch, 2026-09-29). Engine (294, plus
+  16 against real Dovecot and GreenMail), shell (127) and website (785)
   suites run in CI (`desktop-ci.yml`, `rata-next-ci.yml`), and from 0.1.43
   also in `release.yml`'s `gate` before anything is built. The **desktop
-  UI harness** (261 checks that drive
+  UI harness** (278 checks that drive
   the real interface against a fake backend, in `desktop/rata-app/harness/`)
   runs in CI as *Desktop interface, driven* ([A3](#a3),
   [#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)).

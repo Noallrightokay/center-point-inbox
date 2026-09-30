@@ -185,6 +185,12 @@ Don't spend time reporting these; they are known and planned:
     message is sent at the next start, or, if it may already have gone, put
     back with a note to look in Sent first; it is never sent twice. Tell us
     if a message is sent twice, or never arrives.
+  - **Mail you delete, archive or file elsewhere now leaves RATA too**, at
+    the next refresh (it used to stay in RATA's inbox for good). On Gmail,
+    a message you archive on your phone moves to Archive instead of showing
+    in both. RATA only follows the newest 2 000 messages of each folder
+    this way. Tell us if mail disappears from RATA that is still in your
+    webmail, with the provider: that is the most important thing to report.
   - **The licence renews while RATA stays open**, every six hours and
     whenever mail stops because it lapsed, not only at start; if
     mailrata.org cannot be reached, the licence box says so and has **Try

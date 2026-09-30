@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 287 tests, plus 15 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 294 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 127 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (261 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (278 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -405,7 +405,31 @@ mail, whose button also shows while a gap is open — until a page reaches
 `floor` (closed), comes back empty (closed) or stale (dropped; the next
 refresh reads the folder afresh). Offline, a gap is kept. Before 0.1.28 the
 messages in between were never fetched at all, since Load older mail pages
-below the *oldest* message held. **Notifications (v0.1.29).**
+below the *oldest* message held. **Following the server (BUG-C, v0.1.43).**
+Each refresh also lists which UIDs the inbox, Sent, Spam and a non-Gmail
+Archive still hold (`imap::Present` {folder, uidvalidity, floor, next,
+uids}, `Newest.present`, per mailbox `MailPresent`, `present` on the wire),
+on the same connection after each folder's refresh. The window is the
+newest `PRESENT_WINDOW` (2 000) messages by position: a folder that size
+or smaller is listed whole; a bigger one asks one `FETCH <EXISTS-1999>
+(UID)` for its floor (UIDNEXT−2000 was rejected: UIDs are sparse where mail
+is archived often). The search is `UID SEARCH UID floor:(UIDNEXT-1)`, so
+only UIDs that existed at SELECT are judged and mail arriving meanwhile is
+never taken for gone; only a tagged OK is believed, and a refusal sends
+nothing. Drafts are skipped (listed whole already) and so is Gmail's All
+Mail (`settleArchives`). The page (`settlePresent`, in `absorbMail` after
+`settleArchives`) drops held messages of that mailbox, folder and
+UIDVALIDITY with `floor <= uid < next` that are not listed, not through
+`S.gone`, sparing `LEAVING`, `ownDraft`, anything outside the window
+(which covers `srvFound`) and everything this refresh brought. So mail
+deleted, archived or filed on the phone leaves RATA too, and on Gmail a
+message archived elsewhere leaves the inbox instead of showing twice.
+Before 0.1.43 it stayed for good, and Delete on the stale copy said
+"Deleted" while nothing happened. Gaps too: a gap whose mailbox is no
+longer linked (or answers `unknown`) is dropped, Remove drops that
+mailbox's gaps, and Load older mail pages normally when the gaps brought
+nothing, so a parked mailbox's gap never blocks the others.
+**Notifications (v0.1.29).**
 `tauri-plugin-notification`, called from Rust only (`notify_mail`, no JS
 plugin permissions): after an automatic refresh brings unread inbox mail
 while the window is hidden or unfocused, `notifyNew` asks for one
