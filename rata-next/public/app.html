@@ -551,6 +551,25 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 #warn-ov.open{display:flex}
 #warn-card{width:min(480px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
 #warn-card h2{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35}
+/* Keyboard shortcuts (H4): the sheet (?), and where the keyboard is in the
+   list, outlined as focus is (DESIGN.md), and only once a key has moved it. */
+#keys-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:62;align-items:center;justify-content:center;padding:20px}
+#keys-ov.open{display:flex}
+#keys-card{width:min(660px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+.keys-head{display:flex;align-items:center;margin-bottom:12px}
+.keys-head h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.keys-head .cmp-close{margin-left:auto}
+#keys-list{display:grid;grid-template-columns:1fr 1fr;gap:18px 32px;align-items:start}
+.keys-group.msg{grid-row:span 2}
+.keys-group h3{font-size:13px;font-weight:600;color:var(--slate);margin-bottom:2px}
+.keys-row{display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--hair-2);font-size:13.5px;line-height:1.35}
+.keys-row:last-child{border-bottom:none}
+.keys-k{margin-left:auto;display:flex;align-items:center;gap:5px;flex-shrink:0;font-size:12px;color:var(--faint)}
+kbd.key{font-family:var(--mono);font-size:12px;min-width:22px;height:22px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;background:var(--fill-2);color:var(--ink);box-shadow:var(--edge);border-radius:5px}
+.keys-foot{margin-top:14px;font-size:12.5px;line-height:1.45;color:var(--slate)}
+@media (max-width:640px){#keys-list{grid-template-columns:1fr}.keys-group.msg{grid-row:auto}}
+@media (prefers-reduced-motion:reduce){#keys-card{animation:none}}
+body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 .md-content a.md-link{color:var(--tint-deep);text-decoration:underline;overflow-wrap:anywhere}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
@@ -897,6 +916,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
           <div class="sec-label">Workspace</div>
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
           <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
+          <div class="set-row" id="keys-row"><div class="grow"><b>Keyboard shortcuts</b><span>Press ? to see them all. They never act while you are typing in a field.</span></div><button class="btn" id="keys-show">Show shortcuts</button><input type="checkbox" id="set-keys" aria-label="Keyboard shortcuts on"></div>
         </div>
         <div class="comp-sec" id="sig-sec" style="display:none">
           <div class="sec-label">Signatures</div>
@@ -998,6 +1018,15 @@ button.att-card:disabled{opacity:.6;cursor:progress}
   </div>
 </div>
 
+<!-- Keyboard shortcuts (H4): drawn from KEYS, the table the keys obey -->
+<div id="keys-ov" role="dialog" aria-modal="true" aria-labelledby="keys-title">
+  <div id="keys-card">
+    <div class="keys-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="cmp-close" id="keys-close" aria-label="Close">✕</button></div>
+    <div id="keys-list"></div>
+    <p class="keys-foot" id="keys-foot"></p>
+  </div>
+</div>
+
 <!-- Rata Assist -->
 <button id="assist-fab" aria-label="Rata Assist"><img src="icons/mark-256.png" alt="" width="40" height="40" style="display:block"></button>
 <div id="assist-ov">
@@ -1024,8 +1053,8 @@ button.att-card:disabled{opacity:.6;cursor:progress}
     <input type="text" id="cmp-cc" placeholder="Cc" aria-label="Cc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
     <input type="text" id="cmp-bcc" placeholder="Bcc — the others will not see these" aria-label="Bcc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
     <div class="cmp-sugg" id="cmp-sugg" role="listbox" aria-label="People you have written to or heard from" hidden></div>
-    <input type="text" id="cmp-subj" placeholder="Subject">
-    <textarea id="cmp-body" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
+    <input type="text" id="cmp-subj" placeholder="Subject" spellcheck="true">
+    <textarea id="cmp-body" spellcheck="true" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-files" id="cmp-files"></div>
     <div class="cmp-foot">
       <select class="sel" id="cmp-from"></select>
@@ -2302,7 +2331,7 @@ function mailRowHTML(m){
   /* Sent mail is listed by who it went to, not by "you". */
   const shown=m.draft?'Draft'+(m.toName?' to '+m.toName:''):m.sent?'To: '+(contact(m.toId)?.name||m.toName||'(no recipient)'):nm;
   return `
-    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
+    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''} ${KEY_AT===m.id?'kb':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
       <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
       <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
       <div class="m-body">
@@ -2426,6 +2455,13 @@ function vlDraw(sc,force){
 }
 /* A drawn row, if the list is showing it. */
 function rowEl(id){return [...document.querySelectorAll('.vl-win .mail-row')].find(r=>r.dataset.id===id)||null}
+/* Ticks a row for Select, by a click on it or by x (H4). */
+function tickRow(id,r){
+  SEL.has(id)?SEL.delete(id):SEL.add(id);
+  const box=(r||rowEl(id))?.querySelector('.selbox');
+  if(box){box.classList.toggle('on',SEL.has(id));box.textContent=SEL.has(id)?'✓':''}
+  bulkRefresh();
+}
 /* Clicks, ticks and drags for every row a list will ever draw. `selectable`
    is the main list, where Select mode turns a click into a tick. */
 function wireRows(sc,selectable){
@@ -2434,12 +2470,7 @@ function wireRows(sc,selectable){
     if(a){e.stopPropagation();go('people');openPerson(a.dataset.cid);return}
     const cb=selectable&&e.target.closest('.selbox');
     const r=e.target.closest('.mail-row');if(!r)return;
-    if(cb||(selectable&&selecting)){
-      const id=r.dataset.id,box=r.querySelector('.selbox');
-      SEL.has(id)?SEL.delete(id):SEL.add(id);
-      if(box){box.classList.toggle('on',SEL.has(id));box.textContent=SEL.has(id)?'✓':''}
-      bulkRefresh();return;
-    }
+    if(cb||(selectable&&selecting)){tickRow(r.dataset.id,r);return}
     openMail(r.dataset.id);
   };
   sc.ondragstart=e=>{
@@ -2628,7 +2659,7 @@ window.__rataLink=said=>{
 $('#link-cancel').onclick=closeLink;
 $('#link-ov').addEventListener('click',e=>{if(e.target.id==='link-ov')closeLink()});
 $('#link-open').onclick=()=>{const u=LINK_PENDING;closeLink();if(u)openLink(u)};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&LINK_PENDING)closeLink()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&LINK_PENDING){e.preventDefault();closeLink()}});
 function openMail(id){
   const m=S.messages.find(x=>x.id===id);if(!m)return;
   selMail=id;
@@ -3021,7 +3052,195 @@ $('#search-input').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()}
 $('#top-search-btn').onclick=()=>go('search');
 document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();go('search')}
-  if(e.key==='Escape')closeCompose();
+});
+
+/* ---------------- KEYBOARD SHORTCUTS (H4) ----------------
+   One table, KEYS, read by the handler and by the sheet (?), so the sheet
+   cannot say what the keys do not do. A key does what its button does: on
+   an open message it presses that button, so it works exactly where the
+   button shows (a only where Reply all is offered, e only where Archive
+   is) and Delete goes the button's way to the Trash. Never while a field
+   has focus, never with Ctrl, Cmd or Alt held (copy, paste and the
+   system's own keys are untouched), never while a question is on screen.
+   Settings turns them off (S.settings.keys; on unless set to false).
+   Escape closing the composer, keeping the draft, is older than all this
+   and does not wait for the setting. */
+const KEY_SEQ_MS=1000;
+/* KEY_AT: the row the keyboard is on. KEY_SEL: what was open when it got
+   there, so a message opened since by a click is where the keys go on from.
+   KEY_PANE: the last press was in the reading pane, where the arrows scroll
+   the message rather than move in the list. */
+let KEY_AT=null,KEY_SEL=null,KEY_PANE=false,KEY_SEQ=null,KEY_BACK=null;
+const keysOn=()=>S.settings.keys!==false;
+const keyShown=s=>{const el=$(s);return !!el&&el.getClientRects().length>0};
+const KEYS=[
+  {keys:['j','ArrowDown'],where:'list',what:'Next message',run:k=>keyMove(1,k)},
+  {keys:['k','ArrowUp'],where:'list',what:'Previous message',run:k=>keyMove(-1,k)},
+  {keys:['Enter'],where:'list',what:'Open it',run:keyOpen},
+  {keys:['x'],where:'list',what:'Tick it, to act on several at once',run:keyTick},
+  {keys:['r'],where:'msg',what:'Reply',run:()=>keyPress('#md-reply')},
+  {keys:['a'],where:'msg',what:'Reply all',run:()=>keyPress('#md-replyall')},
+  {keys:['f'],where:'msg',what:'Forward',run:()=>keyPress('#md-forward')},
+  {keys:['e'],where:'msg',what:'Archive',run:()=>keyLeave('#md-archive')},
+  {keys:['#','Delete'],where:'msg',what:'Delete, to the Trash',run:()=>keyLeave('#md-del')},
+  {keys:['s'],where:'msg',what:'Star or unstar',run:()=>keyPress('#md-star')},
+  {keys:['u'],where:'msg',what:'Mark unread',run:()=>keyPress('#md-unread')},
+  {keys:['m'],where:'msg',what:'Move to a folder',run:keyFile},
+  {keys:['c'],where:'any',what:'Compose',run:()=>{openCompose();return true}},
+  {keys:['/'],where:'any',what:'Search',run:keySearch},
+  {keys:['g i'],where:'any',what:'Go to the inbox',run:()=>{go('inbox');return true}},
+  {keys:['Escape'],where:'any',what:'Close the message or the composer',run:keyEscape},
+  {keys:['?'],where:'any',what:'Show these shortcuts',run:()=>{openKeys();return true}},
+];
+const KEY_GROUPS=[['list','In the message list'],['msg','On an open message'],['any','Anywhere']];
+const KEY_CAPS={ArrowDown:['↓','Down arrow'],ArrowUp:['↑','Up arrow'],Escape:['Esc','Escape'],Enter:['Enter'],Delete:['Delete']};
+/* The main list, when it is on screen as one list (Side by side is not). */
+function keyList(){
+  if(currentView!=='inbox'||splitOn)return null;
+  const sc=$('#mail-scroll'),st=sc&&VL.get(sc);
+  return st&&st.pool&&st.pool.length&&sc.querySelector('.vl-space')?{sc,st,pool:st.pool}:null;
+}
+function keyIndex(L){
+  const id=selMail&&selMail!==KEY_SEL?selMail:KEY_AT;
+  return L.pool.findIndex(m=>m.id===id);
+}
+/* Puts the keyboard on row i, drawing it and scrolling it into view: a row
+   far from the drawn screenful is scrolled to first, then drawn. */
+function keyMark(L,i){
+  KEY_AT=L.pool[i].id;KEY_SEL=selMail;KEY_PANE=false;
+  document.body.classList.add('kbnav');
+  const {sc,st}=L;
+  vlDraw(sc,true);
+  let r=rowEl(KEY_AT);
+  if(!r&&st.stride){
+    const scrolls=sc.scrollHeight>sc.clientHeight+1,view=scrolls?sc.getBoundingClientRect():{top:0,bottom:innerHeight};
+    const by=sc.querySelector('.vl-space').getBoundingClientRect().top+i*st.stride-(view.top+view.bottom)/2;
+    if(scrolls)sc.scrollTop+=by;else scrollBy(0,by);
+    vlDraw(sc,true);r=rowEl(KEY_AT);
+  }
+  if(r&&r.scrollIntoView)r.scrollIntoView({block:'nearest'});
+}
+function keyMove(d,k){
+  if(/^Arrow/.test(k)&&KEY_PANE)return false;
+  const L=keyList();if(!L)return false;
+  const i=keyIndex(L);
+  keyMark(L,i<0?0:Math.max(0,Math.min(L.pool.length-1,i+d)));
+  return true;
+}
+/* Enter and x act on the row the keyboard is on, as a click on it would. */
+function keyOpen(){
+  const L=keyList(),i=L?keyIndex(L):-1;if(i<0)return false;
+  openMail(L.pool[i].id);KEY_AT=KEY_SEL=selMail;
+  return true;
+}
+function keyTick(){
+  const L=keyList(),i=L?keyIndex(L):-1;if(i<0)return false;
+  const id=L.pool[i].id;
+  if(!selecting)$('#sel-mode').click();
+  tickRow(id);
+  const M=keyList();if(M){const j=M.pool.findIndex(m=>m.id===id);if(j>=0)keyMark(M,j)}
+  return true;
+}
+/* A button of the open message, pressed as a click presses it, and only
+   where it is on screen. */
+function keyPress(sel){
+  if(currentView!=='inbox'||!selMail||!keyShown(sel))return false;
+  $(sel).click();
+  return true;
+}
+/* Archive and Delete take the message off the list; the keyboard moves on
+   to the one that took its place, without opening it (opening marks read). */
+function keyLeave(sel){
+  const gone=selMail,L=keyList(),i=L?L.pool.findIndex(m=>m.id===gone):-1;
+  if(!keyPress(sel))return false;
+  const M=keyList(),rest=M?M.pool.filter(m=>m.id!==gone):[];
+  if(i>=0&&rest.length){KEY_AT=rest[Math.min(i,rest.length-1)].id;KEY_SEL=selMail;vlDraw(M.sc,true)}
+  return true;
+}
+/* Move to opens its menu and takes the focus, so Tab reaches the folders. */
+function keyFile(){
+  if(!keyPress('#md-file'))return false;
+  $('#md-file').focus();
+  return true;
+}
+function keySearch(){
+  $('#top-search-btn').click();
+  if(keyShown('#search-input'))$('#search-input').focus();
+  return true;
+}
+function keyEscape(){
+  if(ov.classList.contains('open')){closeCompose();return true}
+  const menu=$('.md-sortmenu.open');if(menu){menu.classList.remove('open');return true}
+  if($('#assist-ov').classList.contains('open')){closeAssist();return true}
+  if(currentView==='inbox'&&selMail){
+    KEY_AT=selMail;KEY_SEL=null;selMail=null;
+    $('#mail-detail').classList.remove('open');renderResting();renderMail();
+    return true;
+  }
+  return false;
+}
+function keyTyping(el){
+  return [el,document.activeElement].some(x=>x&&x.nodeType===1&&(x.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName)));
+}
+/* A question on screen has the keyboard to itself: opening a link, saving
+   a disguised program, deleting the account, the licence box, the welcome. */
+function keyDialog(){
+  return !!(LINK_PENDING||WARN_DONE||['#link-ov','#warn-ov','#welcome-ov'].some(s=>$(s).classList.contains('open'))
+    ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
+}
+function keyCaps(k){
+  return k.split(' ').map(p=>{const c=KEY_CAPS[p]||[p];return `<kbd class="key"${c[1]?` title="${c[1]}"`:''}>${esc(c[0])}</kbd>`}).join('<span>then</span>');
+}
+function renderKeys(){
+  $('#keys-list').innerHTML=KEY_GROUPS.map(([g,h])=>`<div class="keys-group ${g}"><h3>${h}</h3>${KEYS.map((k,i)=>k.where!==g?'':
+    `<div class="keys-row" data-key="${i}"><span class="keys-what">${esc(k.what)}</span><span class="keys-k">${k.keys.map(keyCaps).join('<span>or</span>')}</span></div>`).join('')}</div>`).join('');
+  $('#keys-foot').textContent=keysOn()
+    ?'Not while you are typing in a field, and never with Ctrl, Cmd or Alt held. Turn them off in Settings.'
+    :'Shortcuts are off. Turn them on in Settings, under Workspace.';
+}
+function openKeys(){
+  renderKeys();KEY_BACK=document.activeElement;
+  $('#keys-ov').classList.add('open');$('#keys-close').focus();
+}
+function closeKeys(){
+  $('#keys-ov').classList.remove('open');
+  if(KEY_BACK&&KEY_BACK.isConnected&&KEY_BACK.focus)KEY_BACK.focus();
+  KEY_BACK=null;
+}
+$('#keys-close').onclick=closeKeys;
+$('#keys-ov').addEventListener('click',e=>{if(e.target.id==='keys-ov')closeKeys()});
+$('#keys-show').onclick=openKeys;
+$('#set-keys').addEventListener('change',e=>{S.settings.keys=e.target.checked;save();toast(e.target.checked?'Keyboard shortcuts are on':'Keyboard shortcuts are off')});
+/* A press anywhere puts the outline away; one in the reading pane gives it
+   the arrow keys. */
+document.addEventListener('pointerdown',e=>{
+  document.body.classList.remove('kbnav');
+  KEY_PANE=!!(e.target&&e.target.closest&&e.target.closest('#mail-detail'));
+},true);
+/* On the window, after everything on the page: a field's own handler (the
+   address suggestions' Escape, say) and the link question's claim the key
+   first. */
+addEventListener('keydown',e=>{
+  if(e.defaultPrevented||e.isComposing||e.ctrlKey||e.metaKey||e.altKey)return;
+  if($('#keys-ov').classList.contains('open')){
+    if(e.key==='Escape'||e.key==='?'){e.preventDefault();closeKeys()}
+    else if(e.key==='Tab'){e.preventDefault();$('#keys-close').focus()}
+    return;
+  }
+  if(keyDialog())return;
+  const composing=ov.classList.contains('open');
+  if(e.key==='Escape'&&composing){e.preventDefault();closeCompose();return}
+  if(!keysOn()||composing||keyTyping(e.target))return;
+  if($('#assist-ov').classList.contains('open')){if(e.key==='Escape'){e.preventDefault();closeAssist()}return}
+  let k=e.key;
+  const seq=KEY_SEQ&&Date.now()-KEY_SEQ.at<=KEY_SEQ_MS?KEY_SEQ.key+' '+k:null;
+  KEY_SEQ=null;
+  if(seq&&KEYS.some(x=>x.keys.includes(seq)))k=seq;
+  else if(KEYS.some(x=>x.keys.some(s=>s.startsWith(k+' ')))){KEY_SEQ={key:k,at:Date.now()};return}
+  /* Enter on a focused button or link is that button's. */
+  if(k==='Enter'&&e.target&&e.target.closest&&e.target.closest('button,a[href],summary,[role=button],[role=option],[tabindex]'))return;
+  const hit=KEYS.find(x=>x.keys.includes(k));
+  if(hit&&hit.run(k))e.preventDefault();
 });
 
 /* ---------------- DOCUMENTS ---------------- */
@@ -3291,6 +3510,7 @@ async function installUpdate(){
 function renderSettings(){
   $('#set-name').value=S.settings.name;
   if($('#notify-row')){$('#notify-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-notify').value=notifyMode()}
+  $('#set-keys').checked=keysOn();
   renderSigs();
   renderPlan();
   renderLinked();
@@ -4088,7 +4308,7 @@ function openCompose(){
   if(sig)b.setSelectionRange(0,0);
 }
 /* Closing keeps the draft here and, in the app, saves it to Drafts when
-   something in it is new (F1). Escape calls this with nothing open. */
+   something in it is new (F1). Safe to call with nothing open. */
 function closeCompose(){
   suggClose();SUGG_POOL=null;
   const was=ov.classList.contains('open');
@@ -4175,6 +4395,9 @@ $('#folder-new').onclick=()=>{
 };
 
 $('#compose-btn').onclick=openCompose;
+/* The webview checks spelling only where it is asked to, in the language
+   RATA speaks to the customer in (H4). */
+['#cmp-subj','#cmp-body'].forEach(s=>{$(s).spellcheck=true;$(s).lang=userLang()});
 $('#cmp-close').onclick=closeCompose;
 ov.addEventListener('click',e=>{if(e.target===ov)closeCompose()});
 function liveScan(){

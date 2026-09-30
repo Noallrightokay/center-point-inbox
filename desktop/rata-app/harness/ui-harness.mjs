@@ -888,6 +888,302 @@ console.log('\n— address suggestions in the composer (H3) —');
   await pg.close();
 }
 
+console.log('\n— keyboard shortcuts (H4) —');
+{
+  const pg = await open(true);
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Sender ' + uid, from_addr: 's' + uid + '@example.org', to_name: 'Me', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '',
+    subject: 'Keys ' + uid, preview: 'p', body: 'Text ' + uid, ts: Date.now() - uid * 60e3, unread: true, starred: false, uid, uidvalidity: 7,
+    message_id: 'k' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const msgs = [mk(1, { from_name: 'Ann', from_addr: 'ann@example.org', to_all: ['me@example.com', 'bo@example.org'], cc: ['cy@example.org'] })];
+  for (let u = 2; u <= 60; u++) msgs.push(mk(u));
+  msgs.push(mk(61, { id: 'me@example.com_sent_61', folder: 'sent', from_name: 'Me', from_addr: 'me@example.com', to_name: 'Dee', to_addr: 'dee@example.org', to_all: ['dee@example.org'], unread: false }));
+  await pg.evaluate(async (msgs) => {
+    __mock.folders = [{ name: 'Receipts', label: 'Receipts' }];
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    S.settings.keys = undefined;
+    go('inbox'); mailFilter = 'all'; renderMailFilters(); renderMail();
+    document.activeElement && document.activeElement.blur();
+  }, msgs);
+  const press = async (k) => { await pg.keyboard.press(k); await pg.waitForTimeout(80); };
+  const st = () => pg.evaluate(() => {
+    const sc = document.querySelector('#mail-scroll'), pool = (VL.get(sc) || {}).pool || [];
+    const kb = document.querySelector('#mail-scroll .mail-row.kb'), r = kb && kb.getBoundingClientRect(), v = sc.getBoundingClientRect();
+    return { at: KEY_AT, idx: pool.findIndex((m) => m.id === KEY_AT), sel: selMail, view: currentView, pool: pool.map((m) => m.id),
+      kb: kb ? kb.dataset.id : null, kbnav: document.body.classList.contains('kbnav'),
+      inView: !!r && r.top >= Math.max(v.top, 0) - 1 && r.bottom <= Math.min(v.bottom, innerHeight) + 1,
+      outline: kb ? getComputedStyle(kb).outlineStyle : null,
+      composing: document.querySelector('#compose-ov').classList.contains('open'), kind: DRAFT.kind, ticked: [...SEL], selecting,
+      sheet: document.querySelector('#keys-ov').classList.contains('open'), focus: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : null,
+      acts: __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => a.action + ':' + a.uids.join()) };
+  });
+  const clear = () => pg.evaluate(() => { __mock.calls = []; window.__toasts = []; });
+
+  /* The list: j/k and the arrows move, and nothing opens or is marked read. */
+  await clear();
+  await press('j');
+  let s = await st();
+  check(s.idx === 0 && s.kb === s.pool[0] && s.kbnav && s.outline === 'solid' && s.sel === null, `j puts the keyboard on the first message, outlined, without opening it: ${JSON.stringify({ idx: s.idx, kb: s.kb, outline: s.outline, sel: s.sel })}`);
+  await press('j'); await press('ArrowDown');
+  s = await st();
+  check(s.idx === 2 && s.kb === s.pool[2], `j and Down move down: ${s.idx}`);
+  await press('k'); await press('ArrowUp'); await press('k');
+  s = await st();
+  check(s.idx === 0 && s.sel === null && s.acts.length === 0, `k and Up move up, stopping at the top, and nothing is opened or marked read: ${JSON.stringify({ idx: s.idx, sel: s.sel, acts: s.acts })}`);
+  for (let n = 0; n < 45; n++) await pg.keyboard.press('j');
+  await pg.waitForTimeout(150);
+  s = await st();
+  check(s.idx === 45 && s.kb === s.pool[45] && s.inView, `far down the list the row is drawn and scrolled into view: ${JSON.stringify({ idx: s.idx, kb: s.kb, inView: s.inView })}`);
+  await pg.evaluate(() => { KEY_AT = null; document.querySelector('#mail-scroll').scrollTop = 0; scrollTo(0, 0); });
+  await press('j');
+
+  /* x ticks, and turns Select on as the Select button does. */
+  await press('x');
+  s = await st();
+  check(s.selecting && s.ticked.join() === s.pool[0] && s.kb === s.pool[0], `x ticks the message and turns Select on: ${JSON.stringify({ selecting: s.selecting, ticked: s.ticked })}`);
+  await press('j'); await press('x');
+  s = await st();
+  check(s.ticked.length === 2 && s.ticked.includes(s.pool[1]), `x on the next ticks it too: ${JSON.stringify(s.ticked)}`);
+  await press('x');
+  s = await st();
+  check(s.ticked.join() === s.pool[0], `x again unticks: ${JSON.stringify(s.ticked)}`);
+  await pg.click('#bulk-bar [data-bulk="clear"]');
+  await pg.evaluate(() => document.activeElement.blur());
+  await press('k');
+
+  /* Enter opens, as a click does. */
+  await press('Enter');
+  s = await st();
+  const first = s.pool[0];
+  check(s.sel === first && (await pg.evaluate(() => !!document.querySelector('#md-reply'))), `Enter opens the message: ${s.sel}`);
+
+  /* On an open message: each key presses its button. */
+  await clear();
+  await press('s');
+  let m = await pg.evaluate((id) => S.messages.find((x) => x.id === id).starred, first);
+  s = await st();
+  check(m && s.acts.join() === 'star:1', `s stars it, on the server too: ${JSON.stringify(s.acts)}`);
+  await press('s');
+  m = await pg.evaluate((id) => S.messages.find((x) => x.id === id).starred, first);
+  check(!m && (await st()).acts.join() === 'star:1,unstar:1', 's again unstars it');
+  await clear();
+  await press('u');
+  m = await pg.evaluate((id) => S.messages.find((x) => x.id === id).unread, first);
+  check(m && (await st()).acts.join() === 'unread:1', 'u marks it unread, on the server too');
+  await press('r');
+  await pg.waitForTimeout(250);
+  s = await st();
+  check(s.composing && s.kind === 'reply' && (await pg.inputValue('#cmp-to')).includes('ann@example.org'), `r replies: ${JSON.stringify({ composing: s.composing, kind: s.kind })}`);
+  await pg.evaluate(() => document.activeElement.blur());
+  await press('Escape');
+  s = await st();
+  check(!s.composing && s.kind === 'reply' && s.sel === first, `Escape closes the composer, keeping the reply, and nothing else: ${JSON.stringify({ composing: s.composing, kind: s.kind, sel: s.sel })}`);
+  await pg.evaluate(() => newDraft());
+  await press('a');
+  await pg.waitForTimeout(250);
+  s = await st();
+  const cc = await pg.inputValue('#cmp-cc');
+  check(s.composing && /cy@example\.org/.test(cc) && /bo@example\.org/.test(cc), `a replies to everyone: ${JSON.stringify({ composing: s.composing, cc })}`);
+  await press('Escape');
+  await pg.evaluate(() => newDraft());
+  await press('f');
+  await pg.waitForTimeout(250);
+  s = await st();
+  check(s.composing && s.kind === 'forward', `f forwards: ${JSON.stringify({ composing: s.composing, kind: s.kind })}`);
+  await press('Escape');
+  await pg.evaluate(() => newDraft());
+  /* Reply all only where it is offered. */
+  await pg.evaluate(() => openMail('me@example.com_2'));
+  await press('a');
+  await pg.waitForTimeout(200);
+  s = await st();
+  check(!s.composing && !(await pg.evaluate(() => !!document.querySelector('#md-replyall'))), 'a does nothing where Reply all is not offered (no one else to answer)');
+  /* Move to opens its menu, and Escape closes the menu before the message. */
+  await press('m');
+  await pg.waitForTimeout(250);
+  s = await st();
+  const menu = await pg.evaluate(() => document.querySelector('#md-filemenu').classList.contains('open'));
+  check(menu && s.focus === 'md-file', `m opens Move to and puts the focus on it: ${JSON.stringify({ menu, focus: s.focus })}`);
+  await pg.evaluate(() => document.activeElement.blur());
+  await press('Escape');
+  s = await st();
+  check(!(await pg.evaluate(() => document.querySelector('#md-filemenu').classList.contains('open'))) && s.sel === 'me@example.com_2', 'Escape closes the menu first, and the message stays open');
+  /* e archives, # and Delete delete: the button's own way, and the
+     keyboard moves on to what took the message's place. */
+  await pg.evaluate(() => { openMail('me@example.com_3'); KEY_AT = KEY_SEL = selMail; });
+  await clear();
+  const before = (await st()).pool;
+  await press('e');
+  await pg.waitForTimeout(150);
+  s = await st();
+  check(s.acts.join() === 'archive:3' && !s.pool.includes('me@example.com_3') && s.at === before[before.indexOf('me@example.com_3') + 1] && s.sel === null,
+    `e archives it through the Archive button, and the keyboard is on the next message: ${JSON.stringify({ acts: s.acts, at: s.at })}`);
+  await pg.evaluate(() => openMail('me@example.com_4'));
+  await clear();
+  await press('#');
+  await pg.waitForTimeout(150);
+  s = await st();
+  check(s.acts.join() === 'trash:4' && !s.pool.includes('me@example.com_4'), `# deletes it to the Trash through the Delete button: ${JSON.stringify(s.acts)}`);
+  await pg.evaluate(() => openMail('me@example.com_5'));
+  await clear();
+  await press('Delete');
+  await pg.waitForTimeout(150);
+  s = await st();
+  check(s.acts.join() === 'trash:5', `so does Delete: ${JSON.stringify(s.acts)}`);
+  /* Through the button, BUG-M's rule holds: a Trash the server refuses
+     puts the message back. */
+  await pg.evaluate(() => { openMail('me@example.com_7'); __mock.changeFails = true; });
+  await clear();
+  await press('#');
+  await pg.waitForTimeout(300);
+  const back = await pg.evaluate(() => ({ held: S.messages.some((x) => x.id === 'me@example.com_7'), said: window.__toasts.slice() }));
+  check(back.held && back.said.some((t) => /Nothing was changed/.test(t)), `a delete the server refuses, by key, puts the message back and says so: ${JSON.stringify(back)}`);
+  await pg.evaluate(() => { __mock.changeFails = false; });
+  /* Sent mail has no Archive button, so e does nothing. */
+  await clear();
+  await pg.evaluate(() => { mailFilter = 'sent'; renderMail(); openMail('me@example.com_sent_61'); });
+  await press('e');
+  await pg.waitForTimeout(150);
+  s = await st();
+  check(s.acts.length === 0 && s.sel === 'me@example.com_sent_61' && !(await pg.evaluate(() => !!document.querySelector('#md-archive'))), `e does nothing where Archive does not show: ${JSON.stringify(s.acts)}`);
+  await pg.evaluate(() => { mailFilter = 'all'; renderMailFilters(); renderMail(); });
+
+  /* Escape closes the open message. */
+  await press('Escape');
+  s = await st();
+  check(s.sel === null && (await pg.evaluate(() => !document.querySelector('#md-reply'))), `Escape closes the open message: ${s.sel}`);
+
+  /* Anywhere: c, /, g i. */
+  await press('c');
+  s = await st();
+  check(s.composing && s.kind === 'new', `c opens the composer: ${JSON.stringify({ composing: s.composing, kind: s.kind })}`);
+  /* Typing in the composer types, whatever the letter. */
+  await pg.click('#cmp-subj');
+  await pg.keyboard.type('jk#x/');
+  await pg.click('#cmp-body');
+  await pg.keyboard.type('j?cegs');
+  await pg.keyboard.press('Delete');
+  s = await st();
+  check(s.composing && (await pg.inputValue('#cmp-subj')) === 'jk#x/' && (await pg.inputValue('#cmp-body')).startsWith('j?cegs') && !s.sheet && s.view === 'inbox',
+    `typing j (and every other shortcut) in the composer types it: ${JSON.stringify({ subj: await pg.inputValue('#cmp-subj'), sheet: s.sheet })}`);
+  const spell = await pg.evaluate(() => ['#cmp-subj', '#cmp-body'].map((q) => { const el = document.querySelector(q); return { spell: el.spellcheck && el.getAttribute('spellcheck'), lang: el.lang }; }).concat([{ want: userLang() }]));
+  check(spell[0].spell === 'true' && spell[1].spell === 'true' && spell[0].lang === spell[2].want && spell[1].lang === spell[2].want && spell[2].want.length >= 2,
+    `the subject and body are spell-checked, in the customer's language: ${JSON.stringify(spell)}`);
+  await press('Escape');
+  s = await st();
+  check(!s.composing && (await pg.inputValue('#cmp-subj')) === 'jk#x/', 'Escape in the composer closes it and keeps the draft');
+  await pg.evaluate(() => newDraft());
+  await pg.evaluate(() => document.activeElement.blur());
+  await press('/');
+  s = await st();
+  check(s.view === 'search' && s.focus === 'search-input' && (await pg.inputValue('#search-input')) === '', `/ goes to search and puts the cursor in it, without typing a slash: ${JSON.stringify({ view: s.view, focus: s.focus })}`);
+  await pg.keyboard.type('jk');
+  s = await st();
+  check((await pg.inputValue('#search-input')) === 'jk' && s.view === 'search', 'typing j in search types a j');
+  await pg.evaluate(() => document.activeElement.blur());
+  await press('g'); await press('i');
+  s = await st();
+  check(s.view === 'inbox', `g then i goes to the inbox: ${s.view}`);
+  await pg.evaluate(() => go('set'));
+  await press('g');
+  await pg.waitForTimeout(1100);
+  await press('i');
+  s = await st();
+  check(s.view === 'set', `but not a second apart: ${s.view}`);
+  await pg.evaluate(() => go('inbox'));
+
+  /* Ctrl, Cmd and Alt are the system's. */
+  await pg.evaluate(() => { openMail('me@example.com_6'); KEY_AT = KEY_SEL = selMail; });
+  await clear();
+  const was = await st();
+  for (const k of ['Control+c', 'Control+j', 'Meta+c', 'Alt+r', 'Control+Delete']) await press(k);
+  s = await st();
+  m = await pg.evaluate(() => S.messages.find((x) => x.id === 'me@example.com_6'));
+  check(!s.composing && s.at === was.at && s.sel === 'me@example.com_6' && s.view === 'inbox' && s.acts.length === 0 && m && !m.starred && !s.sheet,
+    `Ctrl+C (and Ctrl, Cmd or Alt with any key) does nothing extra: ${JSON.stringify({ composing: s.composing, at: s.at, acts: s.acts })}`);
+
+  /* The sheet lists exactly the table, and the table is the card's. */
+  await press('?');
+  const sheet = await pg.evaluate(() => ({
+    open: document.querySelector('#keys-ov').classList.contains('open'), role: document.querySelector('#keys-ov').getAttribute('role'), focus: document.activeElement.id,
+    rows: [...document.querySelectorAll('#keys-list .keys-row')].map((r) => ({ i: +r.dataset.key, what: r.querySelector('.keys-what').textContent, caps: [...r.querySelectorAll('kbd')].map((k) => k.textContent) })),
+    table: KEYS.map((k, i) => ({ i, what: k.what, caps: k.keys.flatMap((x) => x.split(' ').map((p) => (KEY_CAPS[p] || [p])[0])), keys: k.keys })),
+  }));
+  const byI = (a) => JSON.stringify([...a].sort((x, y) => x.i - y.i).map(({ i, what, caps }) => ({ i, what, caps })));
+  check(sheet.open && sheet.role === 'dialog' && sheet.focus === 'keys-close', `? shows the sheet, as a dialog with the focus on Close: ${JSON.stringify({ open: sheet.open, focus: sheet.focus })}`);
+  check(sheet.rows.length === sheet.table.length && byI(sheet.rows) === byI(sheet.table), `the sheet lists exactly the table, every row once: ${sheet.rows.length} rows, ${sheet.table.length} in the table`);
+  const card = ['j', 'ArrowDown', 'k', 'ArrowUp', 'Enter', 'x', 'r', 'a', 'f', 'e', '#', 'Delete', 's', 'u', 'm', 'c', '/', 'g i', 'Escape', '?'];
+  const keys = sheet.table.flatMap((t) => t.keys);
+  check(keys.length === card.length && card.every((k) => keys.includes(k)), `the table holds the card's keys and no others: ${JSON.stringify(keys)}`);
+  await press('j');
+  check((await st()).at === s.at, 'keys do nothing else while the sheet is open');
+  await press('Escape');
+  s = await st();
+  check(!s.sheet && s.sel === 'me@example.com_6', 'Escape closes the sheet, and only the sheet');
+
+  /* Never while a question is on screen. */
+  await pg.evaluate(() => askToOpen('https://example.com/x', 'example.com'));
+  await press('c'); await press('j'); await press('?');
+  s = await st();
+  check(!s.composing && s.at === was.at && !s.sheet, 'nothing while the link question is open');
+  await press('Escape');
+  s = await st();
+  check(!(await pg.evaluate(() => document.querySelector('#link-ov').classList.contains('open'))) && s.sel === 'me@example.com_6', 'Escape closes the link question, and not the message behind it');
+  await pg.evaluate(() => { window.__warned = askDisguised({ n: 'invoice.pdf.exe' }, true); document.activeElement.blur(); });
+  await press('c'); await press('?');
+  s = await st();
+  check(!s.composing && !s.sheet, 'nothing while the disguised-program question is open');
+  await press('Escape');
+  check(await pg.evaluate(async () => (await window.__warned) === false && !document.querySelector('#warn-ov').classList.contains('open')), 'Escape cancels it, as before');
+  await pg.evaluate(() => { go('set'); openDelete(); document.activeElement.blur(); });
+  await press('c'); await press('?'); await press('g'); await press('i');
+  s = await st();
+  check(!s.composing && !s.sheet && s.view === 'set', 'nothing while the delete-account question is open');
+  await pg.click('#del-cancel');
+
+  /* H3's suggestions keep their keys: Escape closes only the list. */
+  await pg.evaluate(() => { go('inbox'); newDraft(); openCompose(); });
+  await pg.click('#cmp-to');
+  await pg.keyboard.type('se');
+  const listed = await pg.evaluate(() => !document.querySelector('#cmp-sugg').hidden);
+  await press('ArrowDown');
+  const moved = await pg.evaluate(() => document.querySelector('#cmp-to').getAttribute('aria-activedescendant'));
+  await press('Escape');
+  s = await st();
+  check(listed && moved === 'cmp-sugg-1' && s.composing && s.at === was.at && (await pg.evaluate(() => document.querySelector('#cmp-sugg').hidden)),
+    `with the suggestions open, Down moves in them and Escape closes only them: ${JSON.stringify({ listed, moved, composing: s.composing })}`);
+  await press('Escape');
+  s = await st();
+  check(!s.composing && (await pg.inputValue('#cmp-to')) === 'se', 'the next Escape closes the composer, keeping what was typed');
+  await pg.evaluate(() => newDraft());
+
+  /* The setting. */
+  await pg.evaluate(() => go('set'));
+  const row = await pg.evaluate(() => ({ shown: getComputedStyle(document.querySelector('#keys-row')).display !== 'none', on: document.querySelector('#set-keys').checked }));
+  check(row.shown && row.on, `Settings has the row, on by default: ${JSON.stringify(row)}`);
+  await pg.click('#set-keys');
+  check(await pg.evaluate(() => S.settings.keys === false), 'unticking it turns them off');
+  await pg.evaluate(() => { go('inbox'); document.activeElement.blur(); });
+  await press('j'); await press('c'); await press('?'); await press('s');
+  s = await st();
+  m = await pg.evaluate(() => S.messages.find((x) => x.id === 'me@example.com_6'));
+  check(s.at === was.at && !s.composing && !s.sheet && !m.starred, `off, the keys do nothing: ${JSON.stringify({ at: s.at, composing: s.composing, sheet: s.sheet })}`);
+  await pg.evaluate(() => openCompose());
+  await press('Escape');
+  check(!(await st()).composing, 'but Escape still closes the composer, as it always has');
+  await pg.evaluate(() => go('set'));
+  await pg.click('#keys-show');
+  const off = await pg.evaluate(() => ({ open: document.querySelector('#keys-ov').classList.contains('open'), foot: document.querySelector('#keys-foot').textContent }));
+  check(off.open && /off/.test(off.foot), `Show shortcuts opens the sheet, which says they are off: ${JSON.stringify(off)}`);
+  await press('Escape');
+  await pg.click('#set-keys');
+  await pg.evaluate(() => { go('inbox'); document.activeElement.blur(); });
+  await press('c');
+  check((await st()).composing && (await pg.evaluate(() => S.settings.keys === true)), 'ticked again, they work again');
+  await pg.close();
+}
+
 console.log('\n— new mail as it arrives —');
 {
   const pg = await open(true);
