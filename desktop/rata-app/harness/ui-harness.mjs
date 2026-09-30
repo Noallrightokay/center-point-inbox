@@ -2296,6 +2296,130 @@ console.log('\n— Undo send: a message waits a few seconds before it goes (H9) 
   await pg.close();
 }
 
+console.log('\n— the Text view folds quoted text, lightens a signature and cuts long links (H12) —');
+{
+  const pg = await open(true);
+  const long = 'https://docs.example.org/meetings/2026/q4/planning/agenda-and-minutes?ref=mail&id='.padEnd(200, '7');
+  const REPLY = [
+    'Hi Ann,', '', 'Thursday works. The agenda is here: ' + long, 'and the room is https://example.org/room.', '',
+    'Also: <script>window.__h12 = 1</script><img src=x onerror="window.__h12 = 2">', '',
+    '> Can you bring the figures?', '> The ones from Q3.', '', 'Yes, I will.', '',
+    '-- ', 'Bo Li', 'Example Ltd', '',
+    'On Mon, 28 Sep 2026 at 09:00, Ann <ann@example.org> wrote:', '> Does Thursday work?', '>',
+    '> Am Mo., 28. Sept. 2026 um 08:00 Uhr schrieb Cy <cy@example.de>:', '>> Passt es am Donnerstag?', '',
+    'Earlier, from Dee:', '________________________________', 'From: Dee <dee@example.com>', 'Sent: Sunday, 27 September 2026 18:00', 'To: Bo Li', 'Subject: Planning', '',
+    'Let us plan the quarter.',
+  ].join('\n');
+  const put = (id, body) => pg.evaluate(({ id, body }) => {
+    S.messages = S.messages.filter((m) => m.id !== id);
+    S.messages.push({ id, ch: 'email', prov: 'imap', acct: S.linked.find((l) => l.type === 'mail').id, mailbox: 'me@example.com', fromName: 'Bo Li', fromAddr: 'bo@example.org', subj: 'Re: Planning ' + id,
+      prev: 'p', body, ts: Date.now(), unread: false, starred: false, atts: [], uid: 900 + id.length, uidvalidity: 7, bodyV: 2, html: false });
+    openMail(id);
+  }, { id, body });
+  const view = () => pg.evaluate(() => {
+    const el = document.querySelector('#md-body');
+    return { seen: el.innerText, all: el.textContent, btns: [...el.querySelectorAll('.md-qbtn')].map((b) => ({ tag: b.tagName, type: b.type, text: b.textContent, exp: b.getAttribute('aria-expanded'),
+      ctl: b.getAttribute('aria-controls'), hid: document.getElementById(b.getAttribute('aria-controls'))?.hidden })) };
+  });
+  await put('h12-reply', REPLY);
+  let v = await view();
+  check(v.btns.length === 3 && v.btns.every((b) => b.tag === 'BUTTON' && b.type === 'button' && b.text === 'Show quoted text' && b.exp === 'false' && b.hid === true),
+    `each quoted part is folded behind its own Show quoted text button, aria-expanded false: ${JSON.stringify(v.btns)}`);
+  check(/Thursday works/.test(v.seen) && /Yes, I will\./.test(v.seen) && /Bo Li/.test(v.seen) && /Earlier, from Dee:/.test(v.seen)
+    && !/Can you bring|Does Thursday work|schrieb Cy|Passt es|wrote:|Original|From: Dee|Let us plan/.test(v.seen),
+    `folded by default: the reply, the signature and the words between show, the ">" quote, the "On … wrote:" and German attribution and Outlook's header do not: ${JSON.stringify(v.seen)}`);
+  check(/Can you bring/.test(v.all) && /Passt es/.test(v.all) && /Let us plan/.test(v.all), 'and nothing is lost: the folded text is on the page');
+  /* Keyboard: the button takes focus and Enter opens it. */
+  await pg.focus('#md-body .md-qbtn >> nth=1');
+  await pg.keyboard.press('Enter');
+  v = await view();
+  check(v.btns[1].exp === 'true' && v.btns[1].text === 'Hide quoted text' && v.btns[1].hid === false && /Does Thursday work\?/.test(v.seen) && /schrieb Cy/.test(v.seen) && !/Let us plan/.test(v.seen),
+    `Show quoted text, from the keyboard, reveals that part and says Hide quoted text: ${JSON.stringify(v.btns[1])}`);
+  await pg.click('#md-body .md-qbtn >> nth=2');
+  v = await view();
+  check(/From: Dee/.test(v.seen) && /Let us plan/.test(v.seen) && /_{10}/.test(v.seen), 'the Outlook header folds from its rule to the end, and opens');
+  await pg.evaluate(() => openMail('h12-reply'));
+  v = await view();
+  check(v.btns.map((b) => b.exp).join() === 'false,true,true', `a redraw keeps what was opened open: ${v.btns.map((b) => b.exp).join()}`);
+  await pg.click('#md-body .md-qbtn >> nth=1');
+  v = await view();
+  check(v.btns[1].exp === 'false' && v.btns[1].text === 'Show quoted text' && !/Does Thursday work/.test(v.seen), 'Hide quoted text folds it again');
+
+  /* The signature: there, and in the secondary colour. */
+  const sig = await pg.evaluate(() => {
+    const s = document.querySelector('#md-body .md-sig'), probe = document.createElement('span');
+    probe.style.color = 'var(--slate)'; document.body.append(probe);
+    const want = getComputedStyle(probe).color; probe.remove();
+    return s && { text: s.textContent, shown: s.offsetHeight > 0, color: getComputedStyle(s).color, body: getComputedStyle(document.querySelector('#md-body')).color, want };
+  });
+  check(sig && sig.text === '-- \nBo Li\nExample Ltd' && sig.shown && sig.color === sig.want && sig.color !== sig.body,
+    `the signature after "-- " is shown, lighter (--slate, not the text colour): ${JSON.stringify(sig)}`);
+
+  /* The long link: cut for showing, whole in its title and what it opens. */
+  const ln = await pg.evaluate((long) => [...document.querySelectorAll('#md-body a.md-link')].map((a) => ({ text: a.textContent, href: a.getAttribute('href'), title: a.title })), long);
+  const cut = ln.find((a) => a.href === long);
+  check(long.length === 200 && cut && cut.text.length <= 64 && cut.text.startsWith('docs.example.org/meetings/') && cut.text.endsWith('…') && cut.title === long,
+    `a 200-character address shows as its host and the start of its path, whole in its title: ${JSON.stringify(cut && { text: cut.text, title: cut.title.length })}`);
+  check(ln.some((a) => a.href === 'https://example.org/room' && a.text === 'https://example.org/room' && !a.title), 'a short one shows as it is');
+  await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; });
+  await pg.click(`#md-body a.md-link[href="${long}"]`);
+  await pg.waitForFunction(() => (__mock.opened || []).length === 1, null, { timeout: 3000 }).catch(() => {});
+  const opened = await pg.evaluate(() => __mock.opened);
+  check(opened.length === 1 && opened[0] === long, `and a click opens the whole address through open_link: ${opened.map((u) => u.length)} characters`);
+
+  /* No script in the text runs, and none of its markup becomes an element. */
+  const safe = await pg.evaluate(() => ({ ran: window.__h12, els: document.querySelectorAll('#md-body script, #md-body img').length, text: document.querySelector('#md-body').textContent }));
+  check(safe.ran === undefined && safe.els === 0 && safe.text.includes('<script>window.__h12 = 1</script><img src=x onerror="window.__h12 = 2">'),
+    `no script in the message runs; its markup is shown as text: ${JSON.stringify({ ran: safe.ran, els: safe.els })}`);
+
+  /* What must not fold. */
+  await put('h12-only', '> Does Thursday work?\n> Or Friday?\n>\n> Ann');
+  v = await view();
+  check(v.btns.length === 0 && /Or Friday\?/.test(v.seen), `a message that is only a quote is not folded: ${JSON.stringify(v)}`);
+  await put('h12-onlyon', 'On Mon, 28 Sep 2026 at 09:00, Ann <ann@example.org> wrote:\n> Does Thursday work?\n> Or Friday?\n\n-- \nBo');
+  v = await view();
+  check(v.btns.length === 0 && /Or Friday\?/.test(v.seen), `nor one that is only an attribution, its quote and a signature: ${JSON.stringify(v.btns)}`);
+  await put('h12-code', 'Run this:\n\n  $ cat notes\n  > first line\n\nWhen x\n> 0 the sum grows.\nThat is all.');
+  v = await view();
+  check(v.btns.length === 0 && /> first line/.test(v.seen) && /> 0 the sum grows/.test(v.seen), `a lone ">" line in code or maths is not folded: ${JSON.stringify(v.seen)}`);
+  await put('h12-fwd', 'FYI\n\n---------- Forwarded message ---------\nFrom: Ann <ann@example.org>\nDate: Mon, 28 Sep 2026\nSubject: Plan\nTo: me@example.com\n\nThe plan.');
+  v = await view();
+  check(v.btns.length === 0 && /The plan\./.test(v.seen), 'a forwarded message is the message, not a quote, and stays open');
+
+  /* Each attribution the card names, on its own. */
+  const forms = await pg.evaluate(() => Object.fromEntries(Object.entries({
+    de: 'Danke!\n\nAm Mo., 28. Sept. 2026 um 08:00 Uhr schrieb Cy <cy@example.de>:\n> Passt es?',
+    fr: 'Merci\n\nLe lun. 28 sept. 2026 à 08:00, Cy <cy@example.fr> a écrit :\n> Ça va ?',
+    es: 'Gracias\n\nEl lun, 28 sept 2026 a las 8:00, Cy (<cy@example.es>) escribió:\n> ¿Vale?',
+    nl: 'Dank\n\nOp ma 28 sep. 2026 om 08:00 schreef Cy <cy@example.nl>:\n> Goed?',
+    en: 'Sure.\n\nOn Mon, Sep 28, 2026 at 9:00 AM Ann Example <\nann@example.org> wrote:\n\n> Lunch?',
+    orig: 'Ok\n\n-----Original Message-----\nFrom: Dee\nTo: Bo\n\nThe original.',
+    outlook: 'See below.\n\nFrom: Dee <dee@example.com>\nSent: Sunday, 27 September 2026 18:00\nTo: Bo\n\nThe original.',
+    plain: 'Ok\n\nOn Mon, Ann wrote:\nThe original, with no ">" before it.',
+  }).map(([k, t]) => [k, readingParts(t).map((p) => p.kind).join()])));
+  check(Object.values(forms).every((k) => k === 'text,quote'), `German, French, Spanish, Dutch, a wrapped English attribution, -----Original Message-----, a From:/Sent: header and an unprefixed original all fold: ${JSON.stringify(forms)}`);
+
+  /* A translation folds the same way. */
+  await pg.evaluate(() => { TRANSLATED.set('h12-reply', { text: 'Hallo Ann,\n\nDonnerstag passt.\n\nOn Mon, 28 Sep 2026 at 09:00, Ann <ann@example.org> wrote:\n> Passt Donnerstag?\n> Oder Freitag?', to: 'de', hidden: false }); openMail('h12-reply'); });
+  v = await view();
+  check(v.btns.length === 1 && v.btns[0].exp === 'false' && /Donnerstag passt/.test(v.seen) && !/Oder Freitag/.test(v.seen), `a translated message folds its translation's quote too: ${JSON.stringify(v.btns)}`);
+  await pg.evaluate(() => TRANSLATED.delete('h12-reply'));
+
+  /* The formatted view is left alone. */
+  const fmt = await pg.evaluate(() => {
+    OPENED.set('h12-reply', { text: 'Hi\n\n> a\n> b', html: '<p>Hi</p><blockquote>&gt; a<br>&gt; b</blockquote>', atts: [] });
+    VIEWMODE.set('h12-reply', 'html'); openMail('h12-reply');
+    const f = document.querySelector('#md-html');
+    const r = { frame: !!f, sandbox: f && f.getAttribute('sandbox'), btns: document.querySelectorAll('#mail-detail .md-qbtn').length };
+    VIEWMODE.set('h12-reply', 'text'); openMail('h12-reply');
+    r.textBtns = document.querySelectorAll('#md-body .md-qbtn').length;
+    OPENED.delete('h12-reply');
+    return r;
+  });
+  check(fmt.frame && fmt.sandbox === 'allow-popups' && fmt.btns === 0 && fmt.textBtns === 1, `the formatted view is untouched; its Text view folds: ${JSON.stringify(fmt)}`);
+  await pg.close();
+}
+
 await browser.close();
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);
