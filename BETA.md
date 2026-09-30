@@ -191,6 +191,11 @@ Don't spend time reporting these; they are known and planned:
     in both. RATA only follows the newest 2 000 messages of each folder
     this way. Tell us if mail disappears from RATA that is still in your
     webmail, with the provider: that is the most important thing to report.
+  - **Replies read shorter:** in the Text view the quoted part of a reply
+    folds behind **Show quoted text**, the signature (after a `-- ` line)
+    is shown lighter, and a very long link is shortened on screen but opens
+    whole. Tell us about a reply whose quote did not fold, or a message
+    where something you needed to read was folded away.
   - **The licence renews while RATA stays open**, every six hours and
     whenever mail stops because it lapsed, not only at start; if
     mailrata.org cannot be reached, the licence box says so and has **Try

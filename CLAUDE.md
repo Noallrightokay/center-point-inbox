@@ -29,7 +29,7 @@ convenient.
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`). 127 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 785 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (278 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (297 checks, CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -674,7 +674,10 @@ too (the app saves what it makes through `save_file` and never navigates
 to a blob), and so is any other `tauri://` host or port. It
 sends mailrata.org links to the browser and refuses the rest — the licence
 box's "Sign in at mailrata.org" used to replace the app with the website,
-with no way back. In the Text view, addresses are linked (`linkify`) and
+with no way back. In the Text view, addresses are linked (`linkify(el,text)`, which since
+H12 builds text nodes and `<a>` elements, never an HTML string; a web
+address over 64 characters shows as its host and the start of its path
+with `…`, its `href` and `title` whole) and
 open straight away, since the text *is* the address; bridge.js hands every
 http(s) link on the app's own page to `open_link`, and `open_link` checks
 again in Rust whatever the page asked. Verified in the packaged WebKit build
@@ -1061,6 +1064,22 @@ closing the only window exits the app and probably drops a send in
 flight, which the outbox then puts back. Harness: `open()` sets
 `undoSend = 0` unless `{undo: true}`; `window.__RATA_SEND_SECOND`
 shortens a second of the count.
+**Quoted text folded (H12, v0.1.43).** In the Text view only (the
+formatted view is untouched), `readingParts` splits a message into text,
+signature and quote parts and `fillReading` draws them with DOM methods.
+Folded behind a **Show quoted text** button (`aria-expanded`,
+`aria-controls`; `QUOTE_OPEN` keeps a part open across redraws for the
+session): a run of two or more `>` lines (a blank line inside counts); an
+attribution (English "On … wrote:", including Gmail's two-line form,
+German "Am … schrieb", French "Le … a écrit", Spanish "El … escribió",
+Dutch "Op … schreef") with the `>` lines under it, or to the end when none
+follow, so an interleaved reply's answers stay visible; Outlook's
+"-----Original Message-----" or a `From:` with `Sent:` within three lines
+(and the Von/Gesendet, De/Envoyé, De/Enviado, Van/Verzonden forms), to the
+end. Never folded: a single `>` line (code, maths), Gmail's "Forwarded
+message" block, or anything when only a signature or nothing would be
+left. A line that is exactly `-- ` or `--` starts the signature, shown in
+`--slate`, never hidden. A translation folds the same way.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an

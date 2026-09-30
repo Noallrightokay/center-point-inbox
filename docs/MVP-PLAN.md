@@ -73,13 +73,13 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   `.deb` and the Windows exe, no font CDN, and it launches as "RATA 0.1.42
   beta" (`verify-release.sh`, 2026-09-29). The install-and-launch smoke
   test passed on all four builds ([run 36574649823](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36574649823)).
-- **Merged for 0.1.43** (wave 5a, H3, H6 and H9 of 5b, H4 of 5c, and the pre-launch audit's
+- **Merged for 0.1.43** (wave 5a, all of 5b (H3, H6, H9, H12), H4 of 5c, and the pre-launch audit's
   bug cards; not yet released: [G2](#g2) bumps the version in
   [#102](https://github.com/Noallrightokay/center-point-inbox/pull/102)
   and the PM merges it once the owner confirms the licence signing key):
   the licence mint script, `infrastructure/licence/mint.sh` ([#90](https://github.com/Noallrightokay/center-point-inbox/pull/90));
   [H1](#h1), the privacy policy and terms ([#92](https://github.com/Noallrightokay/center-point-inbox/pull/92)); [H2](#h2), the help
-  page at `/help` ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)); [H4](#h4), keyboard shortcuts ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)); [H6](#h6), search on the server ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)); [H9](#h9), undo send ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)); BUG-C, RATA's copy follows the server ([#106](https://github.com/Noallrightokay/center-point-inbox/pull/106)); [H3](#h3), address suggestions and named
+  page at `/help` ([#91](https://github.com/Noallrightokay/center-point-inbox/pull/91)); [H4](#h4), keyboard shortcuts ([#103](https://github.com/Noallrightokay/center-point-inbox/pull/103)); [H6](#h6), search on the server ([#104](https://github.com/Noallrightokay/center-point-inbox/pull/104)); [H9](#h9), undo send ([#105](https://github.com/Noallrightokay/center-point-inbox/pull/105)); BUG-C, RATA's copy follows the server ([#106](https://github.com/Noallrightokay/center-point-inbox/pull/106)); [H12](#h12), quoted text folded ([#107](https://github.com/Noallrightokay/center-point-inbox/pull/107)); [H3](#h3), address suggestions and named
   addresses in the engine ([#99](https://github.com/Noallrightokay/center-point-inbox/pull/99)); [H7](#h7), Unsubscribe ([#95](https://github.com/Noallrightokay/center-point-inbox/pull/95));
   [H8](#h8), Copy diagnostics and Help in Settings ([#96](https://github.com/Noallrightokay/center-point-inbox/pull/96));
   [BUG-A](#bug-a), the AI relay on long mail ([#94](https://github.com/Noallrightokay/center-point-inbox/pull/94)); [BUG-D](#bug-d),
@@ -133,7 +133,7 @@ The evidence goes in `docs/MVP-EVIDENCE.md`.
   16 against real Dovecot and GreenMail), shell (127) and website (785)
   suites run in CI (`desktop-ci.yml`, `rata-next-ci.yml`), and from 0.1.43
   also in `release.yml`'s `gate` before anything is built. The **desktop
-  UI harness** (278 checks that drive
+  UI harness** (297 checks that drive
   the real interface against a fake backend, in `desktop/rata-app/harness/`)
   runs in CI as *Desktop interface, driven* ([A3](#a3),
   [#60](https://github.com/Noallrightokay/center-point-inbox/pull/60)).
@@ -859,6 +859,8 @@ quoted text**; the signature block after `-- ` is shown lighter; long
 URLs in the Text view are cut for display but open whole. Nothing
 changes in the formatted (HTML) view. Harness checks with a reply that
 has all three. Done when: they pass. Hot file: `app.html` (text view).
+
+*State: **done** in code ([#107](https://github.com/Noallrightokay/center-point-inbox/pull/107)), merged for 0.1.43; not yet released.*
 
 #### Bug cards from the pre-launch audit (2026-09-29)
 Ten finders read the MVP journey at 0.1.42 and reported 47 findings. The
