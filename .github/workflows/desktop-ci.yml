@@ -125,9 +125,17 @@ jobs:
       - name: Clippy, with the feature
         run: cargo clippy --all-targets --features loopback-tests -- -D warnings
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       # Installing the package starts the system's own Dovecot on 143 and 993;
       # servers.sh runs one of its own there instead.
       - name: Install Dovecot
+        timeout-minutes: 8
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dovecot-imapd
@@ -157,7 +165,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       - name: Install the system webview
+        timeout-minutes: 8
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -228,11 +244,19 @@ jobs:
         run: npm ci
         working-directory: rata-next
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       # The harness imports Playwright from rata-next/node_modules, so the
       # browser is installed by that same pinned copy (run from rata-next): the
       # revision it downloads is the one the harness launches. Neither step
       # sets PLAYWRIGHT_BROWSERS_PATH, so both use the default cache.
       - name: Install Chromium
+        timeout-minutes: 8
         run: npx playwright install --with-deps chromium
         working-directory: rata-next
 

@@ -41,7 +41,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       - name: Install Chromium
+        timeout-minutes: 8
         run: npx playwright install --with-deps chromium
 
       - name: Build Next.js application

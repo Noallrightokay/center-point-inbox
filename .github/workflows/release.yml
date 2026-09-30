@@ -97,7 +97,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       - name: Install the system webview
+        timeout-minutes: 8
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -140,7 +148,15 @@ jobs:
         run: npm ci
         working-directory: rata-next
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       - name: Install Chromium
+        timeout-minutes: 8
         run: npx playwright install --with-deps chromium
         working-directory: rata-next
 
@@ -255,12 +271,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times.
+      - name: Make apt retry a stalled download instead of hanging
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
       # Ubuntu 22.04 rather than 24.04, deliberately: an AppImage built against
       # a newer glibc will not start on an older distribution, and the point of
       # an AppImage is that it runs anywhere. Build on the oldest thing you are
       # willing to support.
       - name: Install the system webview
         if: startsWith(matrix.os, 'ubuntu')
+        timeout-minutes: 8
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
