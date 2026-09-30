@@ -4519,8 +4519,10 @@ mod tests {
             assert!(why.contains("me@example.com"), "{why}");
             // One search: without CHARSET the bytes would be read as ASCII.
             the_search(&log);
-            let log = log.lock().unwrap();
-            assert!(!log.iter().any(|c| c.starts_with(b"UID FETCH")), "{log:?}");
+            {
+                let log = log.lock().unwrap();
+                assert!(!log.iter().any(|c| c.starts_with(b"UID FETCH")), "{log:?}");
+            }
 
             let (mut s, _) =
                 scripted_search(&[1], INBOX_ONLY, SearchReply::Refuse("BAD Invalid search")).await;

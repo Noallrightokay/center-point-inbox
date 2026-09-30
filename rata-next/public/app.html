@@ -4879,6 +4879,10 @@ async function absorbMail(res,quiet){
     const have=S.messages.find(x=>x.id===m.id);
     /* A draft RATA saved (F1), now seen in Drafts: an ordinary draft from here on. */
     if(have&&have.ownDraft){delete have.ownDraft;delete have.savedAt}
+    /* One a search on the server brought (H6), now read by a refresh. A
+       refresh reads only mail newer than what it held, or the newest block
+       whole, so everything between is read too: from here on it counts. */
+    if(have&&have.srvFound)delete have.srvFound;
     if(have&&m.draftId)have.draftId=m.draftId;
     if(have){if(!have.sent&&!have.draft)have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));

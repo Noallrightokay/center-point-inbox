@@ -1760,6 +1760,20 @@ console.log('\n— a search can ask each mailbox’s server too (H6) —');
     marked: S.messages.filter((m) => m.srvFound).map((m) => m.uid), subj7: (S.messages.find((m) => m.id === 'me@example.com_7') || {}).subj, oldest: (oldestRef('me@example.com', 'inbox') || {}).uid }));
   check(paged.ids.join() === '5,7,60,90' && paged.marked.length === 0 && paged.subj7 === 'Old statement' && paged.oldest === 5,
     `Load older mail pages from what it held, and takes the found ones in as history without doubling them: ${JSON.stringify(paged)}`);
+  /* One the server found that arrived after the last refresh: a refresh
+     that then brings it has read it, and from then on it counts. */
+  await pg.evaluate((one) => { __mock.serverFound = { 'me@example.com': { messages: [one], matched: 1 } }; }, mk('me@example.com', 95, 'New statement', { body: 'Another invoice.' }));
+  await pg.fill('#search-input', 'another invoice');
+  await pg.click('#search-go');
+  await pg.waitForSelector('#srv-bar [data-srv="me@example.com"]', { timeout: 5000 }).catch(() => {});
+  await pg.click('#srv-bar [data-srv="me@example.com"]');
+  await pg.waitForFunction(() => /found/.test((document.querySelector('#srv-bar [data-srv="me@example.com"]') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const before = await pg.evaluate(() => ({ marked: S.messages.filter((m) => m.srvFound).map((m) => m.uid), known: heldKnown().filter((k) => k.email === 'me@example.com' && k.folder === 'inbox').map((k) => k.since) }));
+  await pg.evaluate((one) => { __mock.refresh = { messages: [one], flags: [], problems: [], skipped: [] }; }, mk('me@example.com', 95, 'New statement', { body: 'Another invoice.' }));
+  await pg.evaluate(() => serverSync('mail'));
+  const brought = await pg.evaluate(() => ({ marked: S.messages.filter((m) => m.srvFound).map((m) => m.uid), known: heldKnown().filter((k) => k.email === 'me@example.com' && k.folder === 'inbox').map((k) => k.since) }));
+  check(before.marked.join() === '95' && before.known.join() === '90' && brought.marked.length === 0 && brought.known.join() === '95',
+    `a found message newer than the last refresh counts once a refresh has brought it: ${JSON.stringify({ before, brought })}`);
   /* A refused search says why, beside its mailbox, and can be tried again. */
   await pg.evaluate(() => { __mock.searchFails = true; __mock.calls = []; });
   await pg.fill('#search-input', 'a "quoted" \\ word');
