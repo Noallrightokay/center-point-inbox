@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.json">
@@ -79,7 +79,8 @@
 #compose-btn:hover,
 .btn:active,
 .pill:active,
-#compose-btn:active{transform:none}
+#compose-btn:active,
+button:active{transform:none}
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%}
@@ -92,6 +93,10 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 ::-webkit-scrollbar-thumb{background:var(--fill);border-radius:4px}
 ::-webkit-scrollbar-track{background:transparent}
 :focus-visible{outline:2px solid var(--tint);outline-offset:2px;border-radius:4px}
+/* Read by a screen reader, not drawn (H10): the words that go with a shape
+   (unread, starred, how many attachments) and labels that are icons at some
+   widths. */
+.vh{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
 
 /* ---------- shell ---------- */
 #app{display:flex;height:100%;overflow:hidden}
@@ -121,7 +126,7 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .topbar .eyebrow{font-size:11px;color:var(--faint);display:block;font-weight:500}
 .top-search{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);box-shadow:var(--edge);border-radius:var(--r-sm);padding:7px 12px;width:min(320px,30vw);color:var(--faint);transition:background .15s}
 .top-search:hover{background:var(--fill-2);color:var(--slate)}
-.top-search kbd{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint);background:var(--fill-2);padding:1px 6px;border-radius:5px}
+.top-search kbd{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--slate);background:var(--fill-2);padding:1px 6px;border-radius:5px}
 .view{flex:1;overflow:hidden;display:none}
 .view.active{display:flex}
 
@@ -175,8 +180,8 @@ body.split-on .side-list,body.split-on .split-pane{flex:1 1 0;min-width:330px}
 .inbox-mode button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(21,23,28,.08)}
 /* Locked, not hidden: the choice stays on screen, which is how anyone finds
    out the tier above exists. */
-.inbox-mode button.locked{color:var(--faint)}
-.inbox-mode button.locked:hover{color:var(--slate)}
+.inbox-mode button.locked{color:var(--slate)}
+.inbox-mode button.locked:hover{color:var(--ink)}
 /* Side by side means two peers. The left pane drops the digest, the channel
    segments, the category tabs and the filter chips so it stops looking like
    the main event with a sidecar attached — each pane is then a mailbox with
@@ -208,6 +213,13 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .mail-row{display:flex;gap:12px;padding:11px 12px;border-radius:var(--r-sm);cursor:pointer;position:relative;margin-bottom:1px;transition:var(--lift)}
 .mail-row:hover{background:var(--fill-2)}
 .mail-row.sel{background:var(--tint-soft)}
+/* On the selection's tint, --faint falls under 4.5:1; --slate holds it. */
+.mail-row.sel .m-time,.mail-row.sel .m-prev,.mail-row.sel .clip,.mail-row.sel .m-subj.none{color:var(--slate)}
+/* The list is a listbox (H10): one row takes the Tab stop, and the focused
+   row shows the ring inside its own edge, which the scroller would clip. */
+.mail-row:focus{outline:none}
+.mail-row:focus-visible,body.kbnav .mail-row:focus{outline:2px solid var(--tint);outline-offset:-2px}
+.vl-win:focus{outline:none}
 .mail-row.unread .m-from,.mail-row.unread .m-subj{font-weight:600}
 .mail-row.unread::before{content:'';position:absolute;left:3px;top:21px;width:6px;height:6px;border-radius:50%;background:var(--tint)}
 .avatar{width:36px;height:36px;flex-shrink:0;display:grid;place-items:center;color:#FCFCFD;font-weight:600;font-size:13px;border-radius:30%}
@@ -236,6 +248,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .vl-win{position:absolute;left:0;right:0;top:0;will-change:transform}
 .vl-win .mail-row{height:var(--vl-h,auto);box-sizing:border-box;overflow:hidden}
 .clip{font-size:11px;color:var(--faint)}
+.mail-row .clip.star{color:var(--amber)}
 .md-inner{max-width:780px;margin:0 auto;padding:28px 30px 60px;width:100%}
 .md-head{background:var(--card);border-radius:var(--r) var(--r) 0 0;padding:22px 24px 18px;box-shadow:var(--edge)}
 .md-head h2{font-size:20px;font-weight:600;line-height:1.3;margin-bottom:14px;letter-spacing:-.015em;text-wrap:balance}
@@ -604,6 +617,7 @@ body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 .cv-row{display:block;width:100%;min-width:0;text-align:left;border:0;background:none;color:inherit;font:inherit;padding:7px 8px;border-radius:var(--r-sm);cursor:pointer;transition:background .12s}
 button.cv-row:hover{background:var(--fill-2)}
 .cv-row.on{background:var(--tint-soft);cursor:default}
+.cv-row.on .cv-when{color:var(--slate)}
 .cv-line{display:flex;align-items:baseline;gap:10px;min-width:0}
 .cv-who{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cv-here{font-size:12px;font-weight:500;color:var(--tint-deep);flex-shrink:0}
@@ -776,7 +790,9 @@ body.send-counting #toast{bottom:76px}
    232px not being read in. Icons only until there is room for words. */
 @media (min-width:901px) and (max-width:1200px){
   #rail{width:72px;padding:18px 10px 14px;align-items:center}
-  #rail .nav-label,#rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
+  #rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
+  /* Icons only, and still named: the label is there for a screen reader. */
+  #rail .nav-label{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
   #rail .nav-item{justify-content:center;padding:11px 0;gap:0}
   #rail .nav-item svg{width:20px;height:20px}
   #rail .nav-count{position:absolute;top:4px;right:10px;font-size:10px}
@@ -818,21 +834,21 @@ body.send-counting #toast{bottom:76px}
 </head>
 <body>
 <div id="app">
-  <nav id="rail">
+  <nav id="rail" aria-label="Sections">
     <div class="brand">
       <div class="brand-mark"><img class="mk" src="icons/mark-256.png" alt="" width="38" height="38"></div>
       <div class="brand-text"><div class="brand-name">RATA</div><div class="brand-sub">Your mail, on your machine.</div></div>
     </div>
     <button id="compose-btn">Compose</button>
-    <button class="nav-item active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg><span class="nav-label">Mail</span><span class="nav-count" id="nc-inbox">0</span></button>
-    <button class="nav-item" data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg><span class="nav-label">People</span></button>
-    <button class="nav-item" data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Files</span><span class="nav-count" id="nc-docs">0</span></button>
-    <button class="nav-item" id="nav-more-toggle" aria-expanded="false" style="opacity:.75"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg><span class="nav-label">More</span></button>
+    <button class="nav-item active" data-view="inbox"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg><span class="nav-label">Mail</span><span class="nav-count" id="nc-inbox">0</span></button>
+    <button class="nav-item" data-view="people"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg><span class="nav-label">People</span></button>
+    <button class="nav-item" data-view="docs"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg><span class="nav-label">Files</span><span class="nav-count" id="nc-docs">0</span></button>
+    <button class="nav-item" id="nav-more-toggle" aria-expanded="false" aria-controls="nav-more"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg><span class="nav-label">More</span></button>
     <div id="nav-more" hidden>
-      <button class="nav-item" data-view="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-label">Search</span></button>
-      <button class="nav-item" data-view="comp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Privacy checks</span></button>
+      <button class="nav-item" data-view="search"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-label">Search</span></button>
+      <button class="nav-item" data-view="comp"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Privacy checks</span></button>
     </div>
-    <button class="nav-item" data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg><span class="nav-label">Settings</span></button>
+    <button class="nav-item" data-view="set"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg><span class="nav-label">Settings</span></button>
     <div class="rail-foot">
       <div class="rail-profile">DLP profile<b id="rail-prof">HIPAA</b></div>
       <div class="rail-profile" style="margin-top:10px">Signed in<b id="rail-acct" style="color:var(--slate);word-break:break-all"></b></div>
@@ -841,12 +857,12 @@ body.send-counting #toast{bottom:76px}
     </div>
   </nav>
 
-  <div id="main">
+  <main id="main">
     <div class="topbar">
       <div><span class="eyebrow" id="tb-eyebrow">Every mailbox</span><h1 id="tb-title">Messages</h1></div>
-      <button class="top-search" id="top-search-btn" style="margin-left:auto"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>Search everything…</span><kbd>⌘K</kbd></button>
-      <button id="acct-btn" aria-label="Account"></button>
-      <div id="acct-menu">
+      <button class="top-search" id="top-search-btn" style="margin-left:auto" aria-keyshortcuts="Control+K Meta+K"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>Search everything…</span><kbd>⌘K</kbd></button>
+      <button id="acct-btn" aria-label="Account" aria-expanded="false" aria-controls="acct-menu"></button>
+      <div id="acct-menu" role="region" aria-label="Account">
         <div class="am-head"><span id="am-av"></span><div><b id="am-name"></b><span id="am-email"></span></div></div>
         <div class="am-row" id="am-plan"></div>
         <div class="am-row" id="am-links"></div>
@@ -862,7 +878,7 @@ body.send-counting #toast{bottom:76px}
 
     <!-- MESSAGES -->
     <section class="view active pane-view" id="view-inbox">
-      <div class="side-list">
+      <div class="side-list" role="region" aria-label="Message list">
         <div class="inbox-mode" id="inbox-mode" role="group" aria-label="Inbox layout">
           <button type="button" data-mode="one" class="on" title="Every mailbox in one inbox">Center Point</button>
           <button type="button" data-mode="split">Side by side</button>
@@ -875,12 +891,12 @@ body.send-counting #toast{bottom:76px}
         <div class="chip-row" id="cat-tabs"></div>
         <div class="chip-row" id="mail-filters"></div>
         <div class="box-panel" id="box-panel" hidden></div>
-        <div class="sort-row"><select class="sel" id="mail-sort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button><button class="btn" id="sync-all" style="display:none;margin-left:auto">⟳ Sync linked inboxes</button></div>
-        <div id="bulk-bar"><b id="bulk-n">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star">★</button><button class="btn native-only" data-bulk="archive">Archive</button><button class="btn native-only" data-bulk="inbox">Move to inbox</button><span class="md-sortwrap native-only"><button class="btn" data-bulk="file">Move to ▾</button><div class="md-sortmenu md-filemenu" id="bulk-filemenu"></div></span><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
+        <div class="sort-row"><select class="sel" id="mail-sort" aria-label="Sort messages"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="sender">Sender A–Z</option><option value="subject">Subject A–Z</option><option value="unread">Unread first</option></select><button class="btn" id="sel-mode">☑ Select</button><button class="btn" id="sync-all" style="display:none;margin-left:auto">⟳ Sync linked inboxes</button></div>
+        <div id="bulk-bar" role="group" aria-label="Selected messages"><b id="bulk-n" role="status">0 selected</b><button class="btn" data-bulk="read">Mark read</button><button class="btn" data-bulk="unread">Unread</button><button class="btn" data-bulk="star" aria-label="Star">★</button><button class="btn native-only" data-bulk="archive">Archive</button><button class="btn native-only" data-bulk="inbox">Move to inbox</button><span class="md-sortwrap native-only"><button class="btn" data-bulk="file">Move to ▾</button><div class="md-sortmenu md-filemenu" id="bulk-filemenu"></div></span><button class="btn danger" data-bulk="del">Delete</button><button class="btn" data-bulk="clear">Done</button></div>
         <div class="side-scroll" id="mail-scroll"></div>
       </div>
       <div class="extra-panes" id="extra-panes"></div>
-      <div class="detail-pane" id="mail-detail"></div>
+      <div class="detail-pane" id="mail-detail" role="region" aria-label="Reading pane"></div>
     </section>
 
     <!-- PEOPLE -->
@@ -890,7 +906,7 @@ body.send-counting #toast{bottom:76px}
         <div id="addp-host"></div>
         <div class="side-scroll" id="people-scroll"></div>
       </div>
-      <div class="detail-pane" id="person-detail"><div class="empty" style="padding-top:120px"><b>Pick a person</b>Every email with them, from every mailbox — one thread.</div></div>
+      <div class="detail-pane" id="person-detail" role="region" aria-label="Person"><div class="empty" style="padding-top:120px"><b>Pick a person</b>Every email with them, from every mailbox — one thread.</div></div>
     </section>
 
     <!-- DOCUMENTS -->
@@ -921,7 +937,7 @@ body.send-counting #toast{bottom:76px}
               <button class="pill" data-eco="plain">Plain / Markdown</button>
             </div>
           </div>
-          <div class="br-actions"><button class="btn primary" id="br-go">Convert &amp; download</button><button class="btn" id="br-save">Convert into Documents</button><button class="btn" id="br-clear">✕</button></div>
+          <div class="br-actions"><button class="btn primary" id="br-go">Convert &amp; download</button><button class="btn" id="br-save">Convert into Documents</button><button class="btn" id="br-clear" aria-label="Clear this file">✕</button></div>
           <div class="br-note" id="br-note"></div>
         </div>
       </div>
@@ -932,7 +948,7 @@ body.send-counting #toast{bottom:76px}
     <section class="view" id="view-search">
       <div class="search-head">
         <div class="search-box">
-          <input id="search-input" type="text" placeholder="Search every inbox, file and person…" autocomplete="off">
+          <input id="search-input" type="text" aria-label="Search" placeholder="Search every inbox, file and person…" autocomplete="off">
           <button class="btn primary" id="search-go">Search</button>
         </div>
       </div>
@@ -968,15 +984,15 @@ body.send-counting #toast{bottom:76px}
       <div class="comp-wrap">
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
-          <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name"></div>
-          <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
+          <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name" aria-label="Display name"></div>
+          <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify" aria-label="New-mail notifications"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
           <div class="set-row" id="undo-row" style="display:none"><div class="grow"><b>Undo send</b><span>How long Send waits, so a message can be taken back</span></div><select class="sel" id="set-undo" aria-label="Undo send"><option value="0">Off, send at once</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></div>
           <div class="set-row" id="keys-row"><div class="grow"><b>Keyboard shortcuts</b><span>Press ? to see them all. They never act while you are typing in a field.</span></div><button class="btn" id="keys-show">Show shortcuts</button><input type="checkbox" id="set-keys" aria-label="Keyboard shortcuts on"></div>
         </div>
         <div class="comp-sec" id="sig-sec" style="display:none">
           <div class="sec-label">Signatures</div>
           <div id="sig-list"></div>
-          <div class="set-row"><div class="grow"><b>In replies and forwards too</b><span>Otherwise only new messages get a signature</span></div><input type="checkbox" id="set-sigreplies"></div>
+          <div class="set-row"><div class="grow"><b>In replies and forwards too</b><span>Otherwise only new messages get a signature</span></div><input type="checkbox" id="set-sigreplies" aria-label="Signature in replies and forwards too"></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Data</div>
@@ -985,7 +1001,7 @@ body.send-counting #toast{bottom:76px}
         </div>
         <div class="comp-sec">
           <div class="sec-label">Security</div>
-          <div class="set-row" style="flex-wrap:wrap"><div class="grow"><b>Change password</b><span id="pw-mode-note">Verified against your current password, then re-secured.</span></div><input type="password" id="pw-cur" placeholder="Current password" style="min-width:170px"><input type="password" id="pw-new" placeholder="New password (8+)" style="min-width:170px"><button class="btn primary" id="pw-change">Update</button></div>
+          <div class="set-row" style="flex-wrap:wrap"><div class="grow"><b>Change password</b><span id="pw-mode-note">Verified against your current password, then re-secured.</span></div><input type="password" id="pw-cur" aria-label="Current password" placeholder="Current password" style="min-width:170px"><input type="password" id="pw-new" aria-label="New password, 8 characters or more" placeholder="New password (8+)" style="min-width:170px"><button class="btn primary" id="pw-change">Update</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Workspace</div>
@@ -994,9 +1010,9 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b>Delete account</b><span id="del-what">Removes your login, your preferences and folder names, your subscription record and your AI usage record. Your mail stays at your provider, and your mailbox passwords stay in your computer’s keychain.</span></div>
             <button class="btn danger" id="btn-delete">Delete account</button>
           </div>
-          <div class="set-row" id="del-confirm" style="display:none;flex-wrap:wrap;gap:8px">
-            <div class="grow"><b>This cannot be undone</b><span id="del-detail"></span></div>
-            <input type="text" id="del-email" placeholder="type your email address" autocomplete="off" style="min-width:230px">
+          <div class="set-row" id="del-confirm" role="group" aria-labelledby="del-head" aria-describedby="del-detail" style="display:none;flex-wrap:wrap;gap:8px">
+            <div class="grow"><b id="del-head">This cannot be undone</b><span id="del-detail" role="status"></span></div>
+            <input type="text" id="del-email" aria-label="Type your email address to confirm" placeholder="type your email address" autocomplete="off" style="min-width:230px">
             <button class="btn danger" id="del-go">Delete permanently</button>
             <button class="btn" id="del-cancel">Keep my account</button>
           </div>
@@ -1008,7 +1024,7 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b>Add an account</b><span id="quota-line">Gmail, iCloud, Yahoo, Fastmail or your work address, with an app password or, where RATA offers it, Sign in with Microsoft.</span></div>
             <button class="btn primary" data-addlink="mail">＋ Email account</button>
           </div>
-          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-ms-go" style="display:none">Sign in with Microsoft</button><button class="btn" id="lf-cancel">Cancel</button></div>
+          <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" aria-labelledby="lf-title" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" aria-label="App password" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" aria-label="Mail server (IMAP)" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-ms-go" style="display:none">Sign in with Microsoft</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
@@ -1029,19 +1045,19 @@ body.send-counting #toast{bottom:76px}
         </div>
       </div>
     </section>
-  </div>
+  </main>
 </div>
 
 <!-- Mobile nav -->
-<nav id="mnav">
-  <button class="active" data-view="inbox"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Messages</button>
-  <button data-view="people"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>People</button>
-  <button data-view="docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Docs</button>
-  <button data-view="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg>More</button>
+<nav id="mnav" aria-label="Sections">
+  <button class="active" data-view="inbox"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Messages</button>
+  <button data-view="people"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>People</button>
+  <button data-view="docs"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 00-1 1v16a1 1 0 001 1h12a1 1 0 001-1V8l-5-5z"/><path d="M14 3v5h5"/></svg>Docs</button>
+  <button data-view="set"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 005 12a7 7 0 00.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0019 12z"/></svg>More</button>
 </nav>
 
 <!-- Welcome / inbox transfer -->
-<div id="welcome-ov">
+<div id="welcome-ov" role="dialog" aria-modal="true" aria-labelledby="w-title" aria-describedby="w-sub">
   <div id="welcome-card">
     <img src="icons/mark-256.png" alt="" width="52" height="52" style="display:block;margin:0 auto 10px">
     <h2 id="w-title">Welcome</h2>
@@ -1052,7 +1068,7 @@ body.send-counting #toast{bottom:76px}
 </div>
 
 <!-- Opening a link from a formatted message -->
-<div id="link-ov" role="dialog" aria-modal="true" aria-labelledby="link-title">
+<div id="link-ov" role="dialog" aria-modal="true" aria-labelledby="link-title" aria-describedby="link-host">
   <div id="link-card">
     <h2 id="link-title">Open this link in your browser?</h2>
     <p class="link-lead">It goes to</p>
@@ -1076,7 +1092,7 @@ body.send-counting #toast{bottom:76px}
 <!-- A picture attachment, large (H11): a data: image, never a navigation -->
 <div id="pic-ov" role="dialog" aria-modal="true" aria-labelledby="pic-name">
   <div id="pic-card">
-    <div class="pic-head"><span id="pic-name"></span><button class="cmp-close" id="pic-close" aria-label="Close">✕</button></div>
+    <div class="pic-head"><span id="pic-name"></span><button class="cmp-close" id="pic-close" aria-label="Close the picture">✕</button></div>
     <img id="pic-big" alt="">
   </div>
 </div>
@@ -1084,7 +1100,7 @@ body.send-counting #toast{bottom:76px}
 <!-- Keyboard shortcuts (H4): drawn from KEYS, the table the keys obey -->
 <div id="keys-ov" role="dialog" aria-modal="true" aria-labelledby="keys-title">
   <div id="keys-card">
-    <div class="keys-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="cmp-close" id="keys-close" aria-label="Close">✕</button></div>
+    <div class="keys-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="cmp-close" id="keys-close" aria-label="Close the shortcuts">✕</button></div>
     <div id="keys-list"></div>
     <p class="keys-foot" id="keys-foot"></p>
   </div>
@@ -1093,11 +1109,11 @@ body.send-counting #toast{bottom:76px}
 <!-- Rata Assist -->
 <button id="assist-fab" aria-label="Rata Assist"><img src="icons/mark-256.png" alt="" width="40" height="40" style="display:block"></button>
 <div id="assist-ov">
-  <aside id="assist">
+  <aside id="assist" role="dialog" aria-modal="true" aria-labelledby="as-title">
     <div class="as-head">
       <img class="mk" src="icons/mark-256.png" alt="" width="22" height="22">
-      <b>Rata Assist</b>
-      <button class="cmp-close" id="as-close">✕</button>
+      <b id="as-title">Rata Assist</b>
+      <button class="cmp-close" id="as-close" aria-label="Close Rata Assist">✕</button>
     </div>
     <div class="as-actions">
       <button class="btn primary" id="as-run">Run briefing</button>
@@ -1108,19 +1124,19 @@ body.send-counting #toast{bottom:76px}
 
 <!-- Compose -->
 <div id="compose-ov">
-  <div id="compose">
-    <div class="grabber"></div>
+  <div id="compose" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
+    <div class="grabber" aria-hidden="true"></div>
     <div class="cmp-head"><b id="cmp-title">New message</b><span class="badge" id="cmp-prof-badge"></span><button class="cmp-discard" id="cmp-discard" hidden>Discard</button><button class="cmp-close" id="cmp-close" aria-label="Close, keeping the draft">✕</button></div>
     <div class="dlp-bar" id="dlp-bar"></div>
     <div class="cmp-to-row"><input type="text" id="cmp-to" placeholder="To" aria-label="To" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off"><button type="button" class="cmp-cc-btn" id="cmp-cc-btn" aria-label="Add people to copy">Cc</button><button type="button" class="cmp-cc-btn" id="cmp-bcc-btn" aria-label="Add people to copy without the others seeing">Bcc</button></div>
     <input type="text" id="cmp-cc" placeholder="Cc" aria-label="Cc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
     <input type="text" id="cmp-bcc" placeholder="Bcc — the others will not see these" aria-label="Bcc" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="cmp-sugg" autocomplete="off" hidden>
     <div class="cmp-sugg" id="cmp-sugg" role="listbox" aria-label="People you have written to or heard from" hidden></div>
-    <input type="text" id="cmp-subj" placeholder="Subject" spellcheck="true">
-    <textarea id="cmp-body" spellcheck="true" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
+    <input type="text" id="cmp-subj" aria-label="Subject" placeholder="Subject" spellcheck="true">
+    <textarea id="cmp-body" aria-label="Message" spellcheck="true" placeholder="Write your message — it's scanned against the active DLP profile as you type."></textarea>
     <div class="cmp-files" id="cmp-files"></div>
     <div class="cmp-foot">
-      <select class="sel" id="cmp-from"></select>
+      <select class="sel" id="cmp-from" aria-label="From"></select>
       <label class="btn" id="cmp-attach" style="display:none">📎 Attach<input type="file" id="cmp-file" multiple hidden></label>
       <span class="dlp-live" id="dlp-live">DLP idle</span>
       <button class="btn primary" id="cmp-send">Send</button>
@@ -1129,7 +1145,7 @@ body.send-counting #toast{bottom:76px}
 </div>
 
 <div id="send-toast" role="status" tabindex="-1"><span class="st-say" id="st-say"></span><span id="st-count" aria-hidden="true"></span><span class="st-sep" id="st-sep" aria-hidden="true" hidden>·</span><button type="button" id="st-undo" hidden>Undo</button></div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="config.js"></script>
 <script>
@@ -1732,11 +1748,12 @@ function askDisguised(a,saving){
   $('#warn-name').textContent=a.n;
   $('#warn-lead').textContent=(d.shown?'Windows can show its name as '+d.shown+', and opening it would run it. ':'Opening it would run it. ')+'Go ahead only if you expected a program from this sender.';
   $('#warn-go').textContent=saving?'Save anyway':'Open anyway';
+  dlgOpen($('#warn-ov'));
   $('#warn-ov').classList.add('open');
   $('#warn-cancel').focus();
   return new Promise(res=>{WARN_DONE=res});
 }
-function closeWarn(yes){const done=WARN_DONE;WARN_DONE=null;$('#warn-ov').classList.remove('open');if(done)done(yes===true)}
+function closeWarn(yes){const done=WARN_DONE;WARN_DONE=null;$('#warn-ov').classList.remove('open');dlgClose($('#warn-ov'));if(done)done(yes===true)}
 $('#warn-cancel').onclick=()=>closeWarn(false);
 $('#warn-go').onclick=()=>closeWarn(true);
 $('#warn-ov').addEventListener('click',e=>{if(e.target.id==='warn-ov')closeWarn(false)});
@@ -1782,7 +1799,7 @@ async function convertAttachment(m,a,btn,confirmed){
   await brIngest(new File([bytes],a.n,{type:r.mime||''}));
   if(BR.name!==a.n)return;
   audit('attachment.convert',a.n+' from '+(m.subj||'(no subject)'));
-  document.querySelector('.bridge-card').scrollIntoView({behavior:'smooth',block:'start'});
+  document.querySelector('.bridge-card').scrollIntoView({behavior:glide(),block:'start'});
   toast(a.n+', from \u201c'+(m.subj||'(no subject)')+'\u201d, is ready \u2014 choose what to turn it into');
 }
 /* Picture attachments shown in the message (H11). An attachment named as a
@@ -2034,6 +2051,55 @@ function rel(ts){
   return new Date(ts).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._to);t._to=setTimeout(()=>t.classList.remove('show'),2600)}
+/* Scrolling that glides, unless the system asks for less motion. */
+const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';
+/* ---------------- DIALOGS (H10) ----------------
+   Every question and sheet that covers the page is role=dialog with
+   aria-modal and a label in the markup (the licence box in bridge.js).
+   Here: the keyboard stays inside the one on top (Tab and Shift+Tab go
+   round it), and closing one gives the focus back to what had it before,
+   unless the closing code has already put it somewhere on purpose (the
+   Undo toast, say). The disguised-program question's own keys (Escape and
+   Enter cancel) are unchanged; the picture and the shortcut sheet keep
+   their own return. Topmost first, as their z-index stacks them. */
+const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_FROM=new Map();
+function topDialog(){
+  for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
+  return null;
+}
+function dlgFocusables(el){
+  const all=[...el.querySelectorAll('a[href],button,input,select,textarea,iframe,[tabindex]')];
+  /* The Undo toast floats over the composer while an earlier message counts. */
+  if(el.id==='compose-ov'&&$('#send-toast').classList.contains('show'))all.push(...$('#send-toast').querySelectorAll('button'));
+  return all.filter(x=>!x.disabled&&x.tabIndex>=0&&x.type!=='hidden'&&x.getClientRects().length&&!x.closest('[hidden],[inert]'));
+}
+/* Called before a dialog takes the focus: remembers what had it. */
+function dlgOpen(el){
+  if(!el||DLG_FROM.has(el))return;
+  const a=document.activeElement;
+  DLG_FROM.set(el,a&&a!==document.body&&!el.contains(a)?a:null);
+}
+function dlgClose(el){
+  if(!el||!DLG_FROM.has(el))return;
+  const from=DLG_FROM.get(el);DLG_FROM.delete(el);
+  const a=document.activeElement;
+  if(from&&from.isConnected&&from.getClientRects().length&&(!a||a===document.body||el.contains(a)))from.focus({preventScroll:true});
+}
+/* After every other handler, so a field that takes Tab itself (an address
+   suggestion) keeps it. */
+addEventListener('keydown',e=>{
+  if(e.defaultPrevented)return;
+  const d=topDialog();if(!d)return;
+  if(e.key==='Escape'&&d.id==='welcome-ov'){e.preventDefault();$('#w-enter').click();return}
+  if(e.key!=='Tab')return;
+  const f=dlgFocusables(d);
+  if(!f.length){e.preventDefault();return}
+  const i=f.indexOf(document.activeElement);
+  if(i<0){e.preventDefault();(e.shiftKey?f[f.length-1]:f[0]).focus();return}
+  if(!e.shiftKey&&i===f.length-1){e.preventDefault();f[0].focus()}
+  else if(e.shiftKey&&i===0){e.preventDefault();f[f.length-1].focus()}
+});
 /* Only email is read. Kept as a check rather than assumed, so a message from an
    older build's other channels can never slip into a list. */
 function channelEnabled(ch){return (ch||'email')==='email'}
@@ -2046,7 +2112,7 @@ function go(v){
   currentView=v;
   $$('.view').forEach(x=>x.classList.remove('active'));
   view.classList.add('active');
-  $$('#rail .nav-item,#mnav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
+  $$('#rail .nav-item,#mnav button').forEach(b=>{b.classList.toggle('active',b.dataset.view===v);if(b.dataset.view===v)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   $('#tb-eyebrow').textContent=TITLES[v][0];$('#tb-title').textContent=TITLES[v][1];
   if(v==='inbox'){renderSyncAll();renderMailFilters();renderMail()}
   if(v==='docs')bridgeInit();
@@ -2060,7 +2126,7 @@ function go(v){
 $$('#rail .nav-item,#mnav button').forEach(b=>{if(b.dataset.view)b.onclick=()=>go(b.dataset.view)});
 /* Adding a mailbox has one home, Settings → Linked accounts, and every "add an
    account" button in the app goes straight to its form. */
-function openAddMailbox(){go('set');openMailForm();setTimeout(()=>$('#linkform')?.scrollIntoView({behavior:'smooth',block:'center'}),60)}
+function openAddMailbox(){go('set');openMailForm();setTimeout(()=>$('#linkform')?.scrollIntoView({behavior:glide(),block:'center'}),60)}
 /* The advanced views still exist and still work — they are just not the first
    thing a new person has to make sense of. */
 (function(){
@@ -2390,7 +2456,7 @@ function paneHTML(i){
     <div class="split-head">
       <select class="sel" data-pane-acct="${i}" aria-label="Which inbox to show in column ${i+1}">${acctOptions(accts,paneAcct(i))}</select>
       ${last&&panes.length<PANE_MAX&&accts.length>panes.length?`<button class="btn" data-pane-add="1" title="Show another inbox beside this one">＋ Inbox</button>`:''}
-      <button class="btn" data-pane-close="${i}" title="Close this inbox">✕</button>
+      <button class="btn" data-pane-close="${i}" title="Close this inbox" aria-label="Close this inbox">✕</button>
     </div>
     <div class="side-scroll" data-pane-scroll="${i}"></div>
   </div>`;
@@ -2410,6 +2476,7 @@ function renderSplit(){
     const i=k+1;
     const sc=host.querySelector(`[data-pane-scroll="${i}"]`);
     const pool=mailPool(paneAcct(i)||undefined);
+    sc.dataset.listLabel='Messages'+(paneAcct(i)?' in '+acctName(S.linked.find(l=>l.id===paneAcct(i))):'');
     if(pool.length){vlist(sc,pool);wireRows(sc,false)}
     else sc.innerHTML=`<div class="empty" style="padding:40px 18px"><b>Nothing here yet</b>${paneAcct(i)?esc(acctName(S.linked.find(l=>l.id===paneAcct(i))))+' has no messages in RATA yet.':'Every inbox, and none of them has mail yet.'}</div>`;
     wireDrop(sc,()=>paneAcct(i)||(mailAccounts()[0]||{}).id);
@@ -2492,18 +2559,22 @@ function mailRowHTML(m){
   const nm=msgFrom(m);
   /* Sent mail is listed by who it went to, not by "you". */
   const shown=m.draft?'Draft'+(m.toName?' to '+m.toName:''):m.sent?'To: '+(contact(m.toId)?.name||m.toName||'(no recipient)'):nm;
+  /* A listbox option (H10). Unread is a dot and bold type, starred a star,
+     never colour alone; a screen reader hears the words (.vh). Which row
+     takes the Tab stop, and where it sits in the list, vlDraw sets. */
+  const said=[m.unread?'Unread':'',m.starred?'Starred':''].filter(Boolean).join(', ');
   return `
-    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''} ${KEY_AT===m.id?'kb':''}" data-id="${m.id}" draggable="${splitOn?'true':'false'}">
-      <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}">${SEL.has(m.id)?'✓':''}</span>
-      <div class="avatar" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
+    <div class="mail-row ${m.unread?'unread':''} ${selMail===m.id?'sel':''} ${KEY_AT===m.id?'kb':''}" data-id="${m.id}" role="option" tabindex="-1" aria-selected="${selMail===m.id}"${selecting?` aria-checked="${SEL.has(m.id)}"`:''} draggable="${splitOn?'true':'false'}">
+      <span class="selbox ${SEL.has(m.id)?'on':''}" data-sel="${m.id}" aria-hidden="true">${SEL.has(m.id)?'✓':''}</span>
+      <div class="avatar" aria-hidden="true" ${m.cid?`data-cid="${m.cid}" style="cursor:pointer;background:${avColor(nm)}"`:`style="background:${avColor(nm)}"`}>${initials(nm)}</div>
       <div class="m-body">
-        <div class="m-line1"><span class="m-from">${esc(shown)}</span><span class="m-meta">
+        <div class="m-line1">${said?`<span class="vh">${said}, </span>`:''}<span class="m-from">${esc(shown)}</span><span class="m-meta">
           ${m.ch==='email'&&(!m.prov||m.prov==='imap')?'':`<span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>`}
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
           ${!m.sent&&!m.draft&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
           ${m.flag?`<span class="badge flag${m.flag.important?' hot':''}" title="${esc(m.flag.task+(m.flag.due?' \u2014 by '+m.flag.due:''))}">\u2691 ${esc(m.flag.task)}</span>`:''}
-          ${m.atts.length?`<span class="clip">📎 ${m.atts.length}</span>`:''}
-          ${m.starred?'<span class="clip" style="color:var(--amber)">★</span>':''}
+          ${m.atts.length?`<span class="clip"><span aria-hidden="true">📎 ${m.atts.length}</span><span class="vh">${m.atts.length} attachment${m.atts.length===1?'':'s'}</span></span>`:''}
+          ${m.starred?'<span class="clip star" aria-hidden="true">★</span>':''}
         </span><span class="m-time">${rel(m.ts)}</span></div>
         ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:'<div class="m-subj none">(no subject)</div>'}
         <div class="m-prev">${esc(m.prev)}</div>
@@ -2556,8 +2627,21 @@ function renderMail(){
    What the rows do is handled on the list itself (wireRows), not row by row,
    since rows come and go. Where the list is not what scrolls — the page is —
    the part of it on screen is what counts, and the most that costs is
-   drawing all of it, as before. */
+   drawing all of it, as before.
+   The rows are a listbox (H10): each an option that knows its place in the
+   whole list (aria-posinset of aria-setsize, since only a screenful exists),
+   one of them the Tab stop (tabindex 0, the rest -1), and a row that had
+   the focus has it again after a redraw, or the list does while that row is
+   scrolled out of the drawn window. */
 const VL=new WeakMap(),VL_MARGIN=12,VL_BLIND=40;
+/* The row, or the list, that has the focus in this scroller: its id, or
+   'list' for the listbox itself. */
+function vlFocus(sc){
+  const a=document.activeElement;if(!a||!sc.contains(a))return null;
+  if(a.classList.contains('mail-row'))return a.dataset.id;
+  if(a.classList.contains('vl-win')){const st=VL.get(sc);return (st&&st.lost)||'list'}
+  return null;
+}
 function vlist(sc,pool,tail){
   let st=VL.get(sc);
   if(!st){
@@ -2578,17 +2662,17 @@ function vlist(sc,pool,tail){
   st.pool=pool;
   /* Redrawn in place: the spacer gets its height back before the scroll
      position does, or the browser would pull the list back to the top. */
-  const keep=sc.scrollTop;
-  sc.innerHTML='<div class="vl-space"><div class="vl-win"></div></div>'+(tail||'');
+  const keep=sc.scrollTop,had=vlFocus(sc);
+  sc.innerHTML=`<div class="vl-space"><div class="vl-win" role="listbox" tabindex="-1" aria-label="${esc(sc.dataset.listLabel||'Messages')}"></div></div>`+(tail||'');
   if(st.stride)sc.querySelector('.vl-space').style.height=(pool.length*st.stride)+'px';
   sc.scrollTop=keep;
-  st.from=st.to=-1;
+  st.from=st.to=-1;st.focus=had;
   vlDraw(sc,true);
 }
 function vlDraw(sc,force){
   const st=VL.get(sc);if(!st||!st.pool)return;
   const space=sc.querySelector('.vl-space'),win=sc.querySelector('.vl-win');if(!space||!win)return;
-  const n=st.pool.length;
+  const n=st.pool.length,had=st.focus||vlFocus(sc);st.focus=null;
   if(!st.stride&&n){
     /* Measured without the fixed height, from a real row. */
     sc.style.removeProperty('--vl-h');
@@ -2601,22 +2685,69 @@ function vlDraw(sc,force){
     }
     st.from=st.to=-1;force=true;
   }
-  let from=0,to=Math.min(n,VL_BLIND);
+  let from=0,to=Math.min(n,VL_BLIND),seen=0;
   if(st.stride){
     const box=space.getBoundingClientRect(),view=sc.getBoundingClientRect();
     const top=Math.max(view.top,0)-box.top,bottom=Math.min(view.bottom,innerHeight)-box.top;
+    seen=Math.max(0,Math.min(n-1,Math.ceil(top/st.stride)));
     from=Math.max(0,Math.floor(top/st.stride)-VL_MARGIN);
     to=Math.min(n,Math.max(from,Math.ceil(bottom/st.stride)+VL_MARGIN));
     space.style.height=(n*st.stride)+'px';
   }else space.style.height='';
-  if(!force&&from===st.from&&to===st.to)return;
+  if(!force&&from===st.from&&to===st.to){if(had&&had!==vlFocus(sc))vlRefocus(sc,st,win,had);return}
   st.from=from;st.to=to;
   win.style.transform=st.stride?`translateY(${from*st.stride}px)`:'';
   win.style.position=st.stride?'':'static';
   win.innerHTML=st.pool.slice(from,to).map(mailRowHTML).join('');
+  const rows=win.children;
+  for(let k=0;k<rows.length;k++){rows[k].setAttribute('aria-posinset',from+k+1);rows[k].setAttribute('aria-setsize',n)}
+  /* The Tab stop: the row the keyboard is on, else the open message, else
+     the first row on screen. */
+  const want=(had&&had!=='list'?had:null)||st.stop||KEY_AT||selMail;
+  const stop=[...rows].find(r=>r.dataset.id===want)||rows[Math.max(0,Math.min(rows.length-1,seen-from))];
+  if(stop)stop.tabIndex=0;
+  if(had)vlRefocus(sc,st,win,had);
+}
+function vlRefocus(sc,st,win,had){
+  const r=had==='list'?null:[...win.children].find(x=>x.dataset.id===had);
+  if(r){st.lost=null;r.focus({preventScroll:true});return}
+  if(had!=='list')st.lost=had;
+  win.focus({preventScroll:true});
+}
+/* The row that takes the focus becomes the list's one Tab stop. */
+function vlStop(sc,r){
+  const st=VL.get(sc);if(st){st.stop=r.dataset.id;st.lost=null}
+  for(const x of r.parentElement.children)x.tabIndex=x===r?0:-1;
 }
 /* A drawn row, if the list is showing it. */
-function rowEl(id){return [...document.querySelectorAll('.vl-win .mail-row')].find(r=>r.dataset.id===id)||null}
+function rowEl(id,sc){return [...(sc||document).querySelectorAll('.vl-win .mail-row')].find(r=>r.dataset.id===id)||null}
+/* Row i drawn and scrolled into view: a row far from the drawn screenful is
+   scrolled to first, then drawn. */
+function rowShow(sc,st,i){
+  const id=st.pool[i].id;
+  vlDraw(sc,true);
+  let r=rowEl(id,sc);
+  if(!r&&st.stride){
+    const scrolls=sc.scrollHeight>sc.clientHeight+1,view=scrolls?sc.getBoundingClientRect():{top:0,bottom:innerHeight};
+    const by=sc.querySelector('.vl-space').getBoundingClientRect().top+i*st.stride-(view.top+view.bottom)/2;
+    if(scrolls)sc.scrollTop+=by;else scrollBy(0,by);
+    vlDraw(sc,true);r=rowEl(id,sc);
+  }
+  if(r&&r.scrollIntoView)r.scrollIntoView({block:'nearest'});
+  return r;
+}
+/* The arrows, Home and End on a focused row move the focus through the
+   whole list, drawing what they reach; in the main list they move the
+   keyboard's row (KEY_AT) too, as j and k do. */
+function rowStep(sc,id,d){
+  const st=VL.get(sc);if(!st||!st.pool||!st.pool.length)return;
+  const n=st.pool.length,i=st.pool.findIndex(m=>m.id===id);
+  const j=d==='home'?0:d==='end'?n-1:i<0?0:Math.max(0,Math.min(n-1,i+d));
+  const L=keyList();
+  if(L&&L.sc===sc){keyMark(L,j);return}
+  const r=rowShow(sc,st,j);
+  if(r)r.focus({preventScroll:true});
+}
 /* Ticks a row for Select, by a click on it or by x (H4). */
 function tickRow(id,r){
   SEL.has(id)?SEL.delete(id):SEL.add(id);
@@ -2627,6 +2758,21 @@ function tickRow(id,r){
 /* Clicks, ticks and drags for every row a list will ever draw. `selectable`
    is the main list, where Select mode turns a click into a tick. */
 function wireRows(sc,selectable){
+  if(!sc.dataset.rowsWired){
+    sc.dataset.rowsWired='1';
+    sc.addEventListener('focus',e=>{const r=e.target.closest&&e.target.closest('.mail-row');if(r)vlStop(sc,r)},true);
+  }
+  /* Enter and Space on a focused row do what a click on it does. */
+  sc.onkeydown=e=>{
+    if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;
+    const t=e.target,r=t.closest&&t.closest('.mail-row');
+    if(!r&&!(t.classList&&t.classList.contains('vl-win')))return;
+    if(r&&(e.key==='Enter'||e.key===' ')){e.preventDefault();r.click();return}
+    const d={ArrowDown:1,ArrowUp:-1,Home:'home',End:'end'}[e.key];
+    if(d===undefined)return;
+    e.preventDefault();
+    rowStep(sc,r?r.dataset.id:null,d);
+  };
   sc.onclick=e=>{
     const a=e.target.closest('.avatar[data-cid]');
     if(a){e.stopPropagation();go('people');openPerson(a.dataset.cid);return}
@@ -2895,13 +3041,14 @@ function writeTo(to,subject){
 }
 let LINK_PENDING=null;
 function askToOpen(url,host){
+  dlgOpen($('#link-ov'));
   LINK_PENDING=url;
   $('#link-host').textContent=host;
   $('#link-url').textContent=url.length>400?url.slice(0,400)+'\u2026':url;
   $('#link-ov').classList.add('open');
   $('#link-open').focus();
 }
-function closeLink(){LINK_PENDING=null;$('#link-ov').classList.remove('open')}
+function closeLink(){LINK_PENDING=null;$('#link-ov').classList.remove('open');dlgClose($('#link-ov'))}
 /* Leaving a mailing list (List-Unsubscribe, H7), for inbox mail only: never
    Sent, Drafts, archived or filed mail, and never Spam, where "unsubscribe"
    only tells a spammer the address is read. The web address Rust checked as
@@ -3489,24 +3636,19 @@ function keyList(){
   return st&&st.pool&&st.pool.length&&sc.querySelector('.vl-space')?{sc,st,pool:st.pool}:null;
 }
 function keyIndex(L){
-  const id=selMail&&selMail!==KEY_SEL?selMail:KEY_AT;
+  const f=vlFocus(L.sc);
+  const id=f&&f!=='list'?f:selMail&&selMail!==KEY_SEL?selMail:KEY_AT;
   return L.pool.findIndex(m=>m.id===id);
 }
 /* Puts the keyboard on row i, drawing it and scrolling it into view: a row
    far from the drawn screenful is scrolled to first, then drawn. */
 function keyMark(L,i){
+  const inList=!!vlFocus(L.sc);
   KEY_AT=L.pool[i].id;KEY_SEL=selMail;KEY_PANE=false;
   document.body.classList.add('kbnav');
-  const {sc,st}=L;
-  vlDraw(sc,true);
-  let r=rowEl(KEY_AT);
-  if(!r&&st.stride){
-    const scrolls=sc.scrollHeight>sc.clientHeight+1,view=scrolls?sc.getBoundingClientRect():{top:0,bottom:innerHeight};
-    const by=sc.querySelector('.vl-space').getBoundingClientRect().top+i*st.stride-(view.top+view.bottom)/2;
-    if(scrolls)sc.scrollTop+=by;else scrollBy(0,by);
-    vlDraw(sc,true);r=rowEl(KEY_AT);
-  }
-  if(r&&r.scrollIntoView)r.scrollIntoView({block:'nearest'});
+  const r=rowShow(L.sc,L.st,i);
+  /* A row that has the focus hands it on (H10). */
+  if(inList&&r)r.focus({preventScroll:true});
 }
 function keyMove(d,k){
   if(/^Arrow/.test(k)&&KEY_PANE)return false;
@@ -3781,12 +3923,12 @@ function renderDocs(){
     /* The original file, where it was kept, is read again so its headings,
        lists, tables and sheets come too; otherwise only its text. */
     const kept=d.hasFile?await fvGet(d.id).catch(()=>null):null;
-    if(kept){await brIngest(new File([kept],d.name));if(BR.name===d.name){BR.file=null;BR.srcId=d.id;document.querySelector('.bridge-card').scrollIntoView({behavior:'smooth',block:'start'});return}}
+    if(kept){await brIngest(new File([kept],d.name));if(BR.name===d.name){BR.file=null;BR.srcId=d.id;document.querySelector('.bridge-card').scrollIntoView({behavior:glide(),block:'start'});return}}
     BR={name:d.name,kind:'Workspace document',text:String(d.content||''),rows:null,eco:BR.eco,file:null,srcId:d.id};
     $('#br-name').textContent=BR.name;
     $('#br-kind').textContent=BR.kind+' · '+BR.text.split(/\s+/).length+' words';
     $('#br-loaded').style.display='block';brNote();
-    document.querySelector('.bridge-card').scrollIntoView({behavior:'smooth',block:'start'});
+    document.querySelector('.bridge-card').scrollIntoView({behavior:glide(),block:'start'});
     toast('Loaded into the Bridge — pick a destination');
   });
   g.querySelectorAll('.cv[data-dl]').forEach(b=>b.onclick=async()=>{
@@ -4424,7 +4566,9 @@ async function deleteAccount(){
 }
 
 $('#btn-delete').onclick=openDelete;
-$('#del-cancel').onclick=()=>{$('#del-confirm').style.display='none'};
+$('#del-cancel').onclick=()=>{$('#del-confirm').style.display='none';$('#btn-delete').focus()};
+/* Escape inside the confirmation keeps the account, as Keep my account does. */
+$('#del-confirm').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();$('#del-cancel').click()}});
 $('#del-go').onclick=deleteAccount;
 $('#del-email').addEventListener('keydown',e=>{if(e.key==='Enter')deleteAccount()});
 
@@ -4694,6 +4838,7 @@ function openCompose(keep){
   const b=$('#cmp-body'),sig=keep!==true&&!CMP_SIG&&DRAFT.kind==='new'&&!b.value?sigOf($('#cmp-from').value):'';
   if(sig){b.value='\n\n'+sig;CMP_SIG=sig}
   renderCmpFiles();liveScan();renderDraftHead();
+  if(!ov.classList.contains('open'))dlgOpen(ov);
   ov.classList.add('open');
   startDraftTimer();
   $('#cmp-prof-badge').textContent='DLP · '+S.settings.profile;
@@ -4706,6 +4851,7 @@ function closeCompose(){
   suggClose();SUGG_POOL=null;
   const was=ov.classList.contains('open');
   ov.classList.remove('open');stopDraftTimer();
+  dlgClose(ov);
   if(was)queueDraftSave('close');
 }
 const withoutSig=v=>CMP_SIG?String(v).replace(CMP_SIG,''):String(v);
@@ -5398,8 +5544,8 @@ function renderAcctMenu(){
   const live=S.linked.filter(l=>l.status==='live').length;
   $('#am-links').textContent=S.linked.length?`${S.linked.length} linked account${S.linked.length===1?'':'s'} · ${live} live`:'No linked accounts yet';
 }
-$('#acct-btn').onclick=e=>{e.stopPropagation();renderAcctMenu();$('#acct-menu').classList.toggle('open')};
-document.addEventListener('click',e=>{if(!$('#acct-menu').contains(e.target))$('#acct-menu').classList.remove('open')});
+$('#acct-btn').onclick=e=>{e.stopPropagation();renderAcctMenu();$('#acct-btn').setAttribute('aria-expanded',String($('#acct-menu').classList.toggle('open')))};
+document.addEventListener('click',e=>{if(!$('#acct-menu').contains(e.target)){$('#acct-menu').classList.remove('open');$('#acct-btn').setAttribute('aria-expanded','false')}});
 $('#am-manage').onclick=()=>{$('#acct-menu').classList.remove('open');go('set')};
 $('#am-signout').onclick=()=>$('#btn-signout').click();
 $('#btn-signout').onclick=async()=>{
@@ -6431,7 +6577,7 @@ async function extractTodos(){
   return items;
 }
 function assistItemHTML(i){
-  return `<div class="as-item" data-mid="${i.mid}">
+  return `<div class="as-item" data-mid="${i.mid}" role="button" tabindex="0">
     <div class="as-line1"><span class="badge ${i.ch}">${chan(i.ch).label}</span><b>${esc(i.who)}</b>${i.unread?'<span class="badge trans">unread</span>':''}<span class="as-t">${rel(i.ts)}</span></div>
     <div class="as-text">${esc(i.text)}</div>
     <div class="as-why">${i.why.map(w=>`<span class="as-chip ${w}">${w}</span>`).join('')}</div>
@@ -6451,7 +6597,10 @@ async function runLocalBrief(){
     ${dl.length?`<div class="sec-label">Time-sensitive</div>${dl.map(assistItemHTML).join('')}`:''}
     ${q.length?`<div class="sec-label">Awaiting your reply</div>${q.map(assistItemHTML).join('')}`:''}
     ${rest.length?`<div class="sec-label">Requests & actions</div>${rest.map(assistItemHTML).join('')}`:''}`;
-  out.querySelectorAll('.as-item').forEach(el=>el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)});
+  out.querySelectorAll('.as-item').forEach(el=>{
+    el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)};
+    el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.click()}};
+  });
   audit('assist.brief',`${items.length} items · ${people} people`);
 }
 /* The briefing, by AI: the start of the most recent mail — read or not, since
@@ -6487,17 +6636,20 @@ async function runAIBrief(){
   const items=pool.filter(m=>m.flag).sort((a,b)=>(b.flag.important-a.flag.important)||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
   if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`;return}
   out.innerHTML=`<p class="as-sum"><b>${items.length}</b> of your ${pool.length} most recent messages need${items.length===1?'s':''} something from you${items.some(m=>m.flag.important)?' \u2014 the important ones first':''}.</p>`
-    +items.map(m=>`<div class="as-item" data-mid="${esc(m.id)}">
+    +items.map(m=>`<div class="as-item" data-mid="${esc(m.id)}" role="button" tabindex="0">
       <div class="as-line1">${m.flag.important?'<span class="badge flag hot">important</span>':''}<b>${esc(msgFrom(m))}</b><span class="as-t">${rel(m.ts)}</span></div>
       <div class="as-text">\u2691 ${esc(m.flag.task)}${m.flag.due?` <span class="as-chip deadline">by ${esc(m.flag.due)}</span>`:''}</div>
       <div class="as-why">${esc(m.subj||'')}</div>
     </div>`).join('')
     +(allowanceNote(r.used)?`<p class="as-sum">${esc(allowanceNote(r.used))}</p>`:'');
-  out.querySelectorAll('.as-item').forEach(el=>el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)});
+  out.querySelectorAll('.as-item').forEach(el=>{
+    el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)};
+    el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.click()}};
+  });
   audit('assist.brief.ai',`${items.length} of ${pool.length} flagged`);
 }
-function openAssist(){$('#assist-ov').classList.add('open');runLocalBrief()}
-function closeAssist(){$('#assist-ov').classList.remove('open')}
+function openAssist(){dlgOpen($('#assist-ov'));$('#assist-ov').classList.add('open');runLocalBrief();$('#as-run').focus()}
+function closeAssist(){$('#assist-ov').classList.remove('open');dlgClose($('#assist-ov'))}
 $('#assist-fab').onclick=openAssist;
 $('#as-close').onclick=closeAssist;
 $('#as-run').onclick=runAIBrief;
@@ -6509,8 +6661,10 @@ function showWelcome(ob){
   $('#w-sub').textContent=ob.org?('Your '+ob.org+' workspace is ready. Let\u2019s bring your inboxes over.'):'Your workspace is ready. Let\u2019s bring your inboxes over.';
   const rows=['<div class="w-row"><span class="w-dot live"></span><div class="t"><b>Blank slate, by design</b><span>Add your first mailbox in Settings → Linked accounts, with an app password from your provider or, where RATA offers it, Sign in with Microsoft.</span></div></div>'];
   $('#w-rows').innerHTML=rows.join('');
+  dlgOpen($('#welcome-ov'));
   $('#welcome-ov').classList.add('open');
-  $('#w-enter').onclick=()=>$('#welcome-ov').classList.remove('open');
+  $('#w-enter').onclick=()=>{$('#welcome-ov').classList.remove('open');dlgClose($('#welcome-ov'))};
+  $('#w-enter').focus();
 }
 
 /* ---------------- BOOT ---------------- */
@@ -6596,7 +6750,7 @@ if(__isIOS&&!__standalone)document.addEventListener('DOMContentLoaded',()=>docum
 if(__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
 function installApp(){
   if(__dp){__dp.prompt();__dp.userChoice.then(()=>{__dp=null});return}
-  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
+  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:typeof glide==='function'?glide():'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
   else if(typeof toast==='function')toast('In Chrome or Edge: menu → Install Rata');else alert('In Chrome or Edge: browser menu → "Install Rata".');
 }
 document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.onclick=installApp));
