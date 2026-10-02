@@ -1014,6 +1014,7 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b id="del-head">This cannot be undone</b><span id="del-detail" role="status"></span></div>
             <input type="text" id="del-email" aria-label="Type your email address to confirm" placeholder="type your email address" autocomplete="off" style="min-width:230px">
             <button class="btn danger" id="del-go">Delete permanently</button>
+            <a class="btn" id="del-web" href="https://mailrata.org/account" target="_blank" rel="noopener">Open mailrata.org account</a>
             <button class="btn" id="del-cancel">Keep my account</button>
           </div>
         </div>
@@ -4509,22 +4510,42 @@ $('#pw-change').onclick=async()=>{
    The wording comes from the endpoint that does the work, so the warning
    cannot drift from the behaviour. Two halves: the server clears what it
    holds, and the browser clears what only it has — the workspace, the file
-   vault, the session. Neither half can do the other's. */
+   vault, the session. Neither half can do the other's.
+   In the app (I7) the endpoint is bridge.js, and the other half is Rust:
+   every linked mailbox with its keychain entries, then the licence stored
+   here, then this page's store. The mailrata.org account is not on this
+   computer and is not deleted from it; the row says so and opens
+   mailrata.org/account. Delete permanently stays off until the endpoint has
+   said what it would remove. */
+const DEL_HERE='Removes from this computer every linked mailbox, with its password or Microsoft sign-in in the keychain, the licence stored here, and RATA’s mail store, settings and sign-in. Your mail stays at your provider. Your mailrata.org account and subscription are managed and deleted at mailrata.org.';
+if(window.__RATA_NATIVE__)$('#del-what').textContent=DEL_HERE;
 async function openDelete(){
-  const box=$('#del-confirm'),detail=$('#del-detail');
+  const box=$('#del-confirm'),detail=$('#del-detail'),go=$('#del-go');
   box.style.display='flex';
+  $('#del-web').style.display=window.__RATA_NATIVE__?'':'none';
+  go.disabled=true;go.textContent='Delete permanently';
   $('#del-email').value='';$('#del-email').focus();
   detail.textContent='Checking what this would remove…';
+  if(window.__RATA_NATIVE__){
+    try{
+      const info=await apiFetch('/api/account');
+      if(!info||info.error||!Array.isArray(info.removes)){detail.textContent=(info&&info.error)||'RATA could not tell what is on this computer, so nothing can be deleted yet.';return}
+      go.disabled=false;
+      detail.textContent=`On this computer, this removes ${info.removes.join('; ')}. It keeps ${info.keeps.join('; ')}.`
+        +(info.mailboxes?' Revoke the app passwords you made for RATA at each provider too.':'');
+    }catch(e){detail.textContent='RATA could not tell what is on this computer, so nothing can be deleted yet: '+(e&&e.message||e)}
+    return;
+  }
   try{
     const info=await apiFetch('/api/account');
     if(info.error){detail.textContent=info.error;return}
-    if(info.blocked){detail.textContent=info.blocked;$('#del-go').disabled=true;return}
-    $('#del-go').disabled=false;
+    if(info.blocked){detail.textContent=info.blocked;return}
+    go.disabled=false;
     detail.textContent=`Removes ${info.removes.join(', ')}. Keeps ${info.keeps.join('; ')}.`
       +(info.mailboxes?` ${info.mailboxes} mailbox${info.mailboxes===1?'':'es'} will be disconnected — revoke their app passwords at each provider too.`:'');
   }catch(e){
     /* A device-only account has no server side to ask or to clear. */
-    $('#del-go').disabled=false;
+    go.disabled=false;
     detail.textContent='This account exists only on this device. Deleting it clears the workspace, the files stored here, and the sign-in.';
   }
 }
@@ -4533,6 +4554,8 @@ async function wipeThisDevice(){
   try{localStorage.removeItem(LS_KEY)}catch(e){}
   try{localStorage.removeItem('centra_session')}catch(e){}
   try{localStorage.removeItem(CFG_KEY)}catch(e){}
+  /* A message waiting out Undo send is mail text too. */
+  try{localStorage.removeItem(OB_KEY)}catch(e){}
   try{
     const accts=JSON.parse(localStorage.getItem('centra_accounts')||'{}');
     delete accts[SESSION.email];
@@ -4547,11 +4570,25 @@ async function wipeThisDevice(){
 }
 
 async function deleteAccount(){
+  const btn=$('#del-go');
+  /* Off means there is nothing it could do yet: Enter in the box too. */
+  if(btn.disabled)return;
   const typed=$('#del-email').value.trim().toLowerCase();
   if(typed!==String(SESSION.email||'').toLowerCase()){toast('Type your email address exactly to confirm');return}
-  const btn=$('#del-go');btn.disabled=true;btn.textContent='Deleting…';
+  btn.disabled=true;btn.textContent='Deleting…';
   try{
-    if(SESSION.mode==='supabase'){
+    if(window.__RATA_NATIVE__){
+      /* Rust first: the mailboxes and their passwords, then the licence. A
+         keychain that refuses stops it there, and nothing of this page's is
+         cleared, so pressing again finishes the job. */
+      const res=await apiFetch('/api/account',{method:'DELETE'});
+      if(!res||!res.ok){
+        const why=(res&&res.error)||'RATA could not remove what it keeps on this computer.';
+        $('#del-detail').textContent='Nothing more was deleted. '+why;
+        toast('Could not delete the account: '+why);
+        btn.disabled=false;btn.textContent='Delete permanently';return;
+      }
+    }else if(SESSION.mode==='supabase'){
       const res=await apiFetch('/api/account',{method:'DELETE',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({confirm:typed})});
       if(!res.ok){toast(res.error||'Could not delete the account');btn.disabled=false;btn.textContent='Delete permanently';return}

@@ -337,6 +337,13 @@ pub struct AttachmentAt {
     pub index: u32,
 }
 
+/// What Delete account removed from this computer (I7): how many mailboxes
+/// were unlinked. The licence and the stored list went with them.
+#[derive(Debug, Serialize)]
+pub struct Forgotten {
+    pub mailboxes: usize,
+}
+
 /// Where an attachment was saved.
 #[derive(Debug, Serialize)]
 pub struct Saved {
@@ -893,16 +900,66 @@ impl Rata {
     /// Both, or the customer has removed an account from the interface and
     /// their mail password is still sitting in the credential store, which is
     /// not what "unlink" means to anybody.
+    ///
+    /// The keychain first (I7). Every piece of a Microsoft sign-in too, not
+    /// only the first. A keychain that will not let go leaves the mailbox
+    /// listed, with the reason, so Unlink can be pressed again; the other
+    /// way round left a password in the keychain with nothing on screen
+    /// that could ever remove it.
     pub fn unlink(&self, email: &str) -> Result<(), String> {
+        vault::forget_all(self.vault.as_ref(), email)?;
+        self.ms.forget(email);
         let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
         store.remove(email);
         store
             .save()
-            .map_err(|e| format!("The mailbox list could not be saved: {e}"))?;
-        drop(store);
-        self.ms.forget(email);
-        // Every piece of a Microsoft sign-in too, not only the first.
-        vault::forget_all(self.vault.as_ref(), email)
+            .map_err(|e| format!("The mailbox list could not be saved: {e}"))
+    }
+
+    /// Delete account, in the app (I7): every linked mailbox, each through
+    /// [`Rata::unlink`] (its keychain entries, its sign-in held in memory, its
+    /// line in the list), then the licence stored on this computer. In that
+    /// order, and the licence only once every mailbox is gone: a keychain
+    /// that refuses stops here with that mailbox still listed and RATA still
+    /// licensed, so trying again finishes the job instead of leaving a
+    /// password behind. The page clears its own store afterwards; the
+    /// customer's mailrata.org account is not this computer's to delete.
+    pub fn forget_everything(&self) -> Result<Forgotten, String> {
+        let boxes: Vec<String> = self
+            .store
+            .lock()
+            .map_err(|_| "the mailbox list is busy")?
+            .list()
+            .iter()
+            .map(|m| m.email.clone())
+            .collect();
+        for email in &boxes {
+            self.unlink(email)
+                .map_err(|e| format!("{email} could not be removed: {e}"))?;
+        }
+        {
+            let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+            // A mailbox linked while this ran keeps the licence too.
+            if let Some(m) = store.list().first() {
+                return Err(format!(
+                    "{} was linked while RATA was removing the others. Try again.",
+                    m.email
+                ));
+            }
+            store.set_licence(None);
+            store
+                .save()
+                .map_err(|e| format!("The licence could not be removed: {e}"))?;
+        }
+        if let Ok(mut notes) = self.notes.lock() {
+            notes.clear();
+        }
+        if let Ok(mut last) = self.last_refresh.lock() {
+            *last = None;
+        }
+        Ok(Forgotten {
+            mailboxes: boxes.len(),
+        })
     }
 
     /// Read every linked mailbox. `known` is what the interface already holds
@@ -1926,14 +1983,6 @@ impl Rata {
             Acted::Net(why) => Changed::failed("net", why),
         }
     }
-
-    /// Try a mailbox again after its password has been replaced.
-    pub fn clear_auth_failure(&self, email: &str) {
-        if let Ok(mut store) = self.store.lock() {
-            store.mark_auth(email, None);
-            let _ = store.save();
-        }
-    }
 }
 
 /// The special folders one refresh of `email` shows exist, added to what
@@ -2435,6 +2484,92 @@ mod tests {
     }
 
     #[test]
+    fn deleting_here_removes_every_mailbox_its_keychain_entries_and_the_licence() {
+        let file = tmpfile("forget-all");
+        let app = rata(file.clone());
+        linked(&app, "owner@example.com", "imap.example.com");
+        // A Microsoft mailbox whose refresh token is kept in three pieces.
+        vault::put_refresh(app.vault.as_ref(), "me@outlook.com", &"r".repeat(2500)).unwrap();
+        app.remember(Mailbox {
+            email: "me@outlook.com".into(),
+            host: "outlook.office365.com".into(),
+            port: 993,
+            label: "Outlook".into(),
+            help: None,
+            source: "microsoft".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::OAuth,
+        })
+        .unwrap();
+        assert!(app.vault.get_piece("me@outlook.com#3").is_ok());
+        app.note("owner@example.com", |n| n.last_good = Some(1));
+        assert!(app.standing().licensed);
+
+        let gone = app.forget_everything().unwrap();
+        assert_eq!(gone.mailboxes, 2);
+        assert!(app.mailboxes().is_empty());
+        for email in ["owner@example.com", "me@outlook.com"] {
+            assert!(
+                app.vault.get(email).is_err(),
+                "{email} left in the keychain"
+            );
+        }
+        for n in 2..=vault::PIECES_MAX {
+            assert!(
+                app.vault.get_piece(&format!("me@outlook.com#{n}")).is_err(),
+                "piece {n} of the Microsoft sign-in was left behind"
+            );
+        }
+        let standing = app.standing();
+        assert!(
+            !standing.licensed && standing.token.is_none(),
+            "{standing:?}"
+        );
+        assert!(app.notes.lock().unwrap().is_empty());
+        // And on disk: RATA started again finds nothing.
+        let again = Store::open(file);
+        assert!(again.list().is_empty() && again.licence().is_none());
+        // Nothing left is nothing to do, and still an answer.
+        assert_eq!(app.forget_everything().unwrap().mailboxes, 0);
+    }
+
+    #[test]
+    fn a_keychain_that_will_not_let_go_keeps_the_mailbox_and_the_licence() {
+        let app = Rata::new(
+            Store::open(tmpfile("forget-locked")),
+            Box::new(crate::vault::Locked),
+            Resolver::system().expect("resolver"),
+            Some(KEY),
+        );
+        app.set_licence(Some(PRO.into())).unwrap();
+        app.remember(Mailbox {
+            email: "owner@example.com".into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Owner".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::Password,
+        })
+        .unwrap();
+        // Unlink: the password could not be removed, so the mailbox stays
+        // listed and Unlink can be pressed again.
+        assert!(app.unlink("owner@example.com").is_err());
+        assert_eq!(app.mailboxes().len(), 1);
+        // Delete account stops there too, before the licence.
+        let why = app.forget_everything().unwrap_err();
+        assert!(
+            why.contains("owner@example.com") && why.contains("keychain locked"),
+            "{why}"
+        );
+        assert_eq!(app.mailboxes().len(), 1);
+        assert!(app.standing().licensed, "the licence went first");
+    }
+
+    #[test]
     fn a_rejected_password_stops_that_mailbox_being_retried() {
         rt().block_on(async {
             let app = rata(tmpfile("authfail"));
@@ -2453,8 +2588,9 @@ mod tests {
                 out.skipped[0]
             );
 
-            // And it comes back once the password is replaced.
-            app.clear_auth_failure("owner@example.com");
+            // And it comes back once the password is replaced: relinking
+            // writes the mailbox afresh, with nothing parked.
+            linked(&app, "owner@example.com", "imap.example.com");
             assert!(app.refresh(15, &[], &[]).await.skipped.is_empty());
         });
     }

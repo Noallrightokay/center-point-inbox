@@ -130,7 +130,6 @@
         label: m.label,
         foundBy: m.source,
         auth: m.auth || 'password',
-        relinked: false,
       };
     }
     /* Stopped by the customer: nothing to say. */
@@ -604,10 +603,38 @@
       return invoke('licence_status');
     },
 
-    async '/api/account'() {
-      return cannot(
-        'This copy of RATA keeps everything on this computer, so there is no cloud account to manage here. Remove a mailbox with Unlink, or uninstall the app to remove everything.'
-      );
+    /* Delete account, in the app (I7). What it removes is everything RATA
+       keeps on this computer: Rust unlinks every mailbox (the keychain
+       entries first, Microsoft pieces too), then forgets the licence
+       stored here (forget_everything), and the page then clears its own
+       store and sign-in. The customer's mailrata.org account and
+       subscription are not on this computer and are not deleted from it:
+       the page says so and opens mailrata.org/account. The wording lives
+       here, beside the call that does the work, so the two cannot drift. */
+    async '/api/account'(opts) {
+      if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
+        try {
+          const r = await invoke('forget_everything');
+          return { ok: true, mailboxes: r.mailboxes };
+        } catch (e) {
+          return { ok: false, error: e && e.error ? e.error : String(e) };
+        }
+      }
+      const [boxes, standing] = await Promise.all([invoke('list_mailboxes'), invoke('licence_status')]);
+      const n = (boxes || []).length;
+      const removes = [];
+      if (n) removes.push(n === 1
+        ? 'the mailbox linked here, with its password or Microsoft sign-in in this computer’s keychain'
+        : `all ${n} mailboxes linked here, with their passwords and Microsoft sign-ins in this computer’s keychain`);
+      if (standing && standing.token) removes.push('the licence stored on this computer');
+      removes.push('RATA’s mail store, settings and sign-in');
+      return {
+        here: true,
+        mailboxes: n,
+        removes,
+        keeps: ['your mail, which stays at your provider', 'your mailrata.org account and subscription, which you manage and delete at mailrata.org'],
+        account: 'https://mailrata.org/account',
+      };
     },
   };
 
