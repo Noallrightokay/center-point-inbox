@@ -646,6 +646,12 @@ focus ring, and bumped the version ([#113](https://github.com/Noallrightokay/cen
 engine 297, shell 130, harness 358, website 785, all green on the branch.
 The screenshots are H10's, taken after the last interface change. Not yet
 merged, released or verified: the PM merges. 0.1.44 released and verified 2026-09-30 ([run 36749751360](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36749751360)): the first run's gate caught a harness race on the disguised-program question ([run 36748146906](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36748146906), fixed in [#115](https://github.com/Noallrightokay/center-point-inbox/pull/115)), and the website moved to Next.js 16.3.8 for a critical advisory first ([#114](https://github.com/Noallrightokay/center-point-inbox/pull/114)); `verify-release.sh v0.1.44` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.44 beta".
+0.1.45 folded in #118–#123 (wave 6: I1 to I7; I5 was the audit), with the
+follow-ups they found (the privacy page's briefing sentence, the app's
+link to the website's Delete account, the domain add-on's ghost name),
+and bumped the version; engine 305, shell 136, harness 425, website 800.
+No screenshot changed: I7's new row is in Settings, which the shots do
+not show.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
