@@ -279,6 +279,83 @@ pub struct Handed {
     pub picture: Option<&'static str>,
 }
 
+/// The most attachments one `read_pictures` judges: more than the page shows
+/// before "Show N more" (6), and a bound on the work one request asks for.
+pub const PICTURES_ASK: usize = 24;
+
+/// The most picture bytes one `read_pictures` answer carries, decoded (about
+/// 40 MB as base64): six pictures at `PICTURE_MAX` fit. A picture that would
+/// pass it comes back `left-out`, for the page to ask for again.
+pub const PICTURES_TOTAL: usize = 30 * 1024 * 1024;
+
+/// One attachment judged for showing in the message: its bytes and the kind
+/// of picture they are, or no bytes and why not (`Shown::reason`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub index: u32,
+    pub picture: Option<&'static str>,
+    pub data: Option<Vec<u8>>,
+    /// `gone` (no such attachment), `disguised` (a program named as a
+    /// document, judged from the name as fetched), `too-large` (past
+    /// `PICTURE_MAX`), `not-a-picture` (by its bytes), or `left-out` (past
+    /// `PICTURES_TOTAL` in this answer; asking again for it alone will do).
+    pub reason: Option<&'static str>,
+}
+
+impl Shown {
+    fn not(index: u32, reason: &'static str) -> Shown {
+        Shown {
+            index,
+            picture: None,
+            data: None,
+            reason: Some(reason),
+        }
+    }
+}
+
+/// The pictures among `indexes` of one fetched message `raw`, parsed once.
+/// Everything is judged here from what was fetched, never from what the page
+/// said: the name (`looks_disguised`, or the engine's own flag) and the bytes
+/// (`sniff_image`, `PICTURE_MAX`). The answer is in the order asked, each
+/// index once, and carries at most `PICTURES_TOTAL` bytes.
+pub fn pictures_fetched(raw: &[u8], indexes: &[u32]) -> Vec<Shown> {
+    let mut asked: Vec<u32> = Vec::with_capacity(indexes.len());
+    for &i in indexes {
+        if !asked.contains(&i) {
+            asked.push(i);
+        }
+    }
+    let mut total = 0usize;
+    body::attachments_at(raw, &asked)
+        .into_iter()
+        .zip(&asked)
+        .map(|(found, &index)| {
+            let Some((info, bytes)) = found else {
+                return Shown::not(index, "gone");
+            };
+            if info.disguised || looks_disguised(&info.name) {
+                return Shown::not(index, "disguised");
+            }
+            if bytes.len() > PICTURE_MAX {
+                return Shown::not(index, "too-large");
+            }
+            let Some(kind) = sniff_image(&bytes) else {
+                return Shown::not(index, "not-a-picture");
+            };
+            if total + bytes.len() > PICTURES_TOTAL {
+                return Shown::not(index, "left-out");
+            }
+            total += bytes.len();
+            Shown {
+                index,
+                picture: Some(kind),
+                data: Some(bytes),
+                reason: None,
+            }
+        })
+        .collect()
+}
+
 /// What kind of picture `bytes` are, from their first bytes alone: `png`,
 /// `jpeg`, `gif` or `webp`, the subtype of the `data:image/…` URL the page
 /// shows it as. Never from the file's name or the type the message declares,
@@ -1284,6 +1361,37 @@ impl Rata {
     ) -> Result<Handed, Problem> {
         let (info, bytes) = self.attachment_of(email, &at).await?;
         hand_fetched(email, info, bytes, confirmed)
+    }
+
+    /// The pictures among one message's attachments, for the page to show in
+    /// the message (H11): the message is fetched from the mailbox once,
+    /// however many are asked for, rather than once a picture, since each
+    /// fetch is a sign-in. The page names the message and the indexes only
+    /// (at most `PICTURES_ASK`); what each one is, is `pictures_fetched`'s
+    /// judgment of what was fetched.
+    pub async fn read_pictures(
+        &self,
+        email: &str,
+        folder: Folder,
+        uid: u32,
+        uidvalidity: u32,
+        indexes: &[u32],
+    ) -> Result<Vec<Shown>, Problem> {
+        if indexes.len() > PICTURES_ASK {
+            return Err(Problem {
+                email: email.to_string(),
+                kind: "too-many".into(),
+                error: format!(
+                    "RATA reads at most {PICTURES_ASK} pictures of a message at a time."
+                ),
+            });
+        }
+        if indexes.is_empty() {
+            self.usable(email)?;
+            return Ok(Vec::new());
+        }
+        let raw = self.whole(email, folder, uid, uidvalidity).await?;
+        Ok(pictures_fetched(&raw, indexes))
     }
 
     async fn attachment_of(
@@ -3203,6 +3311,156 @@ mod tests {
             as_named("poster.png", "image/png", &big).picture,
             Some("png")
         );
+    }
+
+    /// A whole message with these attachments, each base64 as a mail
+    /// program sends it, and the index the engine lists each one under.
+    fn mailed(parts: &[(&str, &str, &[u8])]) -> (Vec<u8>, Vec<u32>) {
+        let mut raw = String::from(
+            "From: ann@example.org\r\nTo: owner@example.com\r\nSubject: Pictures\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b1\r\n\r\n--b1\r\nContent-Type: text/plain\r\n\r\nFrom the weekend.\r\n",
+        );
+        for (name, mime, bytes) in parts {
+            let b64 = rata_mail::words::base64_encode(bytes);
+            raw.push_str(&format!(
+                "--b1\r\nContent-Type: {mime}; name=\"{name}\"\r\nContent-Disposition: attachment; filename=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+            ));
+            for line in b64.as_bytes().chunks(76) {
+                raw.push_str(std::str::from_utf8(line).unwrap());
+                raw.push_str("\r\n");
+            }
+        }
+        raw.push_str("--b1--\r\n");
+        let raw = raw.into_bytes();
+        let listed = body::read_whole(&raw)
+            .attachments
+            .iter()
+            .map(|a| a.index)
+            .collect::<Vec<_>>();
+        assert_eq!(listed.len(), parts.len());
+        (raw, listed)
+    }
+
+    #[test]
+    fn every_picture_asked_for_comes_from_one_fetched_message_by_its_bytes() {
+        let mut big = PNG.to_vec();
+        big.resize(PICTURE_MAX + 1, 0);
+        let (raw, at) = mailed(&[
+            ("holiday.jpg", "image/jpeg", PNG),
+            ("chart.png", "image/png", b"<html><script>alert(1)</script>"),
+            ("logo.png", "image/svg+xml", b"<svg onload=alert(1)/>"),
+            ("invoice.pdf.exe", "image/png", PNG),
+            ("poster.png", "image/png", &big),
+            ("scan.jpeg", "image/jpeg", JPEG),
+            ("wave.gif", "image/gif", GIF),
+            ("photo.webp", "image/webp", WEBP),
+        ]);
+        // Asked in any order, an index twice, and one the message lacks.
+        let asked = [
+            at[7], at[0], at[1], at[2], at[3], at[0], at[4], 99, at[5], at[6],
+        ];
+        let got = pictures_fetched(&raw, &asked);
+        let summary: Vec<(u32, Option<&str>, Option<&str>)> =
+            got.iter().map(|s| (s.index, s.picture, s.reason)).collect();
+        assert_eq!(
+            summary,
+            vec![
+                (at[7], Some("webp"), None),
+                // A PNG named .jpg and declared a JPEG is the PNG it is.
+                (at[0], Some("png"), None),
+                // A web page and an SVG named and declared as pictures are not.
+                (at[1], None, Some("not-a-picture")),
+                (at[2], None, Some("not-a-picture")),
+                // Picture bytes under a disguised name are never handed over.
+                (at[3], None, Some("disguised")),
+                (at[4], None, Some("too-large")),
+                (99, None, Some("gone")),
+                (at[5], Some("jpeg"), None),
+                (at[6], Some("gif"), None),
+            ]
+        );
+        assert_eq!(got[1].data.as_deref(), Some(PNG));
+        assert_eq!(got[0].data.as_deref(), Some(WEBP));
+        assert!(
+            got.iter()
+                .filter(|s| s.reason.is_some())
+                .all(|s| s.data.is_none())
+        );
+        // Exactly PICTURE_MAX is still a picture.
+        big.truncate(PICTURE_MAX);
+        let (raw, at) = mailed(&[("poster.png", "image/png", &big)]);
+        assert_eq!(pictures_fetched(&raw, &at)[0].picture, Some("png"));
+        // A message RATA cannot parse has none of them.
+        assert_eq!(
+            pictures_fetched(b"no headers here", &[0, 1]),
+            vec![Shown::not(0, "gone"), Shown::not(1, "gone")]
+        );
+    }
+
+    #[test]
+    fn one_answer_carries_at_most_pictures_total_and_says_what_it_left_out() {
+        // Each just under the most a picture may be, so six leave a little room.
+        let mut full = PNG.to_vec();
+        full.resize(PICTURE_MAX - 1024, 7);
+        let names: Vec<String> = (0..7).map(|i| format!("p{i}.png")).collect();
+        let parts: Vec<(&str, &str, &[u8])> = names
+            .iter()
+            .map(|n| (n.as_str(), "image/png", &full[..]))
+            .chain([("small.gif", "image/gif", GIF)])
+            .collect();
+        let (raw, at) = mailed(&parts);
+        let got = pictures_fetched(&raw, &at);
+        let carried: usize = got
+            .iter()
+            .filter_map(|s| s.data.as_ref())
+            .map(Vec::len)
+            .sum();
+        assert!(carried <= PICTURES_TOTAL, "{carried}");
+        // Six fit (six at PICTURE_MAX would too); the seventh is left out, to
+        // be asked for again, and a small one after it still fits.
+        assert_eq!(PICTURES_TOTAL / PICTURE_MAX, 6);
+        let reasons: Vec<Option<&str>> = got.iter().map(|s| s.reason).collect();
+        assert_eq!(
+            reasons,
+            vec![None, None, None, None, None, None, Some("left-out"), None]
+        );
+        assert_eq!(got[6], Shown::not(at[6], "left-out"));
+        assert_eq!(got[7].picture, Some("gif"));
+        // Asked for again on its own, it comes.
+        assert_eq!(pictures_fetched(&raw, &[at[6]])[0].picture, Some("png"));
+    }
+
+    #[test]
+    fn pictures_are_refused_before_ever_dialling() {
+        rt().block_on(async {
+            let who = "owner@example.com";
+            let app = unlicensed(tmpfile("pics-unlic"));
+            assert_eq!(
+                app.read_pictures(who, Folder::Inbox, 1, 7, &[0, 1])
+                    .await
+                    .unwrap_err()
+                    .kind,
+                "unlicensed"
+            );
+            let app = rata(tmpfile("pics-parked"));
+            linked(&app, who, "imap.example.com");
+            app.note_auth_failure(who);
+            for asked in [&[0u32, 1][..], &[]] {
+                assert_eq!(
+                    app.read_pictures(who, Folder::Inbox, 1, 7, asked)
+                        .await
+                        .unwrap_err()
+                        .kind,
+                    "auth"
+                );
+            }
+            let many: Vec<u32> = (0..=PICTURES_ASK as u32).collect();
+            let e = app
+                .read_pictures(who, Folder::Inbox, 1, 7, &many)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "too-many");
+            assert!(e.error.contains("at most 24"), "{}", e.error);
+        });
     }
 
     #[test]

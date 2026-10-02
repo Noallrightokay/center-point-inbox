@@ -1810,15 +1810,17 @@ async function convertAttachment(m,a,btn,confirmed){
 }
 /* Picture attachments shown in the message (H11). An attachment named as a
    PNG, JPEG, GIF or WebP, not disguised, and not known to be over 5 MB is
-   fetched through read_attachment once the message is open, at most
-   PIC_SHOW a message until "Show N more". Rust decides what the bytes are
-   (core::sniff_image, `picture`), never the name or the declared type, and
-   answers null for anything else, SVG included, or for a picture over 5 MB
+   fetched once the message is open, at most PIC_SHOW a message until "Show
+   N more". All the pictures shown are asked for in one request
+   (read_pictures, I4), which fetches the message once: each fetch is a
+   sign-in. Rust decides what the bytes are (core::sniff_image, `picture`),
+   never the name or the declared type, and answers null for anything else,
+   SVG included, a disguised name, or a picture over 5 MB
    (core::PICTURE_MAX): that one stays listed and is not shown. A picture is
    only ever a data: image in an <img>, which the app CSP already allows;
    opening it large is the same data: image in #pic-ov, no navigation and no
    window. Kept for the session only, like OPENED. */
-const PIC_EXT=/\.(png|jpe?g|gif|webp)$/i,PIC_TYPES=['png','jpeg','gif','webp'],PIC_MAX=5*1024*1024,PIC_SHOW=6,PIC_KEEP=48;
+const PIC_EXT=/\.(png|jpe?g|gif|webp)$/i,PIC_TYPES=['png','jpeg','gif','webp'],PIC_MAX=5*1024*1024,PIC_SHOW=6,PIC_KEEP=48,PIC_ASK=24;
 const PICS=new Map(),PIC_MORE=new Set();
 let PIC_FROM=null;
 const pictureable=a=>!!(a&&a.i!==undefined&&!a.disguised&&PIC_EXT.test(String(a.n||'').trim())&&!(Number(a.b)>PIC_MAX));
@@ -1847,24 +1849,34 @@ function drawPicture(k,m,a){
   tile.title='Show '+picName(a.n)+' larger';
 }
 async function loadPictures(m,atts,shown){
-  const id=m.id,todo=[];
+  const id=m.id;let todo=[];
   for(const a of shown){const k=atts.indexOf(a);if(PICS.has(picKey(m,a)))drawPicture(k,m,a);else todo.push([k,a])}
-  /* One at a time: each is a fetch of the message from the mailbox. */
-  for(const [k,a] of todo){
-    if(selMail!==id)return;
-    const key=picKey(m,a);
-    if(PICS.has(key)){drawPicture(k,m,a);continue}
-    PICS.set(key,{pending:true});
+  /* One request, one fetch of the message, for every picture not yet held;
+     at most PIC_ASK (core::PICTURES_ASK) a request. */
+  while(todo.length&&selMail===id){
+    const batch=todo.slice(0,PIC_ASK);todo=todo.slice(PIC_ASK);
+    for(const [,a] of batch)PICS.set(picKey(m,a),{pending:true});
     let r;
-    try{r=await apiFetch('/api/mail/attachment/read',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:false})})}
+    try{r=await apiFetch('/api/mail/attachment/pictures',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,indexes:batch.map(([,a])=>a.i)})})}
     catch(e){r={ok:false}}
-    /* A failure is not an answer: forgotten, so opening the message again
-       tries again. Until then the tile goes and the file stays listed. */
-    if(!r||!r.ok){PICS.delete(key);if(selMail===id)dropPicture(k);continue}
-    const type=PIC_TYPES.includes(r.picture)&&typeof r.data==='string'&&r.data.length<=Math.ceil(PIC_MAX/3)*4?r.picture:null;
-    PICS.set(key,type?{type,data:r.data}:{});
+    const by=new Map();
+    if(r&&r.ok&&Array.isArray(r.pictures))for(const p of r.pictures)if(p&&!by.has(p.index))by.set(p.index,p);
+    const again=[];
+    for(const [k,a] of batch){
+      const key=picKey(m,a),p=by.get(a.i);
+      /* Left out only to keep one answer small: asked for again below. */
+      if(p&&p.reason==='left-out'){PICS.delete(key);again.push([k,a]);continue}
+      const type=p&&PIC_TYPES.includes(p.picture)&&typeof p.data==='string'&&p.data.length<=Math.ceil(PIC_MAX/3)*4?p.picture:null;
+      /* A failure is not an answer: forgotten, so opening the message again
+         tries again. Until then the tile goes and the file stays listed.
+         Rust's "not one to show" is an answer, and is kept. */
+      if(!type&&!(p&&['not-a-picture','too-large','disguised'].includes(p.reason))){PICS.delete(key);if(selMail===id)dropPicture(k);continue}
+      PICS.set(key,type?{type,data:p.data}:{});
+      if(selMail===id)drawPicture(k,m,a);
+    }
     while(PICS.size>PIC_KEEP)PICS.delete(PICS.keys().next().value);
-    if(selMail===id)drawPicture(k,m,a);
+    if(again.length<batch.length)todo=again.concat(todo);
+    else for(const [k] of again)if(selMail===id)dropPicture(k);
   }
 }
 function openPicture(m,a,from){

@@ -191,6 +191,7 @@ fn main() {
             commands::open_link,
             commands::save_file,
             commands::read_attachment,
+            commands::read_pictures,
             commands::check_update,
             commands::install_update,
             commands::diagnostics,

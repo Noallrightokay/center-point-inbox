@@ -28,6 +28,15 @@ const MOCK = ({ licensed, ms, old, lic }) => {
     msDomains: [],
   };
   const M = window.__mock;
+  /* As core::sniff_image: what the bytes are (base64 here), never the name,
+     and nothing over core::PICTURE_MAX (5 MB). */
+  M.sniff = (data) => {
+    const head = atob(String(data).slice(0, 24));
+    const at = (s, o = 0) => head.slice(o, o + s.length) === s;
+    return atob(data).length > 5 * 1024 * 1024 ? null
+      : at('\x89PNG\r\n\x1a\n') ? 'png' : at('\xFF\xD8\xFF') ? 'jpeg' : at('GIF87a') || at('GIF89a') ? 'gif'
+        : at('RIFF') && at('WEBP', 8) ? 'webp' : null;
+  };
   /* BUG-L: a licence with a clock, as core.rs judges one. `lic.token` is
      what is on disk, `lic.now` this computer's clock (seconds), and
      `lic.genuine` every token the fake key signed, with its expiry. An
@@ -158,14 +167,29 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         const f = (M.readable || {})[args.index];
         if (!f) throw { email: args.email, kind: 'gone', error: 'That attachment is no longer in the message.' };
         if ('picture' in f) return f;
-        /* As core::sniff_image: what the bytes are, never the name, and
-           nothing over core::PICTURE_MAX (5 MB). */
-        const head = atob(String(f.data).slice(0, 24));
-        const at = (s, o = 0) => head.slice(o, o + s.length) === s;
-        const picture = atob(f.data).length > 5 * 1024 * 1024 ? null
-          : at('\x89PNG\r\n\x1a\n') ? 'png' : at('\xFF\xD8\xFF') ? 'jpeg' : at('GIF87a') || at('GIF89a') ? 'gif'
-            : at('RIFF') && at('WEBP', 8) ? 'webp' : null;
-        return { ...f, picture };
+        return { ...f, picture: M.sniff(f.data) };
+      }
+      /* I4: core::read_pictures, one fetch of the message for every index
+         asked; each judged by core::pictures_fetched from the name and bytes
+         as fetched, never from what the page sent. */
+      case 'read_pictures': {
+        if (M.readFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
+        if (!Array.isArray(args.indexes) || args.indexes.length > 24) throw { email: args.email, kind: 'too-many', error: 'RATA reads at most 24 pictures of a message at a time.' };
+        let total = 0;
+        const seen = new Set();
+        return args.indexes.filter((i) => !seen.has(i) && seen.add(i)).map((index) => {
+          const f = (M.readable || {})[index];
+          const not = (reason) => ({ index, picture: null, data: null, reason });
+          if (!f) return not('gone');
+          if (/\.(pdf|docx?|xlsx?|txt|jpe?g|png)\.(exe|scr|js|bat|cmd|com)$/i.test(f.name)) return not('disguised');
+          const size = atob(f.data).length;
+          if (size > 5 * 1024 * 1024) return not('too-large');
+          const picture = M.sniff(f.data);
+          if (!picture) return not('not-a-picture');
+          if (total + size > (M.picturesTotal || 30 * 1024 * 1024)) return not('left-out');
+          total += size;
+          return { index, picture, data: f.data, reason: null };
+        });
       }
       case 'open_message':
         if (M.openFails) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached' };
@@ -1808,7 +1832,9 @@ console.log('\n— picture attachments are shown in the message, by what their b
     await serverSync('mail', true);
     go('inbox');
   }, atts);
-  const reads = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_attachment').map(([, a]) => ({ index: a.index, confirmed: a.confirmed })));
+  /* I4: every picture shown comes from one read_pictures call, which is
+     one fetch of the message, never one read_attachment a picture. */
+  const reads = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'read_pictures' || c === 'read_attachment').map(([c, a]) => ({ c, indexes: a.indexes, confirmed: a.confirmed })));
   check((await reads()).length === 0, 'nothing is fetched for pictures until the message is opened');
   await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
   await pg.waitForFunction(() => document.querySelectorAll('#mail-detail [data-att]').length === 11
@@ -1832,9 +1858,9 @@ console.log('\n— picture attachments are shown in the message, by what their b
   check(!listed.tiles.includes(1) && listed.cards === 4 && !listed.htmlShown && listed.strayImg === 0 && listed.pwned === null,
     `a web page named chart.png is listed and not shown, and no img is made from it or from any name: ${JSON.stringify(listed)}`);
   const r1 = await reads();
-  const asked = r1.map((r) => r.index).sort((a, b) => a - b);
-  check(JSON.stringify(asked) === JSON.stringify([1, 2, 6, 7, 8, 9]) && r1.every((r) => r.confirmed === false),
-    `only the first six named as pictures are fetched, never the disguised program, the SVG or the one over 5 MB, and never "confirmed": ${JSON.stringify(r1)}`);
+  const asked = r1.length === 1 && r1[0].c === 'read_pictures' ? [...r1[0].indexes].sort((a, b) => a - b) : null;
+  check(JSON.stringify(asked) === JSON.stringify([1, 2, 6, 7, 8, 9]) && r1[0].confirmed === undefined,
+    `opening it makes exactly one bridge call, for the first six named as pictures, never the disguised program, the SVG or the one over 5 MB, and nothing "confirmed": ${JSON.stringify(r1)}`);
   const more = await pg.evaluate(() => document.querySelector('#md-pics-more')?.textContent || null);
   check(more === 'Show 2 more', `the rest wait behind a button: ${more}`);
   // The picture, large, in the app: Escape, the button and the backdrop close it.
@@ -1867,12 +1893,12 @@ console.log('\n— picture attachments are shown in the message, by what their b
   await pg.waitForFunction(() => document.querySelectorAll('#mail-detail .md-pics img').length === 7, null, { timeout: 5000 }).catch(() => {});
   const r2 = await reads();
   const shownAll = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, more: !!document.querySelector('#md-pics-more') }));
-  check(shownAll.imgs === 7 && !shownAll.more && JSON.stringify(r2.slice(6).map((r) => r.index)) === JSON.stringify([10, 11]),
-    `"Show 2 more" fetches and shows the other two, and only them: ${JSON.stringify({ shownAll, r2: r2.map((r) => r.index) })}`);
+  check(shownAll.imgs === 7 && !shownAll.more && r2.length === 2 && r2[1].c === 'read_pictures' && JSON.stringify(r2[1].indexes) === JSON.stringify([10, 11]),
+    `"Show 2 more" asks once more, for the other two only, and shows them: ${JSON.stringify({ shownAll, r2 })}`);
   // Open again: kept for the session, nothing fetched twice.
   await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
   await pg.waitForTimeout(150);
-  const again = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, reads: __mock.calls.filter(([c]) => c === 'read_attachment').length }));
+  const again = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, reads: __mock.calls.filter(([c]) => c === 'read_attachment' || c === 'read_pictures').length }));
   check(again.imgs === 7 && again.reads === 0, `opening the message again shows them without fetching: ${JSON.stringify(again)}`);
   if (process.env.H11_SHOTS) {
     await pg.setViewportSize({ width: 1280, height: 900 });
@@ -1896,10 +1922,72 @@ console.log('\n— picture attachments are shown in the message, by what their b
   });
   await pg.waitForFunction(() => !document.querySelector('#mail-detail .md-pics [data-pic]'), null, { timeout: 5000 }).catch(() => {});
   const failed = await pg.evaluate(() => ({ tiles: document.querySelectorAll('#mail-detail [data-pic]').length, cards: document.querySelectorAll('#mail-detail [data-att]').length,
-    reads: __mock.calls.filter(([c]) => c === 'read_attachment').length, kept: PICS.size }));
-  check(failed.tiles === 0 && failed.cards === 11 && failed.reads === 6 && failed.kept === 0,
-    `a read that fails drops the thumbnail, keeps the file listed, and remembers nothing: ${JSON.stringify(failed)}`);
+    reads: __mock.calls.filter(([c]) => c === 'read_attachment' || c === 'read_pictures').length, kept: PICS.size }));
+  check(failed.tiles === 0 && failed.cards === 11 && failed.reads === 1 && failed.kept === 0,
+    `a read that fails drops the thumbnails, keeps the files listed, and remembers nothing: ${JSON.stringify(failed)}`);
   await pg.evaluate(() => { __mock.readFails = false; });
+  // Opened again after the failure: one call, and they show.
+  await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail .md-pics img').length === 5, null, { timeout: 5000 }).catch(() => {});
+  const retried = await pg.evaluate(() => ({ imgs: document.querySelectorAll('#mail-detail .md-pics img').length, calls: __mock.calls.filter(([c]) => c === 'read_pictures').length }));
+  check(retried.imgs === 5 && retried.calls === 1, `opening it again tries again, in one call: ${JSON.stringify(retried)}`);
+  await pg.close();
+}
+
+console.log('\n— pictures in one fetch: an SVG or a web page named .png is not shown, and a full answer is asked again —');
+{
+  /* I4: one read_pictures call for every picture; what each one is comes
+     from Rust (the mock judges as core::pictures_fetched does), so a file
+     named .png that is an SVG or a web page is listed and never drawn. A
+     picture Rust left out of an answer to keep it small is asked for again. */
+  const pg = await open(true);
+  const mkAtt = (index, name, size) => ({ index, name, mime: 'image/png', size, disguised: false });
+  await pg.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 40; c.height = 30;
+    const x = c.getContext('2d'); x.fillStyle = '#3a6'; x.fillRect(0, 0, 40, 30);
+    const png = c.toDataURL('image/png').split(',')[1];
+    __mock.readable = {
+      1: { name: 'badge.png', mime: 'image/png', data: btoa('<svg xmlns="http://www.w3.org/2000/svg" onload="parent.window.__pwned=1"><script>parent.window.__pwned=2</script></svg>') },
+      2: { name: 'page.png', mime: 'image/png', data: btoa('<!doctype html><img src=x onerror="parent.window.__pwned=3">') },
+      3: { name: 'one.png', mime: 'image/png', data: png },
+      4: { name: 'two.png', mime: 'image/png', data: png },
+      5: { name: 'three.png', mime: 'image/png', data: png },
+    };
+  });
+  const atts = [mkAtt(1, 'badge.png', 120), mkAtt(2, 'page.png', 60), mkAtt(3, 'one.png', 300), mkAtt(4, 'two.png', 300), mkAtt(5, 'three.png', 300)];
+  await pg.evaluate(async (atts) => {
+    __mock.openAttsBy = { 96: atts };
+    __mock.refresh = { messages: [{ id: 'me@example.com_96', folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+      from_name: 'Bo', from_addr: 'bo@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Badges', preview: 'Badges.',
+      body: 'Badges.', ts: Date.now(), unread: true, starred: false, uid: 96, uidvalidity: 7, message_id: 'pics96@example.org',
+      reply_to: '', truncated: false, attachments: atts, html: false }], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    go('inbox');
+    __mock.calls.length = 0; openMail('me@example.com_96');
+  }, atts);
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail .md-pics img').length === 3 && !document.querySelector('#mail-detail .pic-wait'), null, { timeout: 8000 }).catch(() => {});
+  const got = await pg.evaluate(() => ({
+    calls: __mock.calls.filter(([c]) => c === 'read_pictures' || c === 'read_attachment').map(([c, a]) => [c, a.indexes]),
+    imgs: [...document.querySelectorAll('#mail-detail .md-pics img')].map((i) => i.alt),
+    allData: [...document.querySelectorAll('#mail-detail img')].every((i) => /^data:image\/(png|jpeg|gif|webp);base64,/.test(i.src)),
+    tiles: document.querySelectorAll('#mail-detail [data-pic]').length,
+    cards: [...document.querySelectorAll('#mail-detail [data-att]')].map((b) => b.textContent).filter((t) => /badge\.png|page\.png/.test(t)).length,
+    pwned: window.__pwned || null,
+  }));
+  check(got.calls.length === 1 && got.calls[0][0] === 'read_pictures' && JSON.stringify(got.calls[0][1]) === JSON.stringify([1, 2, 3, 4, 5]),
+    `five named as pictures, one bridge call (one fetch of the message): ${JSON.stringify(got.calls)}`);
+  check(JSON.stringify(got.imgs) === JSON.stringify(['one.png', 'two.png', 'three.png']) && got.tiles === 3 && got.cards === 2 && got.allData && got.pwned === null,
+    `an SVG and a web page named .png are listed and not shown; only data: pictures are drawn: ${JSON.stringify(got)}`);
+  // An answer Rust kept small: what it left out is asked for again.
+  await pg.evaluate(() => {
+    [...PICS.keys()].forEach((k) => PICS.delete(k));
+    __mock.picturesTotal = atob(__mock.readable[3].data).length + 1;
+    __mock.calls.length = 0; openMail('me@example.com_96');
+  });
+  await pg.waitForFunction(() => document.querySelectorAll('#mail-detail .md-pics img').length === 3 && !document.querySelector('#mail-detail .pic-wait'), null, { timeout: 8000 }).catch(() => {});
+  const split = await pg.evaluate(() => ({ calls: __mock.calls.filter(([c]) => c === 'read_pictures').map(([, a]) => a.indexes), imgs: document.querySelectorAll('#mail-detail .md-pics img').length }));
+  check(split.imgs === 3 && JSON.stringify(split.calls) === JSON.stringify([[1, 2, 3, 4, 5], [4, 5], [5]]),
+    `pictures left out of a full answer are asked for again, and only they: ${JSON.stringify(split)}`);
   await pg.close();
 }
 
