@@ -2173,6 +2173,71 @@ console.log('\n— the AI relay is sent the start of a long message, never all o
   await pg.close();
 }
 
+console.log('\n— the briefing sends each message by its place, never by its id —');
+{
+  /* I1: a message's id starts with its mailbox's key, which is made from the
+     address (key.rs, mail_key), and the briefing's request reaches
+     Anthropic. Ids here are shaped like the real ones. The answer names the
+     second message by its place, and the flag lands on that one. */
+  const KEY = 'me_example_com_0a1b2c3d4e';
+  let answer = { body: { tasks: [{ id: '2', task: 'Pay the invoice', due: '2026-10-09', important: true }], used: 0.1 } };
+  const pg = await open(true, { ai: () => answer });
+  const mk = (uid) => ({ id: KEY + '_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann ' + uid, from_addr: 'ann' + uid + '@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Subject ' + uid, preview: 'Words ' + uid, body: 'Please reply ' + uid + '.',
+    ts: Date.now() - uid * 60_000, unread: true, starred: false, uid, uidvalidity: 7, message_id: 'brief' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  await pg.evaluate(async (msgs) => {
+    S.settings.aiOk = true;
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    __mock.refresh = null;
+    openAssist(); await runAIBrief();
+  }, [1, 2, 3, 4].map(mk));
+  const raw = pg.__ai.at(-1) || '{}', asked = JSON.parse(raw);
+  const held = await pg.evaluate(() => ({
+    ids: S.messages.map((m) => m.id),
+    linked: S.linked.filter((l) => l.type === 'mail').flatMap((l) => [l.id, l.label, l.email].filter(Boolean).map(String)),
+    flagged: S.messages.filter((m) => m.flag).map((m) => [m.id, m.flag.task]),
+  }));
+  const secrets = [...new Set([...held.ids, ...held.linked, KEY, 'me_example_com', 'me@example.com'])];
+  const leaked = secrets.filter((x) => raw.toLowerCase().includes(String(x).toLowerCase()));
+  check(asked.task === 'tasks' && asked.messages.length === 4 && asked.messages.map((m) => m.id).join(',') === '1,2,3,4',
+    `the briefing names its messages "1" to "4": ${JSON.stringify(asked.messages && asked.messages.map((m) => m.id))}`);
+  check(leaked.length === 0 && held.ids.length >= 4, `and no message id, mailbox address or key is in what it sends: ${JSON.stringify(leaked)}`);
+  check(held.flagged.length === 1 && held.flagged[0][0] === KEY + '_2' && held.flagged[0][1] === 'Pay the invoice',
+    `the answer's "2" flags the second newest message, and only that one: ${JSON.stringify(held.flagged)}`);
+  /* An answer naming a real id flags nothing: only places are read. */
+  answer = { body: { tasks: [{ id: KEY + '_3', task: 'Reply to Ann', due: null, important: false }], used: 0.1 } };
+  await pg.evaluate(async () => { await runAIBrief(); });
+  const after = await pg.evaluate(() => S.messages.filter((m) => m.flag).map((m) => m.id));
+  check(after.length === 0, `an answer naming a message by its id flags nothing: ${JSON.stringify(after)}`);
+  await pg.close();
+}
+
+console.log('\n— a feed with nothing for this computer is not "the newest version" —');
+{
+  /* I1: update.rs answers notHere when the feed has no entry for this kind
+     of installation (not_here_yet). That is not "this is the newest", so the
+     Settings row and a manual check say what Install says. */
+  const pg = await open(true);
+  const asks = (offer, manual) => pg.evaluate(async ({ offer, manual }) => {
+    __mock.update = offer; window.__toasts.length = 0; UPD_LATER = '';
+    go('set'); await checkUpdate(manual);
+    const bar = document.querySelector('#upd-bar');
+    return { line: document.querySelector('#upd-line').textContent, toasts: window.__toasts.slice(), bar: !!bar && !bar.hidden };
+  }, { offer, manual });
+  const base = { enabled: true, current: '0.1.44', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
+  let r = await asks({ ...base, notHere: true }, true);
+  check(r.line === 'You have RATA 0.1.44. There is no update for this computer yet.' && r.toasts.join('|') === 'There is no update for this computer yet.' && !r.bar,
+    `a manual check says there is no update for this computer yet, in the row and the toast: ${JSON.stringify(r)}`);
+  check(!/newest/.test(r.line + r.toasts.join('')), 'and never that it is the newest version');
+  r = await asks({ ...base, notHere: true }, false);
+  check(r.toasts.length === 0 && !r.bar && /no update for this computer yet/.test(r.line), `the automatic check says nothing, and the row says the same: ${JSON.stringify(r)}`);
+  r = await asks(base, true);
+  check(r.line === 'You have RATA 0.1.44. It is the newest version.' && r.toasts.join('|') === 'RATA 0.1.44 is the newest version.',
+    `a feed that has this computer and nothing newer still says it is the newest: ${JSON.stringify(r)}`);
+  await pg.close();
+}
+
 console.log('\n— the website banner never shows in the app —');
 {
   /* F2: "RATA reads your mail in the desktop app" is the website's sentence.
@@ -3032,7 +3097,20 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
     closeCompose(); return r;
   });
   check(still.compose === 'none' && /^(0s|1e-05s|0\.00001s)$/.test(still.toast.split(',')[0]) && still.glide === 'auto', `reduced motion stops what moves: ${JSON.stringify(still)}`);
+  /* I1: the menu and the four dialog cards that pop (a fade and a 4 px
+     rise) do not under reduced motion, and do otherwise. */
+  const pops = () => pg.evaluate(() => {
+    const menu = document.querySelector('#acct-menu'), was = menu.classList.contains('open');
+    menu.classList.add('open');
+    const r = ['#acct-menu', '#link-card', '#warn-card', '#keys-card', '#welcome-card'].map((q) => getComputedStyle(document.querySelector(q)).animationName);
+    if (!was) menu.classList.remove('open');
+    return r;
+  });
+  const popStill = await pops();
   await pg.emulateMedia({ reducedMotion: 'no-preference' });
+  const popMoving = await pops();
+  check(popStill.every((n) => n === 'none') && popMoving.every((n) => n === 'pop'),
+    `the account menu and the link, warning, shortcut and welcome cards pop, except under reduced motion: ${JSON.stringify({ popStill, popMoving })}`);
   await ctx.close();
 
   const lctx = await browser.newContext();

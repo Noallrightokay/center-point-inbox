@@ -822,6 +822,24 @@ export default async function run(state) {
     check(!/cubic-bezier/.test(look.pop), `motion without overshoot: ${look.pop}`);
     check(look.gradients.length === 0, `no gradient anywhere on screen: ${JSON.stringify(look.gradients)}`);
 
+    /* Every animation the page names has its @keyframes (I1: five rules
+       named \`pop\`, which did not exist, so the account menu and four
+       dialogs never moved), and \`pop\` is DESIGN.md's fade and 4 px rise:
+       no scale, no overshoot. */
+    const motion = await page.evaluate(() => {
+      const used = new Set(), defined = new Map();
+      const walk = rules => { for (const r of rules) {
+        if (r.type === CSSRule.KEYFRAMES_RULE) defined.set(r.name, r.cssText);
+        else if (r.style) for (const n of String(r.style.animationName || '').split(',').map(x => x.trim())) if (n && n !== 'none' && n !== 'initial' && n !== 'inherit') used.add(n);
+        if (r.cssRules) walk(r.cssRules);
+      } };
+      for (const sh of document.styleSheets) { try { walk(sh.cssRules); } catch {} }
+      return { missing: [...used].filter(n => !defined.has(n)), pop: defined.get('pop') || '' };
+    });
+    check(motion.missing.length === 0, `every animation the page uses is defined: ${JSON.stringify(motion.missing)}`);
+    check(/translateY\(4px\)/.test(motion.pop) && /opacity: 0/.test(motion.pop) && !/scale|cubic-bezier/.test(motion.pop),
+      `pop fades and rises 4 px, with no scale or overshoot: ${motion.pop.replace(/\s+/g, ' ')}`);
+
     await page.evaluate(() => go('docs'));
 
     /* ---- the Business file library ---- */
