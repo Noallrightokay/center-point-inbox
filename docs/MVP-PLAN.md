@@ -1052,6 +1052,87 @@ as an audit card after wave 5b.
   after 5c, retaking the screenshots (the composer and reading pane
   change visibly).
 
+### Workstream I: found on the way (wave 6, 2026-10-02)
+
+Small things seen while building and releasing H, each checked in the
+code before it was written down. None needs the owner. Each card names
+its region so they can run side by side; none edits this file (the PM
+folds their notes in).
+
+#### I1
+**The page: a missing animation, the briefing's ids, the update row.**
+Region: `app.html` (CSS top, `runAIBrief`, `renderUpdateRow` and the
+manual check), `ui-src/probe.html`, `sync-ui.sh`.
+- `animation: pop` is used by five rules (`#acct-menu.open`,
+  `#link-card`, `#warn-card`, `#keys-card`, `#welcome-card`) and no
+  `@keyframes pop` exists, so none animates. Add one as `DESIGN.md`
+  allows (no overshoot), off under reduced motion.
+- `runAIBrief` sends each message's `m.id` to the relay, and so to
+  Anthropic; an id is built from the mailbox's key, which comes from its
+  address. Send ids that say nothing (their position) and map the answer
+  back; a harness check reads the request and finds no id or address of
+  a mailbox in it.
+- When the feed has no update for this computer, a manual check still
+  says "is the newest version". Say what `not_here_yet` means.
+- `probe.html` calls `send_mail` in the shape before `core::Draft`:
+  bring it up to date, or remove it if nothing ships or uses it.
+- `sync-ui.sh` sets the desktop build's `stripePortal` to
+  `https://mailrata.org/account`: check what the page does with it and
+  make it right, or say why it already is.
+
+#### I2
+**The engine's words and a sender's name.** Region: `desktop/rata-mail`
+(`discover.rs`, `imap.rs` `revoked_msg`, `compose.rs`), and the help
+page's quotes of them (`help.test.mjs`).
+- `APPLE_HELP` names appleid.apple.com; Apple's page is now
+  account.apple.com (BETA.md already says so).
+- `revoked_msg` says "Relink it in Accounts"; there is no such screen.
+  It is Settings → Linked accounts.
+- `compose::render_as` with a non-ASCII `from_name`: check that no
+  encoded-word ends up inside a quoted string (RFC 2047 §5 forbids it,
+  and Gmail shows it raw); fix and test if it does.
+- Zoho documents `imappro.zoho.<region>` / `smtppro.zoho.<region>` for
+  organisation accounts. When a custom-domain Zoho mailbox's password is
+  refused at `imap.zoho.<region>`, try the `pro` host of the same region
+  once before saying the password is wrong; never another provider.
+
+#### I3
+**The website's words, renewal while setting up, and every installer
+checked.** Region: `rata-next/lib/account.js`,
+`app/api/licence/renew`, `desktop/rata-app/ui-src/bridge.js` (`renew`
+only), `desktop/rata-app/harness/verify-release.sh`.
+- The deletion refusal in `lib/account.js` has an em dash; visible copy
+  has none (`DESIGN.md`).
+- `/api/licence/renew` answers `no-subscription` for an `incomplete`
+  row that has a customer (being set up). Answer `reason: 'pending'`
+  as `/api/licence` does (`settingUp`), and have bridge.js keep the old
+  licence on it, as for an unreachable server.
+- `verify-release.sh` checks the `.deb` and the `.exe` only. Check the
+  AppImage and both `.dmg` files the same way (key, id, title, no font
+  CDN), with tools a Linux runner has.
+
+#### I4
+**Pictures in one fetch.** Region: the pictures path only:
+`core::read_attachment`'s neighbours in `core.rs`, `commands.rs`,
+bridge.js, `app.html` H11 block (`PICS`, `pictureable`).
+H11 fetches each picture with its own whole-message fetch, a sign-in
+each: six pictures, six sign-ins, which a provider throttles. Fetch the
+message once and hand back every picture-able part (same sniffing,
+`PICTURE_MAX` each, the same refusal of disguised names), capped in
+total, then fill the tiles from that. Saving is unchanged.
+
+#### I5
+**Audit: the page-to-Rust contract for every mail action.** Read-only;
+the finder that should have done this stopped at a usage limit in wave
+5. For each bridge route, compare what `app.html` sends, what bridge.js
+passes, what the command takes and what comes back, field by field
+(names, `serde` defaults, folder shapes, error kinds), and report
+mismatches with file and line. Findings become cards.
+
+#### Waves
+- **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`).
+  G2 releases 0.1.45 when they are in.
+
 ---
 
 ## Part 6. Order of work
