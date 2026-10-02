@@ -130,7 +130,14 @@ Traps, all of which have bitten:
 - After a release, verify the shipped binary rather than assuming: extract it and
   check the licence public key, `org.mailrata.desktop`, and that no
   `fonts.googleapis`/`fonts.gstatic` string is present.
-  `harness/verify-release.sh` does this; `verify-release.sh --title <version>`
+  `harness/verify-release.sh` does this for all five installers (I3,
+  v0.1.45: the `.deb`, the `.exe`, the AppImage's squashfs found after its
+  runtime and read with `unsquashfs`, never run, and both `.dmg` files
+  through `7z`, with `Info.plist` naming `org.mailrata.desktop`). It exits
+  0 when all pass, 1 on a failure and 3 when a tool is missing and a file
+  was skipped (`squashfs-tools`, `7z`). On the Intel Mac binary the title is
+  compiled into the code as 8-byte immediates, reported `title-in-code=1`,
+  which passes. `verify-release.sh --title <version>`
   prints the window title it expects (0.x is `RATA <v> beta`, 1.x is
   `RATA <v>`), worked out the way release.yml's smoke works it out.
 
@@ -192,7 +199,13 @@ installation (BUG-R); v0.1.44 shows picture attachments in the message
 and opens them large (H11), lists the rest of a conversation under an open
 message, linked by ids only (H5), and makes the list, dialogs and toasts
 work by keyboard and screen reader, checked by axe, with pinch zoom no
-longer blocked (H10); its CI retries a stalled apt download instead of hanging. An
+longer blocked (H10); its CI retries a stalled apt download instead of hanging;
+v0.1.45 fetches a message's pictures in one sign-in (I4), lets mail of a
+removed mailbox be deleted and keeps a folder the server renumbered from
+mixing two messages (I6), makes Delete account in the app remove what RATA
+keeps on the computer (I7), sends the briefing's messages by number only and
+writes a non-ASCII sender name correctly (I1, I2), tries Zoho's organisation
+servers, and says the server's own reason when a renewal is refused (I3). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -223,8 +236,14 @@ Renewal refuses a licence that expired more than `RENEW_GRACE_DAYS` (90,
 `lib/licence.js`, `renewable`) ago, before the database is asked, with
 `reason: 'too-old'` and "Sign in at mailrata.org to get a new one." (SEC-4,
 v0.1.41), so a token that leaked long ago cannot be revived. bridge.js
-`renew()` takes `too-old`, like `no-subscription`, as a real answer, and
-`settleLicence` puts the server's sentence in the licence box when the
+`renew()` takes any answer with a `reason` and a sentence as a real answer
+(`no-subscription`, `too-old`, `pending`, `malformed`, `bad-signature`,
+`no-public-key`; I3, v0.1.45) and never passes it to `set_licence`, so a
+working licence is kept; only a bare error or no answer is "could not
+reach mailrata.org". `/api/licence/renew` answers `pending` for a row being
+set up (`settingUp`), as `/api/licence` does, and its `no-public-key`
+sentence is the customer's, with the operator's hint in the server log.
+`settleLicence` (in bridge.js) puts the server's sentence in the licence box when the
 licence is still not good afterwards (harness: "a licence too old to renew
 itself says what to do). **Renewal while RATA is open (BUG-L, v0.1.43).**
 `settleLicence(force)` is the only renewal path, one at a time (a second
@@ -311,7 +330,9 @@ account.html, `withBuyer` in `renderPlan`); the webhook does not read
 `client_reference_id` yet (the licence is still keyed on the address paid
 with). A live plan in Settings switches only in the billing portal, never
 through a Payment Link, which made a second Stripe customer the webhook
-refused. Deleting an account (`app/api/account/route.js`) removes
+refused. The desktop build's `stripePortal` is `https://mailrata.org/app`
+(`sync-ui.sh`, I1, v0.1.45), whose Settings shows the real portal once
+signed in; it had been `/account`, which has no portal link. Deleting an account (`app/api/account/route.js`) removes
 `workspaces`, `subscriptions` and the person's `ai_usage` rows, and still
 finishes when `ai_usage` does not exist yet (PGRST205 or 42P01: §5 of
 `database.sql` never ran). It is refused (`blocksDeletion`,
@@ -321,6 +342,21 @@ licence issued while it was live is the AI relay's credential, and
 deleting `ai_usage` would let it spend the month's allowance again.
 `incomplete_expired` issued no licence and does not block. The app's
 Delete account row names what `DELETION_REMOVES` names (tested).
+**Delete account in the desktop app (I7, v0.1.45)** is about this
+computer: bridge.js `/api/account` GET says what it would remove and keep,
+and DELETE calls `forget_everything` (core.rs), which unlinks every mailbox
+through `unlink` (keychain entries first, Microsoft pieces too, then the
+list entry, so a refused keychain leaves the mailbox listed with the error),
+then removes the licence stored here and the diagnostics notes; a keychain
+refusal stops it before the licence goes, and a mailbox linked meanwhile
+makes it refuse. Only after Rust says ok does the page clear IndexedDB,
+localStorage (the Undo-send outbox included, on the website too) and the
+sign-in. Delete permanently stays off until the GET has answered, and on
+any error. The mailrata.org account is never deleted from the app:
+**Open mailrata.org account** opens `https://mailrata.org/app`, whose
+Settings holds the website's Delete account. Before 0.1.45 the app wiped
+only the page, and the next refresh brought every mailbox back.
+`retry_mailbox` (no route called it) is gone.
 `pending_subscriptions` rows hold no address and are not deleted with an
 account; they go when applied or dropped. **The privacy policy and terms
 (H1)** are tied to the code by `tests/legal.test.mjs`: `LICENCE_DAYS`,
@@ -427,7 +463,30 @@ puts it back, text and all (read from disk before it left), and the toast
 says "Nothing was changed — <mailbox>: <why>"; a partial selection says how
 many came back. Until 0.1.43 a refused Delete had already hidden the
 message for good. A move out of Gmail's archive is a COPY (`Acted::Copied`,
-`copied: true` on the wire), so it leaves the list without `S.gone`. What is
+`copied: true` on the wire), so it leaves the list without `S.gone`.
+**Mail of a removed mailbox (I6, v0.1.45)** is RATA's copy only:
+`linkedOf(m)` finds a message's linked entry by id, else by address, and
+without one `serverRef` is false, so Delete goes straight to `S.gone`,
+read and star stay local, and Archive, Move and opening in full are not
+offered; before, every action on it was refused with "not linked in RATA"
+and the mail came back. **A message's generation (I6).** Ids stay
+`<key>_<place><uid>`, but the page counts UIDVALIDITY as part of a
+message's identity: when a refresh, a folder read or a server search
+brings mail of a folder under a new UIDVALIDITY, `settleGenerations` drops
+held mail of the old one (not through `S.gone`, sparing `LEAVING` and
+`ownDraft`, with its gaps and what the session keeps by id), `take` and
+`loadBox` replace a record of another generation whole instead of merging
+(which had shown one message while actions reached another), `S.goneV[id]`
+keeps each deletion's UIDVALIDITY so `isGone(id, v)` never hides the new
+generation, and `heldKnown` reports one generation per folder. A listing
+alone (`present`, `archives`) never triggers it, so a folder rebuilt empty
+keeps its old mail until new mail arrives. **Fields on held mail (I6).**
+`takeFields` copies `inReplyTo`, `refsLast`, `unsub`, `toAll`, `cc`,
+`messageId` and `replyTo` onto held mail whenever it is fetched again
+(refresh, folder, re-read, older mail, search) and never clears one; mail
+never fetched again keeps what it had. In the app a failed refresh or link
+says "RATA could not refresh your mail: …" or "RATA could not link …",
+never "download the app". What is
 missing is scale. **New mail by itself, and only what is new (v0.1.27).**
 Until 0.1.27 the desktop app never refreshed on its own — boot only synced
 website accounts — so mail arrived only when someone pressed Sync. Now
@@ -739,7 +798,9 @@ https://mailrata.org/api/ai` with the licence token as the credential
 (`rata-next/app/api/ai/route.js`, rules in `lib/ai.js`): plan-gated
 (`translate` for Base, `ai` for Pro — `lib/plan.js`), Haiku 4.5, text capped
 (12 000 chars; the briefing sends the start, 1 500 chars, of the 25 most
-recent messages from the last 14 days), every prompt fences the email as
+recent messages from the last 14 days, each named only by its place,
+`"1"`..`"25"`, never by `m.id`, which carries the mailbox key and so its
+address; I1, v0.1.45, harness check), every prompt fences the email as
 untrusted (`fence` turns any `<` that starts an `email` tag, in any case or
 spacing, opening or closing, into `‹`, so a message cannot close its fence
 early; `clean` strips control and bidi-control characters from what goes in
@@ -845,8 +906,16 @@ message is in, an attachment named `.png`, `.jpg`, `.jpeg`, `.gif` or
 `.webp`, not `disguised`, and not known to be over 5 MB (`b`, its size in
 bytes, which `asAttachment` now passes) shows as a thumbnail above the
 attachment list (`pictureable`). At most `PIC_SHOW` (6) show, then "Show N
-more". Each is fetched through `read_attachment` with `confirmed:false`,
-one at a time (each is a whole-message fetch, so a sign-in), and kept in
+more". **One fetch for all of them (I4, v0.1.45):** `read_pictures`
+(bridge `/api/mail/attachment/pictures`) takes up to `PICTURES_ASK` (24)
+indexes (`too-many` past that, before anything is dialled), fetches the
+message once through `whole()`, and `core::pictures_fetched` judges each
+from the fetched name and bytes, answering with no data and a reason for
+`gone`, `disguised`, `too-large`, `not-a-picture`, or `left-out` once
+`PICTURES_TOTAL` (30 MB decoded) is spent; `body::attachments_at` parses
+once for several parts. The page asks once when the message opens, once
+for "Show N more", and again only for what was left out. Until 0.1.45
+each picture was its own `read_attachment`, a sign-in each. Pictures are kept in
 `PICS` for the session, at most `PIC_KEEP` (48); a failed read is not kept,
 so opening the message again tries again, and until then the tile goes and
 the file stays listed. **What a picture is comes from the bytes alone:**
@@ -925,6 +994,8 @@ would be offered and then refused as a bad signature. Copies up to 0.1.42
 read only `latest.json`. A feed with no entry for this computer
 (`TargetNotFound`/`TargetsNotFound`, `not_here_yet`) is no update, not an
 error, and Install says "There is no update for this computer yet.";
+`check` reports it as `notHere`, and the Settings row and a manual check
+say the same words, not "the newest version" (I1, v0.1.45);
 "cannot update itself" is for an unsupported OS or architecture and for
 failed installs, with the plugin's reason in brackets. The first per-
 installation files are written by 0.1.43's publish job. The
@@ -1083,7 +1154,10 @@ brackets are removed); `addresses()` writes it quoted when ASCII, as
 encoded-words otherwise, still folding under 998 bytes; and
 `smtp::recipients` reads the envelope from each `<…>`, so a comma in a name
 is never a second recipient. RATA's own record of a sent message keeps the
-typed line as `toName` until the provider's copy replaces it.
+typed line as `toName` until the provider's copy replaces it. From is
+written by the same `named()` (I2, v0.1.45); before, a non-ASCII sender
+name was an encoded-word inside quotes, which RFC 2047 §5 forbids (the app
+sends no `from_name` yet, so none shipped).
 **Keyboard shortcuts (H4, v0.1.43).** One table, `KEYS` in `app.html`,
 drives both the handler (a `keydown` on `window`, after every other
 handler) and the `?` sheet, so the two cannot disagree (harness). A message
@@ -1262,7 +1336,11 @@ a gradient. Behaviour changed in three places only: a mail row's badges sit on
 the sender's line (rows are three lines, so none is cut when the list sizes
 every row from one it drew), the provider badge ("Imap") is gone from rows,
 and "via mailbox" is text in the sender line rather than a dead button. The
-account button shows initials from the start. The website was rewritten to
+account button shows initials from the start. `@keyframes pop` (a fade
+and a 4 px rise, 160 ms, none under reduced motion) opens the account menu
+and the link, warning, shortcut and welcome cards; it was missing until
+I1 (v0.1.45), so none of them moved, and `app.test.mjs` now checks every
+animation used is defined. The website was rewritten to
 say only what the app does (it still sold texts, Slack, Discord, DLP and a
 browser install; all but DLP have been gone from the app since 0.1.6, and
 DLP is still in the app, not sold on the website: Privacy checks, compose
@@ -1474,8 +1552,14 @@ is only for a domain discovery could not settle. Before 0.1.43 a Gmail
 customer offline was asked for a server address. Zoho custom domains sign
 in at their own region, read from the MX (`ZOHO_REGIONS`: `imap.zoho.eu`,
 `.in`, `.com.au`, `.jp`, `zohocloud.ca`, `.sa`, `.com.cn`, `.com`), SMTP
-and the help text follow; Zoho documents `imappro.zoho.*` for organisation
-accounts, the next thing to try if one is refused. Sending: `smtp_ports`
+and the help text follow. A custom domain whose `imap.zoho.<region>`, found
+by MX, refuses the password is tried once at `imappro.zoho.<region>`
+(Zoho's host for organisation accounts; `discover::zoho_pro`,
+`zoho_second_chance`; I2, v0.1.45), never after a network error, for a
+personal zoho.com address, a token or another provider; one linked there
+sends through `smtppro.<region>`, and a refusal there reports the region
+host's words. `verify_with` dials through `verify_found` and a private
+`Dial` trait so tests can script it. Not seen against real Zoho. Sending: `smtp_ports`
 puts 587 first for `smtp-mail.outlook.com`, `smtp.office365.com` and
 `smtp.mail.me.com`, the only table hosts that document 587 alone; every
 other host keeps 465 first (`SMTP_PORTS`). `smtp::routes` tries each host's

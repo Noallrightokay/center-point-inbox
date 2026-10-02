@@ -252,6 +252,26 @@ Don't spend time reporting these; they are known and planned:
     or Cmd and + does not zoom yet (tell us if you need it). Tell us about anything you cannot reach or do by
     keyboard, anything a screen reader reads wrongly or not at all (which
     one, on which system), and any text that is hard to read.
+- **v0.1.45:**
+  - **Pictures load in one go:** a message's pictures now come from your
+    mailbox in one fetch instead of one per picture, so a message with
+    several opens faster and your provider sees one sign-in.
+  - **Mail from a mailbox you removed** can be deleted and marked read
+    again; it is RATA's own copy, so nothing is sent to the provider.
+    Archive and Move are not offered for it.
+  - **Delete account in the app** now removes everything RATA keeps on this
+    computer: every linked mailbox with its password in the keychain, the
+    licence stored here, and RATA's mail and settings. It never deletes your
+    mailrata.org account; **Open mailrata.org account** takes you there.
+  - **Mail RATA had before an update** gains Unsubscribe, Reply all and its
+    conversation the next time it is fetched again.
+  - **Zoho company mailboxes:** if Zoho refuses the password at its usual
+    server, RATA tries Zoho's server for organisation accounts once before
+    saying the password is wrong. Tell us which worked.
+  - **Licence renewal** says mailrata.org's own reason when it refuses,
+    instead of "could not reach mailrata.org", and keeps your licence.
+  - **Run briefing** sends each message as a number, never anything made
+    from your mailbox's address.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.

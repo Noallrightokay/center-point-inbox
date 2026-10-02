@@ -1080,6 +1080,13 @@ manual check), `ui-src/probe.html`, `sync-ui.sh`.
   `https://mailrata.org/account`: check what the page does with it and
   make it right, or say why it already is.
 
+State: released in 0.1.45 (#118). The desktop `stripePortal` is now
+`/app`, whose Settings shows the portal (`/account` has none); a direct
+portal link would need the owner's portal URL as a build variable.
+`probe.html` was kept (the app's README tells people to use it) and
+brought up to date. The privacy page's briefing sentence followed in the
+release PR.
+
 #### I2
 **The engine's words and a sender's name.** Region: `desktop/rata-mail`
 (`discover.rs`, `imap.rs` `revoked_msg`, `compose.rs`), and the help
@@ -1096,6 +1103,11 @@ page's quotes of them (`help.test.mjs`).
   refused at `imap.zoho.<region>`, try the `pro` host of the same region
   once before saying the password is wrong; never another provider.
 
+State: released in 0.1.45 (#119). The From bug was real (an
+encoded-word inside quotes) but never shipped: the app sends no
+`from_name`. The Zoho retry is seen only on scripted servers; B2 can
+confirm it on a real organisation mailbox.
+
 #### I3
 **The website's words, renewal while setting up, and every installer
 checked.** Region: `rata-next/lib/account.js`,
@@ -1111,6 +1123,11 @@ only), `desktop/rata-app/harness/verify-release.sh`.
   AppImage and both `.dmg` files the same way (key, id, title, no font
   CDN), with tools a Linux runner has.
 
+State: released in 0.1.45 (#120). Renewal also shows the site's own
+sentence for `malformed`, `bad-signature` and `no-public-key`, which had
+read as "could not reach mailrata.org" (found by I5). verify-release.sh
+passed all five v0.1.44 installers.
+
 #### I4
 **Pictures in one fetch.** Region: the pictures path only:
 `core::read_attachment`'s neighbours in `core.rs`, `commands.rs`,
@@ -1121,6 +1138,9 @@ message once and hand back every picture-able part (same sniffing,
 `PICTURE_MAX` each, the same refusal of disguised names), capped in
 total, then fill the tiles from that. Saving is unchanged.
 
+State: released in 0.1.45 (#123): `read_pictures`, 24 indexes and 30 MB
+an answer.
+
 #### I5
 **Audit: the page-to-Rust contract for every mail action.** Read-only;
 the finder that should have done this stopped at a usage limit in wave
@@ -1129,9 +1149,38 @@ passes, what the command takes and what comes back, field by field
 (names, `serde` defaults, folder shapes, error kinds), and report
 mismatches with file and line. Findings become cards.
 
+State: done 2026-10-02. Every route's fields matched; the findings were
+about identity, and became I6 and I7, plus renewal's refused reasons
+(added to I3).
+
+#### I6
+**What the page does with a message's identity.** Region: app.html's
+`actEmail`, `serverRef`, `absorbMail`, `heldKnown`, `settlePresent`,
+`isGone`, `loadBox`, `rereadBodies`, `serverSync`, `mailLink`.
+- Mail of a removed mailbox could never be deleted or moved: the page sent
+  the old linked id, Rust answered `unknown`, and `takeOff` put it back.
+- UIDVALIDITY was not part of a message's identity, so after a folder was
+  rebuilt one record could show message A while actions reached B, and an
+  old deletion could hide a new message for good.
+- `refsLast`, `inReplyTo`, `unsub`, `toAll`, `cc` never reached mail held
+  from before those fields.
+- A failed command in the app said to download the app.
+
+State: released in 0.1.45 (#122). A folder rebuilt empty keeps its old
+mail until new mail arrives, because a listing alone never drops mail.
+
+#### I7
+**Delete account inside the app, and a dead command.** The app's Delete
+account wiped only the page; Rust kept the mailboxes, keychain entries and
+licence, and the next refresh brought them back. `retry_mailbox` was
+registered and never called.
+
+State: released in 0.1.45 (#121): `forget_everything`, and the link to
+the website's own Delete account goes to `/app`.
+
 #### Waves
-- **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`).
-  G2 releases 0.1.45 when they are in.
+- **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`);
+  I6 and I7 from I5's findings. G2 releases 0.1.45 when they are in.
 
 ---
 
