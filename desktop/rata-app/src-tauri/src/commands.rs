@@ -20,8 +20,8 @@ use rata_mail::{Action, DraftRef, File, Folder, Message, OwnFolder};
 
 use crate::core::ServerFound;
 use crate::core::{
-    AttachmentAt, Changed, Delivered, Draft, Drafted, Forwarded, Found, Held, Linked, Opened,
-    Problem, Rata, Refreshed, Saved, Standing,
+    AttachmentAt, Changed, Delivered, Draft, Drafted, Forgotten, Forwarded, Found, Held, Linked,
+    Opened, Problem, Rata, Refreshed, Saved, Standing,
 };
 use crate::store::Mailbox;
 
@@ -92,9 +92,12 @@ pub fn unlink_mailbox(app: App<'_>, email: String) -> Result<(), String> {
     app.unlink(&email)
 }
 
+/// Delete account, in the app (I7): every linked mailbox and its keychain
+/// entries, then the licence stored on this computer. The page clears its
+/// own store once this answers.
 #[tauri::command]
-pub fn retry_mailbox(app: App<'_>, email: String) {
-    app.clear_auth_failure(&email);
+pub fn forget_everything(app: App<'_>) -> Result<Forgotten, String> {
+    app.forget_everything()
 }
 
 #[tauri::command]

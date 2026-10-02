@@ -81,7 +81,20 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         if (M.setLicenceRejects) throw 'The licence could not be written to disk';
         if (M.lic) return setClocked(args.licence);
         return standing();
-      case 'list_mailboxes': return M.mailboxes;
+      case 'list_mailboxes':
+        if (M.listFails) throw M.listFails;
+        return M.mailboxes;
+      /* I7: as core::forget_everything. Every mailbox and its keychain
+         entries, then the licence; a keychain that refuses stops it with
+         everything still in place. What the page still held when Rust was
+         asked is kept in sessionStorage, which outlives the page leaving. */
+      case 'forget_everything': {
+        if (M.forgetFails) throw M.forgetFails;
+        const n = M.mailboxes.length;
+        M.mailboxes = []; M.licensed = false;
+        try { sessionStorage.setItem('rata_forgot', JSON.stringify({ mailboxes: n, pageStoreThen: !!localStorage.getItem('centra_session') })); } catch {}
+        return { mailboxes: n };
+      }
       case 'unlink_mailbox':
         if (M.unlinkFails) throw 'This computer’s keychain refused access';
         M.mailboxes = M.mailboxes.filter((m) => m.email !== args.email);
@@ -240,7 +253,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       default: throw 'unmocked ' + cmd;
     }
   } } };
-  localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' }));
+  /* Signed in, except on the page Delete account leads to (I7). */
+  if (!sessionStorage.getItem('rata_harness_deleted')) localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' }));
 };
 
 const browser = await chromium.launch();
@@ -3192,6 +3206,80 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
   for (let k = 0; k < 5; k++) { await lp.keyboard.press('Tab'); licIn = licIn && await lp.evaluate(() => document.querySelector('#rata-licence').contains(document.activeElement)); }
   check(lic === 'dialog:true:Your licence key' && licIn, `the licence box is a modal dialog named by its heading, and Tab stays in it: ${JSON.stringify({ lic, licIn })}`);
   await lctx.close();
+}
+
+console.log('\n— Delete account in the app removes what is on this computer, and only that (I7) —');
+{
+  const pg = await open(true);
+  await pg.evaluate(() => go('set'));
+  const row = await pg.textContent('#del-what');
+  check(/every linked mailbox/i.test(row) && /keychain/.test(row) && /licence stored here/.test(row) && /mail store/.test(row) && /deleted at mailrata\.org/.test(row)
+    && !/subscription record|AI usage record|stay in your computer/i.test(row) && !/\u2014/.test(row),
+  `the Settings row says what it removes on this computer, and that the mailrata.org account is deleted there: "${row}"`);
+  const detailNow = () => pg.textContent('#del-detail');
+  const goOff = () => pg.evaluate(() => document.querySelector('#del-go').disabled);
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent));
+  let d = await detailNow();
+  check(!(await goOff()) && /the mailbox linked here, with its password or Microsoft sign-in in this computer’s keychain/.test(d)
+    && /the licence stored on this computer/.test(d) && /mail store/.test(d) && /mailrata\.org account and subscription/.test(d) && !/\u2014/.test(d),
+  `the confirmation names the mailbox, its keychain entry, the licence and the store, and keeps the mailrata.org account: "${d}"`);
+  const grp = await pg.evaluate(() => { const g = document.querySelector('#del-confirm'); return [g.getAttribute('role'), document.activeElement.id].join(':'); });
+  check(grp === 'group:del-email', `it is still a group that takes the focus (H10): ${grp}`);
+  /* The mailrata.org account is the website's: opened in the browser, never deleted from here. */
+  const web = await pg.evaluate(() => { const a = document.querySelector('#del-web'); return { shown: getComputedStyle(a).display !== 'none', href: a.getAttribute('href') }; });
+  await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; });
+  await pg.click('#del-web');
+  await pg.waitForTimeout(150);
+  let st = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map((c) => c[0]), url: location.pathname }));
+  check(web.shown && web.href === 'https://mailrata.org/account' && JSON.stringify(st.opened) === '["https://mailrata.org/account"]'
+    && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
+  `Open mailrata.org account goes through open_link and deletes nothing: ${JSON.stringify({ web, st })}`);
+
+  /* A keychain that refuses: nothing of the page's is cleared, and it can be pressed again. */
+  await pg.evaluate(() => { __mock.forgetFails = 'me@example.com could not be removed: This computer’s keychain refused access'; });
+  await pg.fill('#del-email', 'me@example.com');
+  await pg.click('#del-go');
+  await pg.waitForFunction(() => /Nothing more was deleted/.test(document.querySelector('#del-detail').textContent));
+  st = await pg.evaluate(() => ({ session: !!localStorage.getItem('centra_session'), ws: !!localStorage.getItem(LS_KEY), url: location.pathname,
+    go: document.querySelector('#del-go').disabled, label: document.querySelector('#del-go').textContent, toasts: window.__toasts.slice() }));
+  check(st.session && st.ws && /app\.html$/.test(st.url) && !st.go && st.label === 'Delete permanently' && st.toasts.some((t) => /keychain refused access/.test(t)),
+    `a keychain that refuses stops it, says why, and leaves the page's store alone: ${JSON.stringify(st)}`);
+
+  /* Nothing can be done when RATA cannot say what is here: off, Enter too. */
+  await pg.click('#del-cancel');
+  await pg.evaluate(() => { __mock.listFails = 'the mailbox list is busy'; __mock.calls = []; });
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent));
+  d = await detailNow();
+  await pg.fill('#del-email', 'me@example.com');
+  await pg.press('#del-email', 'Enter');
+  await pg.waitForTimeout(150);
+  st = await pg.evaluate(() => __mock.calls.map((c) => c[0]));
+  check((await goOff()) && /could not tell/.test(d) && !st.includes('forget_everything'), `when RATA cannot tell what is here, Delete permanently stays off: "${d}" ${JSON.stringify(st)}`);
+  await pg.click('#del-cancel');
+  check((await pg.evaluate(() => document.activeElement.id)) === 'btn-delete', 'and Keep my account gives the focus back to Delete account');
+
+  /* Done for real: Rust first, then the page's store, then out to sign-up. */
+  await pg.evaluate(() => { __mock.listFails = null; __mock.forgetFails = null; localStorage.setItem(OB_KEY, '[{"id":"waiting"}]'); });
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !document.querySelector('#del-go').disabled);
+  await pg.fill('#del-email', 'Me@Example.com');
+  const before = await pg.evaluate(async () => (await indexedDB.databases()).map((x) => x.name));
+  check(before.includes('rata-mail-local_t'), `the mail store is there to be removed: ${JSON.stringify(before)}`);
+  await pg.evaluate(() => sessionStorage.setItem('rata_harness_deleted', '1'));
+  await Promise.all([pg.waitForURL(/auth\.html/, { timeout: 10000 }), pg.click('#del-go')]);
+  await pg.waitForLoadState('domcontentloaded');
+  const after = await pg.evaluate(async () => ({
+    url: location.pathname + location.search,
+    forgot: JSON.parse(sessionStorage.getItem('rata_forgot') || 'null'),
+    keys: Object.keys(localStorage).filter((k) => /centra_session|centra_ws_local_t|rata_outbox_local_t/.test(k)),
+    dbs: (await indexedDB.databases()).map((x) => x.name).filter((n) => /local_t|rata-files/.test(n)),
+  }));
+  check(/auth\.html\?mode=signup&deleted=1/.test(after.url) && after.forgot && after.forgot.mailboxes === 1 && after.forgot.pageStoreThen
+    && !after.keys.length && !after.dbs.length,
+  `Delete permanently asks Rust to remove the mailboxes and licence first, then clears the store, the outbox and the sign-in: ${JSON.stringify(after)}`);
+  await pg.close();
 }
 
 await browser.close();

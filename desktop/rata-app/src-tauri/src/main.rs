@@ -174,7 +174,7 @@ fn main() {
             commands::discover_mailbox,
             commands::list_mailboxes,
             commands::unlink_mailbox,
-            commands::retry_mailbox,
+            commands::forget_everything,
             commands::refresh_mail,
             commands::send_mail,
             commands::save_draft,
