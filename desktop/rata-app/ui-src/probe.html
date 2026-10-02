@@ -12,7 +12,7 @@ function say(k,v){lines.push('<b>'+k+'</b><pre>'+String(v).replace(/[<&]/g,c=>({
   try{ say('list_mailboxes', JSON.stringify(await invoke('list_mailboxes'))); }catch(e){ say('list_mailboxes ERROR', e) }
   try{ say('link_mailbox proton - should refuse', JSON.stringify(await invoke('link_mailbox',{email:'x@proton.me',password:'y',host:null}))); }catch(e){ say('link_mailbox ERROR', e) }
   try{ say('refresh_mail', JSON.stringify(await invoke('refresh_mail',{limit:5}))); }catch(e){ say('refresh_mail ERROR', e) }
-  try{ await invoke('send_mail',{from:'a@b.com',to:'c@d.com',subject:'s',body:'b',inReplyTo:null}); say('send_mail','unexpectedly OK'); }catch(e){ say('send_mail not linked - should refuse', e) }
+  try{ await invoke('send_mail',{draft:{from:'a@b.com',to:'c@d.com',subject:'s',body:'b',inReplyTo:null}}); say('send_mail','unexpectedly OK'); }catch(e){ say('send_mail not linked - should refuse', e) }
   try{ await invoke('read_file',{path:'/etc/passwd'}); say('read_file','REACHABLE - BAD'); }catch(e){ say('a command that does not exist', e) }
 })();
 </script>

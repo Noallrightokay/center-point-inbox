@@ -557,6 +557,11 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 #acct-btn{width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:13px;display:grid;place-items:center;margin-left:12px;flex-shrink:0;box-shadow:var(--edge)}
 #acct-menu{position:absolute;top:56px;right:18px;width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
 #acct-menu.open{display:block;animation:pop .16s ease-out}
+/* Menus and dialog cards fade and rise 4 px in 160 ms (DESIGN.md, Motion):
+   no scale, no overshoot. Five rules use it (the account menu and the link,
+   warning, shortcut and welcome cards); none moves under reduced motion
+   (after #welcome-card, so it comes later than all five). */
+@keyframes pop{from{transform:translateY(4px);opacity:0}to{transform:none;opacity:1}}
 .am-head{display:flex;align-items:center;gap:11px;padding:10px 10px 12px;border-bottom:1px solid var(--hair-2)}
 #am-av{width:40px;height:40px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:15px;display:grid;place-items:center}
 .am-head b{font-size:14px;display:block}
@@ -596,7 +601,6 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 kbd.key{font-family:var(--mono);font-size:12px;min-width:22px;height:22px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;background:var(--fill-2);color:var(--ink);box-shadow:var(--edge);border-radius:5px}
 .keys-foot{margin-top:14px;font-size:12.5px;line-height:1.45;color:var(--slate)}
 @media (max-width:640px){#keys-list{grid-template-columns:1fr}.keys-group.msg{grid-row:auto}}
-@media (prefers-reduced-motion:reduce){#keys-card{animation:none}}
 body.kbnav .mail-row.kb{outline:2px solid var(--tint);outline-offset:-2px}
 .md-content a.md-link{color:var(--tint-deep);text-decoration:underline;overflow-wrap:anywhere}
 /* H12: a signature is secondary text; quoted text folds behind a quiet button. */
@@ -625,6 +629,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .cv-words{display:block;font-size:13px;line-height:1.45;color:var(--slate);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .md-convo .cv-more{margin:8px 8px 0;font-size:12.5px;color:var(--faint)}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
+@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card{animation:none}}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -4000,6 +4005,11 @@ $('#tamper-demo').onclick=()=>{
    key, or an install the updater does not handle — the answer says so and
    offers the download instead. */
 let UPD=null,UPD_LATER='';
+/* The feed has nothing for this kind of installation (update.rs,
+   not_here_yet): its installer was held back from the last release. That
+   says nothing about whether this copy is the newest, so neither the row nor
+   a manual check claims it is; Install says the same words. */
+const UPD_NOT_HERE='There is no update for this computer yet.';
 async function checkUpdate(manual){
   if(!window.__RATA_NATIVE__)return;
   const b=$('#upd-check');if(manual&&b){b.disabled=true;b.textContent='Checking\u2026'}
@@ -4008,14 +4018,14 @@ async function checkUpdate(manual){
   UPD=r||{};
   renderUpdateRow();
   if(UPD.version&&(manual||UPD_LATER!==UPD.version))showUpdateBar();
-  else if(manual)toast(UPD.error?UPD.error:!UPD.enabled?'This copy of RATA updates from the releases page, not by itself.':'RATA '+(UPD.current||'')+' is the newest version.');
+  else if(manual)toast(UPD.error?UPD.error:!UPD.enabled?'This copy of RATA updates from the releases page, not by itself.':UPD.notHere?UPD_NOT_HERE:'RATA '+(UPD.current||'')+' is the newest version.');
 }
 function renderUpdateRow(){
   const row=$('#upd-row');if(!row)return;
   row.style.display=window.__RATA_NATIVE__?'':'none';
   if(!UPD){$('#upd-line').textContent='Not checked yet.';return}
   $('#upd-line').textContent='You have RATA '+(UPD.current||'?')+'. '+(UPD.version?'RATA '+UPD.version+' is ready to install.'
-    :!UPD.enabled?'This copy updates from the releases page.':UPD.error?UPD.error:'It is the newest version.');
+    :!UPD.enabled?'This copy updates from the releases page.':UPD.error?UPD.error:UPD.notHere?UPD_NOT_HERE:'It is the newest version.');
 }
 function showUpdateBar(){
   let bar=$('#upd-bar');
@@ -6617,7 +6627,11 @@ async function runAIBrief(){
   if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
   btn.disabled=true;btn.textContent='Reading\u2026';
   const texts=await bodiesOf(pool);
-  const sent=pool.map(m=>({id:m.id,from:aiCut(msgFrom(m),AI_FROM),subject:aiCut(m.subj,AI_SUBJ),text:aiCut(texts.get(m.id)||m.prev,AI_BRIEF_EACH)}));
+  /* Each message goes by its place in this list ("1" to "25"), never by
+     m.id: an id is built from the mailbox's key, which comes from its
+     address, and what is sent here reaches Anthropic. The relay takes any
+     id string and answers only with ids it was sent (lib/ai.js). */
+  const sent=pool.map((m,i)=>({id:String(i+1),from:aiCut(msgFrom(m),AI_FROM),subject:aiCut(m.subj,AI_SUBJ),text:aiCut(texts.get(m.id)||m.prev,AI_BRIEF_EACH)}));
   /* Mail full of quotes or line breaks grows as JSON; the oldest go until
      the request is well under what the relay takes, and only what was sent
      is re-flagged below. */
@@ -6628,10 +6642,11 @@ async function runAIBrief(){
   /* A briefing that failed, or was cut short, says nothing about what needs
      doing: every flag stays as it was. */
   if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}
-  const found=new Map((r.tasks||[]).map(t=>[t.id,t]));
+  const found=new Map((r.tasks||[]).map(t=>[String(t.id),t]));
   /* What the briefing looked at is re-flagged from its answer, so a message
-     that no longer needs anything loses its flag. */
-  for(const m of pool){const t=found.get(m.id);if(t)m.flag={task:t.task,due:t.due,important:t.important,at:Date.now()};else delete m.flag}
+     that no longer needs anything loses its flag. The answer names each by
+     the place it was sent under. */
+  pool.forEach((m,i)=>{const t=found.get(String(i+1));if(t)m.flag={task:t.task,due:t.due,important:t.important,at:Date.now()};else delete m.flag});
   save();renderMail();
   const items=pool.filter(m=>m.flag).sort((a,b)=>(b.flag.important-a.flag.important)||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
   if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`;return}
