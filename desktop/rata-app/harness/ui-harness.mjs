@@ -20,6 +20,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
     mailboxes: [{ email: 'me@example.com', host: 'imap.example.com', port: 993, label: 'Example' }],
     unlinkFails: false,
     setLicenceRejects: false,
+    /* SEC-7: how many times forget_everything has run (core::Rata's epoch). */
+    epoch: 0,
     refresh: null,
     calls: [],
     /* Whether this build can sign in with Microsoft (RATA_MS_CLIENT_ID). */
@@ -56,8 +58,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
   const clocked = () => {
     const j = judge(M.lic.token);
     if (j.ok) return { licensed: true, message: 'Licensed for RATA Pro until day ' + j.exp + '.', plan: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
-      used: M.mailboxes.length, limit: null, renewSoon: j.exp - M.lic.now < 7 * 86400, token: M.lic.token, reason: null };
-    return { licensed: false, plan: null, token: M.lic.token || null, reason: j.reason, renewSoon: j.reason === 'expired', used: M.mailboxes.length, limit: 0,
+      used: M.mailboxes.length, limit: null, renewSoon: j.exp - M.lic.now < 7 * 86400, token: M.lic.token, reason: null, epoch: M.epoch };
+    return { licensed: false, plan: null, token: M.lic.token || null, reason: j.reason, renewSoon: j.reason === 'expired', used: M.mailboxes.length, limit: 0, epoch: M.epoch,
       message: j.reason === 'expired' ? 'This licence needs refreshing. Open RATA while online and it will renew itself.'
         : j.reason === 'missing' ? 'Enter your licence key to use RATA on this computer. Sign in at mailrata.org to find it.'
         : 'This licence could not be read. Sign in at mailrata.org to get a new one.' };
@@ -88,6 +90,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'licence_status': return standing();
       case 'set_licence':
         if (M.setLicenceRejects) throw 'The licence could not be written to disk';
+        /* SEC-7: as core::set_licence, a renewal that began before a Delete
+           account writes nothing. */
+        if (args.since != null && args.since !== M.epoch) throw 'The licence was removed from this computer while it was being renewed, so the renewed one was not kept.';
         if (M.lic) return setClocked(args.licence);
         return standing();
       case 'list_mailboxes':
@@ -101,7 +106,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'forget_everything': {
         if (M.forgetFails) throw M.forgetFails;
         const n = M.mailboxes.length;
-        M.mailboxes = []; M.licensed = false;
+        M.mailboxes = []; M.licensed = false; M.epoch++;
+        if (M.lic) M.lic.token = null;
         try { sessionStorage.setItem('rata_forgot', JSON.stringify({ mailboxes: n, pageStoreThen: !!localStorage.getItem('centra_session') })); } catch {}
         return { mailboxes: n };
       }
@@ -305,12 +311,12 @@ async function open(licensed, opts = {}) {
   /* What mailrata.org answers a renewal with (bridge.js renew()). */
   if (opts.renew) {
     page.__renewals = 0;
-    await page.route('https://mailrata.org/api/licence/renew', (route) => {
+    await page.route('https://mailrata.org/api/licence/renew', async (route) => {
       const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'POST' };
       if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
       page.__renewals++;
       /* A function answers each request (BUG-L); `abort` is unreachable. */
-      const a = typeof opts.renew === 'function' ? opts.renew(JSON.parse(route.request().postData() || '{}')) : opts.renew;
+      const a = await (typeof opts.renew === 'function' ? opts.renew(JSON.parse(route.request().postData() || '{}')) : opts.renew);
       if (a.abort) return route.abort('internetdisconnected');
       return route.fulfill({ status: a.status || 200, headers: cors, contentType: 'application/json', body: JSON.stringify(a.body) });
     });
@@ -2404,6 +2410,28 @@ console.log('\n— the licence renews while RATA is open (BUG-L) —');
   st = await state(pg);
   check(!st.box && st.licensed && st.disk === 'v1.second.sig', `Use this licence with the box empty renews the licence it has: ${JSON.stringify(st)}`);
   await pg.close();
+
+  /* SEC-7: Delete account while mailrata.org is still answering a renewal.
+     The renewal began under the standing's epoch and passes it back; Rust
+     (mocked as core.rs has it) keeps nothing from before the Delete, so the
+     licence does not come back after "deleted". */
+  {
+    let letGo = null;
+    const held = new Promise((r) => { letGo = r; });
+    pg = await open(true, { lic: { token: 'v1.first.sig', now: T0 + 2 * DAY, genuine: genuine() },
+      renew: async (b) => { await held; return renewal(b); } });
+    for (let i = 0; i < 50 && pg.__renewals < 1; i++) await pg.waitForTimeout(100);
+    const gone = await pg.evaluate(() => window.__RATA_NATIVE__('/api/account', { method: 'DELETE' }));
+    letGo();
+    await pg.waitForFunction(() => __mock.calls.some(([c, a]) => c === 'set_licence' && a && a.since === 0), null, { timeout: 5000 }).catch(() => {});
+    await pg.waitForTimeout(200);
+    const late = await pg.evaluate(() => ({ disk: __mock.lic.token, epoch: __mock.epoch,
+      sent: __mock.calls.filter(([c]) => c === 'set_licence').map(([, a]) => a) }));
+    check(gone.ok && pg.__renewals === 1 && late.disk === null && late.epoch === 1 && late.sent.length === 1
+      && late.sent[0].licence === 'v1.second.sig' && late.sent[0].since === 0,
+    `a renewal still out when Delete account runs passes the epoch it began under, and the licence stays deleted: ${JSON.stringify({ gone, renewals: pg.__renewals, ...late })}`);
+    await pg.close();
+  }
 
   /* A key wrapped by a mail client: line breaks and spaces inside it are
      taken out before it is used. */

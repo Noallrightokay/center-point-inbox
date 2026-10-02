@@ -50,8 +50,15 @@ export async function GET(req) {
   } catch (e) {
     /* The signing key is missing or unreadable. That is a deployment fault,
        not the customer's, and a 500 says so — it must not read as "you have
-       not paid". */
-    return NextResponse.json({ error: e.message }, { status: 500 });
+       not paid". What went wrong names a variable and a file, which are the
+       operator's: they go to the server log, and the caller hears a fixed
+       sentence (SEC-7). */
+    console.error(`licence: no licence could be issued: ${e.message}`);
+    return NextResponse.json({
+      licensed: false,
+      reason: 'not-configured',
+      message: 'mailrata.org cannot issue licences at the moment. This is at our end, not yours. Try again later.',
+    }, { status: 500 });
   }
 
   const def = planDef(plan);

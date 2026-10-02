@@ -76,10 +76,16 @@ pub fn licence_status(app: App<'_>) -> Standing {
 }
 
 /// Store a licence, or clear it with `null`. Returns the standing that
-/// results, so the interface never has to ask twice.
+/// results, so the interface never has to ask twice. `since` is the
+/// standing's `epoch` when a renewal began: one that began before a Delete
+/// account is refused and writes nothing (SEC-7). The licence box sends none.
 #[tauri::command]
-pub fn set_licence(app: App<'_>, licence: Option<String>) -> Result<Standing, String> {
-    app.set_licence(licence)
+pub fn set_licence(
+    app: App<'_>,
+    licence: Option<String>,
+    since: Option<u64>,
+) -> Result<Standing, String> {
+    app.set_licence(licence, since)
 }
 
 #[tauri::command]
