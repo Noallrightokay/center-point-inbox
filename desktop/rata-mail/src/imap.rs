@@ -669,6 +669,67 @@ pub async fn verify_with(
     host_override: Option<&str>,
 ) -> Verify {
     let found = discover(resolver, email, host_override).await;
+    verify_found(&Public(resolver), found, email, credential, host_override).await
+}
+
+/// Where linking opens its connections: the public internet, through the
+/// guard, or a scripted server in the tests.
+trait Dial {
+    type Stream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + std::fmt::Debug + Send;
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> impl std::future::Future<Output = Result<Client<Self::Stream>, Trouble>> + Send;
+}
+
+/// The internet, every name judged by the guard first ([`open`]).
+struct Public<'a>(&'a Resolver);
+
+impl Dial for Public<'_> {
+    type Stream = Tls;
+    async fn dial(&self, host: &str, port: u16) -> Result<Client<Tls>, Trouble> {
+        open(self.0, host, port).await
+    }
+}
+
+/// What a successful sign-in at `cand` links.
+fn verified(cand: &Candidate) -> Verify {
+    Verify::Ok(Box::new(Verified {
+        host: cand.host.clone(),
+        port: if cand.port == 0 { IMAP_PORT } else { cand.port },
+        label: cand.label.clone(),
+        help: cand.help.clone(),
+        source: cand.source,
+    }))
+}
+
+/// The one other server a refused password is tried at: Zoho's organisation
+/// host, `imappro.zoho.<region>`, for a company domain whose MX named Zoho
+/// and whose region's `imap.zoho.<region>` refused it. Zoho documents that
+/// host for organisation accounts, and the region is the MX's, so the
+/// password goes nowhere it was not already meant for. Never for a Zoho
+/// address of Zoho's own (the table's, a personal account), a server RATA
+/// guessed or was told, or a token.
+fn zoho_second_chance(cand: &Candidate, credential: &Credential) -> Option<Candidate> {
+    if cand.source != Source::Mx || !matches!(credential, Credential::Password(_)) {
+        return None;
+    }
+    let host = crate::discover::zoho_pro(&cand.host)?;
+    Some(Candidate {
+        host,
+        ..cand.clone()
+    })
+}
+
+/// [`verify_with`] after discovery, every connection made through `dial`.
+async fn verify_found<D: Dial + Sync>(
+    dial: &D,
+    found: Discovery,
+    email: &str,
+    credential: &Credential,
+    host_override: Option<&str>,
+) -> Verify {
     let (hosts, filtered_by) = match found {
         // The domain's own DNS already answered the question, and the answer
         // was "there is no mailbox here". Trying anyway would spend three
@@ -705,7 +766,7 @@ pub async fn verify_with(
             });
         }
 
-        let client = match open(resolver, &cand.host, cand.port).await {
+        let client = match dial.dial(&cand.host, cand.port).await {
             Ok(c) => c,
             // Refused by the guard: this *name* points somewhere RATA will
             // not connect. A different name is a different place — a stale
@@ -727,17 +788,26 @@ pub async fn verify_with(
         match sign_in(client, email, credential).await {
             Ok(mut session) => {
                 let _ = timeout(COMMAND, session.logout()).await;
-                return Verify::Ok(Box::new(Verified {
-                    host: cand.host.clone(),
-                    port: if cand.port == 0 { IMAP_PORT } else { cand.port },
-                    label: cand.label.clone(),
-                    help: cand.help.clone(),
-                    source: cand.source,
-                }));
+                return verified(cand);
             }
             // The password is wrong. Every remaining candidate is the same
             // password at another address, and providers count failures.
-            Err(Trouble::Auth(why)) => return Verify::Refused(refusal(cand, &why)),
+            //
+            // One exception, tried once: a Zoho organisation account may sign
+            // in only at its region's `imappro.` host. Only a refusal leads
+            // there; a server that could not be reached says nothing about
+            // the password. Whatever that host answers short of a sign-in,
+            // the refusal reported is the first one.
+            Err(Trouble::Auth(why)) => {
+                if let Some(pro) = zoho_second_chance(cand, credential)
+                    && let Ok(client) = dial.dial(&pro.host, pro.port).await
+                    && let Ok(mut session) = sign_in(client, email, credential).await
+                {
+                    let _ = timeout(COMMAND, session.logout()).await;
+                    return verified(&pro);
+                }
+                return Verify::Refused(refusal(cand, &why));
+            }
             // The same token goes to every candidate, so the same answer
             // would come back from each.
             Err(Trouble::OAuth(why)) => {
@@ -3931,9 +4001,12 @@ fn oauth_msg(acct: &Account, why: &str) -> String {
     )
 }
 
+/// What to say when a mailbox that signed in before refuses its password.
+/// It names the screen where the fix is, Settings → Linked accounts, whose
+/// row for the mailbox carries the Relink button.
 fn revoked_msg(acct: &Account, why: &str) -> String {
     format!(
-        "{} rejected the sign-in — the app password has probably been revoked. Relink it in Accounts. The server said: {}",
+        "{} rejected the sign-in: the app password has probably been revoked. Relink it in Settings → Linked accounts. The server said: {}",
         acct.email,
         why.trim()
     )
@@ -8696,5 +8769,285 @@ mod tests {
             .await;
             assert!(matches!(got, DraftSaved::Refused(_)), "{got:?}");
         });
+    }
+
+    // ------------------------------------------------------- linking tests
+    //
+    // `verify_found` with every connection made to a scripted server named
+    // by host, so what is under test is which servers a password reaches,
+    // in what order, and what the customer is told.
+
+    #[test]
+    fn a_revoked_password_names_the_screen_that_fixes_it() {
+        let said = revoked_msg(&acct("imap.example.com"), " Invalid credentials ");
+        assert_eq!(
+            said,
+            "owner@example.com rejected the sign-in: the app password has probably been revoked. Relink it in Settings → Linked accounts. The server said: Invalid credentials"
+        );
+        assert!(!said.contains('—'), "{said}");
+    }
+
+    /// How a scripted sign-in server answers LOGIN.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Accept,
+        /// A wrong password, in Zoho's words.
+        Refuse,
+        /// The server declining for now, which says nothing of the password.
+        Busy,
+    }
+
+    /// A server that answers LOGIN as told, any number of connections,
+    /// logging `"<host>: <command>"` for each line into the shared log.
+    async fn scripted_signer(
+        host: &'static str,
+        answer: Answer,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> std::net::SocketAddr {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = listener.accept().await {
+                let log = log.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = sock.into_split();
+                    let mut lines = BufReader::new(r).lines();
+                    w.write_all(b"* OK scripted IMAP ready\r\n").await.unwrap();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let (tag, cmd) = line.split_once(' ').unwrap_or((&line, ""));
+                        let verb = cmd.split(' ').next().unwrap_or("").to_ascii_uppercase();
+                        log.lock().unwrap().push(format!("{host}: {verb}"));
+                        let reply = match (verb.as_str(), answer) {
+                            ("LOGIN", Answer::Accept) => format!("{tag} OK signed in\r\n"),
+                            ("LOGIN", Answer::Refuse) => format!(
+                                "{tag} NO [AUTHENTICATIONFAILED] Invalid credentials at {host}\r\n"
+                            ),
+                            ("LOGIN", Answer::Busy) => {
+                                format!("{tag} NO [UNAVAILABLE] Try again later\r\n")
+                            }
+                            ("LOGOUT", _) => format!("* BYE\r\n{tag} OK bye\r\n"),
+                            _ => format!("{tag} OK done\r\n"),
+                        };
+                        if w.write_all(reply.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Hosts by name: a scripted server, or nothing at all (`None`, a name
+    /// that does not answer). Any host not listed is a test failure, logged
+    /// as `"<host>: DIALLED"`, since nothing else may be reached.
+    struct Hosts {
+        at: Vec<(&'static str, Option<std::net::SocketAddr>)>,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Dial for Hosts {
+        type Stream = TcpStream;
+        async fn dial(&self, host: &str, _port: u16) -> Result<Client<TcpStream>, Trouble> {
+            let Some((_, at)) = self.at.iter().find(|(h, _)| *h == host) else {
+                self.log.lock().unwrap().push(format!("{host}: DIALLED"));
+                return Err(Trouble::Net(format!("{host} is not in this test")));
+            };
+            let Some(addr) = at else {
+                return Err(Trouble::Net(format!("{host} could not be reached.")));
+            };
+            let tcp = TcpStream::connect(addr).await.unwrap();
+            let mut client = Client::new(tcp);
+            client.read_response().await.unwrap();
+            Ok(client)
+        }
+    }
+
+    /// What discovery hands `verify` for a company domain whose MX is
+    /// `mx`, its conventional names behind the provider's host.
+    fn found_by_mx(mx: &str) -> Discovery {
+        let Some(crate::discover::MxRule::Serves(h)) = crate::discover::mx_rule(mx) else {
+            panic!("{mx} names no provider");
+        };
+        Discovery::Candidates {
+            hosts: vec![
+                Candidate {
+                    host: h.host.into(),
+                    port: IMAP_PORT,
+                    label: h.label.into(),
+                    help: Some(h.help.into()),
+                    source: Source::Mx,
+                },
+                Candidate {
+                    host: "imap.acme.de".into(),
+                    port: IMAP_PORT,
+                    label: String::new(),
+                    help: None,
+                    source: Source::Guess,
+                },
+            ],
+            filtered_by: None,
+        }
+    }
+
+    /// Link `email` with a password against `servers`, each answering as
+    /// given (`None`: the name does not answer). The outcome, and the log.
+    fn link_against(
+        email: &str,
+        found: Discovery,
+        servers: &[(&'static str, Option<Answer>)],
+    ) -> (Verify, Vec<String>) {
+        rt_act().block_on(async {
+            let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut at = Vec::new();
+            for (host, answer) in servers {
+                let addr = match answer {
+                    Some(a) => Some(scripted_signer(host, *a, log.clone()).await),
+                    None => None,
+                };
+                at.push((*host, addr));
+            }
+            let hosts = Hosts {
+                at,
+                log: log.clone(),
+            };
+            let pass = Credential::Password("the-password".into());
+            let got = verify_found(&hosts, found, email, &pass, None).await;
+            let seen = log.lock().unwrap().clone();
+            (got, seen)
+        })
+    }
+
+    fn logins(log: &[String]) -> Vec<&str> {
+        log.iter()
+            .filter(|l| l.ends_with(": LOGIN") || l.ends_with(": DIALLED"))
+            .map(String::as_str)
+            .collect()
+    }
+
+    #[test]
+    fn a_zoho_organisation_refused_at_imap_signs_in_at_imappro_and_sends_from_smtppro() {
+        let (got, log) = link_against(
+            "ann@acme.de",
+            found_by_mx("mx.zoho.eu"),
+            &[
+                ("imap.zoho.eu", Some(Answer::Refuse)),
+                ("imappro.zoho.eu", Some(Answer::Accept)),
+            ],
+        );
+        match got {
+            Verify::Ok(v) => {
+                assert_eq!(v.host, "imappro.zoho.eu");
+                assert_eq!(v.port, IMAP_PORT);
+                assert_eq!(v.label, "Zoho Mail");
+                assert_eq!(v.source, Source::Mx);
+                assert_eq!(
+                    v.help.as_deref(),
+                    Some("accounts.zoho.eu → Security → App passwords")
+                );
+                // And mail goes out through the organisation host's twin.
+                assert_eq!(
+                    crate::discover::smtp_candidates(&v.host, "ann@acme.de"),
+                    ["smtppro.zoho.eu"]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // One refusal, one sign-in, and nothing guessed.
+        assert_eq!(
+            logins(&log),
+            ["imap.zoho.eu: LOGIN", "imappro.zoho.eu: LOGIN"],
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn a_zoho_organisation_host_that_refuses_too_reports_the_first_refusal_once() {
+        for pro in [Some(Answer::Refuse), Some(Answer::Busy), None] {
+            let (got, log) = link_against(
+                "ann@acme.in",
+                found_by_mx("mx.zoho.in"),
+                &[
+                    ("imap.zoho.in", Some(Answer::Refuse)),
+                    ("imappro.zoho.in", pro),
+                ],
+            );
+            match got {
+                Verify::Refused(why) => {
+                    assert!(why.starts_with("Zoho Mail rejected the sign-in."), "{why}");
+                    assert!(why.contains("accounts.zoho.in"), "{why}");
+                    // The region's own words, not the organisation host's.
+                    assert!(why.contains("Invalid credentials at imap.zoho.in"), "{why}");
+                    assert!(!why.contains("imappro"), "{why}");
+                }
+                other => panic!("{other:?}"),
+            }
+            // The organisation host at most once, and the guesses never.
+            let want: &[&str] = if pro.is_some() {
+                &["imap.zoho.in: LOGIN", "imappro.zoho.in: LOGIN"]
+            } else {
+                &["imap.zoho.in: LOGIN"]
+            };
+            assert_eq!(logins(&log), want, "{log:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_refused_password_at_zoho_found_by_mx_tries_the_organisation_host() {
+        // A Zoho region that cannot be reached, or that declines for now:
+        // nothing about the password, so imappro is not asked.
+        for first in [None, Some(Answer::Busy)] {
+            let (got, log) = link_against(
+                "ann@acme.de",
+                found_by_mx("mx.zoho.eu"),
+                &[
+                    ("imap.zoho.eu", first),
+                    ("imappro.zoho.eu", Some(Answer::Accept)),
+                    ("imap.acme.de", None),
+                ],
+            );
+            assert!(matches!(got, Verify::Failed(_)), "{got:?}");
+            assert!(!log.iter().any(|l| l.starts_with("imappro.")), "{log:?}");
+        }
+        // A personal Zoho address, from the table: imap.zoho.com is its only
+        // server, and a refusal there is the answer.
+        let personal = Discovery::Candidates {
+            hosts: vec![Candidate {
+                host: "imap.zoho.com".into(),
+                port: IMAP_PORT,
+                label: "Zoho Mail".into(),
+                help: Some("accounts.zoho.com → Security → App passwords".into()),
+                source: Source::Table,
+            }],
+            filtered_by: None,
+        };
+        let (got, log) = link_against(
+            "ann@zoho.com",
+            personal,
+            &[
+                ("imap.zoho.com", Some(Answer::Refuse)),
+                ("imappro.zoho.com", Some(Answer::Accept)),
+            ],
+        );
+        assert!(matches!(got, Verify::Refused(_)), "{got:?}");
+        assert_eq!(logins(&log), ["imap.zoho.com: LOGIN"], "{log:?}");
+        // Any other provider: one refusal, and the password goes nowhere else.
+        let (got, log) = link_against(
+            "ann@acme.de",
+            found_by_mx("in1-smtp.messagingengine.com"),
+            &[("imap.fastmail.com", Some(Answer::Refuse))],
+        );
+        assert!(matches!(got, Verify::Refused(_)), "{got:?}");
+        assert_eq!(logins(&log), ["imap.fastmail.com: LOGIN"], "{log:?}");
+    }
+
+    #[test]
+    fn linking_can_still_be_awaited_on_another_thread() {
+        fn sends<T: Send>(_: &T) {}
+        let r = Resolver::system().unwrap();
+        let pass = Credential::Password("x".into());
+        let fut = verify_with(&r, "a@b.c", &pass, None);
+        sends(&fut);
     }
 }

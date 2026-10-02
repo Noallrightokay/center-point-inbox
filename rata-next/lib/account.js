@@ -41,7 +41,7 @@ export function blocksDeletion(sub, now = Date.now()) {
   const status = String(sub.status || '').toLowerCase();
   if (LIVE_STATUSES.includes(status)) {
     return `Your${sub.plan ? ' ' + sub.plan : ''} subscription is still ${status}. `
-      + 'Cancel it in the billing portal first — otherwise Stripe keeps charging for an account that no longer exists. '
+      + 'Cancel it in the billing portal first, or Stripe keeps charging for an account that no longer exists. '
       + 'Then come back and delete.';
   }
   if (status === PENDING) {

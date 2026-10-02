@@ -55,13 +55,21 @@ async function renew(req) {
   const licence = seen.licence;
   if (!licence && !seen.ok) {
     /* A licence this server cannot read is not renewable by any means, and
-       saying which of the two it is helps a support conversation. */
+       saying which of the two it is helps a support conversation. The app
+       keeps the licence it has whatever this says (bridge.js renew()) and
+       shows the sentence, so each one is for the customer: a deployment
+       with no public key is our fault, named in the server log only. */
+    if (seen.reason === 'no-public-key') {
+      console.warn('licence/renew: LICENCE_PUBLIC_KEY is not set or cannot be read, so no licence can be renewed; see rata-next/LAUNCH.md section 2');
+    }
     return NextResponse.json({
       licensed: false,
       reason: seen.reason,
       message: seen.reason === 'no-public-key'
-        ? 'This deployment cannot check licences — LICENCE_PUBLIC_KEY is not set. See LICENSING.md.'
-        : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
+        ? 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.'
+        : seen.reason === 'bad-signature'
+          ? 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'
+          : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
     }, seen.reason === 'no-public-key' ? { status: 500 } : undefined);
   }
 
@@ -82,7 +90,21 @@ async function renew(req) {
     return NextResponse.json({ error: 'The licence service is not configured.' }, { status: 500 });
   }
 
-  const { plan } = await entitlementsForUser(sb, email);
+  const { plan, pending } = await entitlementsForUser(sb, email);
+  if (!plan && pending) {
+    /* A purchase still being set up (settingUp in lib/plan.js): the checkout
+       reached us and the subscription has not named its plan yet, or a bank
+       transfer has not cleared. /api/licence answers `pending` for the same
+       row, and so does this: it is not "no subscription", and the app keeps
+       the licence it holds and asks again later rather than showing a price
+       to somebody who has just paid. */
+    return NextResponse.json({
+      licensed: false,
+      reason: 'pending',
+      email,
+      message: 'Your licence is being set up: your purchase has reached us and is not confirmed yet. If you paid by bank transfer, that happens once the transfer clears. RATA keeps the licence it has and tries again later.',
+    });
+  }
   if (!plan) {
     /* Cancelled, refunded, or a failed payment that has stopped retrying. Not
        an error and not an accusation — the app shows the price. */

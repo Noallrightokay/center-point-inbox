@@ -295,19 +295,16 @@ fn render_as(
 ) -> String {
     let mut out = String::with_capacity(msg.body.len() + 512);
 
-    let from = match &msg.from_name {
-        // A display name is a quoted string, and the quoting has to survive a
-        // name with a quote in it.
-        Some(name) if !name.trim().is_empty() => {
-            let shown = words::encode_header(name)
-                .replace('\\', "")
-                .replace('"', "'");
-            format!("\"{}\" <{}>", shown, msg.from.as_str())
-        }
-        _ => format!("<{}>", msg.from.as_str()),
-    };
-
-    let _ = write!(out, "From: {from}\r\n");
+    // The sender's name is written exactly as a named recipient's is
+    // ([`named`]): between quotes when it is ASCII, as encoded-words
+    // otherwise. Never an encoded-word between quotes, which RFC 2047 §5
+    // forbids and Gmail shows as it is, `=?UTF-8?B?…?=` and all.
+    let from_name = msg.from_name.as_deref().and_then(sender_name);
+    let _ = write!(
+        out,
+        "From: {}\r\n",
+        named(from_name.as_deref(), msg.from.as_str())
+    );
     // A message sent always has someone in To (`smtp::send` refuses one
     // without); a draft may not yet.
     if draft.is_none() || !msg.to.is_empty() {
@@ -384,11 +381,7 @@ fn addresses(out: &mut String, name: &str, list: &[Address]) {
     let mut line = name.len() + 1;
     let _ = write!(out, "{name}:");
     for (i, a) in list.iter().enumerate() {
-        let piece = match a.name() {
-            Some(shown) if shown.is_ascii() => format!("\"{shown}\" <{}>", a.as_str()),
-            Some(shown) => format!("{} <{}>", words::encode_header(shown), a.as_str()),
-            None => format!("<{}>", a.as_str()),
-        };
+        let piece = named(a.name(), a.as_str());
         if i > 0 {
             out.push(',');
             line += 1;
@@ -402,6 +395,29 @@ fn addresses(out: &mut String, name: &str, list: &[Address]) {
         line += 1 + piece.len();
     }
     out.push_str("\r\n");
+}
+
+/// One address as a header writes it, with its name in front when it has
+/// one: `"Ann Smith" <ann@example.org>` for a plain ASCII name (cleaned by
+/// [`display_name`], so it holds no `"` or `\` to escape), RFC 2047
+/// encoded-words with no quotes around them otherwise (an encoded-word
+/// inside a quoted string is not decoded, RFC 2047 §5), and `<addr>` alone
+/// without a name.
+fn named(name: Option<&str>, addr: &str) -> String {
+    match name {
+        Some(shown) if shown.is_ascii() => format!("\"{shown}\" <{addr}>"),
+        Some(shown) => format!("{} <{addr}>", words::encode_header(shown)),
+        None => format!("<{addr}>"),
+    }
+}
+
+/// The sender's own name, cleaned as a recipient's is ([`display_name`]),
+/// except that a control character is dropped rather than refusing it: the
+/// name comes from the mailbox's settings, not from a typed address, and a
+/// message is not refused over it. `None` when nothing is left.
+fn sender_name(raw: &str) -> Option<String> {
+    let kept: String = raw.chars().filter(|c| !c.is_control()).collect();
+    display_name(&kept).flatten()
 }
 
 /// A message with files: `multipart/mixed`, the text first, then each file.
@@ -975,6 +991,59 @@ mod tests {
         // One opening and one closing quote, and nothing that escapes them.
         assert_eq!(line.matches('"').count(), 2, "{line}");
         assert!(!line.contains('\\'), "{line}");
+    }
+
+    #[test]
+    fn the_senders_name_is_written_as_a_recipients_is_and_never_as_a_quoted_encoded_word() {
+        let from = |name: &str| {
+            let mut m = msg("x", "y");
+            m.from_name = Some(name.into());
+            let out = render(&m, "d", "i");
+            out.lines().next().unwrap().to_string()
+        };
+        // Plain ASCII: a quoted string, which a comma cannot break out of.
+        assert_eq!(from("Ann Smith"), "From: \"Ann Smith\" <owner@example.com>");
+        assert_eq!(
+            from("Smith, Ann"),
+            "From: \"Smith, Ann\" <owner@example.com>"
+        );
+        // A quote, a backslash or a bracket would end or escape the quoted
+        // string, or look like an address: each goes, as in a recipient's.
+        assert_eq!(
+            from("Ann \"The Boss\" \\ Smith <x>"),
+            "From: \"Ann The Boss Smith x\" <owner@example.com>"
+        );
+        // Not ASCII: encoded-words standing on their own, never quoted.
+        assert_eq!(
+            from("Zoë Ångström"),
+            "From: =?UTF-8?B?Wm/DqyDDhW5nc3Ryw7Zt?= <owner@example.com>"
+        );
+        assert_eq!(
+            from("张伟, Ltd"),
+            "From: =?UTF-8?B?5byg5LyfLCBMdGQ=?= <owner@example.com>"
+        );
+        // A line break cannot start another header, and a name of nothing
+        // but blanks is no name.
+        assert_eq!(
+            from("Ann\r\nBcc: all@example.com"),
+            "From: \"AnnBcc: all@example.com\" <owner@example.com>"
+        );
+        assert_eq!(from("  "), "From: <owner@example.com>");
+        // Exactly as To and Cc write the same names.
+        let mut m = msg("x", "y");
+        m.to =
+            Address::parse_list("\"Smith, Ann\" <ann@example.org>, Zoë Ångström <zoe@example.org>")
+                .unwrap();
+        let out = render(&m, "d", "i");
+        assert!(
+            out.contains(
+                "To: \"Smith, Ann\" <ann@example.org>,\r\n =?UTF-8?B?Wm/DqyDDhW5nc3Ryw7Zt?= <zoe@example.org>\r\n"
+            ),
+            "{out}"
+        );
+        // No quoted string anywhere in the head holds an encoded-word.
+        let head = out.split("\r\n\r\n").next().unwrap();
+        assert!(!head.contains("\"=?"), "{head}");
     }
 
     #[test]

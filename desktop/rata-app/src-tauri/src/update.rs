@@ -58,6 +58,11 @@ pub struct Offer {
     pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The feed has nothing for this computer's platform and installer
+    /// (`not_here_yet`). Not an error, and not "this is the newest" either:
+    /// the interface says there is no update for this computer yet.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub not_here: bool,
     pub releases: &'static str,
 }
 
@@ -85,8 +90,10 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Offer {
         // A feed with nothing for this kind of installation is not a fault
         // here: that platform's installer was held back from the release (a
         // failed launch or signature check), and it catches up with the next
-        // one. Nothing is shown.
-        Err(e) if not_here_yet(&e) => {}
+        // one. Nothing is shown unless someone asked: then the interface
+        // says there is no update for this computer yet, the words Install
+        // uses, rather than that this copy is the newest.
+        Err(e) if not_here_yet(&e) => offer.not_here = true,
         Err(e) => offer.error = Some(explain(&e)),
     }
     offer
@@ -216,6 +223,32 @@ mod tests {
         ] {
             assert!(!not_here_yet(&e), "{e}");
         }
+    }
+
+    /// What the page reads to tell "nothing here for this computer" from
+    /// "this is the newest" (`notHere`), and that the field is absent
+    /// otherwise, as it was before.
+    #[test]
+    fn a_missing_platform_reaches_the_page_as_not_here() {
+        let offer = Offer {
+            enabled: true,
+            current: "0.1.44".into(),
+            not_here: true,
+            releases: RELEASES,
+            ..Offer::default()
+        };
+        let json = serde_json::to_value(&offer).unwrap();
+        assert_eq!(json["notHere"], true, "{json}");
+        assert!(
+            json.get("error").is_none() && json.get("version").is_none(),
+            "{json}"
+        );
+        let newest = serde_json::to_value(Offer {
+            not_here: false,
+            ..offer
+        })
+        .unwrap();
+        assert!(newest.get("notHere").is_none(), "{newest}");
     }
 
     /// Each installation reads its own feed first and `latest.json` after,

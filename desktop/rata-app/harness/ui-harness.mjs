@@ -83,7 +83,19 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         return standing();
       case 'list_mailboxes':
         if (M.listThrows) throw M.listThrows;
+        if (M.listFails) throw M.listFails;
         return M.mailboxes;
+      /* I7: as core::forget_everything. Every mailbox and its keychain
+         entries, then the licence; a keychain that refuses stops it with
+         everything still in place. What the page still held when Rust was
+         asked is kept in sessionStorage, which outlives the page leaving. */
+      case 'forget_everything': {
+        if (M.forgetFails) throw M.forgetFails;
+        const n = M.mailboxes.length;
+        M.mailboxes = []; M.licensed = false;
+        try { sessionStorage.setItem('rata_forgot', JSON.stringify({ mailboxes: n, pageStoreThen: !!localStorage.getItem('centra_session') })); } catch {}
+        return { mailboxes: n };
+      }
       case 'unlink_mailbox':
         if (M.unlinkFails) throw 'This computer’s keychain refused access';
         M.mailboxes = M.mailboxes.filter((m) => m.email !== args.email);
@@ -245,7 +257,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       default: throw 'unmocked ' + cmd;
     }
   } } };
-  localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' }));
+  /* Signed in, except on the page Delete account leads to (I7). */
+  if (!sessionStorage.getItem('rata_harness_deleted')) localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' }));
 };
 
 const browser = await chromium.launch();
@@ -2127,6 +2140,76 @@ console.log('\n— a licence too old to renew itself says what to do —');
   await pg.close();
 }
 
+console.log('\n— a renewal mailrata.org answers but cannot give keeps the licence, and says why —');
+{
+  /* /api/licence/renew answers licensed:false with a reason and a sentence
+     for more than a cancelled subscription: `pending`, a purchase Stripe
+     has not confirmed yet (lib/plan.js settingUp), which is not "no
+     subscription"; `malformed` and `bad-signature`, a licence the site
+     could not check (a site holding another key than the app's answers
+     bad-signature for every genuine licence); and `no-public-key`, a 500
+     from a site with no key at all. bridge.js renew() keeps the licence
+     on disk for every one, never replacing or clearing it, and the box
+     shows the site's sentence rather than "could not reach mailrata.org". */
+  const DAY = 86400, T0 = 1_800_000_000;
+  const genuine = () => ({ 'v1.first.sig': T0 + 8 * DAY, 'v1.second.sig': T0 + 60 * DAY });
+  const answers = {
+    pending: { body: { licensed: false, reason: 'pending', email: 'me@example.com',
+      message: 'Your licence is being set up: your purchase has reached us and is not confirmed yet. If you paid by bank transfer, that happens once the transfer clears. RATA keeps the licence it has and tries again later.' } },
+    malformed: { body: { licensed: false, reason: 'malformed', message: 'That licence could not be read. Sign in at mailrata.org to get a new one.' } },
+    'bad-signature': { body: { licensed: false, reason: 'bad-signature', message: 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.' } },
+    'no-public-key': { status: 500, body: { licensed: false, reason: 'no-public-key', message: 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.' } },
+  };
+  const look = (pg) => pg.evaluate(() => ({ disk: __mock.lic.token, licensed: !!(LIC && LIC.licensed), token: LIC && LIC.token,
+    sets: __mock.calls.filter(([c]) => c === 'set_licence').length, box: !!document.getElementById('rata-licence'),
+    why: document.querySelector('#rata-licence-why')?.textContent || null, err: document.querySelector('#rata-licence-error')?.textContent || '',
+    retry: !!document.querySelector('#rata-licence-retry') && !document.querySelector('#rata-licence-retry').hidden }));
+
+  for (const [reason, answer] of Object.entries(answers)) {
+    /* In its last week, so launch renews it: the licence stays, in use, and
+       nothing is put in front of anybody. */
+    let pg = await open(true, { lic: { token: 'v1.first.sig', now: T0 + 2 * DAY, genuine: genuine() }, renew: answer });
+    await pg.waitForFunction(() => LIC && LIC.token, null, { timeout: 5000 }).catch(() => {});
+    let st = await look(pg);
+    check(pg.__renewals >= 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.licensed && st.token === 'v1.first.sig' && !st.box,
+      `${reason}: a working licence in its last week is kept and used: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    await pg.close();
+
+    /* Expired but still renewable: the licence on disk is kept, the box
+       says what the site said, and Try again does not claim the site could
+       not be reached. */
+    let reply = answer;
+    pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: () => reply });
+    await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(pg.__renewals === 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.retry && st.why === answer.body.message,
+      `${reason}: an expired licence is kept, not cleared, and the box gives the site's sentence: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    await pg.click('#rata-licence-retry');
+    /* The box disables Try again while it renews and enables it after. */
+    await pg.waitForFunction(() => !document.querySelector('#rata-licence-retry')?.disabled, null, { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(pg.__renewals === 2 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.why === answer.body.message && !/could not reach/.test(st.err),
+      `${reason}: Try again asks once more, keeps the licence and does not say the site could not be reached: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    /* The licence kept is still the one that renews once the site can. */
+    reply = { body: { licensed: true, licence: 'v1.second.sig', message: 'Renewed.' } };
+    await pg.click('#rata-licence-retry');
+    await pg.waitForFunction(() => !document.getElementById('rata-licence'), null, { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(!st.box && st.licensed && st.disk === 'v1.second.sig', `${reason}: and once the site gives a licence, Try again takes it: ${JSON.stringify(st)}`);
+    await pg.close();
+  }
+
+  /* A bare server error with no sentence is still "could not reach". */
+  const pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: { status: 502, body: { error: 'Bad gateway' } } });
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  await pg.click('#rata-licence-retry');
+  await pg.waitForFunction(() => /could not reach mailrata\.org/.test(document.querySelector('#rata-licence-error')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const st = await look(pg);
+  check(st.box && st.disk === 'v1.first.sig' && /could not reach mailrata\.org/.test(st.err) && /needs refreshing/.test(st.why || ''),
+    `a server error with nothing to say keeps the app's own words and reads as unreachable: ${JSON.stringify(st)}`);
+  await pg.close();
+}
+
 console.log('\n— the licence renews while RATA is open (BUG-L) —');
 {
   /* A copy started more than a week before its licence expires, and left
@@ -2332,6 +2415,71 @@ console.log('\n— the AI relay is sent the start of a long message, never all o
     `the briefing request fits (${raw.length} characters, ${asked.messages.length} messages)`);
   check(after.flags === 25 && /The briefing was cut short\. Try again\./.test(after.said) && /Flags from earlier briefings are kept/.test(after.said),
     `a briefing cut short keeps all 25 flags and says so: ${JSON.stringify({ flags: after.flags, said: after.said.slice(0, 160) })}`);
+  await pg.close();
+}
+
+console.log('\n— the briefing sends each message by its place, never by its id —');
+{
+  /* I1: a message's id starts with its mailbox's key, which is made from the
+     address (key.rs, mail_key), and the briefing's request reaches
+     Anthropic. Ids here are shaped like the real ones. The answer names the
+     second message by its place, and the flag lands on that one. */
+  const KEY = 'me_example_com_0a1b2c3d4e';
+  let answer = { body: { tasks: [{ id: '2', task: 'Pay the invoice', due: '2026-10-09', important: true }], used: 0.1 } };
+  const pg = await open(true, { ai: () => answer });
+  const mk = (uid) => ({ id: KEY + '_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann ' + uid, from_addr: 'ann' + uid + '@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Subject ' + uid, preview: 'Words ' + uid, body: 'Please reply ' + uid + '.',
+    ts: Date.now() - uid * 60_000, unread: true, starred: false, uid, uidvalidity: 7, message_id: 'brief' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  await pg.evaluate(async (msgs) => {
+    S.settings.aiOk = true;
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    __mock.refresh = null;
+    openAssist(); await runAIBrief();
+  }, [1, 2, 3, 4].map(mk));
+  const raw = pg.__ai.at(-1) || '{}', asked = JSON.parse(raw);
+  const held = await pg.evaluate(() => ({
+    ids: S.messages.map((m) => m.id),
+    linked: S.linked.filter((l) => l.type === 'mail').flatMap((l) => [l.id, l.label, l.email].filter(Boolean).map(String)),
+    flagged: S.messages.filter((m) => m.flag).map((m) => [m.id, m.flag.task]),
+  }));
+  const secrets = [...new Set([...held.ids, ...held.linked, KEY, 'me_example_com', 'me@example.com'])];
+  const leaked = secrets.filter((x) => raw.toLowerCase().includes(String(x).toLowerCase()));
+  check(asked.task === 'tasks' && asked.messages.length === 4 && asked.messages.map((m) => m.id).join(',') === '1,2,3,4',
+    `the briefing names its messages "1" to "4": ${JSON.stringify(asked.messages && asked.messages.map((m) => m.id))}`);
+  check(leaked.length === 0 && held.ids.length >= 4, `and no message id, mailbox address or key is in what it sends: ${JSON.stringify(leaked)}`);
+  check(held.flagged.length === 1 && held.flagged[0][0] === KEY + '_2' && held.flagged[0][1] === 'Pay the invoice',
+    `the answer's "2" flags the second newest message, and only that one: ${JSON.stringify(held.flagged)}`);
+  /* An answer naming a real id flags nothing: only places are read. */
+  answer = { body: { tasks: [{ id: KEY + '_3', task: 'Reply to Ann', due: null, important: false }], used: 0.1 } };
+  await pg.evaluate(async () => { await runAIBrief(); });
+  const after = await pg.evaluate(() => S.messages.filter((m) => m.flag).map((m) => m.id));
+  check(after.length === 0, `an answer naming a message by its id flags nothing: ${JSON.stringify(after)}`);
+  await pg.close();
+}
+
+console.log('\n— a feed with nothing for this computer is not "the newest version" —');
+{
+  /* I1: update.rs answers notHere when the feed has no entry for this kind
+     of installation (not_here_yet). That is not "this is the newest", so the
+     Settings row and a manual check say what Install says. */
+  const pg = await open(true);
+  const asks = (offer, manual) => pg.evaluate(async ({ offer, manual }) => {
+    __mock.update = offer; window.__toasts.length = 0; UPD_LATER = '';
+    go('set'); await checkUpdate(manual);
+    const bar = document.querySelector('#upd-bar');
+    return { line: document.querySelector('#upd-line').textContent, toasts: window.__toasts.slice(), bar: !!bar && !bar.hidden };
+  }, { offer, manual });
+  const base = { enabled: true, current: '0.1.44', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
+  let r = await asks({ ...base, notHere: true }, true);
+  check(r.line === 'You have RATA 0.1.44. There is no update for this computer yet.' && r.toasts.join('|') === 'There is no update for this computer yet.' && !r.bar,
+    `a manual check says there is no update for this computer yet, in the row and the toast: ${JSON.stringify(r)}`);
+  check(!/newest/.test(r.line + r.toasts.join('')), 'and never that it is the newest version');
+  r = await asks({ ...base, notHere: true }, false);
+  check(r.toasts.length === 0 && !r.bar && /no update for this computer yet/.test(r.line), `the automatic check says nothing, and the row says the same: ${JSON.stringify(r)}`);
+  r = await asks(base, true);
+  check(r.line === 'You have RATA 0.1.44. It is the newest version.' && r.toasts.join('|') === 'RATA 0.1.44 is the newest version.',
+    `a feed that has this computer and nothing newer still says it is the newest: ${JSON.stringify(r)}`);
   await pg.close();
 }
 
@@ -3194,7 +3342,20 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
     closeCompose(); return r;
   });
   check(still.compose === 'none' && /^(0s|1e-05s|0\.00001s)$/.test(still.toast.split(',')[0]) && still.glide === 'auto', `reduced motion stops what moves: ${JSON.stringify(still)}`);
+  /* I1: the menu and the four dialog cards that pop (a fade and a 4 px
+     rise) do not under reduced motion, and do otherwise. */
+  const pops = () => pg.evaluate(() => {
+    const menu = document.querySelector('#acct-menu'), was = menu.classList.contains('open');
+    menu.classList.add('open');
+    const r = ['#acct-menu', '#link-card', '#warn-card', '#keys-card', '#welcome-card'].map((q) => getComputedStyle(document.querySelector(q)).animationName);
+    if (!was) menu.classList.remove('open');
+    return r;
+  });
+  const popStill = await pops();
   await pg.emulateMedia({ reducedMotion: 'no-preference' });
+  const popMoving = await pops();
+  check(popStill.every((n) => n === 'none') && popMoving.every((n) => n === 'pop'),
+    `the account menu and the link, warning, shortcut and welcome cards pop, except under reduced motion: ${JSON.stringify({ popStill, popMoving })}`);
   await ctx.close();
 
   const lctx = await browser.newContext();
@@ -3206,6 +3367,80 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
   for (let k = 0; k < 5; k++) { await lp.keyboard.press('Tab'); licIn = licIn && await lp.evaluate(() => document.querySelector('#rata-licence').contains(document.activeElement)); }
   check(lic === 'dialog:true:Your licence key' && licIn, `the licence box is a modal dialog named by its heading, and Tab stays in it: ${JSON.stringify({ lic, licIn })}`);
   await lctx.close();
+}
+
+console.log('\n— Delete account in the app removes what is on this computer, and only that (I7) —');
+{
+  const pg = await open(true);
+  await pg.evaluate(() => go('set'));
+  const row = await pg.textContent('#del-what');
+  check(/every linked mailbox/i.test(row) && /keychain/.test(row) && /licence stored here/.test(row) && /mail store/.test(row) && /deleted at mailrata\.org/.test(row)
+    && !/subscription record|AI usage record|stay in your computer/i.test(row) && !/\u2014/.test(row),
+  `the Settings row says what it removes on this computer, and that the mailrata.org account is deleted there: "${row}"`);
+  const detailNow = () => pg.textContent('#del-detail');
+  const goOff = () => pg.evaluate(() => document.querySelector('#del-go').disabled);
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent));
+  let d = await detailNow();
+  check(!(await goOff()) && /the mailbox linked here, with its password or Microsoft sign-in in this computer’s keychain/.test(d)
+    && /the licence stored on this computer/.test(d) && /mail store/.test(d) && /mailrata\.org account and subscription/.test(d) && !/\u2014/.test(d),
+  `the confirmation names the mailbox, its keychain entry, the licence and the store, and keeps the mailrata.org account: "${d}"`);
+  const grp = await pg.evaluate(() => { const g = document.querySelector('#del-confirm'); return [g.getAttribute('role'), document.activeElement.id].join(':'); });
+  check(grp === 'group:del-email', `it is still a group that takes the focus (H10): ${grp}`);
+  /* The mailrata.org account is the website's: opened in the browser, never deleted from here. */
+  const web = await pg.evaluate(() => { const a = document.querySelector('#del-web'); return { shown: getComputedStyle(a).display !== 'none', href: a.getAttribute('href') }; });
+  await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; });
+  await pg.click('#del-web');
+  await pg.waitForTimeout(150);
+  let st = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map((c) => c[0]), url: location.pathname }));
+  check(web.shown && web.href === 'https://mailrata.org/account' && JSON.stringify(st.opened) === '["https://mailrata.org/account"]'
+    && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
+  `Open mailrata.org account goes through open_link and deletes nothing: ${JSON.stringify({ web, st })}`);
+
+  /* A keychain that refuses: nothing of the page's is cleared, and it can be pressed again. */
+  await pg.evaluate(() => { __mock.forgetFails = 'me@example.com could not be removed: This computer’s keychain refused access'; });
+  await pg.fill('#del-email', 'me@example.com');
+  await pg.click('#del-go');
+  await pg.waitForFunction(() => /Nothing more was deleted/.test(document.querySelector('#del-detail').textContent));
+  st = await pg.evaluate(() => ({ session: !!localStorage.getItem('centra_session'), ws: !!localStorage.getItem(LS_KEY), url: location.pathname,
+    go: document.querySelector('#del-go').disabled, label: document.querySelector('#del-go').textContent, toasts: window.__toasts.slice() }));
+  check(st.session && st.ws && /app\.html$/.test(st.url) && !st.go && st.label === 'Delete permanently' && st.toasts.some((t) => /keychain refused access/.test(t)),
+    `a keychain that refuses stops it, says why, and leaves the page's store alone: ${JSON.stringify(st)}`);
+
+  /* Nothing can be done when RATA cannot say what is here: off, Enter too. */
+  await pg.click('#del-cancel');
+  await pg.evaluate(() => { __mock.listFails = 'the mailbox list is busy'; __mock.calls = []; });
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent));
+  d = await detailNow();
+  await pg.fill('#del-email', 'me@example.com');
+  await pg.press('#del-email', 'Enter');
+  await pg.waitForTimeout(150);
+  st = await pg.evaluate(() => __mock.calls.map((c) => c[0]));
+  check((await goOff()) && /could not tell/.test(d) && !st.includes('forget_everything'), `when RATA cannot tell what is here, Delete permanently stays off: "${d}" ${JSON.stringify(st)}`);
+  await pg.click('#del-cancel');
+  check((await pg.evaluate(() => document.activeElement.id)) === 'btn-delete', 'and Keep my account gives the focus back to Delete account');
+
+  /* Done for real: Rust first, then the page's store, then out to sign-up. */
+  await pg.evaluate(() => { __mock.listFails = null; __mock.forgetFails = null; localStorage.setItem(OB_KEY, '[{"id":"waiting"}]'); });
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !document.querySelector('#del-go').disabled);
+  await pg.fill('#del-email', 'Me@Example.com');
+  const before = await pg.evaluate(async () => (await indexedDB.databases()).map((x) => x.name));
+  check(before.includes('rata-mail-local_t'), `the mail store is there to be removed: ${JSON.stringify(before)}`);
+  await pg.evaluate(() => sessionStorage.setItem('rata_harness_deleted', '1'));
+  await Promise.all([pg.waitForURL(/auth\.html/, { timeout: 10000 }), pg.click('#del-go')]);
+  await pg.waitForLoadState('domcontentloaded');
+  const after = await pg.evaluate(async () => ({
+    url: location.pathname + location.search,
+    forgot: JSON.parse(sessionStorage.getItem('rata_forgot') || 'null'),
+    keys: Object.keys(localStorage).filter((k) => /centra_session|centra_ws_local_t|rata_outbox_local_t/.test(k)),
+    dbs: (await indexedDB.databases()).map((x) => x.name).filter((n) => /local_t|rata-files/.test(n)),
+  }));
+  check(/auth\.html\?mode=signup&deleted=1/.test(after.url) && after.forgot && after.forgot.mailboxes === 1 && after.forgot.pageStoreThen
+    && !after.keys.length && !after.dbs.length,
+  `Delete permanently asks Rust to remove the mailboxes and licence first, then clears the store, the outbox and the sign-in: ${JSON.stringify(after)}`);
+  await pg.close();
 }
 
 await browser.close();
