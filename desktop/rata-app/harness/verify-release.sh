@@ -194,7 +194,14 @@ elif have ldd && ldd "$D/deb/usr/bin/rata-app" 2>/dev/null | grep -q 'not found'
 else
   export HOME="$D/home"; mkdir -p "$HOME"
   Xvfb :77 -screen 0 1280x800x24 >/dev/null 2>&1 & X=$!; sleep 2
-  DISPLAY=:77 "$D/deb/usr/bin/rata-app" >/dev/null 2>&1 & A=$!; sleep 12
+  DISPLAY=:77 "$D/deb/usr/bin/rata-app" >/dev/null 2>&1 & A=$!
+  # A cold machine can take 20 s or more to draw the first window; wait for
+  # it, up to a minute, rather than a fixed time.
+  for _ in $(seq 1 60); do
+    DISPLAY=:77 xdotool search --name RATA >/dev/null 2>&1 && break
+    sleep 1
+  done
+  sleep 2
   seen=""
   for w in $(DISPLAY=:77 xdotool search --name RATA 2>/dev/null); do
     n=$(DISPLAY=:77 xdotool getwindowname "$w")
