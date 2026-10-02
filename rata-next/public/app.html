@@ -1019,7 +1019,7 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b id="del-head">This cannot be undone</b><span id="del-detail" role="status"></span></div>
             <input type="text" id="del-email" aria-label="Type your email address to confirm" placeholder="type your email address" autocomplete="off" style="min-width:230px">
             <button class="btn danger" id="del-go">Delete permanently</button>
-            <a class="btn" id="del-web" href="https://mailrata.org/account" target="_blank" rel="noopener">Open mailrata.org account</a>
+            <a class="btn" id="del-web" href="https://mailrata.org/app" target="_blank" rel="noopener">Open mailrata.org account</a>
             <button class="btn" id="del-cancel">Keep my account</button>
           </div>
         </div>
@@ -4644,7 +4644,7 @@ $('#pw-change').onclick=async()=>{
    every linked mailbox with its keychain entries, then the licence stored
    here, then this page's store. The mailrata.org account is not on this
    computer and is not deleted from it; the row says so and opens
-   mailrata.org/account. Delete permanently stays off until the endpoint has
+   mailrata.org/app, whose Settings holds Delete account. Delete permanently stays off until the endpoint has
    said what it would remove. */
 const DEL_HERE='Removes from this computer every linked mailbox, with its password or Microsoft sign-in in the keychain, the licence stored here, and RATA’s mail store, settings and sign-in. Your mail stays at your provider. Your mailrata.org account and subscription are managed and deleted at mailrata.org.';
 if(window.__RATA_NATIVE__)$('#del-what').textContent=DEL_HERE;

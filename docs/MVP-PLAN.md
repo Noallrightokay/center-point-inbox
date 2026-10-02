@@ -646,6 +646,12 @@ focus ring, and bumped the version ([#113](https://github.com/Noallrightokay/cen
 engine 297, shell 130, harness 358, website 785, all green on the branch.
 The screenshots are H10's, taken after the last interface change. Not yet
 merged, released or verified: the PM merges. 0.1.44 released and verified 2026-09-30 ([run 36749751360](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36749751360)): the first run's gate caught a harness race on the disguised-program question ([run 36748146906](https://github.com/Noallrightokay/center-point-inbox/actions/runs/36748146906), fixed in [#115](https://github.com/Noallrightokay/center-point-inbox/pull/115)), and the website moved to Next.js 16.3.8 for a critical advisory first ([#114](https://github.com/Noallrightokay/center-point-inbox/pull/114)); `verify-release.sh v0.1.44` found five assets, the licence key in the `.deb` and the `.exe`, no font CDN, window "RATA 0.1.44 beta".
+0.1.45 folded in #118–#123 (wave 6: I1 to I7; I5 was the audit), with the
+follow-ups they found (the privacy page's briefing sentence, the app's
+link to the website's Delete account, the domain add-on's ghost name),
+and bumped the version; engine 305, shell 136, harness 425, website 800.
+No screenshot changed: I7's new row is in Settings, which the shots do
+not show.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
@@ -1080,6 +1086,13 @@ manual check), `ui-src/probe.html`, `sync-ui.sh`.
   `https://mailrata.org/account`: check what the page does with it and
   make it right, or say why it already is.
 
+State: released in 0.1.45 (#118). The desktop `stripePortal` is now
+`/app`, whose Settings shows the portal (`/account` has none); a direct
+portal link would need the owner's portal URL as a build variable.
+`probe.html` was kept (the app's README tells people to use it) and
+brought up to date. The privacy page's briefing sentence followed in the
+release PR.
+
 #### I2
 **The engine's words and a sender's name.** Region: `desktop/rata-mail`
 (`discover.rs`, `imap.rs` `revoked_msg`, `compose.rs`), and the help
@@ -1096,6 +1109,11 @@ page's quotes of them (`help.test.mjs`).
   refused at `imap.zoho.<region>`, try the `pro` host of the same region
   once before saying the password is wrong; never another provider.
 
+State: released in 0.1.45 (#119). The From bug was real (an
+encoded-word inside quotes) but never shipped: the app sends no
+`from_name`. The Zoho retry is seen only on scripted servers; B2 can
+confirm it on a real organisation mailbox.
+
 #### I3
 **The website's words, renewal while setting up, and every installer
 checked.** Region: `rata-next/lib/account.js`,
@@ -1111,6 +1129,11 @@ only), `desktop/rata-app/harness/verify-release.sh`.
   AppImage and both `.dmg` files the same way (key, id, title, no font
   CDN), with tools a Linux runner has.
 
+State: released in 0.1.45 (#120). Renewal also shows the site's own
+sentence for `malformed`, `bad-signature` and `no-public-key`, which had
+read as "could not reach mailrata.org" (found by I5). verify-release.sh
+passed all five v0.1.44 installers.
+
 #### I4
 **Pictures in one fetch.** Region: the pictures path only:
 `core::read_attachment`'s neighbours in `core.rs`, `commands.rs`,
@@ -1121,6 +1144,9 @@ message once and hand back every picture-able part (same sniffing,
 `PICTURE_MAX` each, the same refusal of disguised names), capped in
 total, then fill the tiles from that. Saving is unchanged.
 
+State: released in 0.1.45 (#123): `read_pictures`, 24 indexes and 30 MB
+an answer.
+
 #### I5
 **Audit: the page-to-Rust contract for every mail action.** Read-only;
 the finder that should have done this stopped at a usage limit in wave
@@ -1129,9 +1155,38 @@ passes, what the command takes and what comes back, field by field
 (names, `serde` defaults, folder shapes, error kinds), and report
 mismatches with file and line. Findings become cards.
 
+State: done 2026-10-02. Every route's fields matched; the findings were
+about identity, and became I6 and I7, plus renewal's refused reasons
+(added to I3).
+
+#### I6
+**What the page does with a message's identity.** Region: app.html's
+`actEmail`, `serverRef`, `absorbMail`, `heldKnown`, `settlePresent`,
+`isGone`, `loadBox`, `rereadBodies`, `serverSync`, `mailLink`.
+- Mail of a removed mailbox could never be deleted or moved: the page sent
+  the old linked id, Rust answered `unknown`, and `takeOff` put it back.
+- UIDVALIDITY was not part of a message's identity, so after a folder was
+  rebuilt one record could show message A while actions reached B, and an
+  old deletion could hide a new message for good.
+- `refsLast`, `inReplyTo`, `unsub`, `toAll`, `cc` never reached mail held
+  from before those fields.
+- A failed command in the app said to download the app.
+
+State: released in 0.1.45 (#122). A folder rebuilt empty keeps its old
+mail until new mail arrives, because a listing alone never drops mail.
+
+#### I7
+**Delete account inside the app, and a dead command.** The app's Delete
+account wiped only the page; Rust kept the mailboxes, keychain entries and
+licence, and the next refresh brought them back. `retry_mailbox` was
+registered and never called.
+
+State: released in 0.1.45 (#121): `forget_everything`, and the link to
+the website's own Delete account goes to `/app`.
+
 #### Waves
-- **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`).
-  G2 releases 0.1.45 when they are in.
+- **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`);
+  I6 and I7 from I5's findings. G2 releases 0.1.45 when they are in.
 
 ---
 

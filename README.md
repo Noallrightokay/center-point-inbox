@@ -68,7 +68,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 297 tests, no network required
+cargo test --all-targets   # 305 tests, no network required
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -103,7 +103,7 @@ Never enable it in `rata-app`.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
-cargo test          # 130 tests
+cargo test          # 136 tests
 ```
 
 On Linux you need the system webview first:
@@ -121,7 +121,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (358 checks, among them axe-core accessibility scans of the inbox, an
+policy (425 checks, among them axe-core accessibility scans of the inbox, an
 open message, the composer, Settings and the dialogs, in light and dark,
 failing on any serious or critical rule). CI runs it as *Desktop interface,
 driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
@@ -142,7 +142,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 785 checks, no network, no database required
+npm test 2>&1 | cat # 800 checks, no network, no database required
 npm run dev
 ```
 

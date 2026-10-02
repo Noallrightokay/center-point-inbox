@@ -633,7 +633,8 @@
        stored here (forget_everything), and the page then clears its own
        store and sign-in. The customer's mailrata.org account and
        subscription are not on this computer and are not deleted from it:
-       the page says so and opens mailrata.org/account. The wording lives
+       the page says so and opens mailrata.org/app, whose Settings
+       holds Delete account and the billing portal. The wording lives
        here, beside the call that does the work, so the two cannot drift. */
     async '/api/account'(opts) {
       if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
@@ -657,7 +658,7 @@
         mailboxes: n,
         removes,
         keeps: ['your mail, which stays at your provider', 'your mailrata.org account and subscription, which you manage and delete at mailrata.org'],
-        account: 'https://mailrata.org/account',
+        account: 'https://mailrata.org/app',
       };
     },
   };

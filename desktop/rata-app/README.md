@@ -166,7 +166,7 @@ The interface reaches the outside world through one function, `apiFetch`, and
 
 ## The attack surface from the page
 
-Twenty-seven commands, the list in `main.rs`'s `generate_handler!`, and
+Thirty commands, the list in `main.rs`'s `generate_handler!`, and
 nothing else. No filesystem plugin, no shell plugin, no arbitrary HTTP. The
 notification and updater plugins are called from Rust only; the page holds no
 plugin permission. A script that somehow reached a rendered message can ask to
@@ -178,11 +178,12 @@ browser.
 ```
 licence_status   set_licence      link_mailbox     link_microsoft
 cancel_microsoft microsoft_ready  discover_mailbox list_mailboxes
-unlink_mailbox   retry_mailbox    refresh_mail     send_mail
+unlink_mailbox   forget_everything refresh_mail    send_mail
 save_draft       change_messages  older_mail       reread_mail
 list_folders     folder_mail      notify_mail      watching
 open_message     save_attachment  open_link        save_file
-read_attachment  check_update     install_update
+read_attachment  read_pictures    search_mail      diagnostics
+check_update     install_update
 ```
 
 Verified rather than assumed: `ui-src/probe.html` calls a few of them and also

@@ -134,7 +134,7 @@ export function money(n) {
 export const DOMAIN_ADDON = {
   price: 1.5,
   label: 'Your own domain',
-  blurb: 'Host mail on a domain you own — you@yourcompany.com, arriving in the same Center Point inbox.',
+  blurb: 'Host mail on a domain you own, you@yourcompany.com, read in RATA beside your other mailboxes.',
 };
 
 export const ORDER = ['base', 'pro', 'enterprise'];

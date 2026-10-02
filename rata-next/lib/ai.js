@@ -138,8 +138,8 @@ export function prompt(task, input) {
   }
   /* tasks */
   const emails = input.messages.map(m => fence('email', `id: ${m.id}\nFrom: ${m.from}\nSubject: ${m.subject}\n\n${m.text}`)).join('\n');
-  /* max_tokens: each email the answer names takes 60 to 120 tokens once its
-     id (a mailbox slug, a hash and a UID) is spelled out, so 1 200 cut off
+  /* max_tokens: each email the answer names takes 60 to 120 tokens (ids are
+     the message's place in the list since I1, so short), and 1 200 cut off
      an answer naming most of the 25. The relay reserves by max_tokens, so this
      raises the most one briefing can hold by 1 800 × $5/M, under a cent. */
   return {

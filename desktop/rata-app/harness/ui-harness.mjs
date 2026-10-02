@@ -3481,7 +3481,7 @@ console.log('\n— Delete account in the app removes what is on this computer, a
   await pg.click('#del-web');
   await pg.waitForTimeout(150);
   let st = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map((c) => c[0]), url: location.pathname }));
-  check(web.shown && web.href === 'https://mailrata.org/account' && JSON.stringify(st.opened) === '["https://mailrata.org/account"]'
+  check(web.shown && web.href === 'https://mailrata.org/app' && JSON.stringify(st.opened) === '["https://mailrata.org/app"]'
     && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
   `Open mailrata.org account goes through open_link and deletes nothing: ${JSON.stringify({ web, st })}`);
 
