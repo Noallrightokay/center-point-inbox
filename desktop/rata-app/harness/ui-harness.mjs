@@ -1965,6 +1965,76 @@ console.log('\n— a licence too old to renew itself says what to do —');
   await pg.close();
 }
 
+console.log('\n— a renewal mailrata.org answers but cannot give keeps the licence, and says why —');
+{
+  /* /api/licence/renew answers licensed:false with a reason and a sentence
+     for more than a cancelled subscription: `pending`, a purchase Stripe
+     has not confirmed yet (lib/plan.js settingUp), which is not "no
+     subscription"; `malformed` and `bad-signature`, a licence the site
+     could not check (a site holding another key than the app's answers
+     bad-signature for every genuine licence); and `no-public-key`, a 500
+     from a site with no key at all. bridge.js renew() keeps the licence
+     on disk for every one, never replacing or clearing it, and the box
+     shows the site's sentence rather than "could not reach mailrata.org". */
+  const DAY = 86400, T0 = 1_800_000_000;
+  const genuine = () => ({ 'v1.first.sig': T0 + 8 * DAY, 'v1.second.sig': T0 + 60 * DAY });
+  const answers = {
+    pending: { body: { licensed: false, reason: 'pending', email: 'me@example.com',
+      message: 'Your licence is being set up: your purchase has reached us and is not confirmed yet. If you paid by bank transfer, that happens once the transfer clears. RATA keeps the licence it has and tries again later.' } },
+    malformed: { body: { licensed: false, reason: 'malformed', message: 'That licence could not be read. Sign in at mailrata.org to get a new one.' } },
+    'bad-signature': { body: { licensed: false, reason: 'bad-signature', message: 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.' } },
+    'no-public-key': { status: 500, body: { licensed: false, reason: 'no-public-key', message: 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.' } },
+  };
+  const look = (pg) => pg.evaluate(() => ({ disk: __mock.lic.token, licensed: !!(LIC && LIC.licensed), token: LIC && LIC.token,
+    sets: __mock.calls.filter(([c]) => c === 'set_licence').length, box: !!document.getElementById('rata-licence'),
+    why: document.querySelector('#rata-licence-why')?.textContent || null, err: document.querySelector('#rata-licence-error')?.textContent || '',
+    retry: !!document.querySelector('#rata-licence-retry') && !document.querySelector('#rata-licence-retry').hidden }));
+
+  for (const [reason, answer] of Object.entries(answers)) {
+    /* In its last week, so launch renews it: the licence stays, in use, and
+       nothing is put in front of anybody. */
+    let pg = await open(true, { lic: { token: 'v1.first.sig', now: T0 + 2 * DAY, genuine: genuine() }, renew: answer });
+    await pg.waitForFunction(() => LIC && LIC.token, null, { timeout: 5000 }).catch(() => {});
+    let st = await look(pg);
+    check(pg.__renewals >= 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.licensed && st.token === 'v1.first.sig' && !st.box,
+      `${reason}: a working licence in its last week is kept and used: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    await pg.close();
+
+    /* Expired but still renewable: the licence on disk is kept, the box
+       says what the site said, and Try again does not claim the site could
+       not be reached. */
+    let reply = answer;
+    pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: () => reply });
+    await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(pg.__renewals === 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.retry && st.why === answer.body.message,
+      `${reason}: an expired licence is kept, not cleared, and the box gives the site's sentence: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    await pg.click('#rata-licence-retry');
+    /* The box disables Try again while it renews and enables it after. */
+    await pg.waitForFunction(() => !document.querySelector('#rata-licence-retry')?.disabled, null, { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(pg.__renewals === 2 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.why === answer.body.message && !/could not reach/.test(st.err),
+      `${reason}: Try again asks once more, keeps the licence and does not say the site could not be reached: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    /* The licence kept is still the one that renews once the site can. */
+    reply = { body: { licensed: true, licence: 'v1.second.sig', message: 'Renewed.' } };
+    await pg.click('#rata-licence-retry');
+    await pg.waitForFunction(() => !document.getElementById('rata-licence'), null, { timeout: 5000 }).catch(() => {});
+    st = await look(pg);
+    check(!st.box && st.licensed && st.disk === 'v1.second.sig', `${reason}: and once the site gives a licence, Try again takes it: ${JSON.stringify(st)}`);
+    await pg.close();
+  }
+
+  /* A bare server error with no sentence is still "could not reach". */
+  const pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: { status: 502, body: { error: 'Bad gateway' } } });
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  await pg.click('#rata-licence-retry');
+  await pg.waitForFunction(() => /could not reach mailrata\.org/.test(document.querySelector('#rata-licence-error')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const st = await look(pg);
+  check(st.box && st.disk === 'v1.first.sig' && /could not reach mailrata\.org/.test(st.err) && /needs refreshing/.test(st.why || ''),
+    `a server error with nothing to say keeps the app's own words and reads as unreachable: ${JSON.stringify(st)}`);
+  await pg.close();
+}
+
 console.log('\n— the licence renews while RATA is open (BUG-L) —');
 {
   /* A copy started more than a week before its licence expires, and left

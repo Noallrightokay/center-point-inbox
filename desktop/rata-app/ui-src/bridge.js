@@ -633,8 +633,11 @@
   const RENEW_WAIT = 20e3;
 
   /* Ask mailrata.org for a fresh licence. Answers the standing after a
-     renewal that worked, `{ licensed: false, message }` for a real refusal,
-     and null for anything else, which leaves the licence as it was. */
+     renewal that worked, `{ licensed: false, reason, message }` when
+     mailrata.org answered with a reason and a sentence of its own, and null
+     for anything else (unreachable, or a server error with no sentence),
+     which leaves the licence as it was. Only a renewal that worked ever
+     reaches set_licence, so no answer here replaces or clears a licence. */
   async function renew(current) {
     if (!current) return null;
     const stop = typeof AbortController === 'function' ? new AbortController() : null;
@@ -647,6 +650,23 @@
         ...(stop ? { signal: stop.signal } : {}),
       });
       const d = await r.json();
+      /* mailrata.org answered, with a reason and its own sentence, and gave
+         no licence. Read first, so nothing else in such an answer is ever
+         used. The licence here is kept as it is (still in use if it works,
+         still renewable later if it can), and the licence box shows that
+         sentence rather than "could not reach mailrata.org", which would be
+         untrue. The reasons: a cancelled subscription (no-subscription); a
+         licence that expired too long ago to renew itself (too-old,
+         RENEW_GRACE_DAYS on the website); a purchase still being set up
+         (pending: the checkout reached the site and Stripe has not
+         confirmed it, or a bank transfer is clearing), which is not "no
+         subscription"; and a licence the site could not check (malformed,
+         bad-signature, which is what a site holding another key than this
+         app's answers, or no-public-key, the site's own fault). Each is
+         asked again at the next renewal. */
+      if (d && d.licensed !== true && typeof d.reason === 'string' && typeof d.message === 'string' && d.message.trim()) {
+        return { licensed: false, reason: d.reason, message: d.message };
+      }
       if (d.licensed && d.licence) {
         /* Rust keeps the new token only if it verifies (set_licence): one
            signed with the wrong key, from a website set up wrongly, is
@@ -655,13 +675,9 @@
         const kept = await invoke('set_licence', { licence: d.licence });
         return kept && kept.licensed && !kept.refused ? kept : null;
       }
-      /* A cancelled subscription is a real answer and the app should stop
-         asking. So is a licence that expired too long ago to renew itself
-         (RENEW_GRACE_DAYS on the website): only signing in gets a new one,
-         and the server's sentence says so. A server having a bad morning is
-         not — the licence still has days left on it, so nothing is touched
-         and it tries again later. */
-      if (d.reason === 'no-subscription' || d.reason === 'too-old') return { licensed: false, message: d.message };
+      /* A server having a bad morning with nothing to say (a bare `error`)
+         is not an answer: the licence still has days left on it, so nothing
+         is touched and it tries again later. */
       return null;
     } catch {
       /* Offline. Exactly the case the whole design exists for. */

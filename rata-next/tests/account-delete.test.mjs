@@ -47,6 +47,20 @@ export default async function run(state) {
     check(!!blocksDeletion({ status: 'INCOMPLETE' }), 'in any case');
   }
 
+  console.log('\n— every refusal is visible copy, so it has no em or en dash (DESIGN.md) —');
+  {
+    const at = Date.parse('2026-09-29T12:00:00Z');
+    const said = [
+      ...['active', 'trialing', 'past_due'].map(status => blocksDeletion({ status, plan: 'pro' })),
+      blocksDeletion({ status: 'active' }),
+      blocksDeletion({ status: 'incomplete', plan: 'pro' }),
+      blocksDeletion({ status: 'canceled', plan: 'pro', updated_at: new Date(at - 86400000).toISOString() }, at),
+    ];
+    const dashed = said.filter(s => !s || /[–—]/.test(s));
+    check(said.length === 6 && !dashed.length,
+      `no refusal shown to a customer carries a dash: ${dashed.length ? JSON.stringify(dashed) : 'none does'}`);
+  }
+
   console.log('\n— nor can deletion reset the AI allowance while a licence still works (P3-6) —');
   {
     /* A licence is issued only while the subscription is live and lasts 30

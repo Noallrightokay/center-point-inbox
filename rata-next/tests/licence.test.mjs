@@ -157,6 +157,35 @@ export default async function run(state) {
       const live = await ask();
       check_(live.licensed === true && live.plan === 'pro' && check(live.licence, keys.publicKey).ok,
         `once live: a Pro key: ${live.plan}`);
+
+      /* Renewal answers the same row the same way. The app renewing a
+         licence it holds while a new purchase is being set up (a bank
+         transfer clearing, say) must hear "being set up", which it treats
+         like a server it cannot reach and keeps its licence, never "no
+         subscription". */
+      const renewWith = async (licence) => (await fetch(s.url + '/api/licence/renew', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ licence }),
+      })).json();
+      const held = issue({ email: 'Buyer@Example.com', plan: 'base', days: 30, now: Date.now() - 25 * 86400e3 }, keys.privateKey);
+      fake.row = { plan: 'base', status: 'incomplete', stripe_customer: 'cus_1', domain_addons: 0 };
+      const rp = await renewWith(held);
+      check_(rp.licensed === false && rp.reason === 'pending' && !rp.licence,
+        `renew, incomplete with a customer: reason pending, no key: ${JSON.stringify(rp)}`);
+      check_(/being set up/i.test(rp.message || '') && !/no active subscription|choose a plan|not paid/i.test(rp.message || ''),
+        `and it says the licence is being set up, nothing that reads as "you have not paid": ${JSON.stringify(rp.message)}`);
+      check_(!/[–—]/.test(rp.message || ''), 'and the sentence has no dash (DESIGN.md)');
+      fake.row = { plan: 'base', status: 'INCOMPLETE', stripe_customer: 'cus_1', domain_addons: 0 };
+      check_((await renewWith(held)).reason === 'pending', 'renew: in any case');
+      fake.row = { plan: 'base', status: 'incomplete', stripe_customer: null, domain_addons: 0 };
+      check_((await renewWith(held)).reason === 'no-subscription', 'renew, incomplete with no customer: no-subscription, as before');
+      fake.row = { plan: 'pro', status: 'canceled', stripe_customer: 'cus_1', domain_addons: 0 };
+      check_((await renewWith(held)).reason === 'no-subscription', 'renew, a cancelled subscription: no-subscription, as before');
+      fake.row = null;
+      check_((await renewWith(held)).reason === 'no-subscription', 'renew, no row: no-subscription, as before');
+      fake.row = { plan: 'pro', status: 'active', stripe_customer: 'cus_1', domain_addons: 0 };
+      const rl = await renewWith(held);
+      check_(rl.licensed === true && rl.plan === 'pro' && check(rl.licence, keys.publicKey).ok && check(rl.licence, keys.publicKey).licence.sub === 'buyer@example.com',
+        `renew, once live: a Pro key for the address in the licence: ${rl.plan}`);
     } finally { await s.stop(); sbx.srv.close(); }
   }
 
@@ -182,6 +211,13 @@ export default async function run(state) {
       const r = await post(theirs);
       check_(!r.licensed, `a licence signed by somebody else's key gets nothing back: ${JSON.stringify(r.message || r.error)}`);
       check_(!r.licence, 'and certainly no token');
+      /* The app keeps the licence it has for any such answer and shows the
+         site's sentence (bridge.js renew()), so each has one, with no dash. */
+      check_(r.reason === 'bad-signature' && /sign in at mailrata\.org/i.test(r.message || '') && !/[\u2013\u2014]/.test(r.message || ''),
+        `a signature the site does not recognise says so, and where to get a new one: ${JSON.stringify(r.message)}`);
+      const junk = await post('not-a-licence');
+      check_(junk.reason === 'malformed' && /could not be read/i.test(junk.message || '') && !/[\u2013\u2014]/.test(junk.message || ''),
+        `a licence that is not one says it could not be read: ${JSON.stringify(junk.message)}`);
 
       /* A real, expired licence must be *accepted* for renewal — refusing one
          would mean the only licences that can be renewed are the ones that did
@@ -240,6 +276,10 @@ export default async function run(state) {
       check_(r.status === 500, `no LICENCE_PUBLIC_KEY is a server fault (${r.status}), not a refusal`);
       check_(!/have not paid|no active subscription/i.test(JSON.stringify(d)),
         `and never blames the customer: ${JSON.stringify(d.message || d.error)}`);
+      check_(d.licensed === false && d.reason === 'no-public-key' && /keeps the licence it has/i.test(d.message || ''),
+        `and tells the customer RATA keeps the licence it has: ${JSON.stringify(d.message)}`);
+      check_(!/[\u2013\u2014]/.test(d.message || '') && !/LICENCE_PUBLIC_KEY|\.md\b/.test(d.message || ''),
+        'with no dash, and no variable or file name meant for the operator (that goes to the server log)');
     } finally { await s.stop(); }
   }
 }
