@@ -689,8 +689,11 @@
      mailrata.org answered with a reason and a sentence of its own, and null
      for anything else (unreachable, or a server error with no sentence),
      which leaves the licence as it was. Only a renewal that worked ever
-     reaches set_licence, so no answer here replaces or clears a licence. */
-  async function renew(current) {
+     reaches set_licence, so no answer here replaces or clears a licence.
+     `epoch` is the standing's when the renewal began: Rust keeps nothing
+     from a renewal that began before a Delete account (SEC-7), which can
+     run while mailrata.org is still answering. */
+  async function renew(current, epoch) {
     if (!current) return null;
     const stop = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = stop ? setTimeout(() => stop.abort(), RENEW_WAIT) : null;
@@ -714,7 +717,8 @@
          confirmed it, or a bank transfer is clearing), which is not "no
          subscription"; and a licence the site could not check (malformed,
          bad-signature, which is what a site holding another key than this
-         app's answers, or no-public-key, the site's own fault). Each is
+         app's answers, or no-public-key, the site's own fault); and a site
+         that cannot sign one (not-configured, its own fault too). Each is
          asked again at the next renewal. */
       if (d && d.licensed !== true && typeof d.reason === 'string' && typeof d.message === 'string' && d.message.trim()) {
         return { licensed: false, reason: d.reason, message: d.message };
@@ -724,7 +728,7 @@
            signed with the wrong key, from a website set up wrongly, is
            refused and the licence already here stays in use. That is a
            server having a bad morning, not an answer. */
-        const kept = await invoke('set_licence', { licence: d.licence });
+        const kept = await invoke('set_licence', { licence: d.licence, since: Number.isInteger(epoch) ? epoch : null });
         return kept && kept.licensed && !kept.refused ? kept : null;
       }
       /* A server having a bad morning with nothing to say (a bare `error`)
@@ -757,7 +761,7 @@
       let standing = await invoke('licence_status');
       let renewal = 'none';
       if (standing.token && (force === true || standing.renewSoon || !standing.licensed)) {
-        const after = await renew(standing.token);
+        const after = await renew(standing.token, standing.epoch);
         renewal = !after ? 'unreachable' : after.licensed ? 'renewed' : 'refused';
         standing = after && after.licensed ? after : await invoke('licence_status');
         /* Still not licensed after a real refusal: the licence box says why in

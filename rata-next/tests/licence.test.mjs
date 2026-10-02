@@ -282,4 +282,58 @@ export default async function run(state) {
         'with no dash, and no variable or file name meant for the operator (that goes to the server log)');
     } finally { await s.stop(); }
   }
+
+  /* SEC-7: a deployment that can check licences but not sign them (no
+     LICENCE_PRIVATE_KEY, or one that cannot be read). issue() throws with a
+     sentence naming the variable and a file, which used to go to the caller
+     as `error`. Now it goes to the server log, and both licence routes
+     answer a fixed sentence with reason not-configured. */
+  console.log('\n— a deployment that cannot sign a licence says so without naming its parts —');
+  {
+    const sbx = await new Promise((res) => {
+      const srv = createServer((req, r) => {
+        const url = new URL(req.url, 'http://x');
+        req.resume();
+        const json = (status, body) => { r.writeHead(status, { 'content-type': 'application/json' }); r.end(JSON.stringify(body)); };
+        if (url.pathname === '/auth/v1/user') return json(200, { id: '6c1f3a0e-0000-4000-8000-000000000002', email: 'buyer@example.com', aud: 'authenticated' });
+        if (url.pathname === '/rest/v1/subscriptions') return json(200, [{ plan: 'pro', status: 'active', stripe_customer: 'cus_1', domain_addons: 0 }]);
+        json(404, { message: 'not in the stand-in' });
+      });
+      srv.listen(0, '127.0.0.1', () => res({ srv, url: `http://127.0.0.1:${srv.address().port}` }));
+    });
+    const held = issue({ email: 'buyer@example.com', plan: 'pro', days: 30, now: Date.now() - 25 * 86400e3 }, keys.privateKey);
+    const operator = /LICENCE_PRIVATE_KEY|LICENSING|LAUNCH|\.md\b|PEM|DECODER|asn1|openssl/i;
+    for (const [what, pem] of [['no signing key', ''], ['a signing key that cannot be read', 'not a key at all']]) {
+      const s = await startServer({ env: {
+        SUPABASE_URL: sbx.url, SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
+        LICENCE_PUBLIC_KEY: keys.publicKey, LICENCE_PRIVATE_KEY: pem,
+      } });
+      try {
+        const r1 = await fetch(s.url + '/api/licence', { headers: { Authorization: 'Bearer a-session' } });
+        const d1 = await r1.json();
+        check_(r1.status === 500 && d1.licensed === false && d1.reason === 'not-configured' && !d1.licence && !('error' in d1),
+          `${what}: /api/licence is a 500 with reason not-configured: ${r1.status} ${JSON.stringify(d1)}`);
+        check_(/at our end/.test(d1.message || '') && !operator.test(JSON.stringify(d1)) && !/[\u2013\u2014]/.test(d1.message || ''),
+          `${what}: and a customer's sentence with no variable, file or dash: ${JSON.stringify(d1.message)}`);
+        check_(!/have not paid|no active subscription|choose a plan/i.test(d1.message || ''), `${what}: never "you have not paid"`);
+
+        const r2 = await fetch(s.url + '/api/licence/renew', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ licence: held }),
+        });
+        const d2 = await r2.json();
+        check_(r2.status === 500 && d2.licensed === false && d2.reason === 'not-configured' && !d2.licence && !('error' in d2),
+          `${what}: renewal is a 500 with reason not-configured: ${r2.status} ${JSON.stringify(d2)}`);
+        /* bridge.js renew() keeps the licence for any answer with a reason
+           and a sentence, and shows the sentence. */
+        check_(/keeps the licence it has/.test(d2.message || '') && !operator.test(JSON.stringify(d2)) && !/[\u2013\u2014]/.test(d2.message || ''),
+          `${what}: and tells the app it keeps its licence, with no variable, file or dash: ${JSON.stringify(d2.message)}`);
+        await new Promise((r) => setTimeout(r, 300));
+        const log = s.log();
+        check_(/licence: no licence could be issued/.test(log) && /licence\/renew: no licence could be issued/.test(log),
+          `${what}: the reason goes to the server log instead`);
+        if (!pem) check_(/LICENCE_PRIVATE_KEY/.test(log), `${what}: naming the variable there`);
+      } finally { await s.stop(); }
+    }
+    sbx.srv.close();
+  }
 }

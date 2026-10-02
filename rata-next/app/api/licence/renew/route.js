@@ -120,9 +120,17 @@ async function renew(req) {
   try {
     renewed = issue({ email, plan });
   } catch (e) {
-    /* The signing key is missing. A deployment fault, not the customer's, and
-       it must not read as "you have not paid". */
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    /* The signing key is missing or unreadable. A deployment fault, not the
+       customer's, and it must not read as "you have not paid". Its own words
+       name a variable and a file, for the server log only (SEC-7); the app
+       hears a reason and a sentence, keeps the licence it has and shows the
+       sentence (bridge.js renew()). */
+    console.error(`licence/renew: no licence could be issued: ${e.message}`);
+    return NextResponse.json({
+      licensed: false,
+      reason: 'not-configured',
+      message: 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+    }, { status: 500 });
   }
 
   const def = planDef(plan);

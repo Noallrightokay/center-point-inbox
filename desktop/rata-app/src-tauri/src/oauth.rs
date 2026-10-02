@@ -814,6 +814,29 @@ pub(crate) async fn scripted_token_endpoint(
     reply: &'static str,
     status: &'static str,
 ) -> (String, tokio::task::JoinHandle<String>) {
+    let (url, _asked, _release, task) = held_token_endpoint(reply, status, false).await;
+    (url, task)
+}
+
+/// For tests: the same endpoint, but one that holds its answer once the
+/// request is in, until told to go on. `asked` fires when the request has
+/// been read; dropping or sending `release` lets the answer out. With
+/// `hold` false it answers at once, as `scripted_token_endpoint` does. This
+/// is how a test puts something (an Unlink, a Delete account) in the middle
+/// of a renewal Microsoft is still answering.
+#[cfg(test)]
+pub(crate) async fn held_token_endpoint(
+    reply: &'static str,
+    status: &'static str,
+    hold: bool,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<String>,
+) {
+    let (asked_tx, asked) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
     let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let url = format!(
         "http://127.0.0.1:{}/common/oauth2/v2.0/token",
@@ -844,6 +867,10 @@ pub(crate) async fn scripted_token_endpoint(
                 break;
             }
         }
+        let _ = asked_tx.send(());
+        if hold {
+            let _ = released.await;
+        }
         let answer = format!(
             "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
             reply.len()
@@ -852,7 +879,7 @@ pub(crate) async fn scripted_token_endpoint(
         let _ = s.shutdown().await;
         String::from_utf8_lossy(&got).to_string()
     });
-    (url, task)
+    (url, asked, release, task)
 }
 
 #[cfg(test)]

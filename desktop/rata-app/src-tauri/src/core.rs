@@ -57,6 +57,9 @@ pub struct Rata {
     notes: Mutex<HashMap<String, Noted>>,
     /// When the last refresh finished, for Copy diagnostics.
     last_refresh: Mutex<Option<u64>>,
+    /// Bumped by each Delete account (`forget_everything`), under the
+    /// list's lock: the `epoch` a licence renewal began under (SEC-7).
+    forgotten: std::sync::atomic::AtomicU64,
 }
 
 /// What linking a mailbox produced.
@@ -487,6 +490,10 @@ pub struct Standing {
     /// of the standing is that licence's, which is still the one in use.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<Refused>,
+    /// How many times Delete account has run since RATA started (SEC-7).
+    /// A renewal passes the one it began under back to `set_licence`, which
+    /// keeps nothing from before the last Delete account.
+    pub epoch: u64,
 }
 
 /// A key `set_licence` would not put in place of the one it holds: why the
@@ -496,6 +503,15 @@ pub struct Standing {
 pub struct Refused {
     pub reason: Reason,
     pub message: String,
+}
+
+/// Whether `m` is still the mailbox listed under its address (SEC-7): still
+/// linked, still signing in with Microsoft, and not linked again since,
+/// which writes a new `added_at`.
+fn still_linked(store: &Store, m: &Mailbox) -> bool {
+    store
+        .find(&m.email)
+        .is_some_and(|now| now.auth.is_oauth() && now.added_at == m.added_at)
 }
 
 /// A licence inside its last week should be renewed while there is still time
@@ -517,6 +533,7 @@ impl Rata {
             ms: Microsoft::from_build(),
             notes: Mutex::new(HashMap::new()),
             last_refresh: Mutex::new(None),
+            forgotten: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -526,8 +543,15 @@ impl Rata {
         self.standing_at(now() as i64)
     }
 
+    /// How many times Delete account has run since RATA started: the
+    /// `epoch` a renewal carries to `set_licence`.
+    fn epoch(&self) -> u64 {
+        self.forgotten.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn standing_at(&self, now_secs: i64) -> Standing {
         let used = self.mailboxes().len() as u32;
+        let epoch = self.epoch();
         let token = self
             .store
             .lock()
@@ -554,6 +578,7 @@ impl Rata {
                     limit: plan.mail,
                     renew_soon,
                     refused: None,
+                    epoch,
                 }
             }
             Err(rejected) => Standing {
@@ -568,6 +593,7 @@ impl Rata {
                 // An expired licence is the case renewal exists for.
                 renew_soon: rejected.reason == Reason::Expired,
                 refused: None,
+                epoch,
             },
         }
     }
@@ -583,14 +609,36 @@ impl Rata {
     /// rule is here rather than in the page so no page code can get it wrong.
     /// The answer then carries `refused`, and is otherwise the standing of the
     /// licence kept.
-    pub fn set_licence(&self, token: Option<String>) -> Result<Standing, String> {
-        self.set_licence_at(token, now() as i64)
+    ///
+    /// `since` is for a renewal: the `epoch` the standing read when it
+    /// began. A Delete account in between (SEC-7) means the licence was
+    /// removed on purpose after the renewal asked for a new one, so the new
+    /// one is not kept: nothing is written and the answer is an error.
+    /// `None` is the licence box, a key typed now.
+    pub fn set_licence(
+        &self,
+        token: Option<String>,
+        since: Option<u64>,
+    ) -> Result<Standing, String> {
+        self.set_licence_at(token, now() as i64, since)
     }
 
-    fn set_licence_at(&self, token: Option<String>, now_secs: i64) -> Result<Standing, String> {
+    fn set_licence_at(
+        &self,
+        token: Option<String>,
+        now_secs: i64,
+        since: Option<u64>,
+    ) -> Result<Standing, String> {
         let token = token.map(|t| licence::clean(&t));
         let refused = {
             let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+            // Read under the lock `forget_everything` bumps it under.
+            if since.is_some_and(|e| e != self.epoch()) {
+                return Err(
+                    "The licence was removed from this computer while it was being renewed, so the renewed one was not kept."
+                        .into(),
+                );
+            }
             let refused = match (&token, store.licence()) {
                 (Some(offered), Some(held)) => self.outweighs(held, offered, now_secs),
                 // Nothing held to lose, or the licence cleared on purpose.
@@ -983,10 +1031,19 @@ impl Rata {
     /// listed, with the reason, so Unlink can be pressed again; the other
     /// way round left a password in the keychain with nothing on screen
     /// that could ever remove it.
+    ///
+    /// All of it under the list's lock (SEC-7), which is where a Microsoft
+    /// renewal still in flight checks that its mailbox is listed before it
+    /// writes a rotated token back (`access_token`). Holding it from the
+    /// keychain to the saved list means that renewal either wrote before
+    /// this began, and its token is forgotten here with the rest, or finds
+    /// the mailbox gone and writes nothing. Waiting for the renewal itself
+    /// (`ms.refreshing`) would hold Unlink for as long as Microsoft takes to
+    /// answer.
     pub fn unlink(&self, email: &str) -> Result<(), String> {
+        let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
         vault::forget_all(self.vault.as_ref(), email)?;
         self.ms.forget(email);
-        let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
         store.remove(email);
         store
             .save()
@@ -1027,6 +1084,10 @@ impl Rata {
             store
                 .save()
                 .map_err(|e| format!("The licence could not be removed: {e}"))?;
+            // A renewal that began before this may not put the licence back
+            // (SEC-7): `set_licence` refuses one from an older epoch.
+            self.forgotten
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         if let Ok(mut notes) = self.notes.lock() {
             notes.clear();
@@ -1575,6 +1636,31 @@ impl Rata {
         let http = self.ms.http().map_err(|e| problem("net", e))?;
         match oauth::refresh(http, &self.ms.token_url, client_id, refresh).await {
             Ok(t) => {
+                // Kept only while the mailbox is still the one this renewal
+                // began for (SEC-7). Microsoft can take thirty seconds to
+                // answer, and Unlink or Delete account may have emptied the
+                // keychain meanwhile: writing the rotated token then would
+                // leave a working sign-in that no listed mailbox owns and
+                // nothing in RATA could remove. The check and the writes are
+                // under the list's lock, which `unlink` holds from emptying
+                // the keychain to saving the list, so they land wholly
+                // before it (and it removes them) or wholly after (and see
+                // the mailbox gone). Nothing was written for a mailbox gone,
+                // so nothing is left to forget; a mailbox linked again
+                // meanwhile keeps its own new sign-in.
+                let store = self
+                    .store
+                    .lock()
+                    .map_err(|_| problem("net", "the mailbox list is busy".into()))?;
+                if !still_linked(&store, m) {
+                    return Err(problem(
+                        "unknown",
+                        format!(
+                            "{} was removed or linked again while RATA was signing in to it, so it was left out this time.",
+                            m.email
+                        ),
+                    ));
+                }
                 // Microsoft usually sends a new refresh token too. The old one
                 // keeps working for a while, so a keychain that will not take
                 // the new one costs nothing today. One it takes only half of
@@ -1592,6 +1678,7 @@ impl Rata {
                         expires_at: oauth::expiry(now(), t.expires_in),
                     },
                 );
+                drop(store);
                 Ok((t.access, true))
             }
             Err(TokenError::Revoked(why)) => {
@@ -2511,7 +2598,7 @@ mod tests {
     /// A licensed app, which is what most of these tests are about.
     fn rata(file: std::path::PathBuf) -> Rata {
         let app = unlicensed(file);
-        app.set_licence(Some(PRO.into())).unwrap();
+        app.set_licence(Some(PRO.into()), None).unwrap();
         app
     }
 
@@ -2642,6 +2729,38 @@ mod tests {
         assert_eq!(app.forget_everything().unwrap().mailboxes, 0);
     }
 
+    /// SEC-7 (L1): a licence renewal still out when Delete account runs.
+    /// It began under the epoch the standing showed then; its answer must
+    /// not put a licence back on this computer after "deleted". A renewal
+    /// begun afterwards, and a key typed into the licence box, still work.
+    #[test]
+    fn a_renewal_begun_before_delete_account_is_not_kept() {
+        let app = rata(tmpfile("forget-renewal"));
+        let began = app.standing().epoch;
+        app.forget_everything().unwrap();
+        let why = app.set_licence(Some(PRO.into()), Some(began)).unwrap_err();
+        assert!(why.contains("removed from this computer"), "{why}");
+        let standing = app.standing();
+        assert!(
+            !standing.licensed && standing.token.is_none(),
+            "{standing:?}"
+        );
+        assert_ne!(standing.epoch, began);
+        // Nor does a second Delete account let the first epoch back in.
+        app.forget_everything().unwrap();
+        assert!(app.set_licence(Some(PRO.into()), Some(began)).is_err());
+        assert!(app.standing().token.is_none());
+        // A renewal that began after it is kept, and so is a typed key.
+        let now_epoch = app.standing().epoch;
+        assert!(
+            app.set_licence(Some(BASE.into()), Some(now_epoch))
+                .unwrap()
+                .licensed
+        );
+        app.forget_everything().unwrap();
+        assert!(app.set_licence(Some(PRO.into()), None).unwrap().licensed);
+    }
+
     #[test]
     fn a_keychain_that_will_not_let_go_keeps_the_mailbox_and_the_licence() {
         let app = Rata::new(
@@ -2650,7 +2769,7 @@ mod tests {
             Resolver::system().expect("resolver"),
             Some(KEY),
         );
-        app.set_licence(Some(PRO.into())).unwrap();
+        app.set_licence(Some(PRO.into()), None).unwrap();
         app.remember(Mailbox {
             email: "owner@example.com".into(),
             host: "imap.example.com".into(),
@@ -3511,7 +3630,7 @@ mod tests {
                 Resolver::system().expect("resolver"),
                 Some(KEY),
             );
-            app.set_licence(Some(PRO.into())).unwrap();
+            app.set_licence(Some(PRO.into()), None).unwrap();
             app.remember(Mailbox {
                 email: "owner@example.com".into(),
                 host: "imap.example.com".into(),
@@ -3775,8 +3894,8 @@ mod tests {
 
         // The licence lapses. Cleared first: a lapsed key no longer replaces
         // a working one (BUG-L, `a_bad_key_never_costs_a_good_licence`).
-        app.set_licence(None).unwrap();
-        app.set_licence(Some(LAPSED.into())).unwrap();
+        app.set_licence(None, None).unwrap();
+        app.set_licence(Some(LAPSED.into()), None).unwrap();
         let s = app.standing();
         assert!(!s.licensed);
         assert_eq!(s.reason, Some(Reason::Expired));
@@ -3797,7 +3916,7 @@ mod tests {
     fn base_stops_at_two_mailboxes_and_says_where_to_go() {
         rt().block_on(async {
             let app = unlicensed(tmpfile("baselimit"));
-            app.set_licence(Some(BASE.into())).unwrap();
+            app.set_licence(Some(BASE.into()), None).unwrap();
             let s = app.standing();
             assert_eq!(s.limit, Some(2));
             assert_eq!(s.plan.unwrap().label, "RATA Base");
@@ -3823,7 +3942,7 @@ mod tests {
             // needs its app password again, and the limit refuses the relink —
             // leaving somebody stuck with a broken mailbox they have paid for.
             let app = unlicensed(tmpfile("relink"));
-            app.set_licence(Some(BASE.into())).unwrap();
+            app.set_licence(Some(BASE.into()), None).unwrap();
             linked(&app, "one@example.com", "imap.example.com");
             linked(&app, "someone@proton.me", "imap.example.com");
 
@@ -3842,7 +3961,7 @@ mod tests {
         // for, and it is exactly the case where a naive implementation drops
         // the token on the floor and leaves nothing to renew with.
         let app = unlicensed(tmpfile("token"));
-        app.set_licence(Some(LAPSED.into())).unwrap();
+        app.set_licence(Some(LAPSED.into()), None).unwrap();
         let s = app.standing();
         assert!(!s.licensed);
         assert_eq!(s.token.as_deref(), Some(LAPSED));
@@ -3870,7 +3989,7 @@ mod tests {
         // costs nothing, and being strict would lock a paying customer out for
         // not having updated.
         let app = unlicensed(tmpfile("newplan"));
-        let s = app.set_licence(Some(NEWER_PLAN.into())).unwrap();
+        let s = app.set_licence(Some(NEWER_PLAN.into()), None).unwrap();
         assert!(s.licensed, "{}", s.message);
         assert_eq!(s.limit, None);
     }
@@ -3879,13 +3998,13 @@ mod tests {
     fn a_forged_licence_is_refused_and_a_real_one_replaces_it() {
         let app = unlicensed(tmpfile("forged"));
         let forged = PRO.replace("cSIy", "XXXX");
-        let s = app.set_licence(Some(forged)).unwrap();
+        let s = app.set_licence(Some(forged), None).unwrap();
         assert!(!s.licensed);
         assert_eq!(s.reason, Some(Reason::BadSignature));
         // Not accused of forging when it is merely stale — different words.
         assert!(s.message.contains("could not be read"), "{}", s.message);
 
-        let s = app.set_licence(Some(PRO.into())).unwrap();
+        let s = app.set_licence(Some(PRO.into()), None).unwrap();
         assert!(s.licensed);
         // And it survives a restart.
         assert!(rata_reopen(&app).licensed);
@@ -3915,7 +4034,7 @@ mod tests {
             // Genuine but expired: not worth a working licence either.
             (LAPSED.to_string(), Reason::Expired),
         ] {
-            let s = app.set_licence(Some(bad.clone())).unwrap();
+            let s = app.set_licence(Some(bad.clone()), None).unwrap();
             let r = s
                 .refused
                 .as_ref()
@@ -3933,11 +4052,11 @@ mod tests {
         }
         assert!(rata_reopen(&app).licensed, "and still after a restart");
         // A working key still replaces a working one: another plan, say.
-        let s = app.set_licence(Some(BASE.into())).unwrap();
+        let s = app.set_licence(Some(BASE.into()), None).unwrap();
         assert!(s.refused.is_none() && s.licensed);
         assert_eq!(s.plan.unwrap().label, "RATA Base");
         // And clearing on purpose clears.
-        let s = app.set_licence(None).unwrap();
+        let s = app.set_licence(None, None).unwrap();
         assert!(!s.licensed && s.refused.is_none());
         assert_eq!(stored(&app), None);
     }
@@ -3948,13 +4067,13 @@ mod tests {
     #[test]
     fn a_junk_paste_never_replaces_a_licence_that_can_renew() {
         let app = unlicensed(tmpfile("keep-renewable"));
-        app.set_licence(Some(LAPSED.into())).unwrap();
+        app.set_licence(Some(LAPSED.into()), None).unwrap();
         let exp = app.standing().licence.unwrap().exp;
         let day = 86_400;
         let soon = exp + 10 * day;
 
         for bad in ["v1.junk.junk", "hello", ""] {
-            let s = app.set_licence_at(Some(bad.into()), soon).unwrap();
+            let s = app.set_licence_at(Some(bad.into()), soon, None).unwrap();
             let r = s
                 .refused
                 .as_ref()
@@ -3970,7 +4089,7 @@ mod tests {
             assert_eq!(stored(&app).as_deref(), Some(LAPSED));
         }
         let s = app
-            .set_licence_at(Some(PRO.replace("cSIy", "XXXX")), soon)
+            .set_licence_at(Some(PRO.replace("cSIy", "XXXX")), soon, None)
             .unwrap();
         assert_eq!(s.refused.unwrap().reason, Reason::BadSignature);
         assert_eq!(stored(&app).as_deref(), Some(LAPSED));
@@ -3978,12 +4097,14 @@ mod tests {
         // On the last day it can renew, still kept; a day later, not.
         let last = exp + licence::RENEW_GRACE_DAYS * day;
         assert!(
-            app.set_licence_at(Some("x".into()), last)
+            app.set_licence_at(Some("x".into()), last, None)
                 .unwrap()
                 .refused
                 .is_some()
         );
-        let s = app.set_licence_at(Some("x".into()), last + day).unwrap();
+        let s = app
+            .set_licence_at(Some("x".into()), last + day, None)
+            .unwrap();
         assert!(s.refused.is_none(), "too old to renew is worth nothing");
         assert_eq!(
             s.reason,
@@ -3993,9 +4114,9 @@ mod tests {
         assert_eq!(stored(&app).as_deref(), Some("x"));
 
         // A working key always replaces a renewable one.
-        app.set_licence(None).unwrap();
-        app.set_licence(Some(LAPSED.into())).unwrap();
-        let s = app.set_licence_at(Some(PRO.into()), soon).unwrap();
+        app.set_licence(None, None).unwrap();
+        app.set_licence(Some(LAPSED.into()), None).unwrap();
+        let s = app.set_licence_at(Some(PRO.into()), soon, None).unwrap();
         assert!(s.licensed && s.refused.is_none());
     }
 
@@ -4010,7 +4131,9 @@ mod tests {
             .map(|c| std::str::from_utf8(c).unwrap())
             .collect::<Vec<_>>()
             .join("\r\n");
-        let s = app.set_licence(Some(format!("  {wrapped}\n"))).unwrap();
+        let s = app
+            .set_licence(Some(format!("  {wrapped}\n")), None)
+            .unwrap();
         assert!(s.licensed, "{}", s.message);
         assert_eq!(s.token.as_deref(), Some(PRO), "presented for renewal whole");
         assert_eq!(stored(&app).as_deref(), Some(PRO));
@@ -4812,6 +4935,127 @@ mod tests {
         });
     }
 
+    /// SEC-7 (L1): a renewal Microsoft is still answering when the mailbox
+    /// is unlinked. Its rotated refresh token must not be written back to a
+    /// keychain Unlink has just emptied (a working sign-in with no mailbox
+    /// listed, which nothing in RATA could ever remove), and its access
+    /// token must not be kept or used.
+    #[test]
+    fn an_unlink_during_a_renewal_leaves_no_sign_in_behind() {
+        rt().block_on(async {
+            let (url, asked, release, _sent) = oauth::held_token_endpoint(
+                r#"{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-late","refresh_token":"M.R-rotated-late"}"#,
+                "200 OK",
+                true,
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-unlink-race"), &url);
+            linked_ms(&app, "me@outlook.com", "M.R-before");
+            let m = app.mailboxes().remove(0);
+            let (got, ()) = tokio::join!(app.account(&m, None), async {
+                asked.await.unwrap();
+                app.unlink("me@outlook.com").unwrap();
+                release.send(()).unwrap();
+            });
+            let p = got.unwrap_err();
+            assert_eq!(p.kind, "unknown", "{p:?}");
+            assert!(app.mailboxes().is_empty());
+            assert!(
+                app.vault.get("me@outlook.com").is_err(),
+                "the rotated sign-in was written back after Unlink"
+            );
+            assert!(app.ms.cached("me@outlook.com").is_none());
+        });
+    }
+
+    /// SEC-7 (L1): the same with Delete account, and a rotated token long
+    /// enough to be kept in pieces: no entry and no piece is left, and the
+    /// licence stays gone.
+    #[test]
+    fn delete_account_during_a_renewal_leaves_no_sign_in_behind() {
+        rt().block_on(async {
+            let long: String = (0..2_500)
+                .map(|i| (b'a' + (i % 26) as u8) as char)
+                .collect();
+            let reply: &'static str = Box::leak(
+                format!(
+                    r#"{{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-late","refresh_token":"{long}"}}"#
+                )
+                .into_boxed_str(),
+            );
+            let (url, asked, release, _sent) =
+                oauth::held_token_endpoint(reply, "200 OK", true).await;
+            let app = with_ms(tmpfile("ms-forget-race"), &url);
+            linked_ms(&app, "me@company.example", "M.R-before");
+            let m = app.mailboxes().remove(0);
+            let (got, ()) = tokio::join!(app.account(&m, None), async {
+                asked.await.unwrap();
+                assert_eq!(app.forget_everything().unwrap().mailboxes, 1);
+                release.send(()).unwrap();
+            });
+            assert_eq!(got.unwrap_err().kind, "unknown");
+            assert!(app.vault.get("me@company.example").is_err());
+            for n in 2..=vault::PIECES_MAX {
+                assert!(
+                    app.vault
+                        .get_piece(&format!("me@company.example#{n}"))
+                        .is_err(),
+                    "piece {n} was written back after Delete account"
+                );
+            }
+            assert!(app.ms.cached("me@company.example").is_none());
+            assert!(app.mailboxes().is_empty());
+            assert!(!app.standing().licensed);
+        });
+    }
+
+    /// SEC-7 (L1): unlinked and signed in again while the old renewal was
+    /// still out. The new sign-in is the one kept; the late answer of the
+    /// old one replaces neither its refresh token nor its access token.
+    #[test]
+    fn a_late_renewal_never_replaces_a_new_sign_in() {
+        rt().block_on(async {
+            let (url, asked, release, _sent) = oauth::held_token_endpoint(
+                r#"{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-late","refresh_token":"M.R-rotated-late"}"#,
+                "200 OK",
+                true,
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-relink-race"), &url);
+            linked_ms(&app, "me@outlook.com", "M.R-before");
+            let m = app.mailboxes().remove(0);
+            let (got, ()) = tokio::join!(app.account(&m, None), async {
+                asked.await.unwrap();
+                app.unlink("me@outlook.com").unwrap();
+                vault::put_refresh(app.vault.as_ref(), "me@outlook.com", "M.R-new-sign-in")
+                    .unwrap();
+                app.remember(Mailbox {
+                    added_at: 2,
+                    ..m.clone()
+                })
+                .unwrap();
+                app.ms.keep(
+                    "me@outlook.com",
+                    oauth::Access {
+                        token: "EwB-new-sign-in".into(),
+                        expires_at: now() + 3_000,
+                    },
+                );
+                release.send(()).unwrap();
+            });
+            assert_eq!(got.unwrap_err().kind, "unknown");
+            assert_eq!(
+                vault::get_secret(app.vault.as_ref(), "me@outlook.com").unwrap(),
+                Secret::Refresh("M.R-new-sign-in".into())
+            );
+            assert_eq!(
+                app.ms.cached("me@outlook.com").unwrap().token,
+                "EwB-new-sign-in"
+            );
+            assert_eq!(app.mailboxes().len(), 1);
+        });
+    }
+
     /// L4: looking an address up needs a licence and an address, like
     /// linking one.
     #[test]
@@ -4922,7 +5166,7 @@ mod tests {
     #[test]
     fn diagnostics_name_a_missing_licence_and_a_microsoft_sign_in() {
         let app = with_ms(tmpfile("diag-ms"), &nowhere());
-        app.set_licence(None).unwrap();
+        app.set_licence(None, None).unwrap();
         let token = "EwBwA8l6BAAUbDba3x2OMJElkF7gJ4z/VbCPEss";
         linked_ms(
             &app,
