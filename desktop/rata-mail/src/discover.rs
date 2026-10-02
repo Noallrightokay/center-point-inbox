@@ -43,7 +43,9 @@ pub struct Candidate {
 pub const IMAP_PORT: u16 = 993;
 
 const GOOGLE_HELP: &str = "myaccount.google.com/apppasswords — needs 2-Step Verification on";
-const APPLE_HELP: &str = "appleid.apple.com → Sign-In and Security → App-Specific Passwords";
+/// Apple moved its account pages from appleid.apple.com to
+/// account.apple.com; BETA.md and the help page name the new one too.
+const APPLE_HELP: &str = "account.apple.com → Sign-In and Security → App-Specific Passwords";
 /// Microsoft's IMAP host, for Outlook.com, Hotmail, Live, MSN and Microsoft
 /// 365 alike. Discovery finds it like any other; what differs is how it is
 /// signed in to (see [`is_microsoft`]).
@@ -371,6 +373,34 @@ const ZOHO_REGIONS: [(&str, &str, &str); 8] = [
     ),
 ];
 
+/// The host Zoho documents for organisation accounts (a company's own
+/// domain at Zoho) in the region whose personal host is `imap_host`:
+/// `imappro.zoho.eu` for `imap.zoho.eu`. `None` for any host that is not one
+/// of [`ZOHO_REGIONS`]' own.
+///
+/// Discovery reads the region from the MX and signs in at
+/// `imap.zoho.<region>`; when that refuses the password of a mailbox found
+/// that way, `verify` tries this host once before saying the password is
+/// wrong.
+pub fn zoho_pro(imap_host: &str) -> Option<String> {
+    let h = imap_host.trim_end_matches('.').to_ascii_lowercase();
+    ZOHO_REGIONS
+        .iter()
+        .find(|(_, imap, _)| *imap == h)
+        .map(|(region, _, _)| format!("imappro.{region}"))
+}
+
+/// The submission host for a Zoho organisation account signed in to at
+/// `imappro.<region>`: `smtppro.<region>`, as Zoho documents. `None` for
+/// anything else.
+fn zoho_pro_smtp(imap_host: &str) -> Option<String> {
+    let h = imap_host.trim_end_matches('.').to_ascii_lowercase();
+    ZOHO_REGIONS
+        .iter()
+        .find(|(region, _, _)| h == format!("imappro.{region}"))
+        .map(|(region, _, _)| format!("smtppro.{region}"))
+}
+
 /// The conventional names, for a domain that really does run its own server.
 /// Tried last, so a stale `imap.<domain>` cannot outrank what the MX says.
 pub fn conventional(email: &str) -> Vec<String> {
@@ -405,6 +435,12 @@ pub fn smtp_candidates(imap_host: &str, email: &str) -> Vec<String> {
         add(&mut out, "smtp.office365.com".into());
         add(&mut out, "smtp-mail.outlook.com".into());
         add(&mut out, imap_host.into());
+        return out;
+    }
+    // A Zoho organisation account submits at its region's `smtppro.` host,
+    // the counterpart of the `imappro.` one it reads from.
+    if let Some(pro) = zoho_pro_smtp(imap_host) {
+        add(&mut out, pro);
         return out;
     }
     let known = match imap_host {
@@ -490,6 +526,19 @@ mod tests {
             assert_eq!(table(&d).expect(addr).host, host, "{addr}");
         }
         assert!(table("thesherwood.group").is_none());
+        // Apple's app passwords are at account.apple.com now, by the table
+        // and by the MX alike.
+        assert!(
+            table("icloud.com")
+                .unwrap()
+                .help
+                .starts_with("account.apple.com → ")
+        );
+        match mx_rule("mx01.mail.icloud.com") {
+            Some(MxRule::Serves(h)) => assert_eq!(h.help, APPLE_HELP),
+            other => panic!("{other:?}"),
+        }
+        assert!(!APPLE_HELP.contains("appleid."));
     }
 
     #[test]
@@ -568,6 +617,57 @@ mod tests {
         assert_eq!(smtp_candidates("imap.zoho.in", "a@b.in"), ["smtp.zoho.in"]);
         // Not a region: a name that only ends the same way.
         assert_eq!(mx_rule("mx.notzoho.eu"), None);
+    }
+
+    #[test]
+    fn a_zoho_organisation_host_is_the_same_regions_and_sends_from_its_twin() {
+        for (imap, pro, smtp) in [
+            ("imap.zoho.com", "imappro.zoho.com", "smtppro.zoho.com"),
+            ("imap.zoho.eu", "imappro.zoho.eu", "smtppro.zoho.eu"),
+            ("imap.zoho.in", "imappro.zoho.in", "smtppro.zoho.in"),
+            (
+                "imap.zoho.com.au",
+                "imappro.zoho.com.au",
+                "smtppro.zoho.com.au",
+            ),
+            ("imap.zoho.jp", "imappro.zoho.jp", "smtppro.zoho.jp"),
+            (
+                "imap.zohocloud.ca",
+                "imappro.zohocloud.ca",
+                "smtppro.zohocloud.ca",
+            ),
+            ("imap.zoho.sa", "imappro.zoho.sa", "smtppro.zoho.sa"),
+            (
+                "imap.zoho.com.cn",
+                "imappro.zoho.com.cn",
+                "smtppro.zoho.com.cn",
+            ),
+        ] {
+            assert_eq!(zoho_pro(imap).as_deref(), Some(pro), "{imap}");
+            assert_eq!(smtp_candidates(pro, "a@b.de"), [smtp], "{pro}");
+            // The personal host still sends from its own counterpart.
+            assert_eq!(
+                smtp_candidates(imap, "a@b.de"),
+                [imap.replacen("imap.", "smtp.", 1)],
+                "{imap}"
+            );
+        }
+        // Only Zoho's own personal hosts: never another provider's, never a
+        // pro host again, never a name that only looks like one.
+        for host in [
+            "imap.gmail.com",
+            "imappro.zoho.eu",
+            "imap.zoho.example",
+            "imap.notzoho.eu",
+            "imap.fastmail.com",
+            "",
+        ] {
+            assert_eq!(zoho_pro(host), None, "{host}");
+        }
+        assert_eq!(
+            smtp_candidates("imappro.example.com", "a@b.de"),
+            ["imappro.example.com"]
+        );
     }
 
     #[test]
