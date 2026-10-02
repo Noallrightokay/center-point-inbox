@@ -503,6 +503,20 @@
       }
     },
 
+    /* The pictures among one message's attachments (H11, I4): one fetch of
+       the message for all of them. Each comes back with data and `picture`
+       only when Rust found one of the four kinds in its bytes; otherwise
+       both are null and `reason` says why. */
+    async '/api/mail/attachment/pictures'(opts) {
+      const b = body(opts);
+      try {
+        const got = await invoke('read_pictures', { email: b.email, folder: b.folder || 'inbox', uid: b.uid, uidvalidity: b.uidvalidity, indexes: Array.isArray(b.indexes) ? b.indexes : [] });
+        return { ok: true, pictures: (got || []).map((p) => ({ index: p.index, picture: p.picture || null, data: p.data || null, reason: p.reason || null })) };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
+      }
+    },
+
     /* The customer's own folders in one mailbox, and the newest mail of one
        of them — read when the customer opens it, not on every refresh. */
     async '/api/mail/folders'(opts) {

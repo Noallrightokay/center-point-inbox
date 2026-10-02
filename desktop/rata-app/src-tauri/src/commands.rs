@@ -401,6 +401,52 @@ pub struct Handed {
     picture: Option<&'static str>,
 }
 
+/// The pictures among one message's attachments, to show in the message
+/// (H11): the message is fetched once for all of them, not once each, since
+/// every fetch is a sign-in. The interface names the message and the indexes
+/// it wants (at most `core::PICTURES_ASK`); Rust judges each from the name
+/// and bytes as fetched (`core::pictures_fetched`). Never a disguised
+/// program, and nothing to confirm: such a name comes back without data.
+#[tauri::command]
+pub async fn read_pictures(
+    app: App<'_>,
+    email: String,
+    folder: Option<Folder>,
+    uid: u32,
+    uidvalidity: u32,
+    indexes: Vec<u32>,
+) -> Result<Vec<Picture>, Problem> {
+    let got = app
+        .read_pictures(
+            &email,
+            folder.unwrap_or_default(),
+            uid,
+            uidvalidity,
+            &indexes,
+        )
+        .await?;
+    Ok(got
+        .into_iter()
+        .map(|s| Picture {
+            index: s.index,
+            picture: s.picture,
+            data: s.data.map(|d| rata_mail::words::base64_encode(&d)),
+            reason: s.reason,
+        })
+        .collect())
+}
+
+/// One attachment judged for showing on its way to the page: `data` (base64)
+/// and `picture` only for a PNG, JPEG, GIF or WebP by its bytes, small enough
+/// to show; otherwise both `null` and `reason` says why (`core::Shown`).
+#[derive(serde::Serialize)]
+pub struct Picture {
+    index: u32,
+    picture: Option<&'static str>,
+    data: Option<String>,
+    reason: Option<&'static str>,
+}
+
 /// A file the interface made (a conversion, an export), into Downloads. The
 /// bytes come as base64, since the bridge carries text.
 #[tauri::command]

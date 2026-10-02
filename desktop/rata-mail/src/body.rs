@@ -148,13 +148,32 @@ fn formatted(msg: &Parsed<'_>) -> Option<html::Safe> {
 
 /// One attachment's decoded bytes, by its [`Attachment::index`].
 pub fn attachment(raw: &[u8], index: u32) -> Option<(Attachment, Vec<u8>)> {
-    if !starts_with_header(raw) {
-        return None;
-    }
-    let msg = MessageParser::default().parse(raw)?;
-    let part = msg.attachment(index)?;
-    let info = describe(index, part, raw.len(), false);
-    Some((info, part.contents().to_vec()))
+    attachments_at(raw, &[index]).pop().flatten()
+}
+
+/// Several attachments' decoded bytes from one parse of `raw`, in the order
+/// asked, each as [`attachment`] would give it: `None` for an index the
+/// message does not have. The message is parsed once however many are asked
+/// for, which is what showing a message's pictures needs.
+pub fn attachments_at(raw: &[u8], indexes: &[u32]) -> Vec<Option<(Attachment, Vec<u8>)>> {
+    let parsed = if starts_with_header(raw) {
+        MessageParser::default().parse(raw)
+    } else {
+        None
+    };
+    let Some(msg) = parsed else {
+        return indexes.iter().map(|_| None).collect();
+    };
+    indexes
+        .iter()
+        .map(|&index| {
+            let part = msg.attachment(index)?;
+            Some((
+                describe(index, part, raw.len(), false),
+                part.contents().to_vec(),
+            ))
+        })
+        .collect()
 }
 
 fn read_capped(raw: &[u8], cut: bool, cap: usize) -> Body {
@@ -687,6 +706,32 @@ mod tests {
         assert_eq!(bytes, b"%PDF-1.4\n");
         assert!(attachment(&raw, 99).is_none());
         assert!(attachment(b"no headers", 0).is_none());
+    }
+
+    #[test]
+    fn several_attachments_come_back_from_one_parse_in_the_order_asked() {
+        let raw = with_attachments();
+        let listed: Vec<u32> = read_whole(&raw)
+            .attachments
+            .iter()
+            .map(|a| a.index)
+            .collect();
+        let (pdf, ics) = (listed[0], listed[1]);
+        let got = attachments_at(&raw, &[ics, 99, pdf]);
+        assert_eq!(got.len(), 3);
+        let (info, bytes) = got[0].as_ref().unwrap();
+        assert_eq!((info.index, info.mime.as_str()), (ics, "text/calendar"));
+        assert_eq!(bytes, b"BEGIN:VCALENDAR\r\nEND:VCALENDAR");
+        assert!(got[1].is_none());
+        let (info, bytes) = got[2].as_ref().unwrap();
+        assert_eq!(info.name, "Q3 figures.pdf");
+        assert_eq!(bytes, b"%PDF-1.4\n");
+        // Each is what asking for it alone gives.
+        assert_eq!(got[2], attachment(&raw, pdf));
+        assert_eq!(got[0], attachment(&raw, ics));
+        // Nothing to parse: nothing found, one answer per index all the same.
+        assert_eq!(attachments_at(b"no headers", &[0, 1]), vec![None, None]);
+        assert!(attachments_at(&raw, &[]).is_empty());
     }
 
     #[test]
