@@ -220,20 +220,30 @@
          mail, or the ones the timer finds due. Absent is all of them. */
       const only = Array.isArray(b.only) && b.only.length ? b.only.map(String) : null;
       const ask = { limit: 15, known: Array.isArray(b.known) ? b.known : null, only };
-      let res = await invoke('refresh_mail', ask);
-      /* The licence lapsed while RATA was open (BUG-L): renew it now, and
-         read again if that worked, so mail carries on with no relaunch. If
-         it did not, settleLicence has put the licence box up. */
-      if (res.unlicensed) {
-        const after = await settleLicence().catch(() => null);
-        if (after && after.licensed) res = await invoke('refresh_mail', ask);
+      /* A command that fails outright (I6) is said as what it is: an error
+         the interface shows and leaves its mail alone for. Uncaught, it
+         reached the page as a thrown error, which the page read as "this is
+         the website" and answered with "download the app". */
+      const failed = (e) => ({ error: 'RATA could not refresh your mail: ' + (String((e && typeof e === 'object' ? e.error || e.message : e) || '').replace(/\s+/g, ' ').trim() || 'it gave no reason.') });
+      let res, boxes;
+      try {
+        res = await invoke('refresh_mail', ask);
+        /* The licence lapsed while RATA was open (BUG-L): renew it now, and
+           read again if that worked, so mail carries on with no relaunch. If
+           it did not, settleLicence has put the licence box up. */
+        if (res.unlicensed) {
+          const after = await settleLicence().catch(() => null);
+          if (after && after.licensed) res = await invoke('refresh_mail', ask);
+        }
+        /* Nothing was read, because this copy is not licensed. Said as an error
+           so the interface leaves what it has alone — building an answer from
+           the empty lists below would report every mailbox as live and freshly
+           synced, with "up to date" on top. */
+        if (res.unlicensed) return { error: res.unlicensed, unlicensed: true };
+        boxes = await invoke('list_mailboxes');
+      } catch (e) {
+        return failed(e);
       }
-      /* Nothing was read, because this copy is not licensed. Said as an error
-         so the interface leaves what it has alone — building an answer from
-         the empty lists below would report every mailbox as live and freshly
-         synced, with "up to date" on top. */
-      if (res.unlicensed) return { error: res.unlicensed, unlicensed: true };
-      const boxes = await invoke('list_mailboxes');
       /* How each mailbox signs in: "oauth" is Microsoft's sign-in (C2), so a
          mailbox that needs it again says "Sign in to Microsoft again", not
          "app password". */

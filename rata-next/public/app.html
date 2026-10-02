@@ -1493,7 +1493,7 @@ async function load(){
   for(const m of S.messages)if(m&&m.id!=null)byId.set(String(m.id),m);
   /* A delete the window closed on before IndexedDB finished is still
      recorded in S.gone, which is written at once. */
-  S.messages=[...byId.values()].filter(m=>(m.ch||'email')==='email'&&!isGone(m.id));
+  S.messages=[...byId.values()].filter(m=>(m.ch||'email')==='email'&&!isGone(m.id,m.uidvalidity));
   tidyAccts();
   if(!MS)return;
   /* If that first write fails, mail goes back to the old way for this
@@ -1509,16 +1509,27 @@ function save(){saveLocal();scheduleCloudSync()}
 /* Deleting a message has to survive the next sync. Sync adds anything it has
    not seen, and a deleted message is by definition not there any more — so
    without a record of the deletion, the next refresh put it straight back.
-   Kept per id with the time, and trimmed so it cannot grow without bound. */
+   Kept per id with the time, and trimmed so it cannot grow without bound.
+   An id is only a number inside one generation of a folder (I6): once a
+   folder is rebuilt on the server (a new UIDVALIDITY) the same id names
+   another message. So the UIDVALIDITY a deleted message had is kept beside
+   it (S.goneV), and a message of another generation is not hidden by it.
+   `list` holds messages, or ids of messages RATA holds. */
 const GONE_MAX=5000;
-function dropMessages(ids){
-  const drop=new Set(ids);if(!drop.size)return 0;
+function dropMessages(list){
+  const drop=new Map();
+  for(const x of list||[]){
+    if(x==null)continue;
+    if(typeof x==='object')drop.set(x.id,x.uidvalidity);
+    else drop.set(x,(S.messages.find(m=>m.id===x)||{}).uidvalidity);
+  }
+  if(!drop.size)return 0;
   const before=S.messages.length;
   S.messages=S.messages.filter(m=>!drop.has(m.id));
-  S.gone=S.gone||{};const now=Date.now();
-  for(const id of drop)S.gone[id]=now;
+  S.gone=S.gone||{};S.goneV=S.goneV||{};const now=Date.now();
+  for(const [id,v] of drop){S.gone[id]=now;if(v)S.goneV[id]=v;else delete S.goneV[id]}
   const keys=Object.keys(S.gone);
-  if(keys.length>GONE_MAX){keys.sort((a,b)=>S.gone[a]-S.gone[b]).slice(0,keys.length-GONE_MAX).forEach(k=>delete S.gone[k])}
+  if(keys.length>GONE_MAX){keys.sort((a,b)=>S.gone[a]-S.gone[b]).slice(0,keys.length-GONE_MAX).forEach(k=>{delete S.gone[k];delete S.goneV[k]})}
   return before-S.messages.length;
 }
 /* Mail on its way out of a folder, while its mailbox is being told: off the
@@ -1526,7 +1537,16 @@ function dropMessages(ids){
    until the mailbox says it has gone. A refresh meanwhile does not bring it
    back; a refusal does (takeOff). */
 const LEAVING=new Set();
-const isGone=id=>!!(S.gone&&S.gone[id])||LEAVING.has(id);
+/* `v`: the UIDVALIDITY of the message asked about. A deletion recorded
+   under another one was of another message (I6); one recorded before RATA
+   kept it (0.1.44 and earlier) hides any, until its folder is seen rebuilt
+   (settleGenerations). */
+const isGone=(id,v)=>{
+  if(LEAVING.has(id))return true;
+  if(!S.gone||!S.gone[id])return false;
+  const was=(S.goneV||{})[id];
+  return !(v&&was&&was!==v);
+};
 /* Older mail, a page at a time. A refresh brings the newest fifteen; this
    walks back from the oldest message RATA holds for each mailbox, fifty at a
    time, until the mailbox says there is nothing older. Desktop app only.
@@ -1629,11 +1649,11 @@ async function loadOlder(only,quiet){
     const got=r.messages||[];
     if(!got.length){l[FOLDER_DONE[folder]]=true;if(folder==='inbox')finished++;continue}
     for(const m of got){
-      if(isGone(m.id))continue;
+      if(isGone(m.id,m.uidvalidity))continue;
       /* One a search on the server brought (H6) is reached now: from here it
          counts as history, or the next page would be this one again. */
       const had=S.messages.find(x=>x.id===m.id);
-      if(had){if(had.srvFound)delete had.srvFound;continue}
+      if(had){if(had.srvFound)delete had.srvFound;takeFields(had,m);continue}
       S.messages.push(mailRecord(m));
       if(inInbox(m))added++;
     }
@@ -1678,7 +1698,7 @@ async function fillGaps(){
     if(!r||r.error){error=error||g.email+': '+((r&&r.error)||'no answer');continue}
     const got=r.messages||[];
     for(const m of got){
-      if(m.uid<=g.floor||isGone(m.id)||S.messages.some(x=>x.id===m.id))continue;
+      if(m.uid<=g.floor||isGone(m.id,m.uidvalidity)||S.messages.some(x=>x.id===m.id))continue;
       S.messages.push(mailRecord(m));added++;
     }
     const low=got.reduce((a,m)=>Math.min(a,m.uid),g.top);
@@ -1901,7 +1921,69 @@ function takeBody(have,m){
   if(m.replyTo)have.replyTo=m.replyTo;
   return true;
 }
-function staleBodies(){return S.messages.filter(m=>m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2&&!isGone(m.id))}
+/* What a fetched copy of a message knows that RATA's record of it may not
+   (I6): the fields a later build reads from the headers (H5's links, H7's
+   Unsubscribe, 0.1.31's recipients). Mail stored before a field existed
+   gets it the next time the message is fetched for any reason; a field the
+   fetched copy lacks is never cleared. Returns how many changed. */
+function takeFields(have,m){
+  let n=0;
+  for(const k of ['messageId','replyTo','inReplyTo','refsLast'])if(m[k]&&typeof m[k]==='string'&&have[k]!==m[k]){have[k]=m[k];n++}
+  for(const k of ['toAll','cc'])if(Array.isArray(m[k])&&m[k].length&&JSON.stringify(have[k])!==JSON.stringify(m[k])){have[k]=m[k].slice();n++}
+  if(m.unsub&&(m.unsub.https||m.unsub.mailto)&&JSON.stringify(have.unsub)!==JSON.stringify(m.unsub)){have.unsub=Object.assign({},m.unsub);n++}
+  return n;
+}
+/* Whether a fetched copy and a held record under the same id are two
+   different messages: the same number in two generations of a folder. */
+const otherGeneration=(have,m)=>!!(have&&m&&have.uidvalidity&&m.uidvalidity&&have.uidvalidity!==m.uidvalidity);
+/* What this session keeps about a message by its id, beside the record:
+   the whole text opened, a translation, its pictures. A record dropped for
+   another generation takes these with it, or the message that next takes
+   its id would show them. */
+function forgetHeld(id){
+  OPENED.delete(id);PIC_MORE.delete(id);BODY_CACHE.delete(String(id));
+  for(const k of [...PICS.keys()])if(k.startsWith(id+'\u0000'))PICS.delete(k);
+  try{TRANSLATED.delete(id)}catch(e){}
+  if(selMail===id){selMail=null;const d=$('#mail-detail');if(d)d.classList.remove('open')}
+}
+/* A folder rebuilt on the server (I6). IMAP numbers a rebuilt folder's
+   messages afresh and says so with a new UIDVALIDITY, and a message's id
+   here is its mailbox, folder and number, so from then on the same id names
+   another message. Until 0.1.45 a refresh wrote the new number onto the old
+   record: the pane showed one message while Delete went to another. `seen`
+   is what an answer says each folder's generation is now ({email, folder,
+   box, uidvalidity}). Held mail of an earlier generation of that folder is
+   dropped, not through S.gone (nothing was deleted), sparing mail on its
+   way out (LEAVING) and a draft RATA saved (ownDraft); the answer brings
+   the new generation's newest, and Load older mail pages back from there.
+   Its gaps go (their numbers mean nothing now), and so do deletions of that
+   folder recorded under another generation or before RATA kept one, which
+   would otherwise hide the new message that takes the id. Returns the
+   records dropped. */
+const genKey=(email,folder,box)=>String(email||'').toLowerCase()+'|'+folder+'|'+(folder==='named'?box||'':'');
+const seenOf=list=>(list||[]).filter(Boolean).map(m=>({email:m.acct,folder:folderOf(m),box:m.box,uidvalidity:m.uidvalidity}));
+function settleGenerations(seen){
+  const now=new Map();
+  for(const s of seen||[])if(s&&s.email&&s.folder&&s.uidvalidity)now.set(genKey(s.email,s.folder,s.box),s.uidvalidity);
+  if(!now.size)return [];
+  const fresh=m=>now.get(genKey(mailEmailOf(m),folderOf(m),m.box));
+  const older=m=>m&&m.prov==='imap'&&!!m.uid&&!!m.uidvalidity&&fresh(m)!==undefined&&fresh(m)!==m.uidvalidity&&!LEAVING.has(m.id)&&!m.ownDraft;
+  const dropped=S.messages.filter(older);
+  if(dropped.length){const out=new Set(dropped);S.messages=S.messages.filter(m=>!out.has(m))}
+  /* An id is the mailbox's key, the folder's place and the number: what is
+     left of a dropped id without its number is the folder's prefix. */
+  const prefixes=new Map();
+  for(const m of dropped){prefixes.set(String(m.id).replace(/\d+$/,''),fresh(m));forgetHeld(m.id)}
+  if(prefixes.size&&S.gone){
+    S.goneV=S.goneV||{};
+    for(const k of Object.keys(S.gone))for(const [pre,v] of prefixes){
+      if(k.length>pre.length&&k.startsWith(pre)&&/^\d+$/.test(k.slice(pre.length))&&S.goneV[k]!==v){delete S.gone[k];delete S.goneV[k]}
+    }
+  }
+  S.gaps=(S.gaps||[]).filter(g=>{const v=now.get(genKey(g.email,g.folder));return v===undefined||!g.uidvalidity||g.uidvalidity===v});
+  return dropped;
+}
+function staleBodies(){return S.messages.filter(m=>serverRef(m)&&!m.sent&&m.bodyV!==2&&!isGone(m.id,m.uidvalidity))}
 async function rereadBodies(msgs){
   if(!window.__RATA_NATIVE__||!msgs.length)return 0;
   const groups=new Map();
@@ -1919,7 +2001,9 @@ async function rereadBodies(msgs){
     if(!r||r.error)continue;
     for(const got of (r.messages||[])){
       const have=S.messages.find(x=>x.id===got.id);
-      if(have&&takeBody(have,got))fixed++;
+      if(!have||otherGeneration(have,got))continue;
+      if(takeBody(have,got))fixed++;
+      if(takeFields(have,got))fixed++;
     }
   }
   if(fixed){save();renderMail()}
@@ -1937,8 +2021,20 @@ async function upgradeBodies(){
    per message. Messages fetched before RATA kept a server reference have none,
    and are changed in RATA only. Resolves to a list of problems, one line per
    mailbox that could not be updated. */
-const actEmail=m=>(S.linked.find(l=>l.id===m.acct)||{}).label||m.acct;
-/* Whether the server can be told about m: RATA holds where it is there. */
+/* The linked mailbox a message is in: its entry by id, else the entry for
+   its address (a mailbox removed and linked again gets a new id). None
+   for mail of a mailbox that was removed: Remove keeps that mail, and it
+   is RATA's copy only from then on (I6). Its old id, sent as an address,
+   was refused by the app, so it could never be deleted or archived. */
+function linkedOf(m){
+  if(!m)return null;
+  const l=S.linked.find(x=>x.id===m.acct);if(l)return l;
+  const email=String(m.mailbox||m.acct||'').toLowerCase();
+  return email.includes('@')?linkedFind('mail',email)||null:null;
+}
+const actEmail=m=>(linkedOf(m)||{}).label||'';
+/* Whether the server can be told about m: RATA holds where it is there,
+   in a mailbox that is still linked. */
 const serverRef=m=>m.prov==='imap'&&!!m.uid&&!!m.uidvalidity&&!!actEmail(m);
 /* Each mailbox, folder and UIDVALIDITY's messages, told in one request, and
    what each answered: [{email,msgs,r}]. */
@@ -1984,13 +2080,13 @@ async function takeOff(list,action,shown){
   const texts=told.length?await bodiesOf(told):new Map();
   for(const m of told)LEAVING.add(m.id);
   S.messages=S.messages.filter(m=>!LEAVING.has(m.id));
-  dropMessages(own.map(m=>m.id));
+  dropMessages(own);
   save();
   if(shown)shown();
   const problems=[];let back=0;
   for(const {email,msgs,r} of await serverActGroups(told,action)){
     for(const m of msgs)LEAVING.delete(m.id);
-    if(r.ok){if(!r.copied)dropMessages(msgs.map(m=>m.id));continue}
+    if(r.ok){if(!r.copied)dropMessages(msgs);continue}
     problems.push(email+': '+(r.error||'no answer'));
     for(const m of msgs){
       if(S.messages.some(x=>x.id===m.id))continue;
@@ -2145,9 +2241,11 @@ $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#s
    into one of its folders. Messages a choice does not apply to — sent
    mail, mail RATA has no server reference for — stay as they are, and the
    toast says how many moved. */
-const canArchive=m=>m.prov==='imap'&&m.uid&&inInbox(m);
-const canGoHome=m=>m.prov==='imap'&&m.uid&&['archive','junk','named'].includes(folderOf(m));
-const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&!['sent','drafts'].includes(folderOf(m));
+/* Mail of a mailbox no longer linked (I6) has nowhere to go: it can only
+   be read, starred and deleted, in RATA. */
+const canArchive=m=>m.prov==='imap'&&m.uid&&inInbox(m)&&!!linkedOf(m);
+const canGoHome=m=>m.prov==='imap'&&m.uid&&['archive','junk','named'].includes(folderOf(m))&&!!linkedOf(m);
+const canFile=m=>m.prov==='imap'&&m.uid&&m.uidvalidity&&!m.sent&&!['sent','drafts'].includes(folderOf(m))&&!!linkedOf(m);
 const drawList=()=>{renderSyncAll();renderMailFilters();renderMail()};
 /* What a Delete, Archive or Move of several says once the mailboxes have
    answered: how many went, and why the rest came back. */
@@ -2360,10 +2458,14 @@ async function loadBox(email,name,older){
      decided afresh. */
   if(!older)BOX_DONE.delete(key);
   if(got.length<(older?OLDER_PAGE:BOX_PAGE))BOX_DONE.add(key);
+  /* A folder rebuilt since it was last opened (I6): what RATA held of it
+     goes, and the new generation is taken whole. */
+  settleGenerations(seenOf(got));
   for(const m of got){
-    if(isGone(m.id))continue;
+    if(isGone(m.id,m.uidvalidity))continue;
     const have=S.messages.find(x=>x.id===m.id);
-    if(have){have.unread=m.unread;have.starred=m.starred;takeBody(have,m);continue}
+    if(have&&!otherGeneration(have,m)){have.unread=m.unread;have.starred=m.starred;takeBody(have,m);takeFields(have,m);continue}
+    if(have){S.messages=S.messages.filter(x=>x!==have);forgetHeld(have.id)}
     S.messages.push(mailRecord(m));
   }
   save();renderMailFilters();renderMail();
@@ -3114,7 +3216,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&LINK_PENDING){e.pre
    first, so a chain of thousands cannot hold the page up. */
 const CONVO_MAX=200;
 const convoKeys=m=>[m.messageId,m.inReplyTo,m.refsLast].filter(k=>typeof k==='string'&&k);
-const convoJoins=m=>!!m&&channelEnabled(m.ch)&&folderOf(m)!=='junk'&&!m.draft&&!isGone(m.id);
+const convoJoins=m=>!!m&&channelEnabled(m.ch)&&folderOf(m)!=='junk'&&!m.draft&&!isGone(m.id,m.uidvalidity);
 function conversationOf(m){
   const none={list:[],capped:false};
   if(!m||folderOf(m)==='junk')return none;
@@ -3196,7 +3298,7 @@ function openMail(id){
   if(m.unread){m.unread=false;save();audit('msg.read',`${m.subj||m.prev.slice(0,40)} (${m.ch})`);serverAct([m],'read')}
   /* Once per message at a time: drawing it again (its text arriving from
      disk, say) does not ask the server twice. */
-  if(m.prov==='imap'&&!m.sent&&m.uid&&m.uidvalidity&&m.bodyV!==2&&!REREADING.has(id)){
+  if(serverRef(m)&&!m.sent&&m.bodyV!==2&&!REREADING.has(id)){
     REREADING.add(id);
     rereadBodies([m]).then(n=>{if(n&&selMail===id)openMail(id)}).finally(()=>REREADING.delete(id));
   }
@@ -3205,7 +3307,8 @@ function openMail(id){
   const nm=msgFrom(m);
   /* Mail from Sent is on the server like the inbox's; RATA's own record of
      something it sent is not. */
-  const native=!!window.__RATA_NATIVE__&&m.prov==='imap'&&(!m.sent||folderOf(m)==='sent')&&m.uid&&m.uidvalidity;
+  /* Nor is mail of a mailbox no longer linked (I6). */
+  const native=!!window.__RATA_NATIVE__&&serverRef(m)&&(!m.sent||folderOf(m)==='sent');
   const whole=OPENED.get(id);
   /* The text is read from disk when it is not to hand, and the message
      drawn again once it is — a few milliseconds. */
@@ -3250,11 +3353,11 @@ function openMail(id){
         ${window.__RATA_NATIVE__&&!m.sent?'<button class="btn" id="md-translate">\u21c4 Translate</button>':''}
         <button class="btn" id="md-star">${m.starred?'★ Starred':'☆ Star'}</button>
         <button class="btn" id="md-unread">Mark unread</button>
-        ${m.prov==='imap'&&m.uid&&inInbox(m)?'<button class="btn" id="md-archive">Archive</button>':''}
+        ${canArchive(m)?'<button class="btn" id="md-archive">Archive</button>':''}
         ${unsub?`<button class="btn" id="md-unsub" title="${esc(unsub.web?'Opens '+unsub.host+' in your browser, after asking':'Writes to '+unsub.to+' to leave this list')}">Unsubscribe</button>`:''}
-        ${m.prov==='imap'&&m.uid&&['archive','named'].includes(folderOf(m))?'<button class="btn" id="md-home">Move to inbox</button>':''}
+        ${canGoHome(m)&&folderOf(m)!=='junk'?'<button class="btn" id="md-home">Move to inbox</button>':''}
         ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
-        ${m.prov==='imap'&&m.uid&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
+        ${canGoHome(m)&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
         <button class="btn danger" id="md-del">Delete</button>`}
       </div>
     </div>
@@ -3506,10 +3609,13 @@ async function serverSearch(q,emails){
     if(st!==SRV_SEARCH)return;
     if(!r||r.error){st.res[k]={error:(r&&r.error)||'The server did not answer.'};paintSrvBar();continue}
     let n=0;
+    /* The inbox rebuilt since it was read (I6): its old generation goes. */
+    settleGenerations(seenOf(r.messages));
     for(const m of (r.messages||[])){
-      if(!m||isGone(m.id))continue;
+      if(!m||isGone(m.id,m.uidvalidity))continue;
       n++;st.ids.add(String(m.id));
-      if(S.messages.some(x=>x.id===m.id))continue;
+      const had=S.messages.find(x=>x.id===m.id);
+      if(had){takeFields(had,m);continue}
       S.messages.push(Object.assign(mailRecord(m),{srvFound:true}));added++;
     }
     came+=n;
@@ -4325,7 +4431,8 @@ async function mailLink(email,pass,host){
     }
     await linkedOk(res);
   }catch(e){
-    toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
+    toast(window.__RATA_NATIVE__?'RATA could not link '+email+': '+failedSaying(e)
+      :'Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
   }finally{btn.disabled=$('#lf-ms').style.display!=='none';btn.textContent='Link'}
 }
 
@@ -4726,7 +4833,7 @@ async function saveDraft(d,email,why){
     }
     renderDraftHead();
   }
-  if(replaced.length)dropMessages(replaced.map(m=>m.id));
+  if(replaced.length)dropMessages(replaced);
   save();renderMailFilters();renderMail();
   if(why==='close')toast('Saved to Drafts');
   if(replaced.length)await serverAct(replaced,'trash');
@@ -4876,7 +4983,7 @@ $('#cmp-discard').onclick=async()=>{
   /* A save of it may still be on its way; its copy goes too. */
   await DRAFT_SAVING;
   const rec=srv.rec;if(!rec)return;
-  dropMessages([rec.id]);save();
+  dropMessages([rec]);save();
   if(selMail===rec.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
   renderMailFilters();renderMail();
   const problems=await serverAct([rec],'trash');
@@ -5368,7 +5475,7 @@ async function deliver(it,sb){
   /* The draft this finished is sent: its copy in Drafts goes to the Trash,
      as every mail app does, rather than waiting there to be sent twice. */
   const finished=realSent&&it.finished&&it.finished.uid?it.finished:null;
-  if(finished)dropMessages([finished.id]);
+  if(finished)dropMessages([finished]);
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''}${bcc?' (+'+bcc.split(',').filter(x=>x.trim()).length+' Bcc)':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
   return {ok:true,realSent,mAcct,finished};
@@ -5645,6 +5752,11 @@ function notifyNew(ids){
    that one rather than signing in to every mailbox again. `quiet` is the
    automatic refresh, which speaks only when there is new mail. */
 let SYNCING=null,lastSync=0,lastFull=0,MAIL_WAKE=null,MAIL_AGAIN=false;
+/* What a command the app refused said, as one line (I6). */
+function failedSaying(e){
+  const t=String((e&&typeof e==='object'?e.error||e.message:e)||'').replace(/\s+/g,' ').trim();
+  return t||'it gave no reason. Try again, or copy the diagnostics in Settings.';
+}
 /* When each mailbox was last asked (0.1.35), so the timer can ask each one
    only when it is due. `only`: the addresses to read; none is all. */
 const LAST_TRY=new Map();
@@ -5666,7 +5778,10 @@ function serverSync(p,quiet,only){
       if(res.error){if(!quiet||(res.unlicensed&&!document.getElementById('rata-licence')))toast(res.error);return}
       await absorbMail(res,quiet);
     }catch(e){
-      if(!quiet)toast('Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
+      /* In the app a refresh that fails is the app's own failure (I6), not
+         a page asking to be installed. */
+      if(!quiet)toast(window.__RATA_NATIVE__?'RATA could not refresh your mail: '+failedSaying(e)
+        :'Mailboxes live in the RATA app now, on your own computer — download it at mailrata.org. Your password never leaves the machine.');
     }finally{SYNCING=null;if(MAIL_AGAIN){MAIL_AGAIN=false;window.__rataMail()}}
   })();
   return SYNCING;
@@ -5685,10 +5800,18 @@ function heldKnown(){
        refresh has read: counting it would skip what arrived before it. */
     if(m.srvFound)continue;
     const folder=folderOf(m);if(!FOLDERS.includes(folder))continue;
-    const email=mailEmailOf(m),k=email+'|'+folder,b=best.get(k);
-    if(!b||m.uid>b.since)best.set(k,{email,folder,uidvalidity:m.uidvalidity,since:m.uid});
+    const email=mailEmailOf(m),k=email+'|'+folder+'|'+m.uidvalidity,b=best.get(k);
+    if(!b)best.set(k,{email,folder,uidvalidity:m.uidvalidity,since:m.uid,ts:m.ts||0});
+    else{if(m.uid>b.since)b.since=m.uid;if((m.ts||0)>b.ts)b.ts=m.ts||0}
   }
-  return [...best.values()];
+  /* One generation a folder (I6): numbers of two generations are not
+     comparable. A refresh drops an older one as soon as it sees the new
+     (settleGenerations); should both still be held (a message put back
+     after its folder was rebuilt), the one holding the newest mail is the
+     folder as it is now. */
+  const one=new Map();
+  for(const b of best.values()){const k=b.email+'|'+b.folder,o=one.get(k);if(!o||b.ts>o.ts)one.set(k,b)}
+  return [...one.values()].map(({email,folder,uidvalidity,since})=>({email,folder,uidvalidity,since}));
 }
 /* New mail comes in by itself (0.1.27): a little after start, every five
    minutes while RATA is open, and when it comes back to the front after a
@@ -5870,6 +5993,12 @@ async function absorbMail(res,quiet){
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
   tidyAccts();
+  /* Folders rebuilt on the server since (I6): their old generation goes
+     before anything here is matched by id. A refresh reads a folder whose
+     UIDVALIDITY changed afresh, so the mail it brings says what each
+     folder's generation is now. A listing alone (present, archives) is not
+     taken as that: it judges only its own generation. */
+  const replaced=settleGenerations(seenOf(res.messages));
   addGaps(res.gaps);
   dropVanishedDrafts(res.drafts);
   /* Read and starred for mail RATA already has, from the server — another
@@ -5882,7 +6011,7 @@ async function absorbMail(res,quiet){
     for(const f of res.flags){const have=byId.get(f.id);if(have){if(!have.sent&&!have.draft)have.unread=!!f.unread;have.starred=!!f.starred}}
   }
   const take=m=>{
-    if(isGone(m.id))return;
+    if(isGone(m.id,m.uidvalidity))return;
     /* A message sent from RATA, now back from the Sent folder the provider
        filed it in: the server's copy takes the place of RATA's own record,
        rather than the list showing it twice. */
@@ -5898,8 +6027,14 @@ async function absorbMail(res,quiet){
        whole, so everything between is read too: from here on it counts. */
     if(have&&have.srvFound)delete have.srvFound;
     if(have&&m.draftId)have.draftId=m.draftId;
-    if(have){if(!have.sent&&!have.draft)have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
+    /* The same id in another generation of its folder is another message
+       (I6): the record goes whole and the fetched one takes its place, never
+       a mix of the two. */
+    if(otherGeneration(have,m)){S.messages=S.messages.filter(x=>x!==have);forgetHeld(have.id);replaced.push(have)}
+    else if(have){if(!have.sent&&!have.draft)have.unread=m.unread;have.starred=m.starred;if(m.uid){have.uid=m.uid;have.uidvalidity=m.uidvalidity}takeBody(have,m);takeFields(have,m);if((m.atts||[]).length&&!(have.atts||[]).length)have.atts=m.atts;if(m.html!==undefined)have.html=m.html;return}
     S.messages.push(mailRecord(m));
+    /* A message RATA held before its folder was rebuilt is not news. */
+    if(m.messageId&&replaced.some(x=>x.messageId===m.messageId))return;
     if(inInbox(m))added++;
     newIds.push(m.id);
   };

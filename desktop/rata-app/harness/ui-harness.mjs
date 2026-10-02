@@ -81,13 +81,17 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         if (M.setLicenceRejects) throw 'The licence could not be written to disk';
         if (M.lic) return setClocked(args.licence);
         return standing();
-      case 'list_mailboxes': return M.mailboxes;
+      case 'list_mailboxes':
+        if (M.listThrows) throw M.listThrows;
+        return M.mailboxes;
       case 'unlink_mailbox':
         if (M.unlinkFails) throw 'This computer’s keychain refused access';
         M.mailboxes = M.mailboxes.filter((m) => m.email !== args.email);
         return null;
       case 'refresh_mail':
         if (M.refreshDelay) await new Promise((r) => setTimeout(r, M.refreshDelay));
+        /* I6: a command that fails outright, as a Tauri command rejects. */
+        if (M.refreshThrows) throw M.refreshThrows;
         if (M.lic && !judge(M.lic.token).ok) return { messages: [], problems: [], skipped: [], unlicensed: clocked().message };
         return M.refresh || { messages: [], problems: [], skipped: [] };
       case 'older_mail': {
@@ -104,6 +108,7 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         return older.map((u) => M.mk(u));
       }
       case 'link_mailbox':
+        if (M.linkThrows) throw M.linkThrows;
         /* The engine's refusal (a Microsoft 365 domain found by its MX, say):
            core::link answers `failed` with the reason. */
         if (M.linkFails) return { outcome: 'failed', error: M.linkFails };
@@ -1462,6 +1467,163 @@ console.log('\n— a gap that cannot be filled no longer stops Load older mail (
   check(g.gaps.join() === 'parked@example.net', `a parked mailbox's gap is kept: ${JSON.stringify(g.gaps)}`);
   check((await held()) === '10,20,30,40' && g.toasts.some((t) => /^3 older loaded, but parked@example\.net/.test(t)),
     `and older mail of the others still loads, saying what did not: ${JSON.stringify(g.toasts)}`);
+  await pg.close();
+}
+
+console.log('\n— a message\'s identity: a removed mailbox, a rebuilt folder, fields stored later, a failed command (I6) —');
+{
+  const pg = await open(true);
+  const mk = (uid, extra, folder = 'inbox') => Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Ann', from_addr: 'ann@example.org', to_name: 'Me', to_addr: 'me@example.com', subject: 'Old ' + uid, preview: 'p', body: 'Old body ' + uid,
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: 'old' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const sync = (msgs, quiet = true) => pg.evaluate(async ({ msgs, quiet }) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] }; window.__toasts = [];
+    await serverSync('mail', quiet);
+    __mock.refresh = { messages: [], flags: [], problems: [], skipped: [] };
+  }, { msgs, quiet });
+  const acts = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => ({ email: a.email, uids: a.uids, uidvalidity: a.uidvalidity, action: a.action })));
+
+  /* 1. A mailbox removed: its mail stays, as RATA's copy only. */
+  await sync([mk(1), mk(2), mk(3)]);
+  const lk = await pg.evaluate(() => S.linked.find((l) => l.label === 'me@example.com').id);
+  await pg.evaluate((id) => removeLinked(id), lk);
+  const kept = await pg.evaluate(() => S.messages.filter((m) => m.mailbox === 'me@example.com').map((m) => ({ id: m.id, acct: m.acct, ref: serverRef(m), email: actEmail(m) })));
+  check(kept.length === 3 && kept.every((m) => m.acct === kept[0].acct && /^lk/.test(m.acct) && !m.ref && m.email === ''),
+    `mail of a removed mailbox stays, and RATA no longer counts it as on a server: ${JSON.stringify(kept)}`);
+  await pg.evaluate(() => { __mock.calls = []; window.__toasts = []; go('inbox'); openMail('me@example.com_1'); });
+  const pane = await pg.evaluate(() => ({ archive: !!$('#md-archive'), file: !!$('#md-file'), home: !!$('#md-home'), del: !!$('#md-del'), star: !!$('#md-star') }));
+  check(!pane.archive && !pane.file && !pane.home && pane.del && pane.star, `its pane offers Star and Delete, but no Archive or Move, which have nowhere to go: ${JSON.stringify(pane)}`);
+  await pg.click('#md-star');
+  await pg.click('#md-unread');
+  await pg.waitForTimeout(150);
+  const starred = await pg.evaluate(() => ({ starred: S.messages.find((m) => m.id === 'me@example.com_1').starred, unread: S.messages.find((m) => m.id === 'me@example.com_1').unread }));
+  check(starred.starred && starred.unread && (await acts()).length === 0 && !(await toasts(pg)).some((t) => /not linked|not updated/.test(t)),
+    `Star and Mark unread change RATA's copy and ask no mailbox: ${JSON.stringify(starred)}`);
+  await pg.click('#md-del');
+  await pg.waitForTimeout(150);
+  let st = await pg.evaluate(() => ({ held: S.messages.some((m) => m.id === 'me@example.com_1'), gone: !!(S.gone || {})['me@example.com_1'], v: (S.goneV || {})['me@example.com_1'] }));
+  let t = await toasts(pg);
+  check(!st.held && st.gone && st.v === 7 && (await acts()).length === 0 && t.includes('Deleted') && !t.some((x) => /Nothing was changed|is not linked/.test(x)),
+    `Delete takes it off for good, remembered with its UIDVALIDITY, without asking a mailbox that is not there: ${JSON.stringify({ st, t })}`);
+  await pg.evaluate(() => { go('inbox'); selecting = true; SEL.clear(); SEL.add('me@example.com_2'); bulkRefresh(); __mock.calls = []; window.__toasts = []; });
+  await pg.click('#bulk-bar [data-bulk="read"]');
+  await pg.waitForTimeout(150);
+  t = await toasts(pg);
+  check(t[0] === 'Marked read — 1' && (await acts()).length === 0, `marking a selection of it read says nothing failed: ${JSON.stringify(t)}`);
+  await pg.evaluate(() => { SEL.add('me@example.com_2'); bulkRefresh(); window.__toasts = []; });
+  await pg.click('#bulk-bar [data-bulk="archive"]');
+  await pg.waitForTimeout(150);
+  t = await toasts(pg);
+  check(/^Archived — none of the 1 selected can be/.test(t[0] || '') && (await pg.evaluate(() => S.messages.some((m) => m.id === 'me@example.com_2'))),
+    `and Archive leaves it where it is, as for other mail with no server reference: ${JSON.stringify(t)}`);
+  await pg.evaluate(() => { selecting = false; SEL.clear(); });
+  /* Linked again: the address finds it, before any refresh refiles it. */
+  const back = await pg.evaluate(() => {
+    __mock.mailboxes.push({ email: 'me@example.com', host: 'imap.example.com', port: 993, label: 'Example' });
+    S.linked.push({ id: 'lk_again', type: 'mail', label: 'me@example.com', status: 'live' });
+    const m = S.messages.find((x) => x.id === 'me@example.com_3');
+    return { ref: serverRef(m), email: actEmail(m) };
+  });
+  check(back.ref && back.email === 'me@example.com', `linked again, its mail is on the server again, found by its address: ${JSON.stringify(back)}`);
+  await sync([mk(1), mk(3)]);
+  check(!(await pg.evaluate(() => S.messages.some((m) => m.id === 'me@example.com_1'))), 'and what was deleted while it was removed stays deleted');
+
+  /* 2. A folder rebuilt on the server: another UIDVALIDITY, the same ids. */
+  await pg.evaluate(async () => {
+    __mock.change = null; __mock.calls = [];
+    S.messages = S.messages.filter((m) => m.mailbox !== 'me@example.com'); S.gone = {}; S.goneV = {}; save();
+  });
+  await sync([mk(1), mk(2), mk(3), mk(5, {}, 'sent')]);
+  await pg.evaluate(async () => {
+    go('inbox'); openMail('me@example.com_2');
+    await new Promise((r) => setTimeout(r, 50));
+    $('#md-del').click();
+  });
+  await pg.waitForTimeout(200);
+  await pg.evaluate(() => {
+    S.gone['me@example.com_9'] = Date.now(); /* recorded before RATA kept the generation */
+    S.gaps = [{ email: 'me@example.com', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }];
+    S.messages.find((m) => m.id === 'me@example.com_1').catOverride = 'finance';
+    openMail('me@example.com_1');
+  });
+  const before = await pg.evaluate(() => ({ known: heldKnown().filter((k) => k.email === 'me@example.com'), gone2: !!S.gone['me@example.com_2'] }));
+  check(before.gone2 && before.known.find((k) => k.folder === 'inbox').since === 3, `set up: 2 deleted under the old generation, 3 the newest held: ${JSON.stringify(before)}`);
+  const v8 = (uid, extra) => mk(uid, Object.assign({ uidvalidity: 8, subject: 'New ' + uid, body: 'New body ' + uid, message_id: 'new' + uid + '@example.org' }, extra || {}));
+  /* 4 is the old 3 under its new number; 1, 2 and 9 are other messages now. */
+  await sync([v8(1), v8(2), v8(4, { subject: 'Old 3', message_id: 'old3@example.org' }), v8(9)]);
+  const after = await pg.evaluate(async () => {
+    const mine = S.messages.filter((m) => m.mailbox === 'me@example.com' && folderOf(m) === 'inbox').sort((a, b) => a.uid - b.uid);
+    const one = mine.find((m) => m.id === 'me@example.com_1');
+    return {
+      held: mine.map((m) => m.uid + ':' + m.uidvalidity + ':' + m.subj),
+      body1: one ? await bodyOf(one) : null, cat1: one && one.catOverride,
+      gone: Object.keys(S.gone || {}).filter((k) => k.startsWith('me@example.com_')),
+      sent: S.messages.filter((m) => m.mailbox === 'me@example.com' && folderOf(m) === 'sent').map((m) => m.uid + ':' + m.uidvalidity),
+      sel: selMail, open: $('#mail-detail').classList.contains('open'),
+      known: heldKnown().filter((k) => k.email === 'me@example.com' && k.folder === 'inbox'),
+      gaps: (S.gaps || []).length, toasts: window.__toasts.slice(),
+    };
+  });
+  check(after.held.join() === '1:8:New 1,2:8:New 2,4:8:Old 3,9:8:New 9', `a rebuilt inbox holds only its new generation, each message whole: ${JSON.stringify(after.held)}`);
+  check(after.body1 === 'New body 1' && after.cat1 === undefined, `the record under a reused id is the new message's, text and all, never a mix: ${JSON.stringify({ body: after.body1, cat: after.cat1 })}`);
+  check(after.gone.length === 0, `a deletion under the old generation, or recorded before RATA kept one, hides no message of the new: ${JSON.stringify(after.gone)}`);
+  check(after.sent.join() === '5:7', `the other folders of the mailbox are left alone: ${JSON.stringify(after.sent)}`);
+  check(after.sel === null && !after.open, `the pane showing the old message closes: ${JSON.stringify({ sel: after.sel, open: after.open })}`);
+  check(after.known.length === 1 && after.known[0].uidvalidity === 8 && after.known[0].since === 9 && after.gaps === 0,
+    `the next refresh asks from the new generation's newest, and the old generation's gap is gone: ${JSON.stringify({ known: after.known, gaps: after.gaps })}`);
+  check(after.toasts.includes('3 new messages'), `the message that was only renumbered is not announced as new: ${JSON.stringify(after.toasts)}`);
+  await pg.evaluate(() => { __mock.calls = []; window.__toasts = []; openMail('me@example.com_1'); });
+  await pg.click('#md-del');
+  await pg.waitForTimeout(200);
+  const del = await acts();
+  check(del.length === 1 && del[0].uids.join() === '1' && del[0].uidvalidity === 8, `Delete on it goes to the message shown, under the new generation: ${JSON.stringify(del)}`);
+  /* A record the settling spares (a draft RATA saved, say) is still
+     replaced whole, not merged, when the same id comes again. */
+  await pg.evaluate(() => S.messages.push(Object.assign(mailRecord({ id: 'me@example.com_7', folder: 'inbox', acct: 'me@example.com', ch: 'email', prov: 'imap', subj: 'Stale 7', body: 'Stale body', ts: 1, uid: 7, uidvalidity: 7, unread: false, starred: true }), { ownDraft: true, savedAt: Date.now() })));
+  await sync([v8(7, { starred: false })]);
+  const seven = await pg.evaluate(async () => { const m = S.messages.find((x) => x.id === 'me@example.com_7'); return m && { subj: m.subj, v: m.uidvalidity, body: await bodyOf(m), starred: m.starred }; });
+  check(seven && seven.subj === 'New 7' && seven.v === 8 && seven.body === 'New body 7' && !seven.starred, `a held record of another generation under the same id is replaced, never merged: ${JSON.stringify(seven)}`);
+  /* A named folder rebuilt is settled when it is opened. */
+  const fm = (uid, v, subject) => mk(uid, { id: 'me@example.com_fabc_' + uid, folder: { named: 'Receipts' }, uidvalidity: v, subject });
+  await pg.evaluate((msgs) => { __mock.inFolder = { Receipts: msgs }; return loadBox('me@example.com', 'Receipts', false); }, [fm(1, 3, 'R1'), fm(2, 3, 'R2')]);
+  await pg.evaluate((msgs) => { __mock.inFolder = { Receipts: msgs }; return loadBox('me@example.com', 'Receipts', false); }, [fm(2, 4, 'Other 2')]);
+  const box = await pg.evaluate(() => S.messages.filter((m) => m.box === 'Receipts').map((m) => m.uid + ':' + m.uidvalidity + ':' + m.subj));
+  check(box.join() === '2:4:Other 2', `a rebuilt folder of the customer's own is replaced when it is opened: ${JSON.stringify(box)}`);
+
+  /* 3. Fields a later build reads reach mail stored before them. */
+  await sync([mk(40, { uidvalidity: 8 })]);
+  await pg.evaluate(() => { const m = S.messages.find((x) => x.id === 'me@example.com_40'); for (const k of ['refsLast', 'inReplyTo', 'unsub', 'toAll', 'cc']) delete m[k]; m.bodyV = 2; save(); });
+  const rich = { uidvalidity: 8, in_reply_to: 'root@example.org', references_last: 'mid@example.org', unsubscribe: { https: 'https://list.example.org/leave', mailto: '' },
+    to_all: ['me@example.com', 'cy@example.org'], cc: ['di@example.org'] };
+  await sync([mk(40, rich)]);
+  let f = await pg.evaluate(() => { const m = S.messages.find((x) => x.id === 'me@example.com_40'); return { r: m.refsLast, i: m.inReplyTo, u: m.unsub, t: m.toAll, c: m.cc }; });
+  check(f.r === 'mid@example.org' && f.i === 'root@example.org' && f.u && f.u.https === 'https://list.example.org/leave' && f.t.join() === 'me@example.com,cy@example.org' && f.c.join() === 'di@example.org',
+    `a fetched copy brings its links, Unsubscribe and recipients to the record RATA already held: ${JSON.stringify(f)}`);
+  await sync([mk(40, { uidvalidity: 8 })]);
+  f = await pg.evaluate(() => { const m = S.messages.find((x) => x.id === 'me@example.com_40'); return { r: m.refsLast, u: !!m.unsub, c: (m.cc || []).length }; });
+  check(f.r === 'mid@example.org' && f.u && f.c === 1, `and a later copy without them clears none: ${JSON.stringify(f)}`);
+  await pg.evaluate(() => { go('inbox'); openMail('me@example.com_40'); });
+  const shows = await pg.evaluate(() => ({ unsub: !!$('#md-unsub'), all: !!$('#md-replyall') }));
+  check(shows.unsub && shows.all, `so Unsubscribe and Reply all appear on it: ${JSON.stringify(shows)}`);
+  await pg.evaluate(() => { const m = S.messages.find((x) => x.id === 'me@example.com_fabc_2'); m.cc = []; delete m.refsLast; });
+  await pg.evaluate((m) => { __mock.inFolder = { Receipts: [Object.assign(m, { cc: ['ed@example.org'], references_last: 'r2@example.org' })] }; return loadBox('me@example.com', 'Receipts', false); },
+    fm(2, 4, 'Other 2'));
+  f = await pg.evaluate(() => { const m = S.messages.find((x) => x.id === 'me@example.com_fabc_2'); return { c: m.cc, r: m.refsLast }; });
+  check(f.c.join() === 'ed@example.org' && f.r === 'r2@example.org', `opening a folder brings them too: ${JSON.stringify(f)}`);
+
+  /* 4. A command that fails inside the app says what failed. */
+  await pg.evaluate(async () => { __mock.refreshThrows = 'The mailbox list could not be read from this computer'; window.__toasts = []; await serverSync('mail'); __mock.refreshThrows = null; });
+  t = await toasts(pg);
+  check(t.length === 1 && t[0] === 'RATA could not refresh your mail: The mailbox list could not be read from this computer', `a refresh that fails in the app says so, not "download the app": ${JSON.stringify(t)}`);
+  await pg.evaluate(async () => { __mock.listThrows = { kind: 'keychain', error: 'This computer’s keychain is locked' }; window.__toasts = []; await serverSync('mail'); __mock.listThrows = null; });
+  t = await toasts(pg);
+  check(t.length === 1 && t[0] === 'RATA could not refresh your mail: This computer’s keychain is locked', `so does one whose mailbox list fails: ${JSON.stringify(t)}`);
+  await pg.evaluate(async () => { __mock.refreshThrows = 'offline'; window.__toasts = []; await serverSync('mail', true); __mock.refreshThrows = null; });
+  check((await toasts(pg)).length === 0, 'an automatic refresh that fails stays quiet, as before');
+  await pg.evaluate(async () => { __mock.linkThrows = { kind: 'keychain', error: 'The password could not be stored in this computer’s keychain' }; window.__toasts = []; await mailLink('new@example.org', 'abcd efgh ijkl mnop'); __mock.linkThrows = null; });
+  t = await toasts(pg);
+  check(t.length === 1 && t[0] === 'RATA could not link new@example.org: The password could not be stored in this computer’s keychain' && !/download/.test(t[0]),
+    `linking that fails in the app says what failed: ${JSON.stringify(t)}`);
   await pg.close();
 }
 
