@@ -287,6 +287,12 @@ Don't spend time reporting these; they are known and planned:
     them. Read the block before you paste it anyway; it should hold nothing
     you would not post publicly.
   - **Delete account** also stops a mailbox you were still adding.
+- **v0.1.48:**
+  - **Company mail behind a filter:** if your company's mail passes through
+    Mimecast, Proofpoint, Barracuda or a similar filter, RATA now reads your
+    domain's other public DNS records to find where the mailbox really is
+    (Microsoft 365, Google Workspace, Zoho, Fastmail, Hostinger and others),
+    instead of asking you for a server address. Tell us if it still asks.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
