@@ -5,9 +5,10 @@
 //! that says so, because this is the file that ends up in a backup, a sync
 //! folder or a support bundle.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +79,14 @@ struct Contents {
     /// first time something goes wrong.
     #[serde(default)]
     licence: Option<String>,
+    /// The folders connected as cloud files (K5): iCloud Drive and Creative
+    /// Cloud Files, by service (`apple`, `adobe`), each the folder the
+    /// provider's own app keeps on this computer. Only the path: there is no
+    /// account and no credential behind it. Absent from a file written
+    /// before K5, and not written while empty, so a file without any reads
+    /// and looks exactly as it did; `version` stays 1.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    connections: BTreeMap<String, PathBuf>,
 }
 
 #[derive(Debug)]
@@ -85,6 +94,7 @@ pub struct Store {
     path: PathBuf,
     boxes: Vec<Mailbox>,
     licence: Option<String>,
+    connections: BTreeMap<String, PathBuf>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -115,6 +125,7 @@ impl Store {
             path,
             boxes: held.mailboxes,
             licence: held.licence,
+            connections: held.connections,
             on_disk,
         }
     }
@@ -137,6 +148,7 @@ impl Store {
             version: SCHEMA,
             mailboxes: self.boxes.clone(),
             licence: self.licence.clone(),
+            connections: self.connections.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         // Made afresh, so it is created with the mode below rather than
@@ -181,6 +193,28 @@ impl Store {
         self.licence = token
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty());
+    }
+
+    /// The folder connected for a service (`cloud`), if any.
+    pub fn connection(&self, service: &str) -> Option<&Path> {
+        self.connections.get(service).map(PathBuf::as_path)
+    }
+
+    /// Remember the folder for a service, or forget it with `None`.
+    pub fn set_connection(&mut self, service: &str, folder: Option<PathBuf>) {
+        match folder {
+            Some(f) => {
+                self.connections.insert(service.to_string(), f);
+            }
+            None => {
+                self.connections.remove(service);
+            }
+        }
+    }
+
+    /// Forget every connected folder (Delete account).
+    pub fn clear_connections(&mut self) {
+        self.connections.clear();
     }
 
     pub fn list(&self) -> &[Mailbox] {
@@ -356,6 +390,53 @@ mod tests {
         .unwrap();
         let s = Store::open(&file);
         assert_eq!(s.find("old@example.com").unwrap().auth, Auth::Password);
+    }
+
+    #[test]
+    fn a_connected_folder_survives_a_restart_and_can_be_forgotten() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        let icloud = dir.join("iCloud Drive");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.set_licence(Some("v1.aaa.bbb".into()));
+            s.set_connection("apple", Some(icloud.clone()));
+            s.set_connection("adobe", Some(dir.join("Creative Cloud Files")));
+            s.save().unwrap();
+        }
+        let mut s = Store::open(&file);
+        assert_eq!(s.connection("apple"), Some(icloud.as_path()));
+        assert_eq!(s.list().len(), 1, "the mailboxes are kept beside it");
+        assert_eq!(s.licence(), Some("v1.aaa.bbb"));
+        s.set_connection("apple", None);
+        s.save().unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.connection("apple"), None);
+        assert!(s.connection("adobe").is_some());
+        s.clear_connections();
+        s.save().unwrap();
+        // Nothing connected is not written at all: the file is as it was
+        // before K5.
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(!raw.contains("connections"), "{raw}");
+        assert_eq!(Store::open(&file).connection("adobe"), None);
+    }
+
+    #[test]
+    fn a_file_written_before_connected_folders_still_reads() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"mailboxes":[{"email":"old@example.com","host":"imap.example.com","port":993,"label":"Old","help":null,"source":"mx","added_at":5,"auth_failed_at":null}],"licence":"v1.x.y"}"#,
+        )
+        .unwrap();
+        let s = Store::open(&file);
+        assert_eq!(s.on_disk(), Some(1));
+        assert_eq!(s.list().len(), 1);
+        assert_eq!(s.licence(), Some("v1.x.y"));
+        assert_eq!(s.connection("apple"), None);
     }
 
     #[test]

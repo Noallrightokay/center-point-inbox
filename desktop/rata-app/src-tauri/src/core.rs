@@ -728,6 +728,12 @@ impl Rata {
         }
     }
 
+    /// The store, for the connected folders (`cloud`), which keep their
+    /// paths beside the mailbox list.
+    pub(crate) fn store(&self) -> &Mutex<Store> {
+        &self.store
+    }
+
     pub fn mailboxes(&self) -> Vec<Mailbox> {
         self.store
             .lock()
@@ -1158,6 +1164,10 @@ impl Rata {
                 ));
             }
             store.set_licence(None);
+            // The iCloud Drive and Creative Cloud Files folders connected
+            // here (K5): only their paths, which are RATA's to forget. The
+            // folders and the files in them are the customer's, untouched.
+            store.clear_connections();
             store
                 .save()
                 .map_err(|e| format!("The licence could not be removed: {e}"))?;
@@ -2855,7 +2865,7 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> 
 /// Write `bytes` to a new file in `dir` named `name`, or `name (2)` and so on
 /// if that is taken. Created exclusively, so an existing file is never
 /// overwritten, even one that appears between the check and the write.
-fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+pub(crate) fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
     let (stem, ext) = match name.rfind('.') {

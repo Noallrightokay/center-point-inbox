@@ -461,6 +461,11 @@ pub struct Plan {
     /// Viewing mailboxes side by side rather than in one stream.
     pub split: bool,
     pub ai: bool,
+    /// Connected accounts: cloud files and Share to Slack (Workstream K).
+    /// The page's `can('connect')`, Pro and above. Its own flag rather than
+    /// read from `ai` or `split`, so moving one feature between plans never
+    /// moves another with it.
+    pub connect: bool,
 }
 
 pub fn plan_def(key: &str) -> Plan {
@@ -472,6 +477,7 @@ pub fn plan_def(key: &str) -> Plan {
             chat: Some(0),
             split: false,
             ai: false,
+            connect: false,
         },
         "pro" => Plan {
             key: "pro",
@@ -480,6 +486,7 @@ pub fn plan_def(key: &str) -> Plan {
             chat: Some(3),
             split: true,
             ai: true,
+            connect: true,
         },
         "enterprise" => Plan {
             key: "enterprise",
@@ -488,6 +495,7 @@ pub fn plan_def(key: &str) -> Plan {
             chat: None,
             split: true,
             ai: true,
+            connect: true,
         },
         // A signed licence naming a plan this build has never heard of means
         // the app is older than the price list, not that anything is wrong:
@@ -501,6 +509,7 @@ pub fn plan_def(key: &str) -> Plan {
             chat: None,
             split: true,
             ai: true,
+            connect: true,
         },
     }
 }
