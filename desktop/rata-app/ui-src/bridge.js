@@ -878,8 +878,9 @@
       }
     },
 
-    /* Only ever called when a message with the file goes, or Share to
-       Slack sends it: never to fill the composer. */
+    /* Only ever called when a message with the file goes, when a draft
+       with the file is saved to the mailbox's Drafts (saveDraft), or when
+       Share to Slack sends it: never to fill the composer. */
     async '/api/created/read'(opts) {
       const b = body(opts);
       try {

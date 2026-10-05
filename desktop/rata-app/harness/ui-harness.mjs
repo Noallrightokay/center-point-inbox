@@ -322,6 +322,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
           case 'slack_targets': return C.targets;
           case 'slack_share':
             C.shared.push(args);
+            /* SEC-10: a slow Slack, answered when the harness says. */
+            if (C.shareWait) await C.shareWait;
+            if (C.shareFails) throw no('net', 'slack.com could not be reached.');
             return { where: '#ed-staff in Saltmarsh ED' };
         }
         throw 'unmocked ' + cmd;
@@ -4274,6 +4277,170 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
   await pg.keyboard.press('Escape');
   check((await calls(pg, 'create_file')).length === 8, 'and nothing more was made');
   await pg.close();
+  await ctx.close();
+}
+
+console.log('\n— SEC-10: only what this build connects is named, no disguised program into Files, a Slack send always answers, a resumed send never attaches a made file unseen —');
+{
+  const calls = (pg, name) => pg.evaluate((n) => __mock.calls.filter(([c]) => c === n).map(([, a]) => a), name);
+  const svc = (service, label, kind, account) => ({ service, label, kind, account });
+  const CONN = () => ({
+    on: { apple: true, slack: true },
+    services: [
+      svc('microsoft', 'Microsoft OneDrive', 'files', 'riley@example.org'), svc('google', 'Google Drive', 'files', 'riley@gmail.example'),
+      svc('apple', 'iCloud Drive', 'folder', 'iCloud Drive on this computer'), svc('adobe', 'Creative Cloud Files', 'folder', 'Creative Cloud Files on this computer'),
+      svc('slack', 'Slack', 'share', 'Riley in Saltmarsh ED'),
+    ],
+    tree: { apple: { root: { name: 'iCloud Drive', path: 'iCloud Drive', items: [
+      { id: 'e1', name: 'invoice.pdf.exe', kind: 'file', size: 2 },
+      { id: 'e2', name: 'statement.pdf\u200b.scr', kind: 'file', size: 2 },
+      { id: 'e3', name: 'Rota.txt', kind: 'file', size: 9 },
+    ] } } },
+    files: { e1: { name: 'invoice.pdf.exe', mime: 'application/octet-stream', data: btoa('MZ') }, e2: { name: 'statement.pdf\u200b.scr', mime: 'application/octet-stream', data: btoa('MZ') },
+      e3: { name: 'Rota.txt', mime: 'text/plain', data: btoa('Nights: Ann') } },
+    targets: [{ id: 'C1', name: 'ed-staff', kind: 'channel' }], saved: [], shared: [], finish: null,
+  });
+  const UNAVAILABLE = /OneDrive|Google|Microsoft|Slack/;
+
+  /* 1. Settings → Connected accounts names only the services this build
+     can make, on Pro and on Base; with all of them, every one is named. */
+  const pg = await open(true);
+  const sec = (avail, base) => pg.evaluate(async ({ c, avail, base }) => {
+    __mock.conn = c; if (avail) __mock.conn.avail = avail;
+    __mock.plan = base ? { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false } : undefined;
+    takeStanding(await apiFetch('/api/licence')); go('set'); await loadConnections();
+    return { shown: !document.querySelector('#conn-sec').hidden, lead: document.querySelector('#conn-lead').textContent, text: document.querySelector('#conn-sec').textContent };
+  }, { c: CONN(), avail, base });
+  for (const base of [false, true]) {
+    const plan = base ? 'Base' : 'Pro';
+    const two = await sec(['apple', 'adobe'], base);
+    check(two.shown && !UNAVAILABLE.test(two.text) && /iCloud Drive/.test(two.text) && /Creative Cloud Files/.test(two.text),
+      `${plan}, a build with the two folders only: Connected accounts names iCloud Drive and Creative Cloud Files and nothing it cannot connect: ${JSON.stringify(two.text)}`);
+    const three = await sec(['apple', 'adobe', 'slack'], base);
+    check(/Slack/.test(three.lead) && !/OneDrive|Google|Microsoft/.test(three.text), `${plan}, with Slack too: Slack is named, OneDrive and Google Drive are not: ${JSON.stringify(three.lead)}`);
+    const all = await sec(null, base);
+    check(['OneDrive', 'Google Drive', 'iCloud Drive', 'Creative Cloud Files', 'Slack'].every((n) => all.text.includes(n)) && !/never goes to them/.test(all.text) && !/[–—]/.test(all.text),
+      `${plan}, with every service: each is named, and nothing says mail never goes to them: ${JSON.stringify(all.lead)}`);
+    if (!base) check(/Share to Slack sends only what you choose/.test(all.lead), `Pro says Share to Slack sends only what you choose: ${JSON.stringify(all.lead)}`);
+    else check(/OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack come with RATA Pro\./.test(all.text), 'Base names all five as Pro’s when all five are available');
+  }
+
+  /* 2. A program named as a document from a connected folder never reaches
+     Files, and ⤓ File on one already there asks first. */
+  const judged = await pg.evaluate(() => typeof nameDisguised !== 'function' ? ['no nameDisguised'] : [['invoice.pdf.exe', true], ['statement.pdf\u200b.scr', true], ['scan.PDF .EXE', true], ['x.pdf\u2024exe', true], ['report.docx\u202e.js', true],
+    ['setup.exe', false], ['Rota.txt', false], ['Q3 figures.pdf', false], ['archive.tar.gz', false], ['notes.md.txt', false]].filter(([n, want]) => nameDisguised(n) !== want).map(([n]) => n));
+  check(judged.length === 0, `the page judges a name as rata_mail::names::looks_disguised does: ${JSON.stringify(judged)}`);
+  await sec(null, false);
+  await pg.evaluate(() => { window.__toasts = []; go('docs'); });
+  await pg.click('#cloud-src [data-cloud-src="apple"]');
+  await pg.waitForSelector('#cloud-body [data-cloud-keep="e1"]');
+  const docs0 = await pg.evaluate(() => S.documents.length);
+  for (const id of ['e1', 'e2']) {
+    await pg.click(`#cloud-body [data-cloud-keep="${id}"]`);
+    await pg.waitForFunction(() => window.__toasts.length > 0, null, { timeout: 3000 }).catch(() => {});
+  }
+  let t = (await toasts(pg)).join('|');
+  const kept = await pg.evaluate(() => S.documents.map((d) => d.name));
+  check(kept.length === docs0 && /Not added to Files: invoice\.pdf\.exe is a program \(\.exe\) named to look like a PDF\. Files keeps documents only\./.test(t) && /Not added to Files: statement\.pdf/.test(t),
+    `Add to Files refuses a program named as a document, and says why: ${JSON.stringify({ t, kept })}`);
+  await pg.click('#cloud-body [data-cloud-keep="e3"]');
+  check(await pg.waitForFunction(() => S.documents.some((d) => d.name === 'Rota.txt'), null, { timeout: 3000 }).then(() => true, () => false), 'and still adds a document');
+  /* One already in Files (kept before SEC-10): ⤓ File asks, and only Save anyway saves. */
+  await pg.evaluate(async () => {
+    S.documents.unshift({ id: 'dexe2', name: 'invoice.pdf.exe', fmt: 'EXE', origin: 'cloud', prov: 'cloud', cloud: 'iCloud Drive', size: '1 KB', bytes: 2, ts: Date.now() + 5, content: '', hasFile: true });
+    await fvPut('dexe2', new Blob(['MZ'])); __mock.files = [];
+  });
+  await pg.click('#cloud-src [data-cloud-src="local"]');
+  await pg.waitForSelector('#doc-grid [data-dl="dexe2"]');
+  await pg.click('#doc-grid [data-dl="dexe2"]');
+  await pg.waitForSelector('#warn-ov.open', { timeout: 3000 }).catch(() => {});
+  const asked = await pg.evaluate(() => ({ open: document.querySelector('#warn-ov').classList.contains('open'), title: document.querySelector('#warn-title').textContent }));
+  await pg.click('#warn-cancel').catch(() => {});
+  await pg.waitForTimeout(150);
+  check(asked.open && /is a program \(\.exe\) named to look like a document\. Save it anyway\?/.test(asked.title) && (await pg.evaluate(() => (__mock.files || []).length)) === 0,
+    `⤓ File on a disguised program asks first, and Cancel saves nothing: ${JSON.stringify(asked)}`);
+  await pg.click('#doc-grid [data-dl="dexe2"]');
+  await pg.waitForSelector('#warn-ov.open', { timeout: 3000 }).catch(() => {});
+  await pg.click('#warn-go', { timeout: 3000 }).catch(() => {});
+  await pg.waitForFunction(() => (__mock.files || []).length === 1, null, { timeout: 3000 }).catch(() => {});
+  check((await pg.evaluate(() => (__mock.files[0] || {}).name)) === 'invoice.pdf.exe', 'Save anyway saves it');
+  await pg.evaluate(() => { __mock.files = []; S.documents = S.documents.filter((d) => d.id !== 'dexe2'); renderDocs(); });
+  await pg.click('#doc-grid [data-dl]');
+  await pg.waitForFunction(() => (__mock.files || []).length === 1, null, { timeout: 3000 }).catch(() => {});
+  check(await pg.evaluate(() => !document.querySelector('#warn-ov').classList.contains('open') && __mock.files.length === 1 && __mock.files[0].name === 'Rota.txt'), 'a document saves without a question');
+
+  /* 3. Share to Slack: once Send is pressed, Cancel, ✕, Escape and the
+     backdrop do nothing until Slack answers, and the answer is said. */
+  const docId = await pg.evaluate(() => S.documents.find((d) => d.name === 'Rota.txt').id);
+  const share = async (fails) => {
+    await pg.evaluate((f) => { __mock.conn.shareFails = f; __mock.conn.shareWait = new Promise((r) => { __mock.conn.release = r; }); window.__toasts = []; }, fails);
+    await pg.click(`#doc-grid [data-slack="${docId}"]`);
+    await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+    await pg.click('#slack-targets input[value="C1"]');
+    const n = (await calls(pg, 'slack_share')).length;
+    await pg.click('#slack-send');
+    await pg.waitForFunction((k) => __mock.calls.filter(([c]) => c === 'slack_share').length === k + 1, n);
+    const busy = await pg.evaluate(() => ({ cancel: document.querySelector('#slack-cancel').disabled, close: document.querySelector('#slack-close').disabled, send: document.querySelector('#slack-send').textContent }));
+    await pg.keyboard.press('Escape');
+    await pg.evaluate(() => {
+      const ov = document.querySelector('#slack-ov');
+      if (ov.classList.contains('open')) ov.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      document.querySelector('#slack-cancel').onclick(); document.querySelector('#slack-close').onclick();
+    });
+    const still = await pg.evaluate(() => document.querySelector('#slack-ov').classList.contains('open'));
+    await pg.evaluate(() => __mock.conn.release());
+    return { busy, still };
+  };
+  let s = await share(false);
+  await pg.waitForFunction(() => window.__toasts.some((x) => /^Shared to/.test(x)), null, { timeout: 3000 }).catch(() => {});
+  t = (await toasts(pg)).join('|');
+  check(s.busy.cancel && s.busy.close && s.busy.send === 'Sending…' && s.still && /Shared to #ed-staff in Saltmarsh ED/.test(t)
+    && !(await pg.evaluate(() => document.querySelector('#slack-ov').classList.contains('open'))),
+  `while Slack has not answered, Cancel, ✕, Escape and the backdrop leave the dialog open, and the result is said: ${JSON.stringify({ ...s, t })}`);
+  s = await share(true);
+  await pg.waitForFunction(() => document.querySelector('#slack-err').textContent, null, { timeout: 3000 }).catch(() => {});
+  const failed = await pg.evaluate(() => ({ open: document.querySelector('#slack-ov').classList.contains('open'), err: document.querySelector('#slack-err').textContent, cancel: document.querySelector('#slack-cancel').disabled, lead: document.querySelector('#slack-lead').textContent }));
+  check(s.still && failed.open && /^Not sent to Slack: slack\.com could not be reached\./.test(failed.err) && !failed.cancel && /Nothing is sent until you press Send/.test(failed.lead),
+    `a refusal is said in the dialog, which can then be closed: ${JSON.stringify(failed)}`);
+  await pg.keyboard.press('Escape');
+  check(!(await pg.evaluate(() => document.querySelector('#slack-ov').classList.contains('open'))), 'and Escape closes it again');
+  await pg.close();
+
+  /* 4. A waiting send left by the last session that attaches a file made
+     with Create file is put back, not sent; one without is still sent once. */
+  const ctx = await browser.newContext();
+  const pg1 = await open(true, { undo: true, context: ctx });
+  await pg1.evaluate(() => {
+    const acct = S.linked.find((l) => l.type === 'mail').id;
+    const rec = (id, subj, files) => ({ id, at: Date.now(), state: 'waiting', acctId: acct, real: true, to: 'bo@example.org', cc: '', bcc: '', subj, body: 'b', replying: null, fwd: null, finished: null,
+      files, data: files.map(() => null), look: { to: 'bo@example.org', cc: '', bcc: '', subj, ccOn: false, bccOn: false, sig: null, draft: { kind: 'new' } } });
+    localStorage.setItem(OB_KEY, JSON.stringify([rec('m1', 'Made file', [{ name: 'Shift swap form.docx', created: '00000000000000a1', size: 9300 }]), rec('m2', 'Plain', [])]));
+  });
+  await pg1.close();
+  /* Every toast from the very start, since the put-back is said during boot. */
+  await ctx.addInitScript(() => {
+    if (window !== window.top) return;
+    window.__seen = [];
+    let last = '';
+    new MutationObserver(() => { const el = document.getElementById('toast'); if (el && el.textContent !== last) { last = el.textContent; window.__seen.push(last); } })
+      .observe(document, { childList: true, characterData: true, subtree: true });
+  });
+  const pg2 = await open(true, { undo: true, context: ctx });
+  await pg2.waitForFunction(() => __mock.calls.some(([c]) => c === 'send_mail'), null, { timeout: 3000 }).catch(() => {});
+  await pg2.waitForTimeout(300);
+  const r = await pg2.evaluate(() => ({ sent: __mock.calls.filter(([c]) => c === 'send_mail').map(([, a]) => a.draft.subject), read: __mock.calls.filter(([c]) => c === 'created_read').length,
+    open: document.querySelector('#compose-ov').classList.contains('open'), subj: $('#cmp-subj').value, ref: CMP_FILES[0] && CMP_FILES[0].created, box: localStorage.getItem(OB_KEY) }));
+  t = (await toasts(pg2)).join('|');
+  const said = await pg2.evaluate(() => (window.__seen || []).join('|'));
+  check(r.sent.join() === 'Plain' && r.read === 0 && r.open && r.subj === 'Made file' && r.ref === '00000000000000a1' && r.box === null,
+    `at the next start, a waiting send with a made file is put back with it attached, and only the other is sent: ${JSON.stringify(r)}`);
+  check(/“Made file” was not sent: RATA closed before it went\. It would attach Shift swap form\.docx as it is now, so check it before sending\./.test(t + '|' + said),
+    `and it says the file would go as it is now: ${JSON.stringify(t + '|' + said)}`);
+  await pg2.close();
+  const pg3 = await open(true, { undo: true, context: ctx });
+  await pg3.waitForTimeout(400);
+  check((await pg3.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').length)) === 0, 'and the start after that sends nothing');
+  await pg3.close();
   await ctx.close();
 }
 
