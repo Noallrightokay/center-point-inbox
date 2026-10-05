@@ -29,6 +29,11 @@ pub enum Source {
     Mx,
     Guess,
     Override,
+    /// The domain's SPF record names the provider that sends its mail
+    /// (L1), found when the MX is a filter or names nobody RATA knows.
+    Spf,
+    /// `autodiscover.<domain>` is a CNAME to Microsoft 365's own (L1).
+    Autodiscover,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,6 +404,188 @@ fn zoho_pro_smtp(imap_host: &str) -> Option<String> {
         .iter()
         .find(|(region, _, _)| h == format!("imappro.{region}"))
         .map(|(region, _, _)| format!("smtppro.{region}"))
+}
+
+// ------------------------------------------------- evidence behind a filter
+
+/// SPF `include:` targets that only a mailbox provider's own customers
+/// publish, each with an MX name that [`mx_rule`] already reads as that
+/// provider, so the host, label and help are the MX's own. Exact names
+/// only: an include is evidence of one provider, never of a name that
+/// merely ends the same way. Each is the value the provider's own
+/// documentation tells a domain to publish:
+///
+/// - `spf.protection.outlook.com`: Microsoft, "Set up SPF to identify
+///   valid email sources for your Microsoft 365 domain" (learn.microsoft.com).
+/// - `_spf.google.com`: Google Workspace Admin Help, "Set up SPF"
+///   (support.google.com/a/answer/10685031).
+/// - `spf.messagingengine.com`: Fastmail, "Manual DNS configuration"
+///   (fastmail.help).
+/// - `_spf.mail.hostinger.com`: Hostinger Email, "How to set up SPF"
+///   (support.hostinger.com).
+/// - `icloud.com`: Apple, "Use iCloud Mail with a custom email domain",
+///   `v=spf1 include:icloud.com ~all` (support.apple.com).
+/// - `spf.titan.email`: Titan, "What are SPF records"
+///   (support.titan.email).
+/// - `emailsrvr.com`: Rackspace, "Create an SPF policy"
+///   (docs.rackspace.com).
+/// - `spf.migadu.com`: Migadu's DNS setup (migadu.com/guides).
+/// - `spf.privateemail.com`: Namecheap, "Private Email records for domains
+///   with third-party DNS" (namecheap.com/support).
+/// - `one.zoho.com`: Zoho Mail admin help, "SPF configuration", for an
+///   organisation using several Zoho services (zoho.com/mail/help).
+///
+/// Zoho's regional values are in [`spf_provider`]. Not here, on purpose:
+/// `zcsend.net` is Zoho Campaigns, a mailing-list sender, which says
+/// nothing about where a domain's mailboxes are; and the bulk senders
+/// (SendGrid, Mailgun, Mailchimp, Amazon SES) for the same reason.
+const SPF_INCLUDES: [(&str, &str); 10] = [
+    ("spf.protection.outlook.com", "outlook.com"),
+    ("_spf.google.com", "google.com"),
+    ("spf.messagingengine.com", "messagingengine.com"),
+    ("_spf.mail.hostinger.com", "hostinger.com"),
+    ("icloud.com", "icloud.com"),
+    ("spf.titan.email", "titan.email"),
+    ("emailsrvr.com", "emailsrvr.com"),
+    ("spf.migadu.com", "migadu.com"),
+    ("spf.privateemail.com", "registrar-servers.com"),
+    ("one.zoho.com", "zoho.com"),
+];
+
+/// The mailbox provider an SPF `include:` target names, if it names one.
+///
+/// Zoho, by region: Zoho Mail's current value is `zohomail.<region>`
+/// (`include:zohomail.com`, zoho.com/mail/help/adminconsole/spf-configuration.html;
+/// each region's `zohomail.` domain publishes that region's
+/// `spf.zohomail.` record), and the value it documented before was the
+/// region's own domain (`include:zoho.eu`). Both lead to [`ZOHO_REGIONS`]'
+/// host for that region. Canada has no `zohomail.` domain of Zoho's own.
+pub fn spf_provider(include: &str) -> Option<MailHost> {
+    let inc = include.trim_end_matches('.').to_ascii_lowercase();
+    let mx = SPF_INCLUDES
+        .iter()
+        .find(|(name, _)| *name == inc)
+        .map(|(_, mx)| (*mx).to_string())
+        .or_else(|| {
+            ZOHO_REGIONS.iter().find_map(|(region, _, _)| {
+                let current = region
+                    .strip_prefix("zoho.")
+                    .map(|rest| format!("zohomail.{rest}"));
+                (inc == *region || current.as_deref() == Some(inc.as_str()))
+                    .then(|| region.to_string())
+            })
+        })?;
+    match mx_rule(&mx) {
+        Some(MxRule::Serves(h)) => Some(h),
+        _ => None,
+    }
+}
+
+/// The provider an `autodiscover.<domain>` CNAME names: Microsoft 365
+/// when it is `autodiscover.outlook.com`, the record Microsoft tells every
+/// Microsoft 365 domain to publish ("Add DNS records to connect your
+/// domain", learn.microsoft.com). Nothing else is read from it.
+pub fn autodiscover_provider(target: &str) -> Option<MailHost> {
+    let t = target.trim_end_matches('.').to_ascii_lowercase();
+    if t != "autodiscover.outlook.com" {
+        return None;
+    }
+    match mx_rule(&t) {
+        Some(MxRule::Serves(h)) => Some(h),
+        _ => None,
+    }
+}
+
+/// The parts of an SPF record discovery reads (RFC 7208): the domains it
+/// includes with a pass, and where it redirects.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Spf {
+    /// `include:` targets qualified `+` (or not at all), lowercased, in
+    /// the record's order. A `-`, `~` or `?` include says that sender is
+    /// *not* to be trusted outright, so it is evidence of nothing.
+    pub includes: Vec<String>,
+    /// `redirect=`, only when the record has no `all`, since `all` makes
+    /// a redirect meaningless (RFC 7208 §6.1).
+    pub redirect: Option<String>,
+}
+
+/// The domain's one SPF record among its TXT records. None when it has
+/// none, or more than one: two `v=spf1` records are an error (RFC 7208
+/// §4.5), and an error is evidence of nothing.
+pub fn spf_record(txt: &[String]) -> Option<&str> {
+    let mut spf = txt.iter().filter(|t| {
+        let b = t.as_bytes();
+        b.len() >= 6 && b[..6].eq_ignore_ascii_case(b"v=spf1") && (b.len() == 6 || b[6] == b' ')
+    });
+    let one = spf.next()?;
+    if spf.next().is_some() {
+        return None;
+    }
+    Some(one.as_str())
+}
+
+/// Read an SPF record strictly. None for anything RFC 7208 calls a
+/// permanent error that RATA can see without a lookup: a missing
+/// version, an unknown mechanism, a mechanism or modifier with a bad
+/// name, an `include` with no domain, or two `redirect`s.
+pub fn parse_spf(record: &str) -> Option<Spf> {
+    let mut terms = record.split_ascii_whitespace();
+    if !terms.next()?.eq_ignore_ascii_case("v=spf1") {
+        return None;
+    }
+    let mut spf = Spf::default();
+    let mut all = false;
+    for term in terms {
+        let (qualifier, rest) = match term.as_bytes()[0] {
+            q @ (b'+' | b'-' | b'~' | b'?') => (Some(q), &term[1..]),
+            _ => (None, term),
+        };
+        let end = rest.find([':', '/', '=']).unwrap_or(rest.len());
+        let (name, tail) = rest.split_at(end);
+        let named = name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        if !named {
+            return None;
+        }
+        // A modifier: `name=value`, never qualified.
+        if let Some(value) = tail.strip_prefix('=') {
+            if qualifier.is_some() {
+                return None;
+            }
+            if name.eq_ignore_ascii_case("redirect") {
+                if value.is_empty() || spf.redirect.is_some() {
+                    return None;
+                }
+                spf.redirect = Some(value.trim_end_matches('.').to_ascii_lowercase());
+            }
+            // `exp=` and unknown modifiers are ignored (RFC 7208 §6).
+            continue;
+        }
+        match name.to_ascii_lowercase().as_str() {
+            "all" => {
+                if !tail.is_empty() {
+                    return None;
+                }
+                all = true;
+            }
+            "include" => {
+                let domain = tail.strip_prefix(':').filter(|d| !d.is_empty())?;
+                // A macro (`%{d}`) expands per message; it names no one.
+                if matches!(qualifier, None | Some(b'+')) && !domain.contains('%') {
+                    spf.includes
+                        .push(domain.trim_end_matches('.').to_ascii_lowercase());
+                }
+            }
+            "a" | "mx" | "ptr" | "ip4" | "ip6" | "exists" => {}
+            _ => return None,
+        }
+    }
+    if all {
+        spf.redirect = None;
+    }
+    Some(spf)
 }
 
 /// The conventional names, for a domain that really does run its own server.
