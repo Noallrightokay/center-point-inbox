@@ -20,6 +20,7 @@
 //!
 //! Microsoft, Google and Slack are listed so the page knows their shape,
 //! as not available: they need the owner's registrations (K2 to K4).
+//! Slack becomes available in a build carrying its client id (K3, `slack`).
 
 use std::ffi::OsStr;
 use std::fs;
@@ -42,7 +43,7 @@ const SCAN_MAX: usize = 20_000;
 /// The sentence for a plan without connected accounts.
 pub const NEED_PRO: &str = "Connected accounts come with RATA Pro. Upgrade at mailrata.org.";
 
-/// The sentence for Share to Slack, which no copy of RATA has yet (K3).
+/// The sentence for Share to Slack in a build without its client id (K3).
 pub const NO_SLACK: &str = "Share to Slack is not switched on in this copy of RATA yet.";
 
 /// The sentence for a placeholder iCloud has not downloaded yet.
@@ -104,7 +105,8 @@ impl Service {
         }
     }
 
-    /// Whether this copy can connect it at all.
+    /// Whether every copy can connect it. Slack is not, as such: a copy can
+    /// when it was built with Slack's client id (`Rata::offers`).
     pub fn available(self) -> bool {
         matches!(self, Service::Apple | Service::Adobe)
     }
@@ -258,13 +260,22 @@ pub struct Refusal {
 }
 
 impl Refusal {
-    fn new(service: Service, kind: &'static str, error: impl Into<String>) -> Refusal {
+    pub(crate) fn new(service: Service, kind: &'static str, error: impl Into<String>) -> Refusal {
         Refusal {
             service: service.key().into(),
             kind,
             error: error.into(),
         }
     }
+}
+
+/// What `connect_service` answers: the service's entry, connected, or that
+/// the customer cancelled a sign-in waiting in the browser.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Connected {
+    Done(Status),
+    Cancelled { cancelled: bool },
 }
 
 /// A folder as listed.
@@ -764,30 +775,36 @@ pub fn save(
     })
 }
 
-fn service_of(key: &str) -> Result<Service, Refusal> {
-    let service = Service::parse(key).ok_or_else(|| Refusal {
-        service: String::new(),
-        kind: "unknown",
-        error: "RATA does not know that service.".into(),
-    })?;
-    if !service.available() {
-        let error = if service == Service::Slack {
-            NO_SLACK.to_string()
-        } else {
-            format!(
-                "{} is not switched on in this copy of RATA yet.",
-                service.label()
-            )
-        };
-        return Err(Refusal::new(service, "unavailable", error));
-    }
-    Ok(service)
-}
-
 impl Rata {
+    /// Whether this copy can connect `service`: the folders always, Slack
+    /// with its client id, the rest not yet.
+    pub(crate) fn offers(&self, service: Service) -> bool {
+        service.available() || (service == Service::Slack && self.slack.configured())
+    }
+
+    pub(crate) fn service_of(&self, key: &str) -> Result<Service, Refusal> {
+        let service = Service::parse(key).ok_or_else(|| Refusal {
+            service: String::new(),
+            kind: "unknown",
+            error: "RATA does not know that service.".into(),
+        })?;
+        if !self.offers(service) {
+            let error = if service == Service::Slack {
+                NO_SLACK.to_string()
+            } else {
+                format!(
+                    "{} is not switched on in this copy of RATA yet.",
+                    service.label()
+                )
+            };
+            return Err(Refusal::new(service, "unavailable", error));
+        }
+        Ok(service)
+    }
+
     /// Connected accounts are Pro's (`Plan::connect`). No licence at all
     /// says what the licence box says.
-    fn may_connect(&self, service: Service) -> Result<(), Refusal> {
+    pub(crate) fn may_connect(&self, service: Service) -> Result<(), Refusal> {
         let standing = self.standing();
         match standing.plan {
             Some(p) if p.connect => Ok(()),
@@ -819,6 +836,9 @@ impl Rata {
     }
 
     fn status_of(&self, service: Service, pro: bool) -> Status {
+        if service == Service::Slack {
+            return self.slack_status(pro);
+        }
         let mut s = Status {
             service: service.key(),
             label: service.label(),
@@ -855,8 +875,16 @@ impl Rata {
     /// Look for the service's folder under `home` by `os`'s rules and
     /// remember it.
     pub fn connect_service(&self, key: &str, os: Os, home: &Path) -> Result<Status, Refusal> {
-        let service = service_of(key)?;
+        let service = self.service_of(key)?;
         self.may_connect(service)?;
+        if service.kind() != "folder" {
+            // Slack signs in in the browser (`connect_slack`), never here.
+            return Err(Refusal::new(
+                service,
+                "refused",
+                format!("{} is not a folder on this computer.", service.label()),
+            ));
+        }
         let folder = find(service, os, home)
             .ok_or_else(|| Refusal::new(service, "not-found", service.missing(os)))?;
         self.keep_folder(service, Some(folder))?;
@@ -866,15 +894,25 @@ impl Rata {
     /// Forget the service's folder. Allowed on any plan, so a lapsed
     /// licence can still tidy up; the folder itself is not touched.
     pub fn disconnect_service(&self, key: &str) -> Result<Status, Refusal> {
-        let service = service_of(key)?;
+        let service = self.service_of(key)?;
+        if service == Service::Slack {
+            return self.disconnect_slack().map(|(status, _)| status);
+        }
         self.keep_folder(service, None)?;
         let pro = self.standing().plan.is_some_and(|p| p.connect);
         Ok(self.status_of(service, pro))
     }
 
     pub(crate) fn connected(&self, key: &str) -> Result<(Service, PathBuf), Refusal> {
-        let service = service_of(key)?;
+        let service = self.service_of(key)?;
         self.may_connect(service)?;
+        if service.kind() != "folder" {
+            return Err(Refusal::new(
+                service,
+                "refused",
+                format!("{} has no files RATA can open.", service.label()),
+            ));
+        }
         let folder = self.remembered(service).ok_or_else(|| {
             Refusal::new(
                 service,
@@ -916,13 +954,8 @@ impl Rata {
     }
 }
 
-/// Share to Slack, which needs the owner's Slack app (K3).
-// K3: when Slack sending is built here, escape the posted text first. Slack
-// reads `<!channel>`, `<!here>`, `<@U…>`, `<#C…>` and `<https://x|label>`
-// in a message as live mentions and links, so `&`, `<` and `>` must go as
-// `&amp;`, `&lt;` and `&gt;` (in that order), and bidi controls and
-// zero-width characters must be stripped, so a mail's text cannot ping a
-// whole channel or show one address while linking to another.
+/// Share to Slack in a build without Slack's client id (K3). With one,
+/// `slack` sends, and `slack::for_slack` escapes what it posts.
 pub fn no_slack() -> Refusal {
     Refusal::new(Service::Slack, "unavailable", NO_SLACK)
 }
@@ -980,12 +1013,14 @@ mod tests {
     }
 
     fn app(s: &Scratch, licence: Option<&str>) -> Rata {
-        let app = Rata::new(
+        let mut app = Rata::new(
             Store::open(s.0.join("app/mailboxes.json")),
             Box::new(Memory::default()),
             Resolver::system().expect("resolver"),
             Some(KEY),
         );
+        // A build without Slack's client id, whatever the machine has.
+        app.slack = crate::slack::Slack::off();
         if let Some(l) = licence {
             app.set_licence(Some(l.into()), None).unwrap();
         }

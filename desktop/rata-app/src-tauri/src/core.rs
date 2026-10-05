@@ -61,6 +61,9 @@ pub struct Rata {
     /// list's lock, as it begins and again once the licence is gone: the
     /// `epoch` a licence renewal (SEC-7) or a link (SEC-8) began under.
     forgotten: std::sync::atomic::AtomicU64,
+    /// Share to Slack (K3): this build's client id, the sign-in in
+    /// progress and the tokens held in memory. See `slack`.
+    pub(crate) slack: crate::slack::Slack,
 }
 
 /// What linking a mailbox produced.
@@ -544,6 +547,7 @@ impl Rata {
             notes: Mutex::new(HashMap::new()),
             last_refresh: Mutex::new(None),
             forgotten: std::sync::atomic::AtomicU64::new(0),
+            slack: crate::slack::Slack::from_build(),
         }
     }
 
@@ -732,6 +736,25 @@ impl Rata {
     /// paths beside the mailbox list.
     pub(crate) fn store(&self) -> &Mutex<Store> {
         &self.store
+    }
+
+    /// The keychain, for Share to Slack's sign-in (`slack`), which keeps
+    /// its tokens in a service of its own.
+    pub(crate) fn vault(&self) -> &dyn Vault {
+        self.vault.as_ref()
+    }
+
+    /// Whether the licence `store` holds allows connected accounts (Pro),
+    /// for a caller already holding the list's lock, as
+    /// [`Rata::may_link_in`] is.
+    pub(crate) fn connect_allowed_in(&self, store: &Store) -> bool {
+        let token = store.licence().map(licence::clean);
+        licence::check(
+            token.as_deref().unwrap_or(""),
+            self.public_key,
+            now() as i64,
+        )
+        .is_ok_and(|l| licence::plan_def(&l.plan).connect)
     }
 
     pub fn mailboxes(&self) -> Vec<Mailbox> {
@@ -1144,6 +1167,8 @@ impl Rata {
     /// `keep_linked` refuses it.
     pub fn forget_everything(&self) -> Result<Forgotten, String> {
         self.ms.cancel();
+        // A Slack sign-in waiting for the browser keeps nothing either.
+        self.slack.cancel();
         let boxes: Vec<String> = {
             let store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
             self.forgotten
@@ -1163,6 +1188,12 @@ impl Rata {
                     m.email
                 ));
             }
+            // Share to Slack's sign-in (K3): its keychain entries first, and
+            // a keychain that refuses stops here with the licence kept, as a
+            // mailbox's does. A sign-in or a renewal still in flight finds
+            // the Slack generation moved and writes nothing.
+            self.forget_slack_in(&mut store)
+                .map_err(|e| format!("Slack could not be disconnected: {e}"))?;
             store.set_licence(None);
             // The iCloud Drive and Creative Cloud Files folders connected
             // here (K5): only their paths, which are RATA's to forget. The
@@ -2352,7 +2383,12 @@ impl Rata {
     /// only to take its password or token out of that error: no secret is
     /// ever part of the block (`diagnostics::clean`).
     pub fn diagnostics(&self, updater_key: bool, live: &[String]) -> String {
-        let build = Build::this(updater_key, self.public_key.is_some(), self.ms.configured());
+        let build = Build::this(
+            updater_key,
+            self.public_key.is_some(),
+            self.ms.configured(),
+            self.slack.configured(),
+        );
         let standing = self.standing();
         let licence = match (&standing.plan, &standing.licence) {
             (Some(plan), Some(l)) => Licensed::Yes {
@@ -3100,6 +3136,8 @@ mod tests {
         // No Microsoft sign-in, whatever the machine running the tests has
         // in RATA_MS_CLIENT_ID; `with_ms` gives one where a test needs it.
         app.ms = Microsoft::new(None, oauth::AUTHORIZE_URL, oauth::TOKEN_URL, false);
+        // Nor Slack, whatever RATA_SLACK_CLIENT_ID says.
+        app.slack = crate::slack::Slack::off();
         app
     }
 

@@ -126,7 +126,7 @@ pub fn looks_disguised(name: &str) -> bool {
 /// `blank`, which turns them into a space. The bidirectional controls are Cf
 /// too and are also named where they are removed. Taking U+200C and U+200D
 /// out of a Persian name or an emoji sequence is a small cost in a file name.
-fn invisible(c: char) -> bool {
+pub fn invisible(c: char) -> bool {
     matches!(
         c as u32,
         // Category Cf (Unicode 16).

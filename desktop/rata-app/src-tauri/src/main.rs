@@ -23,6 +23,7 @@ mod links;
 mod mark;
 mod notify;
 mod oauth;
+mod slack;
 mod store;
 mod update;
 mod vault;
