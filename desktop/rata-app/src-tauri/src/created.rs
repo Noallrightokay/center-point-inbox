@@ -32,6 +32,13 @@
 //!    does not make, is never opened.
 //! 4. **The file itself is not a link** (a symbolic link, or on Windows any
 //!    reparse point the standard library reports as one), but a plain file.
+//! 5. **It is not marked as a download** (`mark::carries_mark`: a
+//!    `Zone.Identifier` stream on Windows, `com.apple.quarantine` with the
+//!    download flag on macOS). RATA never marks a file it made, so a marked
+//!    one at that path is somebody else's, saved under the name RATA's file
+//!    left free (SEC-9). Nothing RATA saves takes a name a record points
+//!    at, either (`core::write_unmarked`'s `avoid`). Inodes are not pinned:
+//!    Word saves by writing a new file and renaming it over the old one.
 //!
 //! Then the recorded path alone goes to the system's opener (`system_open`,
 //! the `open` crate, the same one `links` uses for the browser): as an
@@ -535,8 +542,8 @@ fn seconds(t: std::io::Result<std::time::SystemTime>) -> Option<u64> {
 
 /// The rule in the module's notes, applied to one record now: the file RATA
 /// made, of one of the six formats, with that format's extension, still a
-/// plain file (not a link) at its canonical recorded path. Its format and
-/// what the disk says of it when it passes.
+/// plain file (not a link) at its canonical recorded path, and not marked
+/// as a download. Its format and what the disk says of it when it passes.
 fn checked(rec: &Created) -> Result<(Format, fs::Metadata), FileRefusal> {
     let place = shown(&rec.place);
     let refused = || {
@@ -587,6 +594,17 @@ fn checked(rec: &Created) -> Result<(Format, fs::Metadata), FileRefusal> {
             ),
         ));
     }
+    // RATA never marks a file it made, so a marked one here came from
+    // somewhere else: a download saved under the name RATA's left free.
+    if crate::mark::carries_mark(&rec.path) {
+        return Err(refuse(
+            "refused",
+            format!(
+                "{} in {place} is marked as downloaded from the internet, so it is not the file RATA made, and RATA will not open it.",
+                rec.name
+            ),
+        ));
+    }
     Ok((format, md))
 }
 
@@ -619,6 +637,17 @@ impl Rata {
             Some(_) => Err(refuse("plan", NEED_PRO_FILES)),
             None => Err(refuse("unlicensed", standing.message)),
         }
+    }
+
+    /// Where every file Create file made and RATA remembers is, whether or
+    /// not it is still there: names nothing RATA saves may take
+    /// (`core::write_unmarked`), so a record only ever reaches the file RATA
+    /// made in its place (SEC-9).
+    pub(crate) fn created_paths(&self) -> Vec<PathBuf> {
+        self.store()
+            .lock()
+            .map(|s| s.created().iter().map(|c| c.path.clone()).collect())
+            .unwrap_or_default()
     }
 
     fn record(&self, id: &str) -> Result<Created, FileRefusal> {
@@ -684,7 +713,7 @@ impl Rata {
             }
         };
         let clean = file_name(name, format);
-        let path = write_unmarked(&dir, &clean, bytes).map_err(|e| {
+        let path = write_unmarked(&dir, &clean, bytes, &self.created_paths()).map_err(|e| {
             refuse(
                 "disk",
                 format!(
@@ -1217,7 +1246,7 @@ mod tests {
         // Not marked as a download: no write went through the mark...
         assert_eq!(crate::core::MARKED.with(|m| m.get()), marked);
         // ...while a save does, which is what the counter counts.
-        crate::core::write_new(&s.0, "x.txt", b"x").unwrap();
+        crate::core::write_new(&s.0, "x.txt", b"x", &[]).unwrap();
         assert_eq!(crate::core::MARKED.with(|m| m.get()), marked + 1);
         #[cfg(windows)]
         {
@@ -1593,6 +1622,103 @@ mod tests {
         assert_eq!(names, ["Three.txt", "Two.txt", "One.txt"]);
     }
 
+    /// Mark `path` as Windows does, with a `Zone.Identifier` stream: the
+    /// real stream on Windows, a file beside it anywhere else, which
+    /// `mark::zone_marked` reads back the same way.
+    fn mark_as_downloaded(path: &Path) {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        fs::write(stream, crate::mark::zone_identifier_bytes()).unwrap();
+    }
+
+    /// SEC-9 (F2): a stranger's file saved later where RATA's file was is
+    /// not opened, nor read for Send with RATA. RATA never marks what it
+    /// makes, so a marked file there is not RATA's.
+    #[test]
+    fn a_downloaded_file_where_rata_made_one_is_not_opened() {
+        let _marks = crate::mark::read_marks_with(crate::mark::zone_marked);
+        let s = Scratch::new();
+        let (a, id, path) = one(&s);
+        // The customer's own edits, saved by replacing the file, open.
+        let edited = path.with_file_name("~Plan.tmp");
+        fs::write(&edited, b"edited").unwrap();
+        fs::rename(&edited, &path).unwrap();
+        a.open_created(&id, &|_| Ok(())).unwrap();
+        assert_eq!(a.created_read(&id).unwrap().data, b"edited");
+        // Deleted, and a downloaded file of the same name saved there.
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"a stranger's document").unwrap();
+        mark_as_downloaded(&path);
+        refused(&a, &id, "refused", &s);
+        let e = a.open_created(&id, &|_| Ok(())).unwrap_err();
+        assert!(e.error.contains("marked as downloaded"), "{}", e.error);
+        let row = &a.created_list()[0];
+        assert!(!row.exists);
+        assert_eq!((row.size, row.modified), (None, None));
+        // A zone this computer trusts is not a download.
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        fs::write(&stream, b"[ZoneTransfer]\r\nZoneId=0\r\n").unwrap();
+        a.open_created(&id, &|_| Ok(())).unwrap();
+    }
+
+    /// SEC-9 (F2): a name a remembered file of RATA's points at is never
+    /// given to another file, even once it is free, so a record can only
+    /// ever reach the file RATA made.
+    #[test]
+    fn nothing_rata_saves_takes_a_name_a_record_points_at() {
+        let s = Scratch::new();
+        let home = s.0.join("home");
+        let icloud = s.dir("home/iCloud Drive");
+        let docs = s.docs();
+        let a = app(&s, Some(PRO));
+        a.connect_service("apple", Os::Windows, &home).unwrap();
+        let make = |name: &str, place: &str| {
+            a.create_file(
+                "docx",
+                name,
+                place,
+                &body(Format::Docx),
+                Some(&docs),
+                &|_| Ok(()),
+            )
+            .unwrap()
+        };
+        let invoice = make("Invoice", "apple");
+        let first = icloud.join("Invoice.docx");
+        assert!(first.is_file());
+        // The customer deletes RATA's file; a stranger's attachment is then
+        // saved into the same folder under the same name, in any case.
+        fs::remove_file(&first).unwrap();
+        for (asked, got) in [
+            ("Invoice.docx", "Invoice (2).docx"),
+            ("INVOICE.docx", "INVOICE (2).docx"),
+        ] {
+            let placed = a
+                .cloud_save("apple", None, asked, b"a stranger's", false)
+                .unwrap();
+            assert_eq!(placed.name, got);
+            fs::remove_file(icloud.join(got)).unwrap();
+        }
+        assert!(!first.exists(), "the freed name stays free");
+        refused(&a, &invoice.id, "moved", &s);
+        // Create file itself does not take it either.
+        let again = make("Invoice", "apple");
+        assert_eq!(again.name, "Invoice (2).docx");
+        refused(&a, &invoice.id, "moved", &s);
+        // In Documents / RATA too.
+        let plan = make("Plan", "documents");
+        fs::remove_file(docs.join("RATA/Plan.docx")).unwrap();
+        assert_eq!(make("Plan", "documents").name, "Plan (2).docx");
+        refused(&a, &plan.id, "moved", &s);
+        // Forgotten, the name is anyone's again.
+        assert_eq!(a.forget_created(&invoice.id), Ok(true));
+        let placed = a
+            .cloud_save("apple", None, "Invoice.docx", b"x", false)
+            .unwrap();
+        assert_eq!(placed.name, "Invoice.docx");
+    }
+
     /// SEC-9 (F3): making, opening and reading a file for Send with RATA
     /// are Pro's, as connected accounts are; listing and forgetting are
     /// not, so a lapsed licence can still tidy up.
@@ -1605,14 +1731,9 @@ mod tests {
         let check = |kind: &str, sentence: Option<&str>| {
             let fake = Fake::default();
             let e = a
-                .create_file(
-                    "txt",
-                    "Notes",
-                    "documents",
-                    b"",
-                    Some(&docs),
-                    &|p| fake.open(p),
-                )
+                .create_file("txt", "Notes", "documents", b"", Some(&docs), &|p| {
+                    fake.open(p)
+                })
                 .unwrap_err();
             assert_eq!(e.kind, kind, "create: {}", e.error);
             if let Some(sentence) = sentence {

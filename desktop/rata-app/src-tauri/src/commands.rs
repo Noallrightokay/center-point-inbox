@@ -465,6 +465,7 @@ pub struct Picture {
 #[tauri::command]
 pub fn save_file(
     handle: AppHandle,
+    app: App<'_>,
     name: String,
     data: String,
 ) -> Result<crate::core::Saved, String> {
@@ -472,7 +473,12 @@ pub fn save_file(
     if data.len() > crate::core::SAVE_MAX / 3 * 4 + 4 {
         return Err("That file is too large to save from RATA.".into());
     }
-    crate::core::save_file(&dir, &name, &rata_mail::words::base64(data.as_bytes()))
+    crate::core::save_file(
+        &dir,
+        &name,
+        &rata_mail::words::base64(data.as_bytes()),
+        &app.created_paths(),
+    )
 }
 
 /// A web address from the interface — a link in the text of a message, or
