@@ -917,6 +917,12 @@ impl Rata {
 }
 
 /// Share to Slack, which needs the owner's Slack app (K3).
+// K3: when Slack sending is built here, escape the posted text first. Slack
+// reads `<!channel>`, `<!here>`, `<@U…>`, `<#C…>` and `<https://x|label>`
+// in a message as live mentions and links, so `&`, `<` and `>` must go as
+// `&amp;`, `&lt;` and `&gt;` (in that order), and bidi controls and
+// zero-width characters must be stripped, so a mail's text cannot ping a
+// whole channel or show one address while linking to another.
 pub fn no_slack() -> Refusal {
     Refusal::new(Service::Slack, "unavailable", NO_SLACK)
 }

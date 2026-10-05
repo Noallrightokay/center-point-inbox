@@ -22,10 +22,6 @@ sha2 = "0.11"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 open = "5"
-# Create file (K6, created.rs): reading a deflated `[Content_Types].xml`
-# when checking that a blank .docx, .xlsx or .pptx is one. Already in the
-# tree (png, the updater), so nothing new is downloaded.
-flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
@@ -37,6 +33,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"
 # through the updater's tar, so nothing new is built.
 [target.'cfg(target_os = "macos")'.dependencies]
 xattr = "1"
+
+[dev-dependencies]
+# Create file's tests (created.rs): reading and writing deflated zip entries
+# when checking what a blank .docx, .xlsx or .pptx must be. Already in the
+# tree (png, the updater), so nothing new is downloaded.
+flate2 = "1"
 
 [features]
 # Tauri needs this to build a release binary without a console window on Windows.
