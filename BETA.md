@@ -293,6 +293,22 @@ Don't spend time reporting these; they are known and planned:
     domain's other public DNS records to find where the mailbox really is
     (Microsoft 365, Google Workspace, Zoho, Fastmail, Hostinger and others),
     instead of asking you for a server address. Tell us if it still asks.
+- **v0.1.49 (RATA Pro):**
+  - **Create file:** Files → **Create file** makes a blank Word, Excel,
+    PowerPoint, Markdown, text or CSV file in Documents/RATA (or a connected
+    iCloud Drive or Creative Cloud Files folder) and opens it in the app your
+    computer uses for that kind of file. Tell us if Word, Excel, PowerPoint,
+    Pages, Numbers or Keynote complains about the blank file.
+  - **Created by you** lists those files with **Open**, **Send with RATA**
+    (attaches the file as it is when you press Send) and **Forget**.
+  - **Start in your browser:** links to Google Docs, Sheets, Slides, Forms
+    and Drive; Word, Excel, PowerPoint, OneNote and OneDrive on the web;
+    Adobe Acrobat, Fill & Sign, Convert and Express; Pages, Numbers and
+    Keynote on iCloud; Slack; DocuSign, Acrobat Sign and RabbitSign. Each
+    opens in your browser.
+  - **Settings → Connected accounts:** connect your iCloud Drive or Creative
+    Cloud Files folder. OneDrive, Google Drive and Share to Slack come in a
+    later version.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
