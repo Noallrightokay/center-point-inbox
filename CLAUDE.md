@@ -205,7 +205,11 @@ removed mailbox be deleted and keeps a folder the server renumbered from
 mixing two messages (I6), makes Delete account in the app remove what RATA
 keeps on the computer (I7), sends the briefing's messages by number only and
 writes a non-ASCII sender name correctly (I1, I2), tries Zoho's organisation
-servers, and says the server's own reason when a renewal is refused (I3). An
+servers, and says the server's own reason when a renewal is refused (I3);
+v0.1.46 leaves nothing behind when a sign-in or licence renewal finishes
+after Unlink or Delete account (SEC-7), and makes Copy diagnostics keep the
+latest failure of every operation and say how each special folder was found
+(J1). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
