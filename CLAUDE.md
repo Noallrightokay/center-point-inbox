@@ -234,6 +234,14 @@ is all a release needs now. It **cannot** push or delete tags, create or delete
 releases directly, or dispatch workflows — all return 403. Do not discover this
 mid-task and hand it back; say so immediately.
 
+It cannot re-run a job either (`rerun-failed-jobs` is 403). A job that ends
+`cancelled` about 15 minutes after its run started, with no runner name and
+no steps, never got a machine: check https://www.githubstatus.com (on
+2026-10-05, 19:50 to 21:55 UTC, an Actions incident did this to every run
+of #142, #143 and #144). It is not the change's failure. Ask the owner to
+press **Re-run failed jobs**, or start a fresh run with the next real
+change once Actions is back; never an empty commit.
+
 ## Licensing
 
 A signed Ed25519 token, verified offline against a public key compiled in at
