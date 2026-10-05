@@ -1682,8 +1682,16 @@ impl Rata {
                 Ok((t.access, true))
             }
             Err(TokenError::Revoked(why)) => {
-                self.ms.forget(&m.email);
-                self.note_auth_failure(&m.email);
+                // Parked only while the mailbox is still the one this renewal
+                // began for, as above: one linked again meanwhile has a new
+                // sign-in, which this refusal says nothing about.
+                if let Ok(mut store) = self.store.lock()
+                    && still_linked(&store, m)
+                {
+                    self.ms.forget(&m.email);
+                    store.mark_auth(&m.email, Some(now()));
+                    let _ = store.save();
+                }
                 Err(problem(
                     "microsoft",
                     format!("{} Microsoft said: {why}", again(&m.email)),
@@ -5053,6 +5061,48 @@ mod tests {
                 "EwB-new-sign-in"
             );
             assert_eq!(app.mailboxes().len(), 1);
+        });
+    }
+
+    /// A renewal Microsoft refuses after the mailbox was linked again parks
+    /// nothing: the refusal was of the old sign-in, not the new one.
+    #[test]
+    fn a_late_refusal_never_parks_a_new_sign_in() {
+        rt().block_on(async {
+            let (url, asked, release, _sent) = oauth::held_token_endpoint(
+                r#"{"error":"invalid_grant","error_description":"AADSTS70008: The refresh token has expired due to inactivity."}"#,
+                "400 Bad Request",
+                true,
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-relink-refused"), &url);
+            linked_ms(&app, "me@outlook.com", "M.R-before");
+            let m = app.mailboxes().remove(0);
+            let (got, ()) = tokio::join!(app.account(&m, None), async {
+                asked.await.unwrap();
+                app.unlink("me@outlook.com").unwrap();
+                vault::put_refresh(app.vault.as_ref(), "me@outlook.com", "M.R-new-sign-in")
+                    .unwrap();
+                app.remember(Mailbox {
+                    added_at: 2,
+                    ..m.clone()
+                })
+                .unwrap();
+                app.ms.keep(
+                    "me@outlook.com",
+                    oauth::Access {
+                        token: "EwB-new-sign-in".into(),
+                        expires_at: now() + 3_000,
+                    },
+                );
+                release.send(()).unwrap();
+            });
+            assert_eq!(got.unwrap_err().kind, "microsoft");
+            assert!(app.mailboxes()[0].auth_failed_at.is_none());
+            assert_eq!(
+                app.ms.cached("me@outlook.com").unwrap().token,
+                "EwB-new-sign-in"
+            );
         });
     }
 
