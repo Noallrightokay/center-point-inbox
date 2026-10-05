@@ -131,7 +131,11 @@ async fn watch_one<R: Runtime>(
                     match watch.wait(IDLE_FOR).await {
                         Watched::Arrived => tell(&app, &email),
                         Watched::Quiet => {}
-                        _ => break,
+                        // Kept for Copy diagnostics (J1).
+                        ended => {
+                            rata.watch_ended(&email, &ended);
+                            break;
+                        }
                     }
                 }
             }

@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 305 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 141 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 145 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 | `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (426 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
@@ -1539,16 +1539,27 @@ never by address: IMAP host:port, TLS and how it was found, the SMTP
 host:port last used and its mode (or the candidates it will try), how it
 signs in, whether and why it is parked, the last error, the last good
 refresh, the special folders seen this session, and whether its live
-connection is up. The notes are in memory only (`Rata::notes`, filled by
-`refresh` and `send`; act, older mail, open and the watcher's own failures
-are not recorded), and gathering them dials nothing. Every free sentence
+connection is up. The notes are in memory only (`Rata::notes`), and gathering
+them dials nothing. `refresh` and `send` fill the last error. Since J1
+(#128) `Noted.failed` also keeps the latest failure of each other operation
+(`diagnostics::Op`): an action (named, never the destination folder), older
+mail and re-read, a message fetch (open in full, save or convert an
+attachment, pictures), server search, draft save (no Drafts folder too),
+folders (list or read), and the new-mail watch (connect, or connection lost
+through `Rata::watch_ended`), each shown as `Last failed <op> (<what>)`. A
+later success of the same operation (for actions, the same action) keeps
+the line and adds "worked again <when>"; a new failure replaces it. Nothing
+is kept for unlicensed, unknown, `needs-confirmation` or an already parked
+mailbox, and the live line says when the server has no IDLE. Every free sentence
 goes through `diagnostics::clean`: the mailbox's address becomes `Mailbox
 N`, then `credential::said_within` (600) with that mailbox's secrets, read
 from the keychain only when it has an error to show; any other address
 becomes `[address]` and the home folder `~`, and a last pass turns any `@`
-left into ` at `. How a folder other than Gmail's archive was found (by
-attribute or by name) is not reported yet: `places()` does not tell the
-app. **Open help** (`https://mailrata.org/help`) and **Report a bug** (the
+left into ` at `. How Sent, Spam, Drafts and Archive were found is reported
+too: `places_in` records `FoundBy` (attribute, one of RATA's fixed names, or
+Gmail's All Mail) as `Placed`, which a refresh that listed the folders
+returns as `Newest.places` (`None` when the listing failed), and the block
+names only RATA's own spelling, never the server's. Trash is not reported. **Open help** (`https://mailrata.org/help`) and **Report a bug** (the
 *Beta bug* template) go through `open_link`; the website shows those two
 only. **The help page (H2)** is `rata-next/public/help.html`, served at
 `/help` (`proxy.js`): installing, linking each provider (with that
