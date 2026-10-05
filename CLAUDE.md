@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6). 195 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3). 222 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (507 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (527 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox; no patient information. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -220,7 +220,9 @@ calls yet; v0.1.49 adds Create file, Created by you and Send with RATA
 (K6, Pro, with SEC-9's fixes) and Connected accounts with iCloud Drive and
 Creative Cloud Files (K1, K5; OneDrive, Google Drive and Slack report
 `available: false` and stay hidden until K2 to K4), and brings back the
-Start in your browser links. An
+Start in your browser links; v0.1.50 adds Share to Slack (K3, live in a
+build with the owner's `RATA_SLACK_CLIENT_ID`) and fixes the review of
+K1 and K6's page (SEC-10). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -1242,7 +1244,12 @@ files' base64 when they fit), marked `sending` just before `send_mail`
 and removed after; on `pagehide`/`beforeunload` everything waiting goes at
 once, and the next licensed start (`outboxResume`) sends `waiting` records
 once and puts `sending` ones back in the composer ("Look in Sent before
-sending it again"), never resending them. Not seen in a packaged build:
+sending it again"), never resending them. A `waiting` record holding a
+Create file reference (`{created: id}`) is never sent at start either: it
+is put back too ("It would attach X as it is now, so check it before
+sending.", SEC-10), since the file may have changed since Send; put-backs
+are said after the "Sending the message RATA closed on" toast. The file is
+also read when the draft is saved to Drafts (`saveDraft`). Not seen in a packaged build:
 closing the only window exits the app and probably drops a send in
 flight, which the outbox then puts back. Harness: `open()` sets
 `undoSend = 0` unless `{undo: true}`; `window.__RATA_SEND_SECOND`
@@ -1634,7 +1641,14 @@ false`; the contract for the Rust side is the comment in `bridge.js`
 (`/api/connections`, `/api/cloud/*`, `/api/slack/*`; refusals
 `{service, kind, error}`). Every name, path and error is drawn with
 textContent. `lib/plan.js` and the website say nothing of it until the
-real connections ship (BUG-D). **K5 (`cloud.rs`)** is the only real service
+real connections ship (BUG-D). Settings' sentences are built from
+`CONN.list` (`andList`) and never name a service answering `available:
+false` (SEC-10). Add to Files refuses a disguised program from a cloud
+folder, and ⤓ File asks (`askDisguised`) for one already in Files:
+`nameDisguised` in the page mirrors `rata_mail::names::looks_disguised`,
+so keep the two lists in step. Once Share to Slack's Send is pressed the
+dialog stays (Cancel, ✕, Escape and the backdrop do nothing) until Slack
+answers, and the result is always said (SEC-10). **K5 (`cloud.rs`)** is the only real service
 so far: iCloud Drive and Creative Cloud Files as the folders their own apps
 sync (macOS `~/Library/Mobile Documents/com~apple~CloudDocs`, Windows
 `%USERPROFILE%\iCloud Drive` or `iCloudDrive`, `~/Creative Cloud Files…`),
@@ -1646,8 +1660,36 @@ never followed. Listings hide dot files and system files and show iCloud
 placeholders as `offline`; reads cap at `READ_MAX`, saves at 100 MB through
 `write_new` (marked as downloads, since a stranger's attachment may be the
 file) and need `confirmed` for a disguised program. The store keeps
-`connections` (service → path) and Delete account forgets them. The Slack
-commands refuse until K3. **Create file (K6, SEC-9)**: the page sends
+`connections` (service → path) and Delete account forgets them. **Share to Slack (K3, `slack.rs`)**
+exists only in a build with `RATA_SLACK_CLIENT_ID` (a repository
+variable, passed like `RATA_MS_CLIENT_ID`; Copy diagnostics says "Slack
+sharing yes/no"); without it Slack answers `available: false` and every
+command refuses with `NO_SLACK`. A user token over PKCE, no client secret:
+the browser opens `slack.com/oauth/v2/authorize` with the seven user
+scopes in `docs/CONNECTIONS-SETUP.md`, a one-shot listener on 127.0.0.1 at
+the first free one of `PORTS` (28417 to 28419, which the owner registers
+as `http://localhost:<port>`; Slack matches the port, so change both
+together), and `oauth.v2.access` with the verifier; shared pieces with
+`oauth.rs` (one sign-in at a time, the listener, the HTTPS client),
+Microsoft unchanged. The token, refresh token and expiry live in the
+keychain under `org.mailrata.desktop.slack` (`workspace`, pieces
+`workspace#2…#8`, mark `rata-slack1:`); the store keeps only the team, the
+user id, when and whether it is parked. A rotation the keychain refuses is
+kept in memory for the session. Disconnect and Delete account empty the
+keychain first under the list's lock and bump a Slack generation, so a
+sign-in or rotation answering later writes nothing (SEC-7/SEC-8's
+pattern); Delete account cancels a waiting sign-in and forgets Slack
+before the licence; Disconnect then calls `auth.revoke`, best effort.
+`slack_targets`: `conversations.list` (member channels, private, ims) and
+`users.list` (no deleted, bots or Slackbot), 200 a page, 15 pages at most.
+`slack_share`: `chat.postMessage` (no unfurls, `parse=none`), files by
+`files.getUploadURLExternal`, the bytes to `https://*.slack.com` only,
+then `files.completeUploadExternal`; at most 10 files, 25 MB, 40 000
+characters, no disguised program, text with `& < >` escaped and control,
+bidi and invisible characters removed. A revoked token parks Slack
+("Connect Slack again"); `token_expired` renews once; a rate limit of 10 s
+or less is waited out once. Nothing reads Slack. Not yet seen against a
+real Slack app (needs the owner's registration). **Create file (K6, SEC-9)**: the page sends
 only `{format, name, where}` (bridge.js drops anything else, and Rust has
 no parameter for `data`), and `created.rs` writes RATA's own blank docx,
 xlsx or pptx (`Format::blank`, compiled in from `src-tauri/templates/`,
