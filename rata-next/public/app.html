@@ -1933,6 +1933,18 @@ function disguiseOf(name){
   const doc=parts.length>2?parts[parts.length-2]:'';
   return {ext,looks:DISGUISED_AS[doc]||'a document',shown:ext?String(name).replace(/[\s.]+$/,'').replace(/\s*\.[^.]*$/,''):''};
 }
+/* The same judgement from a name alone (rata_mail::names::looks_disguised,
+   its two lists and its look-alike full stops), for files that never came
+   through the engine: one from a connected cloud folder, or one already in
+   Files (SEC-10). It removes what draws nothing first, as safe_file_name
+   does, and trims each part, so it never says no where Rust says yes. */
+const DISG_DOC=new Set(['pdf','doc','docx','xls','xlsx','ppt','pptx','jpg','jpeg','png','gif','txt','zip','csv','rtf','html','htm']);
+const DISG_PROG=new Set(['exe','msi','bat','cmd','scr','ps1','js','jse','vbs','vbe','wsf','wsh','hta','jar','com','pif','lnk','app','dmg','pkg','sh','command','cpl','reg','url','iso','one']);
+function nameDisguised(name){
+  const n=String(name||'').split(/[\/\\]/).pop().replace(/[\s\u115f\u1160\u3164\uffa0\u2800]+/g,' ').replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}<>:"|?*]/gu,'').replace(/^[. ]+|[. ]+$/g,'');
+  const parts=n.split(/[.\u2024\ufe52\uff0e\u0701\u0702\ua4f8\u{10a50}\u2e31\u00b7\u2027\u0387]/u).map(x=>x.trim().toLowerCase());
+  return parts.length>2&&DISG_DOC.has(parts[parts.length-2])&&DISG_PROG.has(parts[parts.length-1]);
+}
 const disguiseLabel=a=>{const d=disguiseOf(a.n);return 'a program'+(d.ext?' (.'+d.ext+')':'')+', not '+d.looks};
 let WARN_DONE=null;
 function askDisguised(a,saving){
@@ -4165,6 +4177,8 @@ const connOn=()=>CONN.available&&canConnect();
 const cloudTargets=()=>connOn()?CONN.list.filter(c=>c.kind!=='share'&&c.connected):[];
 const slackReady=()=>!!window.__RATA_NATIVE__&&connOn()&&CONN.list.some(c=>c.service==='slack'&&c.connected);
 const jsonPost=(path,b,method='POST')=>apiFetch(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+/* "A", "A and B", "A, B and C". */
+const andList=a=>a.length<2?a.join(''):a.slice(0,-1).join(', ')+' and '+a[a.length-1];
 const failWhy=(r,e)=>String((r&&r.error)||(e&&(e.message||e))||'no answer');
 async function loadConnections(){
   let r=null;
@@ -4198,15 +4212,20 @@ function renderConnSettings(){
   sec.hidden=!CONN.available;
   if(!CONN.available)return;
   const pro=canConnect(),list=$('#conn-list');
+  /* SEC-10: every sentence names only what this build can do (CONN.list
+     holds only services the app says are available), so a build with the
+     two folders alone never offers OneDrive, Google Drive or Slack. */
+  const files=CONN.list.filter(c=>c.kind!=='share'),share=CONN.list.filter(c=>c.kind==='share'),signIn=files.some(c=>c.kind==='files');
+  const doing=[files.length?'open, convert and save files in '+andList(files.map(c=>c.place)):'',...share.map(c=>'share to '+c.place)].filter(Boolean);
   $('#conn-lead').textContent=pro
-    ?'Open, convert and save files in your cloud storage, and share to Slack. RATA asks each service only for what you do here, and your mail never goes to them.'
-    :needPlan('connect','Connecting your cloud files and Slack');
+    ?doing.join(', and ').replace(/^./,x=>x.toUpperCase())+'. '+(signIn?'RATA asks each service only for what you do here. ':'')+(files.length?'Nothing from your mail goes to them unless you save it there'+(share.length?', and ':'.'):'')+(share.length?andList(share.map(c=>'Share to '+c.place))+' sends only what you choose.':'')
+    :needPlan('connect',files.length?'Connecting your cloud files'+(share.length?' and '+andList(share.map(c=>c.place)):''):'Sharing to '+andList(share.map(c=>c.place)));
   list.replaceChildren();
   if(!pro){
     const row=document.createElement('div');row.className='set-row';
     const g=document.createElement('div');g.className='grow';
-    const b=document.createElement('b');b.textContent='Cloud files and Slack';
-    const s=document.createElement('span');s.textContent='OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack come with '+TIERS.pro.label+'.';
+    const b=document.createElement('b');b.textContent=[files.length?'Cloud files':'',...share.map(c=>c.place)].filter(Boolean).join(' and ');
+    const s=document.createElement('span');s.textContent=andList(CONN.list.map(c=>c.place))+(CONN.list.length>1?' come':' comes')+' with '+TIERS.pro.label+'.';
     g.append(b,s);
     const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
     up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
@@ -4387,10 +4406,16 @@ async function cloudToBridge(svc,it,btn){
 /* Kept in Files the way a converted document is: the file in the vault,
    and its text (when the Bridge reads its kind) for search and the Bridge. */
 async function cloudToFiles(svc,it,btn){
+  /* Files keeps documents. A program named to look like one is not added
+     at all, judged before reading and again by the name the app read it
+     as, since ⤓ File would put it in Downloads unasked (SEC-10). */
+  const refuse=n=>{const d=disguiseOf(n);toast('Not added to Files: '+n+' is a program'+(d.ext?' (.'+d.ext+')':'')+' named to look like '+d.looks+'. Files keeps documents only.')};
+  if(nameDisguised(it.name)){refuse(it.name);return}
   btn.disabled=true;
   const f=await cloudRead(svc,it);
   if(btn.isConnected)btn.disabled=false;
   if(!f)return;
+  if(nameDisguised(f.name)){refuse(f.name);return}
   const ext=cloudExt(f.name);
   let content='';
   if(BR_KINDS[ext]){try{content=(await brParse(f)).text}catch(e){content=''}}
@@ -4497,14 +4522,16 @@ async function attachmentToCloud(m,a,c,btn,confirmed){
    own list, the text is theirs to edit, each file is ticked to go. Nothing
    is fetched for the files and nothing is sent until Send. */
 let SLACK=null;
+const SLACK_LEAD=$('#slack-lead').textContent;
 function slackName(t){return t.kind==='channel'&&!t.name.startsWith('#')?'#'+t.name:t.name}
 async function openSlack(o){
   if(!slackReady())return;
+  if(SLACK&&SLACK.busy){toast('RATA is still sending to Slack. Wait for its answer.');return}
   if(SLACK)closeSlack();
   SLACK={files:o.files||[],targets:null,chosen:null,busy:false,error:''};
   $('#slack-text').value=o.text||'';
   $('#slack-q').value='';$('#slack-err').textContent='';
-  $('#slack-send').disabled=false;$('#slack-send').textContent='Send';
+  slackBusy(false);
   const fl=$('#slack-filelist');fl.replaceChildren();
   SLACK.files.forEach((f,i)=>{
     const l=document.createElement('label');l.className='slack-file';
@@ -4542,7 +4569,11 @@ function renderSlackTargets(){
     l.append(rb,n,k);box.append(l);
   }
 }
+/* Once Send is pressed the dialog stays until the answer is in (SEC-10):
+   Cancel, ✕, Escape and the backdrop do nothing, so what happened is
+   always said, in the dialog or, should it have gone, in a toast. */
 function closeSlack(){
+  if(SLACK&&SLACK.busy)return;
   const was=$('#slack-ov').classList.contains('open');
   SLACK=null;$('#slack-ov').classList.remove('open');
   if(was)dlgClose($('#slack-ov'));
@@ -4556,19 +4587,26 @@ async function sendSlack(){
   const picked=SLACK.files.filter((f,i)=>{const cb=$('#slack-file-'+i);return cb&&cb.checked});
   if(!text&&!picked.length){err.textContent='Write a message or choose a file to send.';return}
   const mine=SLACK,send=$('#slack-send');
-  mine.busy=true;send.disabled=true;send.textContent='Sending…';
-  const done=why=>{if(SLACK!==mine)return;mine.busy=false;send.disabled=false;send.textContent='Send';err.textContent=why};
+  mine.busy=true;slackBusy(true);
+  /* Not sent: said in the dialog, which opens up again; or in a toast if
+     it is somehow no longer this send's. */
+  const done=why=>{mine.busy=false;if(SLACK!==mine){toast(why);return}slackBusy(false);err.textContent=why;send.focus({preventScroll:true})};
   const files=[];
   for(const f of picked){
-    try{files.push(await f.get())}catch(e){done('Not sent: '+f.name+' could not be read. '+failWhy(null,e));return}
-    if(SLACK!==mine)return;
+    try{files.push(await f.get())}catch(e){done('Not sent to Slack: '+f.name+' could not be read. '+failWhy(null,e));return}
   }
   let r;try{r=await jsonPost('/api/slack/share',{target:t.id,text,files})}catch(e){r={ok:false,error:failWhy(null,e)}}
-  if(SLACK!==mine)return;
-  if(!r||!r.ok){done('Not sent: '+failWhy(r));return}
-  closeSlack();
+  if(!r||!r.ok){done('Not sent to Slack: '+failWhy(r));return}
+  mine.busy=false;
+  if(SLACK===mine){slackBusy(false);closeSlack()}
   audit('slack.share',slackName(t)+(files.length?' with '+files.map(f=>f.name).join(', '):''));
   toast('Shared to '+(r.where||slackName(t)+' in Slack'));
+}
+function slackBusy(on){
+  const send=$('#slack-send');
+  send.disabled=on;send.textContent=on?'Sending…':'Send';
+  $('#slack-cancel').disabled=on;$('#slack-close').disabled=on;
+  $('#slack-lead').textContent=on?'Sending. This stays open until Slack answers.':SLACK_LEAD;
 }
 $('#slack-send').onclick=sendSlack;
 $('#slack-cancel').onclick=closeSlack;
@@ -5059,6 +5097,9 @@ function renderDocs(){
   g.querySelectorAll('.cv[data-slack]').forEach(b=>b.onclick=()=>{const d=S.documents.find(x=>x.id===b.dataset.slack);if(d)shareDocToSlack(d)});
   g.querySelectorAll('.cv[data-dl]').forEach(b=>b.onclick=async()=>{
     const d=S.documents.find(x=>x.id===b.dataset.dl);if(!d)return;
+    /* save_file has no question of its own: a disguised name kept in Files
+       (from a workspace before SEC-10) is asked about here, as Save is. */
+    if(nameDisguised(d.name)&&!await askDisguised({n:d.name},true))return;
     try{
       const blob=await fvGet(d.id);
       if(!blob){toast(`Only the text of ${d.name} travelled with your workspace — the file itself is on the device that made it`);return}
@@ -6483,7 +6524,9 @@ function snapFromRecord(r,files){
 function outboxResume(){
   if(OB_RESUMED||!S||!window.__RATA_NATIVE__||!(LIC&&LIC.licensed))return;
   OB_RESUMED=true;
-  let n=0;
+  /* What is put back is put back last, so its word to the customer is not
+     covered at once by "Sending the message RATA closed on". */
+  let n=0;const back=[];
   for(const r of obRead()){
     if(!r||!r.id)continue;
     /* Files made with Create file are kept by reference, and need no bytes. */
@@ -6491,11 +6534,17 @@ function outboxResume(){
     const whole=refs.every(Boolean)||(Array.isArray(r.data)&&r.data.length===r.files.length);
     let files=[];
     try{files=whole?(r.files||[]).map((f,i)=>refs[i]||b64File(r.data[i],f)):refs.filter(Boolean)}catch(e){}
-    if(r.state!=='waiting'||!whole||files.length!==(r.files||[]).length){
+    /* A file made with Create file is read when the message goes, so one
+       sent now would go as the file is now, perhaps edited since Send was
+       pressed: it is never sent unasked, but put back to look at (SEC-10). */
+    const made=(r.files||[]).filter((f,i)=>refs[i]).map(f=>f.name);
+    if(r.state!=='waiting'||!whole||files.length!==(r.files||[]).length||made.length){
       obDrop(r.id);
-      putBack(snapFromRecord(r,files),r.state!=='waiting'
+      back.push([snapFromRecord(r,files),r.state!=='waiting'
         ?`RATA closed while “${r.subj}” was being sent, so it may have gone. Look in Sent before sending it again.`
-        :`“${r.subj}” was not sent: RATA closed before it went, and its files were too large to keep. Attach ${(r.files||[]).filter((f,i)=>!refs[i]).map(f=>f.name).join(', ')} again.`);
+        :!whole||files.length!==(r.files||[]).length
+        ?`“${r.subj}” was not sent: RATA closed before it went, and its files were too large to keep. Attach ${(r.files||[]).filter((f,i)=>!refs[i]).map(f=>f.name).join(', ')} again.`
+        :`“${r.subj}” was not sent: RATA closed before it went. It would attach ${andList(made)} as ${made.length>1?'they are':'it is'} now, so check ${made.length>1?'them':'it'} before sending.`]);
       continue;
     }
     const fin=r.finished?(S.messages.find(m=>m.id===r.finished.id)||r.finished):null;
@@ -6504,6 +6553,7 @@ function outboxResume(){
     OUTBOX.push(it);n++;
   }
   if(n){toast(n===1?'Sending the message RATA closed on':'Sending the '+n+' messages RATA closed on');renderSendToast();obRun()}
+  for(const [snap,say] of back)putBack(snap,say);
 }
 /* One message out, as Send has always sent it: through the linked mailbox,
    or recorded here only when From is not one. {ok, error} — the error is
