@@ -653,6 +653,7 @@ and bumped the version; engine 305, shell 136, harness 425, website 800.
 No screenshot changed: I7's new row is in Settings, which the shots do
 not show.
 0.1.45 released and verified 2026-10-02 ([run 37061823962](https://github.com/Noallrightokay/center-point-inbox/actions/runs/37061823962)): gate, all four installer jobs and their installed smoke passed first time; `verify-release.sh v0.1.45`, now checking all five installers, passed each (licence key, id, no font CDN, title; the Intel Mac's title found in code). Its own launch step failed here only because the window took about 20 s to appear in this container after a restart, longer than the script's fixed 12 s wait; run by hand, the window was "RATA 0.1.45 beta". The script now waits for the window, up to a minute, and passes all six (five installers and the launch).
+A review of what 0.1.45 changed (2026-10-02) found no High or Medium and two Lows, fixed in SEC-7 ([#126](https://github.com/Noallrightokay/center-point-inbox/pull/126)): a Microsoft renewal or a licence renewal answering after Unlink or Delete account wrote its token back, and both licence routes sent the missing signing key's name to the caller. A late refusal parking a mailbox linked again meanwhile, the same race, was fixed after it. Both go out in 0.1.46.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into

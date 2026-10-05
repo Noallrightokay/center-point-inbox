@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 305 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 136 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 800 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 141 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (425 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (426 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
@@ -238,11 +238,15 @@ Renewal refuses a licence that expired more than `RENEW_GRACE_DAYS` (90,
 v0.1.41), so a token that leaked long ago cannot be revived. bridge.js
 `renew()` takes any answer with a `reason` and a sentence as a real answer
 (`no-subscription`, `too-old`, `pending`, `malformed`, `bad-signature`,
-`no-public-key`; I3, v0.1.45) and never passes it to `set_licence`, so a
+`no-public-key`, `not-configured`; I3, v0.1.45, SEC-7) and never passes it to `set_licence`, so a
 working licence is kept; only a bare error or no answer is "could not
 reach mailrata.org". `/api/licence/renew` answers `pending` for a row being
 set up (`settingUp`), as `/api/licence` does, and its `no-public-key`
 sentence is the customer's, with the operator's hint in the server log.
+When `issue()` throws (no signing key, or one that will not read), both
+`/api/licence` and `/api/licence/renew` answer 500 `reason:
+'not-configured'` with a fixed sentence and no `error` field, and log the
+reason (SEC-7).
 `settleLicence` (in bridge.js) puts the server's sentence in the licence box when the
 licence is still not good afterwards (harness: "a licence too old to renew
 itself says what to do). **Renewal while RATA is open (BUG-L, v0.1.43).**
@@ -349,7 +353,16 @@ through `unlink` (keychain entries first, Microsoft pieces too, then the
 list entry, so a refused keychain leaves the mailbox listed with the error),
 then removes the licence stored here and the diagnostics notes; a keychain
 refusal stops it before the licence goes, and a mailbox linked meanwhile
-makes it refuse. Only after Rust says ok does the page clear IndexedDB,
+makes it refuse. **Nothing comes back afterwards (SEC-7).** `unlink` holds
+the list's lock from emptying the keychain to saving the list, and a
+Microsoft renewal that answers later writes its rotated token, caches its
+access token, or parks the mailbox only if `still_linked` (still listed,
+still OAuth, same `added_at`), so it lands wholly before Unlink or finds
+the mailbox gone or linked again. `forget_everything` bumps a counter
+(`forgotten`) that `Standing` carries as `epoch`; `renew()` passes it to
+`set_licence` as `since`, and one older than the last Delete account is
+refused without writing, so a renewal waiting on mailrata.org cannot store
+the licence again. The licence box sends no `since`. Only after Rust says ok does the page clear IndexedDB,
 localStorage (the Undo-send outbox included, on the website too) and the
 sign-in. Delete permanently stays off until the GET has answered, and on
 any error. The mailrata.org account is never deleted from the app:
