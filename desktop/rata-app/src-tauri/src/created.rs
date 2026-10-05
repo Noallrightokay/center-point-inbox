@@ -58,6 +58,9 @@ use crate::store::{Created, now};
 /// kilobytes; this leaves room for a template with a picture in it.
 pub const CREATE_MAX: usize = 5 * 1024 * 1024;
 
+/// The sentence for a plan without Create file.
+pub const NEED_PRO_FILES: &str = "Create file comes with RATA Pro. Upgrade at mailrata.org.";
+
 /// The folder inside Documents that Create file uses.
 pub const DOCUMENTS_FOLDER: &str = "RATA";
 
@@ -605,6 +608,19 @@ fn open_checked(rec: &Created, open: &Opener<'_>) -> Result<(), FileRefusal> {
 }
 
 impl Rata {
+    /// Create file is Pro's (`Plan::connect`), as connected accounts are:
+    /// making a file, opening one and reading one for Send with RATA. No
+    /// licence at all says what the licence box says. Listing and
+    /// forgetting are not asked, so a lapsed licence can still tidy up.
+    fn may_create(&self) -> Result<(), FileRefusal> {
+        let standing = self.standing();
+        match standing.plan {
+            Some(p) if p.connect => Ok(()),
+            Some(_) => Err(refuse("plan", NEED_PRO_FILES)),
+            None => Err(refuse("unlicensed", standing.message)),
+        }
+    }
+
     fn record(&self, id: &str) -> Result<Created, FileRefusal> {
         if !id_ok(id) {
             return Err(unknown());
@@ -632,6 +648,7 @@ impl Rata {
         docs: Option<&Path>,
         open: &Opener<'_>,
     ) -> Result<Made, FileRefusal> {
+        self.may_create()?;
         let epoch = self.epoch();
         let format = Format::parse(format).ok_or_else(|| {
             refuse(
@@ -722,6 +739,7 @@ impl Rata {
     /// Open a file RATA made, by its id, in the app this computer uses for
     /// its format, after checking it again (`checked`).
     pub fn open_created(&self, id: &str, open: &Opener<'_>) -> Result<Reopened, FileRefusal> {
+        self.may_create()?;
         let rec = self.record(id)?;
         open_checked(&rec, open)?;
         Ok(Reopened {
@@ -766,6 +784,7 @@ impl Rata {
     /// A file RATA made, as it is on disk now, for Send with RATA: checked
     /// as for opening, and at most what a message may carry (`ATTACH_MAX`).
     pub fn created_read(&self, id: &str) -> Result<Contents, FileRefusal> {
+        self.may_create()?;
         let rec = self.record(id)?;
         let (format, md) = checked(&rec)?;
         let too_large = |size: u64| {
@@ -1090,7 +1109,7 @@ mod tests {
     fn a_refused_body_or_format_writes_nothing() {
         let s = Scratch::new();
         let docs = s.docs();
-        let a = app(&s, None);
+        let a = app(&s, Some(PRO));
         let fake = Fake::default();
         let make = |format: &str, place: &str, b: &[u8]| {
             a.create_file(format, "Plan", place, b, Some(&docs), &|p| fake.open(p))
@@ -1155,8 +1174,7 @@ mod tests {
     fn a_file_is_made_in_documents_never_overwritten_and_not_marked() {
         let s = Scratch::new();
         let docs = s.docs();
-        // No licence: Create file in Documents is anyone's.
-        let a = app(&s, None);
+        let a = app(&s, Some(PRO));
         let fake = Fake::default();
         let marked = crate::core::MARKED.with(|m| m.get());
         let first = a
@@ -1223,7 +1241,7 @@ mod tests {
         let docs = s.docs();
         let fake = Fake::default();
         let made = {
-            let a = app(&s, Some(BASE));
+            let a = app(&s, Some(PRO));
             a.create_file(
                 "xlsx",
                 "Budget",
@@ -1278,7 +1296,7 @@ mod tests {
     fn a_file_is_sent_as_it_is_on_disk_and_never_past_the_limit() {
         let s = Scratch::new();
         let docs = s.docs();
-        let a = app(&s, None);
+        let a = app(&s, Some(PRO));
         let made = a
             .create_file("txt", "Notes", "documents", b"", Some(&docs), &|_| Ok(()))
             .unwrap();
@@ -1311,7 +1329,7 @@ mod tests {
     /// Make one file and hand back the app, its id and its path.
     fn one(s: &Scratch) -> (Rata, String, PathBuf) {
         let docs = s.docs();
-        let a = app(s, None);
+        let a = app(s, Some(PRO));
         let made = a
             .create_file(
                 "docx",
@@ -1463,6 +1481,10 @@ mod tests {
             .unwrap()
             .id;
         a.forget_everything().unwrap();
+        // Delete account also removed the licence (SEC-9: open and read
+        // need one); with it back, the records are still gone.
+        refused(&a, &id, "unlicensed", &s);
+        a.set_licence(Some(PRO.into()), None).unwrap();
         refused(&a, &id, "not-found", &s);
         refused(&a, &id2, "not-found", &s);
         assert!(a.created_list().is_empty());
@@ -1475,7 +1497,7 @@ mod tests {
     fn a_file_that_will_not_open_is_still_made() {
         let s = Scratch::new();
         let docs = s.docs();
-        let a = app(&s, None);
+        let a = app(&s, Some(PRO));
         let made = a
             .create_file(
                 "pptx",
@@ -1516,8 +1538,8 @@ mod tests {
         let base = app(&s, Some(BASE));
         assert_eq!(make(&base, "apple").unwrap_err().kind, "plan");
         assert_eq!(make(&base, "adobe").unwrap_err().kind, "plan");
-        // Base makes files in Documents.
-        assert!(make(&base, "documents").is_ok());
+        // Nor in Documents: Create file is Pro's (SEC-9).
+        assert_eq!(make(&base, "documents").unwrap_err().kind, "plan");
         let pro = app(&s, Some(PRO));
         let e = make(&pro, "apple").unwrap_err();
         assert_eq!(e.kind, "not-connected");
@@ -1551,7 +1573,7 @@ mod tests {
     fn the_list_is_newest_first() {
         let s = Scratch::new();
         let docs = s.docs();
-        let a = app(&s, None);
+        let a = app(&s, Some(PRO));
         let ids: Vec<String> = ["One", "Two", "Three"]
             .iter()
             .map(|n| {
@@ -1569,6 +1591,63 @@ mod tests {
         }
         let names: Vec<String> = a.created_list().into_iter().map(|r| r.name).collect();
         assert_eq!(names, ["Three.txt", "Two.txt", "One.txt"]);
+    }
+
+    /// SEC-9 (F3): making, opening and reading a file for Send with RATA
+    /// are Pro's, as connected accounts are; listing and forgetting are
+    /// not, so a lapsed licence can still tidy up.
+    #[test]
+    fn making_opening_and_sending_need_pro_and_tidying_up_does_not() {
+        let s = Scratch::new();
+        let docs = s.docs();
+        let (a, id, path) = one(&s);
+        let made_before = fs::read(&path).unwrap();
+        let check = |kind: &str, sentence: Option<&str>| {
+            let fake = Fake::default();
+            let e = a
+                .create_file(
+                    "txt",
+                    "Notes",
+                    "documents",
+                    b"",
+                    Some(&docs),
+                    &|p| fake.open(p),
+                )
+                .unwrap_err();
+            assert_eq!(e.kind, kind, "create: {}", e.error);
+            if let Some(sentence) = sentence {
+                assert_eq!(e.error, sentence);
+            }
+            let e = a.open_created(&id, &|p| fake.open(p)).unwrap_err();
+            assert_eq!(e.kind, kind, "open: {}", e.error);
+            let e = a.created_read(&id).unwrap_err();
+            assert_eq!(e.kind, kind, "read: {}", e.error);
+            assert!(fake.seen().is_empty(), "the opener was asked");
+            assert!(!docs.join("RATA/Notes.txt").exists(), "nothing written");
+            // Listing works on any plan, and says the file is there.
+            let list = a.created_list();
+            assert_eq!(list.len(), 1);
+            assert!(list[0].exists);
+        };
+        a.set_licence(None, None).unwrap();
+        check("unlicensed", None);
+        a.set_licence(Some(BASE.into()), None).unwrap();
+        check(
+            "plan",
+            Some("Create file comes with RATA Pro. Upgrade at mailrata.org."),
+        );
+        assert_eq!(fs::read(&path).unwrap(), made_before, "untouched");
+        // Forgetting is anyone's, and the file stays.
+        assert_eq!(a.forget_created(&id), Ok(true));
+        assert!(a.created_list().is_empty());
+        assert!(path.is_file());
+        // Back on Pro, a file is made and opened again.
+        a.set_licence(Some(PRO.into()), None).unwrap();
+        let made = a
+            .create_file("txt", "Notes", "documents", b"", Some(&docs), &|_| Ok(()))
+            .unwrap();
+        a.open_created(&made.id, &|_| Ok(())).unwrap();
+        a.created_read(&made.id).unwrap();
     }
 
     #[test]
