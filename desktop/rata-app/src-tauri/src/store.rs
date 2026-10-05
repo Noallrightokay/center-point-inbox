@@ -64,6 +64,26 @@ pub struct Mailbox {
     pub auth: Auth,
 }
 
+/// A file RATA made with Create file (K6), and the only kind of file RATA
+/// will ever open in another app (`created`). Where it is (`path`, canonical
+/// when it was made), what RATA called it, its format (`docx`, `xlsx`,
+/// `pptx`, `md`, `txt` or `csv`), where it was made (`documents`, `apple`
+/// or `adobe`) and when. No content: the file is the customer's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Created {
+    pub id: String,
+    pub path: PathBuf,
+    pub name: String,
+    pub format: String,
+    #[serde(rename = "where")]
+    pub place: String,
+    pub created_at: u64,
+}
+
+/// The most files Create file remembers; past it the oldest is forgotten
+/// (the file stays where it is).
+pub const CREATED_KEEP: usize = 500;
+
 /// The shape of `mailboxes.json` this build writes, as its `version` field.
 pub const SCHEMA: u32 = 1;
 
@@ -87,6 +107,11 @@ struct Contents {
     /// and looks exactly as it did; `version` stays 1.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     connections: BTreeMap<String, PathBuf>,
+    /// The files made with Create file (K6), oldest first. Absent from a
+    /// file written before K6 and not written while empty, like
+    /// `connections`; `version` stays 1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    created: Vec<Created>,
 }
 
 #[derive(Debug)]
@@ -95,6 +120,7 @@ pub struct Store {
     boxes: Vec<Mailbox>,
     licence: Option<String>,
     connections: BTreeMap<String, PathBuf>,
+    created: Vec<Created>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -126,6 +152,7 @@ impl Store {
             boxes: held.mailboxes,
             licence: held.licence,
             connections: held.connections,
+            created: held.created,
             on_disk,
         }
     }
@@ -149,6 +176,7 @@ impl Store {
             mailboxes: self.boxes.clone(),
             licence: self.licence.clone(),
             connections: self.connections.clone(),
+            created: self.created.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         // Made afresh, so it is created with the mode below rather than
@@ -215,6 +243,37 @@ impl Store {
     /// Forget every connected folder (Delete account).
     pub fn clear_connections(&mut self) {
         self.connections.clear();
+    }
+
+    /// The files made with Create file, oldest first.
+    pub fn created(&self) -> &[Created] {
+        &self.created
+    }
+
+    /// One of them, by id.
+    pub fn created_by(&self, id: &str) -> Option<&Created> {
+        self.created.iter().find(|c| c.id == id)
+    }
+
+    /// Remember a file made with Create file, forgetting the oldest past
+    /// [`CREATED_KEEP`].
+    pub fn add_created(&mut self, c: Created) {
+        self.created.retain(|x| x.id != c.id);
+        self.created.push(c);
+        let over = self.created.len().saturating_sub(CREATED_KEEP);
+        self.created.drain(..over);
+    }
+
+    /// Forget one (the file stays). Whether there was one to forget.
+    pub fn forget_created(&mut self, id: &str) -> bool {
+        let before = self.created.len();
+        self.created.retain(|c| c.id != id);
+        self.created.len() != before
+    }
+
+    /// Forget them all (Delete account). The files stay.
+    pub fn clear_created(&mut self) {
+        self.created.clear();
     }
 
     pub fn list(&self) -> &[Mailbox] {
@@ -437,6 +496,82 @@ mod tests {
         assert_eq!(s.list().len(), 1);
         assert_eq!(s.licence(), Some("v1.x.y"));
         assert_eq!(s.connection("apple"), None);
+    }
+
+    fn made(id: &str, at: u64) -> Created {
+        Created {
+            id: id.into(),
+            path: PathBuf::from(format!("/home/ann/Documents/RATA/{id}.docx")),
+            name: format!("{id}.docx"),
+            format: "docx".into(),
+            place: "documents".into(),
+            created_at: at,
+        }
+    }
+
+    #[test]
+    fn files_made_with_create_file_survive_a_restart_and_can_be_forgotten() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.set_connection("apple", Some(dir.join("iCloud Drive")));
+            s.add_created(made("0123456789abcdef", 1));
+            s.add_created(made("fedcba9876543210", 2));
+            s.save().unwrap();
+        }
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"where\": \"documents\""), "{raw}");
+        assert!(raw.contains("\"version\": 1"), "{raw}");
+        let mut s = Store::open(&file);
+        assert_eq!(s.created().len(), 2);
+        assert_eq!(
+            s.created_by("0123456789abcdef"),
+            Some(&made("0123456789abcdef", 1))
+        );
+        assert_eq!(s.list().len(), 1, "the mailboxes are kept beside them");
+        assert!(s.connection("apple").is_some());
+        assert!(s.forget_created("0123456789abcdef"));
+        assert!(!s.forget_created("0123456789abcdef"));
+        s.save().unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.created().len(), 1);
+        s.clear_created();
+        s.save().unwrap();
+        // None made is not written at all: the file is as it was before K6.
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(!raw.contains("created"), "{raw}");
+        assert!(Store::open(&file).created().is_empty());
+    }
+
+    #[test]
+    fn only_the_newest_files_made_are_remembered() {
+        let mut s = Store::open(tmpdir().join("m.json"));
+        for i in 0..CREATED_KEEP + 3 {
+            s.add_created(made(&format!("{i:016x}"), i as u64));
+        }
+        assert_eq!(s.created().len(), CREATED_KEEP);
+        assert_eq!(s.created()[0].created_at, 3, "the oldest went");
+        assert!(
+            s.created_by(&format!("{:016x}", CREATED_KEEP + 2))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_file_written_before_create_file_still_reads() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"mailboxes":[],"licence":"v1.x.y","connections":{"apple":"/x/iCloud Drive"}}"#,
+        )
+        .unwrap();
+        let s = Store::open(&file);
+        assert!(s.created().is_empty());
+        assert_eq!(s.licence(), Some("v1.x.y"));
+        assert!(s.connection("apple").is_some());
     }
 
     #[test]

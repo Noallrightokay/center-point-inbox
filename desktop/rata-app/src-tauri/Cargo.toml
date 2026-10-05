@@ -22,6 +22,10 @@ sha2 = "0.11"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 open = "5"
+# Create file (K6, created.rs): reading a deflated `[Content_Types].xml`
+# when checking that a blank .docx, .xlsx or .pptx is one. Already in the
+# tree (png, the updater), so nothing new is downloaded.
+flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }

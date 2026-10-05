@@ -13,7 +13,9 @@
 //! in Rust, so the page can at most save a real attachment into Downloads.
 //! The connected folders (`cloud`, K5) are the same idea: the page names a
 //! service and an id RATA gave out, and Rust decides the folder and the
-//! name, never leaving the folder the customer connected.
+//! name, never leaving the folder the customer connected. Create file
+//! (`created`, K6) too: the page hands over a blank document's bytes and,
+//! later, only the id RATA gave it, and only such a file is ever opened.
 
 use std::sync::Arc;
 
@@ -27,6 +29,7 @@ use crate::core::{
     AttachmentAt, Changed, Delivered, Draft, Drafted, Forgotten, Forwarded, Found, Held, Linked,
     Opened, Problem, Rata, Refreshed, Saved, Standing,
 };
+use crate::created::{FileRefusal, Listed, Made, Reopened};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -645,4 +648,104 @@ pub fn slack_targets() -> Result<(), Refusal> {
 #[tauri::command]
 pub fn slack_share() -> Result<(), Refusal> {
     Err(crate::cloud::no_slack())
+}
+
+// Create file (K6, `created`): a blank document the page builds, saved by
+// Rust into Documents / RATA or a connected folder and opened in the app
+// this computer uses for its format. The page names a format, a name, a
+// place and, afterwards, the id RATA gave the file; never a path. These are
+// the only files RATA ever opens, and `created` checks each one again every
+// time it is about to.
+
+/// File work off the window's thread, answering in Create file's shape.
+async fn off_window<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, FileRefusal> + Send + 'static,
+) -> Result<T, FileRefusal> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|_| {
+            Err(FileRefusal {
+                kind: "disk",
+                error: "RATA could not finish that. Try again.".into(),
+            })
+        })
+}
+
+/// The Documents folder. Like Downloads, Tauri finds it on Linux only
+/// through the desktop's `user-dirs.dirs`, so `~/Documents` stands in.
+fn documents(handle: &AppHandle) -> Option<std::path::PathBuf> {
+    let paths = handle.path();
+    paths
+        .document_dir()
+        .ok()
+        .or_else(|| paths.home_dir().ok().map(|h| h.join("Documents")))
+}
+
+/// Make a blank file of `format` (docx, xlsx, pptx, md, txt or csv) named
+/// after `name` in `where` (`documents`, `apple` or `adobe`) from the page's
+/// bytes (base64), and open it. A file that would not open is still made.
+#[tauri::command]
+pub async fn create_file(
+    handle: AppHandle,
+    app: App<'_>,
+    format: String,
+    name: String,
+    r#where: String,
+    data: String,
+) -> Result<Made, FileRefusal> {
+    if data.len() > crate::created::CREATE_MAX / 3 * 4 + 4 {
+        return Err(FileRefusal {
+            kind: "too-large",
+            error: "That file is too large for RATA to make.".into(),
+        });
+    }
+    let docs = documents(&handle);
+    let rata = app.inner().clone();
+    off_window(move || {
+        let bytes = rata_mail::words::base64(data.as_bytes());
+        rata.create_file(
+            &format,
+            &name,
+            &r#where,
+            &bytes,
+            docs.as_deref(),
+            &crate::created::system_open,
+        )
+    })
+    .await
+}
+
+/// Open a file RATA made again, by its id.
+#[tauri::command]
+pub async fn open_created(app: App<'_>, id: String) -> Result<Reopened, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || rata.open_created(&id, &crate::created::system_open)).await
+}
+
+/// The files RATA made, newest first, with whether each is still there.
+#[tauri::command]
+pub async fn created_list(app: App<'_>) -> Result<Vec<Listed>, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || Ok(rata.created_list())).await
+}
+
+/// A file RATA made, as it is on disk now, as base64 for Send with RATA.
+#[tauri::command]
+pub async fn created_read(app: App<'_>, id: String) -> Result<CloudFile, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || {
+        let got = rata.created_read(&id)?;
+        Ok(CloudFile {
+            name: got.name,
+            mime: got.mime,
+            data: rata_mail::words::base64_encode(&got.data),
+        })
+    })
+    .await
+}
+
+/// Forget a file RATA made. The file stays where it is.
+#[tauri::command]
+pub fn forget_created(app: App<'_>, id: String) -> Result<bool, FileRefusal> {
+    app.forget_created(&id)
 }

@@ -110,7 +110,7 @@ impl Service {
     }
 
     /// The folder's own name, which starts every path shown for it.
-    fn root_name(self) -> &'static str {
+    pub(crate) fn root_name(self) -> &'static str {
         match self {
             Service::Adobe => "Creative Cloud Files",
             _ => "iCloud Drive",
@@ -425,7 +425,7 @@ enum Want {
 }
 
 /// The connected folder as it is now: canonical, and still a folder.
-fn root_now(service: Service, stored: &Path) -> Result<PathBuf, Refusal> {
+pub(crate) fn root_now(service: Service, stored: &Path) -> Result<PathBuf, Refusal> {
     stored
         .canonicalize()
         .ok()
@@ -870,7 +870,7 @@ impl Rata {
         Ok(self.status_of(service, pro))
     }
 
-    fn connected(&self, key: &str) -> Result<(Service, PathBuf), Refusal> {
+    pub(crate) fn connected(&self, key: &str) -> Result<(Service, PathBuf), Refusal> {
         let service = service_of(key)?;
         self.may_connect(service)?;
         let folder = self.remembered(service).ok_or_else(|| {
