@@ -210,7 +210,10 @@ servers, and says the server's own reason when a renewal is refused (I3);
 v0.1.46 leaves nothing behind when a sign-in or licence renewal finishes
 after Unlink or Delete account (SEC-7), and makes Copy diagnostics keep the
 latest failure of every operation and say how each special folder was found
-(J1). An
+(J1);
+v0.1.47 keeps folder, file and subject names out of Copy diagnostics,
+stops a link still in progress when Delete account runs, and lets a
+Microsoft mailbox whose list entry lost `auth` renew again (SEC-8). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
