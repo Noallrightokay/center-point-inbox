@@ -162,15 +162,32 @@ impl Attempt {
     /// 32 random bytes each: a 43-character verifier (RFC 7636's minimum
     /// length, and 256 bits), and a state nobody can guess.
     pub fn new(port: u16) -> Result<Self, String> {
+        // Loopback, any port: Entra matches `http://127.0.0.1` whatever
+        // the port for a desktop app, and the address is written here
+        // exactly as registered apart from that.
+        Attempt::with_redirect(format!("http://127.0.0.1:{port}"))
+    }
+
+    /// The same, sending the browser back to `redirect_uri`: for a provider
+    /// that matches the address it was registered with exactly, port and
+    /// all (Slack, `slack`).
+    pub fn with_redirect(redirect_uri: String) -> Result<Self, String> {
         Ok(Attempt {
             state: random(32)?,
             verifier: random(32)?,
-            // Loopback, any port: Entra matches `http://127.0.0.1` whatever
-            // the port for a desktop app, and the address is written here
-            // exactly as registered apart from that.
-            redirect_uri: format!("http://127.0.0.1:{port}"),
+            redirect_uri,
             deadline: Instant::now() + WAIT,
         })
+    }
+
+    /// The PKCE `code_challenge` for this attempt's verifier.
+    pub fn code_challenge(&self) -> String {
+        challenge(&self.verifier)
+    }
+
+    /// The verifier itself, which goes only to the token endpoint.
+    pub(crate) fn verifier(&self) -> &str {
+        &self.verifier
     }
 
     /// Microsoft's sign-in page for this attempt. `login_hint` fills in the
@@ -229,8 +246,17 @@ pub enum Heard {
     Stray,
 }
 
-/// Read the request-target of a request to the listener (`/?code=…&state=…`).
+/// Read the request-target of a request to the listener (`/?code=…&state=…`),
+/// as Sign in with Microsoft hears it. The listener itself goes through
+/// [`heard_from`]; this is what its tests read.
+#[cfg(test)]
 pub fn heard(target: &str, state: &str) -> Heard {
+    heard_from(target, state, "Microsoft")
+}
+
+/// Read the request-target of a request to the listener, for the provider
+/// named `who` ("Microsoft", "Slack"), the only word that differs.
+pub fn heard_from(target: &str, state: &str, who: &str) -> Heard {
     if !target.starts_with('/') || target.len() > HEAD_MAX {
         return Heard::Stray;
     }
@@ -264,16 +290,16 @@ pub fn heard(target: &str, state: &str) -> Heard {
         Some(code) if !code.is_empty() && code.len() <= 4096 => {
             Heard::Ours(Callback::Code(code.clone()))
         }
-        _ => Heard::Ours(Callback::Failed(
-            "Microsoft sent the browser back without a sign-in code.".into(),
-        )),
+        _ => Heard::Ours(Callback::Failed(format!(
+            "{who} sent the browser back without a sign-in code."
+        ))),
     }
 }
 
 /// An OAuth error code as the redirect carried it (`invalid_request`,
 /// `server_error`…) — which is only ever lowercase letters and underscores —
 /// or nothing a stranger could have written.
-fn error_code(code: &str) -> String {
+pub(crate) fn error_code(code: &str) -> String {
     if !code.is_empty()
         && code.len() <= 60
         && code
@@ -329,13 +355,24 @@ pub async fn wait_for_code(
     attempt: &Attempt,
     cancel: &Notify,
 ) -> Result<String, Ended> {
+    wait_for_code_from(listener, attempt, cancel, "Microsoft").await
+}
+
+/// [`wait_for_code`], for the provider named `who`, which the browser tab
+/// and a missing code name.
+pub async fn wait_for_code_from(
+    listener: TcpListener,
+    attempt: &Attempt,
+    cancel: &Notify,
+    who: &str,
+) -> Result<String, Ended> {
     loop {
         tokio::select! {
             _ = cancel.notified() => return Err(Ended::Cancelled),
             _ = tokio::time::sleep_until(attempt.deadline) => return Err(Ended::TimedOut),
             got = listener.accept() => {
                 let Ok((stream, _)) = got else { continue };
-                match answer(stream, &attempt.state).await {
+                match answer(stream, &attempt.state, who).await {
                     Heard::Ours(Callback::Code(code)) => return Ok(code),
                     Heard::Ours(Callback::Denied) => return Err(Ended::Denied),
                     Heard::Ours(Callback::Failed(why)) => return Err(Ended::Failed(why)),
@@ -347,7 +384,7 @@ pub async fn wait_for_code(
 }
 
 /// Read one request's head, answer it, and say what it was.
-async fn answer(mut stream: TcpStream, state: &str) -> Heard {
+async fn answer(mut stream: TcpStream, state: &str, who: &str) -> Heard {
     let mut head = Vec::with_capacity(1024);
     let mut buf = [0u8; 1024];
     let read = timeout(HEAD_WAIT, async {
@@ -363,25 +400,27 @@ async fn answer(mut stream: TcpStream, state: &str) -> Heard {
     let line = line.lines().next().unwrap_or("");
     let mut parts = line.split(' ');
     let got = match (read, parts.next(), parts.next()) {
-        (Ok(()), Some("GET"), Some(target)) => heard(target, state),
+        (Ok(()), Some("GET"), Some(target)) => heard_from(target, state, who),
         _ => Heard::Stray,
     };
     let (status, words) = match &got {
         Heard::Ours(Callback::Code(_)) => (
             "200 OK",
-            "RATA has what it needs from Microsoft. You can close this tab and go back to RATA.",
+            format!(
+                "RATA has what it needs from {who}. You can close this tab and go back to RATA."
+            ),
         ),
         Heard::Ours(Callback::Denied) => (
             "200 OK",
-            "Signing in was cancelled, so nothing was added. You can close this tab.",
+            "Signing in was cancelled, so nothing was added. You can close this tab.".into(),
         ),
         Heard::Ours(Callback::Failed(_)) => (
             "200 OK",
-            "Microsoft could not sign you in. You can close this tab; RATA says why.",
+            format!("{who} could not sign you in. You can close this tab; RATA says why."),
         ),
-        Heard::Stray => ("404 Not Found", "Nothing here."),
+        Heard::Stray => ("404 Not Found", "Nothing here.".into()),
     };
-    let _ = stream.write_all(page(status, words).as_bytes()).await;
+    let _ = stream.write_all(page(status, &words).as_bytes()).await;
     let _ = stream.shutdown().await;
     got
 }
@@ -532,6 +571,11 @@ fn id_address(id_token: &str) -> Option<String> {
 /// redirects — a form carrying a refresh token goes to the address it was
 /// written for or nowhere — and gives up after half a minute.
 pub fn client(use_proxy: bool) -> Result<reqwest::Client, String> {
+    client_for(use_proxy, "Microsoft")
+}
+
+/// [`client`], for reaching the provider named `who`.
+pub fn client_for(use_proxy: bool, who: &str) -> Result<reqwest::Client, String> {
     let tls = rata_mail::imap::tls_client_config()?;
     let mut b = reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
@@ -543,7 +587,7 @@ pub fn client(use_proxy: bool) -> Result<reqwest::Client, String> {
         b = b.no_proxy();
     }
     b.build()
-        .map_err(|e| format!("RATA could not get ready to reach Microsoft: {e}"))
+        .map_err(|e| format!("RATA could not get ready to reach {who}: {e}"))
 }
 
 async fn post(
@@ -684,10 +728,67 @@ pub struct Microsoft {
     /// Held while a refresh is under way, so two refreshes of one mailbox
     /// never race each other with the same refresh token.
     pub refreshing: tokio::sync::Mutex<()>,
-    pending: Mutex<Option<Arc<Notify>>>,
-    /// When the last sign-in began, and how long before another may.
-    began: Mutex<Option<Instant>>,
+    gate: Gate,
+    /// How long after one sign-in began another may.
     pub(crate) gap: Duration,
+}
+
+/// One sign-in at a time, and not one straight after another: the browser
+/// tab that counts, for one provider. Sign in with Microsoft and Share to
+/// Slack's sign-in (`slack`) each have a gate of their own.
+#[derive(Default)]
+pub struct Gate {
+    pending: Mutex<Option<Arc<Notify>>>,
+    /// When the last sign-in began.
+    began: Mutex<Option<Instant>>,
+}
+
+impl Gate {
+    /// Start a sign-in with the provider named `who`. There is only ever one
+    /// listener and one browser tab that counts: another is refused while
+    /// one waits (the form's Cancel ends that one first), and for `gap`
+    /// after the last began, so a page cannot open the provider's page in
+    /// tab after tab (security review L2).
+    pub fn begin(&self, gap: Duration, who: &str) -> Result<Arc<Notify>, String> {
+        let busy = || format!("RATA could not start signing in with {who}.");
+        let mut pending = self.pending.lock().map_err(|_| busy())?;
+        if pending.is_some() {
+            return Err(format!(
+                "A {who} sign-in is already waiting in your browser. Finish it there, or press Cancel first."
+            ));
+        }
+        let mut began = self.began.lock().map_err(|_| busy())?;
+        if began.is_some_and(|t| t.elapsed() < gap) {
+            return Err(format!(
+                "Wait a moment, then try signing in with {who} again."
+            ));
+        }
+        *began = Some(Instant::now());
+        let next = Arc::new(Notify::new());
+        *pending = Some(next.clone());
+        Ok(next)
+    }
+
+    /// Stop the sign-in in progress, if there is one.
+    pub fn cancel(&self) -> bool {
+        match self.pending.lock().ok().and_then(|mut p| p.take()) {
+            Some(n) => {
+                // Stored as a permit if the listener is not waiting yet.
+                n.notify_one();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A sign-in is over; forget it unless another has already replaced it.
+    pub fn finish(&self, which: &Arc<Notify>) {
+        if let Ok(mut p) = self.pending.lock()
+            && p.as_ref().is_some_and(|n| Arc::ptr_eq(n, which))
+        {
+            p.take();
+        }
+    }
 }
 
 impl Microsoft {
@@ -710,8 +811,7 @@ impl Microsoft {
             http: OnceLock::new(),
             access: Mutex::new(HashMap::new()),
             refreshing: tokio::sync::Mutex::new(()),
-            pending: Mutex::new(None),
-            began: Mutex::new(None),
+            gate: Gate::default(),
             gap: BEGIN_GAP,
         }
     }
@@ -748,43 +848,17 @@ impl Microsoft {
     /// ends that one first), and for `gap` after the last began, so a page
     /// cannot open Microsoft's page in tab after tab (security review L2).
     pub fn begin(&self) -> Result<Arc<Notify>, String> {
-        let busy = || "RATA could not start signing in with Microsoft.".to_string();
-        let mut pending = self.pending.lock().map_err(|_| busy())?;
-        if pending.is_some() {
-            return Err(
-                "A Microsoft sign-in is already waiting in your browser. Finish it there, or press Cancel first."
-                    .into(),
-            );
-        }
-        let mut began = self.began.lock().map_err(|_| busy())?;
-        if began.is_some_and(|t| t.elapsed() < self.gap) {
-            return Err("Wait a moment, then try signing in with Microsoft again.".into());
-        }
-        *began = Some(Instant::now());
-        let next = Arc::new(Notify::new());
-        *pending = Some(next.clone());
-        Ok(next)
+        self.gate.begin(self.gap, "Microsoft")
     }
 
     /// Stop the sign-in in progress, if there is one.
     pub fn cancel(&self) -> bool {
-        match self.pending.lock().ok().and_then(|mut p| p.take()) {
-            Some(n) => {
-                // Stored as a permit if the listener is not waiting yet.
-                n.notify_one();
-                true
-            }
-            None => false,
-        }
+        self.gate.cancel()
     }
 
     /// A sign-in is over; forget it unless another has already replaced it.
     pub fn finish(&self, which: &Arc<Notify>) {
-        if let Ok(mut p) = self.pending.lock()
-            && p.as_ref().is_some_and(|n| Arc::ptr_eq(n, which))
-        {
-            p.take();
-        }
+        self.gate.finish(which)
     }
 }
 

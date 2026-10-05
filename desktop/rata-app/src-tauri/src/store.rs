@@ -80,6 +80,22 @@ pub struct Created {
     pub created_at: u64,
 }
 
+/// The Slack workspace connected for Share to Slack (K3): which workspace,
+/// as Slack names it, and who signed in, by Slack's id. Never a token: those
+/// are in the keychain (`vault::SLACK_SERVICE`). `connected_at` tells one
+/// connection from the next; `parked_at` is set when Slack ended the
+/// sign-in, so nothing is sent with it again until the customer connects
+/// Slack again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlackLink {
+    pub team_id: String,
+    pub team: String,
+    pub user_id: String,
+    pub connected_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<u64>,
+}
+
 /// The most files Create file remembers; past it the oldest is forgotten
 /// (the file stays where it is).
 pub const CREATED_KEEP: usize = 500;
@@ -112,6 +128,11 @@ struct Contents {
     /// `connections`; `version` stays 1.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     created: Vec<Created>,
+    /// The Slack workspace connected (K3), without any token. Absent from a
+    /// file written before K3 and not written when none is, like
+    /// `connections`; `version` stays 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slack: Option<SlackLink>,
 }
 
 #[derive(Debug)]
@@ -121,6 +142,7 @@ pub struct Store {
     licence: Option<String>,
     connections: BTreeMap<String, PathBuf>,
     created: Vec<Created>,
+    slack: Option<SlackLink>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -153,6 +175,7 @@ impl Store {
             licence: held.licence,
             connections: held.connections,
             created: held.created,
+            slack: held.slack,
             on_disk,
         }
     }
@@ -177,6 +200,7 @@ impl Store {
             licence: self.licence.clone(),
             connections: self.connections.clone(),
             created: self.created.clone(),
+            slack: self.slack.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         // Made afresh, so it is created with the mode below rather than
@@ -243,6 +267,24 @@ impl Store {
     /// Forget every connected folder (Delete account).
     pub fn clear_connections(&mut self) {
         self.connections.clear();
+    }
+
+    /// The Slack workspace connected, if any (K3).
+    pub fn slack(&self) -> Option<&SlackLink> {
+        self.slack.as_ref()
+    }
+
+    /// Remember the Slack workspace connected, or forget it with `None`.
+    pub fn set_slack(&mut self, link: Option<SlackLink>) {
+        self.slack = link;
+    }
+
+    /// Slack ended the sign-in: keep the workspace, marked, until the
+    /// customer connects again or disconnects.
+    pub fn park_slack(&mut self, at: u64) {
+        if let Some(l) = self.slack.as_mut() {
+            l.parked_at = Some(at);
+        }
     }
 
     /// The files made with Create file, oldest first.
@@ -662,6 +704,43 @@ mod tests {
         assert!(s.remove("OWNER@Example.com "));
         assert!(s.list().is_empty());
         assert!(!s.remove("owner@example.com"));
+    }
+
+    #[test]
+    fn a_slack_workspace_is_kept_without_a_token_and_can_be_forgotten() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        // None connected: the file is as it was before K3.
+        assert!(!fs::read_to_string(&file).unwrap().contains("slack"));
+        let mut s = Store::open(&file);
+        s.set_slack(Some(SlackLink {
+            team_id: "T0123".into(),
+            team: "Acme".into(),
+            user_id: "U0456".into(),
+            connected_at: 7,
+            parked_at: None,
+        }));
+        s.save().unwrap();
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"team\": \"Acme\""), "{raw}");
+        for word in ["xox", "token", "secret", "refresh", "parked"] {
+            assert!(!raw.to_lowercase().contains(word), "{word} in {raw}");
+        }
+        let mut s = Store::open(&file);
+        assert_eq!(s.slack().unwrap().user_id, "U0456");
+        s.park_slack(9);
+        s.save().unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.slack().unwrap().parked_at, Some(9));
+        s.set_slack(None);
+        s.save().unwrap();
+        assert!(Store::open(&file).slack().is_none());
+        assert!(!fs::read_to_string(&file).unwrap().contains("slack"));
     }
 
     #[cfg(unix)]

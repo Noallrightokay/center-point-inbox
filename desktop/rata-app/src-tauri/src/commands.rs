@@ -24,7 +24,7 @@ use tauri::{AppHandle, Manager, State};
 
 use rata_mail::{Action, DraftRef, File, Folder, Message, OwnFolder};
 
-use crate::cloud::{Listing, Os, Placed, Refusal, Status};
+use crate::cloud::{Connected, Listing, Os, Placed, Refusal, Service, Status};
 use crate::core::ServerFound;
 use crate::core::{
     AttachmentAt, Changed, Delivered, Draft, Drafted, Forgotten, Forwarded, Found, Held, Linked,
@@ -519,10 +519,12 @@ pub fn diagnostics(
     app.diagnostics(crate::update::has_key(handle.config()), &live.now())
 }
 
-// Connected accounts (Workstream K). Only iCloud Drive and Creative Cloud
-// Files can be connected in this copy, as the folders their own apps keep
-// on this computer (K5, `cloud`). The page names a service and an id RATA
-// gave out, never a path; every answer shows paths relative to the folder.
+// Connected accounts (Workstream K). iCloud Drive and Creative Cloud Files,
+// as the folders their own apps keep on this computer (K5, `cloud`), and,
+// in a build with Slack's client id, Share to Slack (K3, `slack`). The page
+// names a service and an id RATA gave out, never a path; every answer shows
+// paths relative to the folder. For Slack it names a target from the list
+// RATA gave it, and never sees a token.
 
 /// Run file work off the window's thread: a listing of a large folder, or a
 /// 25 MB read and its base64, would otherwise hold the interface up.
@@ -548,33 +550,54 @@ pub fn connections_status(app: App<'_>) -> Vec<Status> {
 }
 
 /// Connect iCloud Drive or Creative Cloud Files: find the folder its app
-/// keeps on this computer and remember it.
+/// keeps on this computer and remember it. Or connect Slack: its page in the
+/// browser, answered when the customer finishes, cancels (`cancelled`) or
+/// five minutes pass.
 #[tauri::command]
 pub async fn connect_service(
     handle: AppHandle,
     app: App<'_>,
     service: String,
-) -> Result<Status, Refusal> {
+) -> Result<Connected, Refusal> {
+    if Service::parse(&service) == Some(Service::Slack) {
+        app.service_of(&service)?;
+        return app.connect_slack(crate::slack::open_sign_in).await;
+    }
     let home = handle.path().home_dir().map_err(|_| Refusal {
         service: service.clone(),
         kind: "not-found",
         error: "RATA could not find your home folder on this computer.".into(),
     })?;
     let rata = app.inner().clone();
-    on_disk(move || rata.connect_service(&service, Os::this(), &home)).await
+    on_disk(move || rata.connect_service(&service, Os::this(), &home))
+        .await
+        .map(Connected::Done)
 }
 
 /// Forget a connected folder. The folder and its files are left as they are.
+/// For Slack, forget its sign-in on this computer and then ask Slack to end
+/// it too (best effort).
 #[tauri::command]
-pub fn disconnect_service(app: App<'_>, service: String) -> Result<Status, Refusal> {
+pub async fn disconnect_service(app: App<'_>, service: String) -> Result<Status, Refusal> {
+    if Service::parse(&service) == Some(Service::Slack) {
+        app.service_of(&service)?;
+        let (status, held) = app.disconnect_slack()?;
+        if let Some(tokens) = held {
+            app.revoke_slack(tokens).await;
+        }
+        return Ok(status);
+    }
     app.disconnect_service(&service)
 }
 
-/// Nothing to cancel: connecting a folder waits on nothing. The browser
-/// sign-ins of K2 to K4 will use this.
+/// Stop a Slack sign-in waiting for the browser. Connecting a folder waits
+/// on nothing, so for the rest there is nothing to stop.
 #[tauri::command]
-pub fn cancel_connect() -> bool {
-    false
+pub fn cancel_connect(app: App<'_>, service: Option<String>) -> bool {
+    match service.as_deref().and_then(Service::parse) {
+        Some(Service::Slack) => app.cancel_slack(),
+        _ => false,
+    }
 }
 
 /// One folder of a connected service: `folder` is an id from an earlier
@@ -645,16 +668,59 @@ pub async fn cloud_save(
     .await
 }
 
-/// Share to Slack's people and channels: not in this copy yet (K3).
+/// Share to Slack's channels and people: those the customer is in and the
+/// workspace's people. A build without Slack's client id refuses, as
+/// before K3.
 #[tauri::command]
-pub fn slack_targets() -> Result<(), Refusal> {
-    Err(crate::cloud::no_slack())
+pub async fn slack_targets(app: App<'_>) -> Result<Vec<crate::slack::Target>, Refusal> {
+    app.slack_targets().await
 }
 
-/// Share to Slack: not in this copy yet (K3).
+/// A file the page hands over for Share to Slack, as base64.
+#[derive(serde::Deserialize)]
+pub struct SlackFile {
+    name: String,
+    data: String,
+}
+
+/// Share to Slack: `text`, and `files` with it, to `target` (an id from
+/// `slack_targets`). The sizes are checked before anything is decoded, and
+/// the rest (names, programs dressed as documents, the text's escaping) in
+/// `slack`.
 #[tauri::command]
-pub fn slack_share() -> Result<(), Refusal> {
-    Err(crate::cloud::no_slack())
+pub async fn slack_share(
+    app: App<'_>,
+    target: String,
+    text: String,
+    files: Option<Vec<SlackFile>>,
+) -> Result<crate::slack::Shared, Refusal> {
+    use crate::slack::{SHARE_FILES_MAX, SHARE_MAX, ShareFile};
+    let files = files.unwrap_or_default();
+    let too_large = |error: String| Refusal {
+        service: "slack".into(),
+        kind: "too-large",
+        error,
+    };
+    if files.len() > SHARE_FILES_MAX {
+        return Err(too_large(format!(
+            "Share at most {SHARE_FILES_MAX} files at a time."
+        )));
+    }
+    let encoded: usize = files.iter().map(|f| f.data.len()).sum();
+    if encoded > SHARE_MAX / 3 * 4 + 4 * files.len() {
+        return Err(too_large(format!(
+            "Those files are too large to share from RATA together (the most is {} MB).",
+            SHARE_MAX / (1024 * 1024)
+        )));
+    }
+    let files = files
+        .into_iter()
+        .map(|f| ShareFile {
+            name: f.name,
+            bytes: rata_mail::words::base64(f.data.as_bytes()),
+        })
+        .collect();
+    app.slack_share(&target, &text, files).await
 }
 
 // Create file (K6, `created`): a blank document RATA writes from its own

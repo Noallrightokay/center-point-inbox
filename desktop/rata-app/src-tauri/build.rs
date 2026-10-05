@@ -6,5 +6,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RATA_LICENCE_PUBLIC_KEY");
     // The same for the Microsoft client id (oauth.rs).
     println!("cargo:rerun-if-env-changed=RATA_MS_CLIENT_ID");
+    // And Slack's (slack.rs).
+    println!("cargo:rerun-if-env-changed=RATA_SLACK_CLIENT_ID");
     tauri_build::build()
 }

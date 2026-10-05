@@ -52,6 +52,8 @@ cd src-tauri
 export RATA_LICENCE_PUBLIC_KEY="$(cat /path/to/licence.pub)"
 # Optional: Microsoft's public OAuth client id turns on Sign in with Microsoft.
 # export RATA_MS_CLIENT_ID=...
+# Optional: the Slack app's public client id turns on Share to Slack (Pro).
+# export RATA_SLACK_CLIENT_ID=...
 
 # A packaged build, the one to test anything visible in. Without the
 # custom-protocol feature a release build looks for a dev server instead of
@@ -98,6 +100,7 @@ and running anywhere is the only reason to ship an AppImage.
 | Six `AZURE_*` values (Artifact Signing), or `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD` | SmartScreen warns before the installer runs. Never both sets, and half a set fails the Windows job; see `docs/WINDOWS-SIGNING.md`. |
 | `RATA_UPDATER_PUBKEY` and `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | The app registers no updater and never checks for a new version. Half the pair fails the build. |
 | `RATA_MS_CLIENT_ID` (a repository **variable**, not a secret) | The build has no Sign in with Microsoft; Microsoft mailboxes cannot be added. |
+| `RATA_SLACK_CLIENT_ID` (a repository **variable**, not a secret) | The build has no Share to Slack; Settings shows no Slack row and the page offers no Share to Slack. |
 
 The build works without the signing secrets and the installers install; they
 just arrive looking untrustworthy, which for a product whose pitch is "your mail

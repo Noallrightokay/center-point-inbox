@@ -612,6 +612,9 @@ jobs:
           # variable rather than a secret. Unset is an empty string, which the
           # app reads as "Microsoft sign-in is not configured".
           RATA_MS_CLIENT_ID: ${{ vars.RATA_MS_CLIENT_ID }}
+          # Share to Slack's client id (K3, docs/CONNECTIONS-SETUP.md): public
+          # too, a variable. Unset, the build offers no Slack at all.
+          RATA_SLACK_CLIENT_ID: ${{ vars.RATA_SLACK_CLIENT_ID }}
           # The Apple, update and Azure signing variables arrive from the
           # steps above, and only when they are real. Do not add them here.
         with:

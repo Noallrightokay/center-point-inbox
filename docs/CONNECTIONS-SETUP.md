@@ -15,8 +15,9 @@ the company's own page in their browser, and the tokens stay in that
 customer's keychain. Put each id in GitHub → the repository → Settings →
 Secrets and variables → Actions → **Variables** (not Secrets).
 
-The Rust side of each connection is its own card (K2, K3, K4) and is not
-built yet; the variable names below are the ones those cards will read.
+The Rust side of each connection is its own card (K2, K3, K4). K3
+(Slack) is built and reads `RATA_SLACK_CLIENT_ID`; K2 and K4 are not built
+yet, and the variable names below are the ones those cards will read.
 Registering first costs nothing and lets each card be tested the day it is
 built.
 
@@ -56,13 +57,31 @@ a minute, 15 messages each, which is too little to be useful).
 
 1. [api.slack.com/apps](https://api.slack.com/apps) → Create New App →
    From scratch → name it RATA, pick a workspace you own for development.
-2. **OAuth & Permissions** → Redirect URLs → add `http://localhost`.
+2. **OAuth & Permissions** → Redirect URLs → add these three, exactly,
+   and Save URLs:
+   - `http://localhost:28417`
+   - `http://localhost:28418`
+   - `http://localhost:28419`
+
+   Slack's docs say a redirect must match, or sit under, a registered
+   Redirect URL, and treat a `localhost` redirect as a desktop one once
+   PKCE is on. Reports from other desktop apps (2026) show the port has to
+   match too, and that `127.0.0.1` is refused where `localhost` works, so
+   a bare `http://localhost` is not enough. RATA listens on the first of
+   the three ports no other program is using, so register all three. They
+   are fixed in the app (`PORTS` in
+   `desktop/rata-app/src-tauri/src/slack.rs`); change both together or not
+   at all. If Slack's page says `bad_redirect_uri`, this step is why.
 3. **User Token Scopes** (not Bot Token Scopes): `chat:write`,
    `files:write`, `im:write`, `channels:read`, `groups:read`, `im:read`,
    `users:read`.
 4. Turn on **PKCE**. It is one-way: once on, the app can no longer use a
    client secret, which RATA would never ship anyway.
    [Using PKCE](https://docs.slack.dev/authentication/using-pkce/).
+   Recommended as well, under OAuth & Permissions: opt in to **token
+   rotation** (also one-way), so an access token lasts 12 hours and is
+   renewed by RATA, rather than lasting until it is revoked. RATA works
+   either way. [Token rotation](https://docs.slack.dev/authentication/using-token-rotation/).
 5. **Manage Distribution** → make the app distributable so other
    workspaces can install it. A Marketplace listing is not needed for
    sending (and needs 10 active workspaces before Slack will review it).
@@ -72,8 +91,12 @@ a minute, 15 messages each, which is too little to be useful).
 Refresh tokens of a PKCE app expire after 30 days, so a customer who has
 not shared anything for a month signs in to Slack again.
 
-**How to tell it worked:** once K3 ships, Connect on the Slack row opens
-Slack's page, and Share to Slack on a message lists the workspace's
+Share to Slack is in builds made after `RATA_SLACK_CLIENT_ID` is set; a
+build without it shows no Slack anywhere, as before.
+
+**How to tell it worked:** in a build made after the variable was set,
+Connect on the Slack row opens Slack's page, and Share to Slack on a
+message lists the workspace's
 channels.
 
 ## Google Drive (K4)
