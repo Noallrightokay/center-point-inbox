@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 305 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 152 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -1464,9 +1464,26 @@ from `option_env!("RATA_MS_CLIENT_ID")` (not a secret). A build without it,
 and the website, keep C0's words: `MS_HELP`/`MS365_HELP` in the engine and
 `MS_NOT_YET` in the page ("…cannot be added to RATA yet…"). Not seen
 against a real Microsoft sign-in until the owner's registration (C4) and
-B2's Outlook column. Not handled: a Microsoft 365 domain behind a mail
-filter such as Mimecast (typing `outlook.office365.com` works around it),
-shared or delegated mailboxes.
+B2's Outlook column. A Microsoft 365 domain behind a mail filter such as
+Mimecast is found since L1 (below) by its autodiscover CNAME or SPF record;
+still not handled: such a domain that publishes neither, or whose SPF names
+two providers, and shared or delegated mailboxes.
+**Behind a mail filter (L1).** When SRV and the MX rules name no provider
+(the MX is a filter, unknown, or missing), `resolve.rs` reads, by DNS only,
+a CNAME of `autodiscover.<domain>` to `autodiscover.outlook.com` (Microsoft
+365, `Source::Autodiscover`) and the domain's one `v=spf1` record, read
+strictly (RFC 7208; only passing includes; one `redirect=` hop, ignored with
+`all`; macros skipped; more than one record, an unknown term or two
+providers is no evidence), whose includes name Microsoft 365, Google
+Workspace, Zoho by region (`zohomail.`/`zoho.`/`one.zoho.com`), Fastmail,
+Hostinger, iCloud, Titan, Rackspace, Migadu or Namecheap Private Email
+(`Source::Spf`); host, label and help come from that provider's MX rule, so
+Microsoft found this way gets Sign in with Microsoft and `verify` keeps a
+password away from it. At most three lookups. Order: SRV, MX rules,
+evidence, conventional names, except that an unknown MX under the address's
+own domain keeps the conventional names first (an on-premises Exchange that
+sends through Microsoft 365 has that SPF). `zoho_second_chance` covers
+`Source::Spf`. `discover_with<D: Lookup>` takes a scripted DNS in tests.
 **Drafts saved to the server (F1, v0.1.41).** In the app the composer's
 draft is APPENDed to the mailbox's Drafts folder with `\Seen \Draft` set
 (`\Seen` since 0.1.43, BUG-M, so it never comes back unread) when the
