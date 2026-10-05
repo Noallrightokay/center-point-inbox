@@ -34,7 +34,7 @@ convenient.
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
-| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's registrations for OneDrive, Slack and Google Drive), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 | `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
