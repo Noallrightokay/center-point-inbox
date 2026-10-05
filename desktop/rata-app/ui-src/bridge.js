@@ -608,6 +608,196 @@
       }
     },
 
+    /* ---- Connected accounts (K1, Pro) ----
+
+       Cloud files (Microsoft OneDrive, Google Drive, iCloud Drive, Adobe's
+       Creative Cloud Files) to open, convert and save files, and Share to
+       Slack. The interface is built; the Rust side is a card per provider,
+       each waiting on the owner registering RATA with that company. Until
+       a build has `connections_status`, the GET below answers
+       `available: false` and the page shows nothing of the feature.
+
+       The contract the Rust commands are to be built to:
+
+       connections_status() -> [{ service, label, kind, available, connected, account?, note? }]
+         service   'microsoft' | 'google' | 'apple' | 'adobe' | 'slack'
+         kind      'files'  : signs in in the browser (OAuth, as Sign in with
+                              Microsoft does). Microsoft and Google. Google
+                              opens its own file chooser in the browser, so
+                              RATA sees only files the customer picks or RATA
+                              saved, and says so in `note`.
+                   'folder' : no sign-in. Apple and Adobe let no other app
+                              into their clouds, so Rust finds the sync folder
+                              on this computer (iCloud Drive: macOS
+                              ~/Library/Mobile Documents/com~apple~CloudDocs,
+                              Windows %USERPROFILE%\iCloud Drive; Adobe: the
+                              Creative Cloud Files folder) and, when it is not
+                              there, asks the customer to choose it.
+                   'share'  : Slack. Send only; nothing is read from Slack.
+         account   for 'files' and 'share' the account signed in; for
+                   'folder' a short name for the folder ("iCloud Drive on
+                   this computer"), never a full path.
+         available false while this build cannot do that service yet (its
+                   card has not shipped): the page then shows nothing of it,
+                   no row, no Files source, no Save to entry, no Share to
+                   Slack. Absent counts as true. The services arrive one at
+                   a time (the iCloud and Adobe folders first), and when no
+                   entry is available the whole section stays hidden, as
+                   when the command is missing.
+         note      a sentence the page shows under the row, or none.
+         Answered whatever the plan: the page itself shows Base the plan
+         sentence and no Connect. Rust refuses connect_service on Base.
+       connect_service({ service }) -> the service's entry, connected, or
+         { cancelled: true }. For 'files' and 'share' it opens the
+         provider's page in the browser and waits (minutes, like
+         link_microsoft); for 'folder' it looks for the folder (K5).
+       cancel_connect({ service }) -> bool: stops a connect_service that is
+         waiting; that call then answers { cancelled: true }. K5's folders
+         wait on nothing, and it answers false.
+       disconnect_service({ service }) -> the service's entry, now not
+         connected. Forgets the token (keychain) or the folder (the folder
+         and its files stay as they are). Allowed on any plan.
+       cloud_list({ service, folder }) -> { folder: { id, name, parent?,
+         path }, items: [{ id, name, kind: 'folder'|'file', size?,
+         modified?, offline? }], truncated }
+         `folder` null is the top (whose id is ""). `path` is what to show
+         for where this is ("iCloud Drive / Taxes"), never a path on disk.
+         `size` in bytes, `modified` in seconds since 1970. `offline`: an
+         iCloud placeholder not downloaded yet; reading it is refused with
+         kind 'offline'. `truncated`: the folder holds more than was listed.
+         Ids are Rust's (K5: relative to the connected folder), opaque here.
+       cloud_read({ service, id }) -> { name, mime, data } (data base64).
+       cloud_save({ service, folder, name, data, confirmed }) ->
+         { name, id, where, size }. `where` names the place for a toast
+         ("iCloud Drive / Taxes"); `name` is the name it was saved as
+         (never overwriting). A program named to look like a document is
+         refused with kind 'needs-confirmation' unless `confirmed`, which
+         the page sends only after its own question (askDisguised), as
+         save_attachment.
+       slack_targets() -> [{ id, name, kind: 'channel'|'person' }]
+       slack_share({ target, text, files: [{ name, data }] }) -> { where }
+
+       Every refusal is a rejected { service, kind, error }; kind is one of
+       unknown, unavailable, unlicensed, plan, not-found, not-connected,
+       gone, refused, offline, too-large, needs-confirmation, disk. The page
+       shows `error` and acts on `kind` only for needs-confirmation.
+       Everything that comes back (names, accounts, notes, paths, `where`,
+       `error`) is the provider's or a stranger's text: the page draws it
+       with textContent only. */
+    async '/api/connections'(opts) {
+      const method = (opts?.method || 'GET').toUpperCase();
+      const b = body(opts);
+      const service = String(b.service || '');
+      if (method === 'GET') {
+        let list;
+        try {
+          list = await invoke('connections_status');
+        } catch {
+          /* No such command in this build (or it failed): the feature is
+             not here, and the page shows nothing of it. */
+          return { available: false };
+        }
+        if (!Array.isArray(list)) return { available: false };
+        return {
+          available: true,
+          services: list.filter((x) => x && typeof x === 'object').map((x) => ({
+            service: String(x.service || ''),
+            label: String(x.label || ''),
+            kind: ['files', 'folder', 'share'].includes(x.kind) ? x.kind : 'files',
+            available: x.available !== false,
+            connected: x.connected === true,
+            ...(x.account ? { account: String(x.account) } : {}),
+            ...(x.note ? { note: String(x.note) } : {}),
+          })),
+        };
+      }
+      try {
+        if (method === 'DELETE') {
+          await invoke('disconnect_service', { service });
+          return { ok: true };
+        }
+        const r = await invoke('connect_service', { service });
+        if (r && r.cancelled) return { ok: false, cancelled: true };
+        return { ok: true, account: r && r.account ? String(r.account) : '' };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    /* Cancel on a connect that is waiting for the browser or a folder. */
+    async '/api/connections/cancel'(opts) {
+      const b = body(opts);
+      try {
+        return { ok: true, stopped: !!(await invoke('cancel_connect', { service: String(b.service || '') })) };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e) };
+      }
+    },
+
+    async '/api/cloud/list'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('cloud_list', { service: String(b.service || ''), folder: b.folder == null ? null : String(b.folder) });
+        const f = (r && r.folder) || {};
+        const num = (n) => (Number.isFinite(Number(n)) && n !== null && n !== '' ? Number(n) : null);
+        return {
+          ok: true,
+          folder: { id: f.id == null ? null : String(f.id), name: String(f.name || ''), path: String(f.path || ''), ...(f.parent != null ? { parent: String(f.parent) } : {}) },
+          items: ((r && r.items) || []).filter((x) => x && typeof x === 'object').map((x) => ({
+            id: String(x.id), name: String(x.name || ''), kind: x.kind === 'folder' ? 'folder' : 'file', size: num(x.size), modified: num(x.modified), offline: x.offline === true,
+          })),
+          truncated: !!(r && r.truncated),
+        };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/cloud/read'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('cloud_read', { service: String(b.service || ''), id: String(b.id || '') });
+        return { ok: true, name: String(r.name || ''), mime: String(r.mime || ''), data: String(r.data || '') };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/cloud/save'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('cloud_save', { service: String(b.service || ''), folder: b.folder == null ? null : String(b.folder), name: String(b.name || 'file'), data: String(b.data || ''), confirmed: b.confirmed === true });
+        return { ok: true, name: String((r && r.name) || b.name || ''), where: String((r && r.where) || '') };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/slack/targets'() {
+      try {
+        const r = await invoke('slack_targets');
+        return { ok: true, targets: (Array.isArray(r) ? r : []).filter((x) => x && typeof x === 'object' && x.id != null)
+          .map((x) => ({ id: String(x.id), name: String(x.name || ''), kind: x.kind === 'person' ? 'person' : 'channel' })) };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e) };
+      }
+    },
+
+    /* Only ever called by the dialog's Send. */
+    async '/api/slack/share'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('slack_share', {
+          target: String(b.target || ''),
+          text: String(b.text || ''),
+          files: (Array.isArray(b.files) ? b.files : []).map((f) => ({ name: String(f.name || 'file'), data: String(f.data || '') })),
+        });
+        return { ok: true, where: String((r && r.where) || '') };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e) };
+      }
+    },
+
     async '/api/links'() {
       const s = await invoke('licence_status');
       if (!s.licensed) return cannot(s.message);

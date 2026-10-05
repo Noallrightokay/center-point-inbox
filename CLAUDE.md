@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 152 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6). 186 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (426 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (473 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox; no patient information. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -1617,6 +1617,46 @@ to report a bug. It quotes the engine's and the app's error sentences
 exactly, and `tests/help.test.mjs` checks every quote is still in the
 source, so **rewording a customer-facing error means updating the help
 page too**. It goes live only when mailrata.org is redeployed.
+**Connected accounts and Share to Slack (K1, K5, K6; Pro).** Workstream K
+in `docs/MVP-PLAN.md` says what each service can be and why. The page
+(K1): Settings → Connected accounts, a source switch and cloud folder
+browser in Files (Open in Bridge, Add to Files), **Save to ▾** on Files
+documents, Bridge output and attachments, and a Share to Slack dialog
+(target search, editable text prefilled from `bodyOf`, attachments ticked
+by choice, nothing sent until Send), all gated by `can('connect')` (TIERS
+`connect`, or the licence plan's own `connect` from Rust). It shows only
+when `connections_status` answers, and only entries with `available !==
+false`; the contract for the Rust side is the comment in `bridge.js`
+(`/api/connections`, `/api/cloud/*`, `/api/slack/*`; refusals
+`{service, kind, error}`). Every name, path and error is drawn with
+textContent. `lib/plan.js` and the website say nothing of it until the
+real connections ship (BUG-D). **K5 (`cloud.rs`)** is the only real service
+so far: iCloud Drive and Creative Cloud Files as the folders their own apps
+sync (macOS `~/Library/Mobile Documents/com~apple~CloudDocs`, Windows
+`%USERPROFILE%\iCloud Drive` or `iCloudDrive`, `~/Creative Cloud Files…`),
+since neither Apple nor Adobe has a public API for a person's files. Ids
+are `/`-separated paths relative to the folder, checked name by name (no
+`..`, absolute, hidden or Windows device names), every step with
+`symlink_metadata`, and the canonical result must stay inside: a link is
+never followed. Listings hide dot files and system files and show iCloud
+placeholders as `offline`; reads cap at `READ_MAX`, saves at 100 MB through
+`write_new` (marked as downloads, since a stranger's attachment may be the
+file) and need `confirmed` for a disguised program. The store keeps
+`connections` (service → path) and Delete account forgets them. The Slack
+commands refuse until K3. **Create file (K6)**: `created.rs` writes a
+blank docx, xlsx, pptx, md, txt or csv the page made (`check_body`:
+OOXML content types name the format's main part, no macros, text is UTF-8,
+5 MB) into Documents/RATA or a connected folder with `write_unmarked`
+(never marked: it is the customer's own new file), records it in the
+store's `created` list (500 at most), and opens it with the computer's app
+(`open::that_detached`). **The one exception to "RATA never opens a saved
+file"**: a file RATA made through `create_file`, named by its random id,
+still at its canonical recorded path, with its format's extension, and not
+a link, all re-checked on every open and every read (`created_read`, for
+Send with RATA, at `ATTACH_MAX`). Delete account forgets the list; the
+files stay. The demo (`desktop/rata-app/demo`) has sample accounts for
+every service. Found on the way: `needPlan` no longer has an em dash, and
+`.att-card .sz` uses `--slate` (axe, on `--fill-2`).
 **Real providers (BUG-M, v0.1.43).** Linking: a table or known-MX
 provider that cannot be reached (no DNS, a blocked port, too many
 connections) is named with the reason and "Check your connection and try

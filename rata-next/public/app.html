@@ -268,7 +268,7 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .md-atts{background:var(--card);border-radius:0 0 var(--r) var(--r);border-top:1px solid var(--hair-2);padding:18px 26px;display:flex;gap:10px;flex-wrap:wrap;box-shadow:var(--edge)}
 .att-card{display:flex;align-items:center;gap:10px;border-radius:var(--r-sm);padding:10px 14px;background:var(--fill-2);font-size:13px}
 .att-card .fmt{font-family:var(--mono);font-size:10.5px;font-weight:500;background:var(--fill);color:var(--slate);padding:2px 6px;border-radius:5px}
-.att-card .sz{color:var(--faint);font-size:11.5px}
+.att-card .sz{color:var(--slate);font-size:11.5px}
 button.att-card{border:0;font:inherit;color:inherit;cursor:pointer;text-align:left;transition:background .15s}
 .att-wrap{display:inline-flex;align-items:stretch;gap:4px}
 .att-conv{border:0;font:inherit;font-size:12.5px;font-weight:600;color:var(--tint-deep);background:var(--tint-soft);border-radius:var(--r-sm);padding:0 12px;cursor:pointer}
@@ -348,6 +348,32 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .doc-grid.listmode .doc-ic{width:32px;height:38px}
 .doc-grid.listmode .doc-meta{margin:0 0 0 auto}
 .doc-grid.listmode .doc-convert{border:none;padding:0;margin-left:16px}
+.badge.cloud{text-transform:none}
+/* Files from a connected cloud (K1): the source chips, and the folder
+   being browsed in place of the files on this computer. */
+.cloud-src{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.cloud-src[hidden],#br-cloud[hidden]{display:none}
+.cloud-src .cloud-src-lbl{font-size:12.5px;color:var(--faint);margin-right:2px}
+#view-docs.cloud-mode #folder-bar,#view-docs.cloud-mode #doc-grid,#view-docs.cloud-mode #doc-viewtoggle{display:none}
+#view-docs:not(.cloud-mode) #cloud-pane{display:none}
+#cloud-pane{flex:1;overflow-y:auto;padding:18px 22px 28px}
+.cloud-crumbs ol{display:flex;flex-wrap:wrap;align-items:center;gap:2px;list-style:none;margin:0 0 12px;padding:0;font-size:13.5px}
+.cloud-crumbs .sep{color:var(--faint);padding:0 2px}
+.cloud-crumbs button{color:var(--tint);font-weight:500;padding:3px 6px;border-radius:6px}
+.cloud-crumbs button:hover{background:var(--fill-2)}
+.cloud-crumbs [aria-current]{font-weight:600;color:var(--ink);padding:3px 6px}
+.cloud-note{font-size:12.5px;color:var(--slate);margin:0 0 12px;max-width:62ch}
+.cloud-list{list-style:none;margin:0;padding:0;background:var(--card);border-radius:var(--r);box-shadow:var(--edge)}
+.cloud-item{display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--hair-2);flex-wrap:wrap}
+.cloud-item:first-child{border-top:0}
+.cloud-ic{flex-shrink:0;min-width:42px;text-align:center;padding:3px 4px;border-radius:6px;background:var(--fill);color:var(--slate);font-family:var(--mono);font-size:10.5px;font-weight:600}
+.cloud-name{flex:1;min-width:160px;font-size:14px;overflow-wrap:anywhere}
+.cloud-folder{display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left;color:var(--ink);padding:2px 0;border-radius:6px}
+.cloud-folder:hover .cloud-name{color:var(--tint)}
+.cloud-meta{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cloud-acts{display:flex;gap:6px;flex-wrap:wrap}
+.cloud-acts .btn{min-height:28px;padding:4px 10px;font-size:12.5px}
+.cloud-empty{padding:18px 16px;font-size:13px;color:var(--slate)}
 #view-comp{flex-direction:column;overflow-y:auto!important;display:none}
 #view-comp.active{display:block}
 .comp-wrap{max-width:980px;margin:0 auto;padding:28px 26px 90px}
@@ -410,6 +436,11 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .diag-row textarea{display:block;width:100%;margin-top:8px;min-height:180px;resize:vertical;border:none;padding:8px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font-family:var(--mono);font-size:12px;line-height:1.5;color:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
 .diag-row textarea:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .set-row span.diag-hint{display:block;margin-top:8px;color:var(--slate)}
+/* Connected accounts (K1). */
+.conn-lead{font-size:13px;color:var(--slate);margin:0 0 10px;max-width:62ch;line-height:1.45}
+.set-row span.conn-state{display:block}
+.set-row span.conn-note{display:block;margin-top:6px;color:var(--slate);line-height:1.45;max-width:62ch}
+.set-row span.conn-wait{font-size:13px;color:var(--slate)}
 #help-sec a.btn{text-decoration:none}
 
 /* ---------- search ---------- */
@@ -629,7 +660,28 @@ button.cv-row:hover{background:var(--fill-2)}
 .cv-words{display:block;font-size:13px;line-height:1.45;color:var(--slate);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .md-convo .cv-more{margin:8px 8px 0;font-size:12.5px;color:var(--faint)}
 #welcome-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:26px 26px 22px;animation:pop .16s ease-out}
-@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card{animation:none}}
+/* Share to Slack (K1): a dialog like the link question, a little wider. */
+#slack-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
+#slack-ov.open{display:flex}
+#slack-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#slack-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
+#slack-card legend,#slack-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
+#slack-card fieldset legend{margin-top:0}
+.slack-targets{margin-top:6px;max-height:190px;overflow-y:auto;border-radius:var(--r-sm);box-shadow:var(--edge);padding:4px}
+.slack-opt,.slack-file{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13.5px;cursor:pointer}
+.slack-opt:hover,.slack-file:hover{background:var(--fill-2)}
+.slack-opt .slack-name,.slack-file .slack-name{overflow-wrap:anywhere}
+.slack-opt .slack-kind{margin-left:auto;font-size:12px;color:var(--slate)}
+.slack-wait{padding:8px;font-size:13px;color:var(--slate)}
+#slack-text{width:100%;min-height:150px;resize:vertical;border:none;padding:10px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font:inherit;font-size:13.5px;line-height:1.5;color:inherit}
+#slack-text:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
+.slack-err{margin-top:10px;font-size:13px;color:var(--red)}
+.slack-err:empty{display:none}
+/* Save to: the clouds connected, as a small menu by the button pressed. */
+.saveto-menu{position:fixed;z-index:70;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;min-width:190px;animation:pop .16s ease-out}
+.saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
+.saveto-menu button:hover{background:var(--fill-2)}
+@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,.saveto-menu{animation:none}}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -924,6 +976,7 @@ body.send-counting #toast{bottom:76px}
         <span id="folder-hint" style="font-size:12px;color:var(--faint)"></span>
       </div>
       <div class="doc-toolbar">
+        <div class="cloud-src" id="cloud-src" role="group" aria-label="Where your files are" hidden></div>
         <span style="flex:1"></span>
         <button class="btn" id="doc-viewtoggle">List view</button>
       </div>
@@ -942,11 +995,12 @@ body.send-counting #toast{bottom:76px}
               <button class="pill" data-eco="plain">Plain / Markdown</button>
             </div>
           </div>
-          <div class="br-actions"><button class="btn primary" id="br-go">Convert &amp; download</button><button class="btn" id="br-save">Convert into Documents</button><button class="btn" id="br-clear" aria-label="Clear this file">✕</button></div>
+          <div class="br-actions"><button class="btn primary" id="br-go">Convert &amp; download</button><button class="btn" id="br-save">Convert into Documents</button><button class="btn" id="br-cloud" aria-haspopup="true" aria-expanded="false" hidden>Save to ▾</button><button class="btn" id="br-clear" aria-label="Clear this file">✕</button></div>
           <div class="br-note" id="br-note"></div>
         </div>
       </div>
       <div class="doc-grid" id="doc-grid"></div>
+      <section id="cloud-pane" aria-labelledby="cloud-title"><h2 class="vh" id="cloud-title">Files</h2><div id="cloud-body"></div></section>
     </section>
 
     <!-- SEARCH -->
@@ -1032,6 +1086,12 @@ body.send-counting #toast{bottom:76px}
           </div>
           <div class="set-row" id="linkform" style="display:none;flex-wrap:wrap"><div class="grow"><b id="lf-title"></b><span id="lf-sub"></span><span class="lf-note" id="lf-ms" role="status" style="display:none"></span></div><input type="text" id="lf-input" aria-labelledby="lf-title" placeholder="" style="min-width:210px"><input type="password" id="lf-pass" aria-label="App password" placeholder="app password" autocomplete="off" style="min-width:180px;display:none"><input type="text" id="lf-host" aria-label="Mail server (IMAP)" placeholder="imap.yourprovider.com" autocomplete="off" style="min-width:180px;display:none"><button class="btn primary" id="lf-save">Link</button><button class="btn" id="lf-ms-go" style="display:none">Sign in with Microsoft</button><button class="btn" id="lf-cancel">Cancel</button></div>
         </div>
+        <!-- Connected accounts (K1): shown only once the app answers for them -->
+        <div class="comp-sec" id="conn-sec" role="region" aria-labelledby="conn-head" hidden>
+          <div class="sec-label" id="conn-head">Connected accounts</div>
+          <p class="conn-lead" id="conn-lead"></p>
+          <div id="conn-list"></div>
+        </div>
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
@@ -1109,6 +1169,27 @@ body.send-counting #toast{bottom:76px}
     <div class="keys-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="cmp-close" id="keys-close" aria-label="Close the shortcuts">✕</button></div>
     <div id="keys-list"></div>
     <p class="keys-foot" id="keys-foot"></p>
+  </div>
+</div>
+
+<!-- Share to Slack (K1): nothing goes until Send -->
+<div id="slack-ov" role="dialog" aria-modal="true" aria-labelledby="slack-title" aria-describedby="slack-lead">
+  <div id="slack-card">
+    <div class="keys-head"><h2 id="slack-title">Share to Slack</h2><button class="cmp-close" id="slack-close" aria-label="Cancel, sending nothing">✕</button></div>
+    <p class="link-lead" id="slack-lead">Choose where it goes and what it says. Nothing is sent until you press Send.</p>
+    <fieldset>
+      <legend>Send to</legend>
+      <input type="search" class="txt" id="slack-q" aria-label="Find a channel or a person" placeholder="Find a channel or a person" autocomplete="off" spellcheck="false">
+      <div class="slack-targets" id="slack-targets"></div>
+    </fieldset>
+    <label class="slack-lbl" for="slack-text">Message</label>
+    <textarea id="slack-text" spellcheck="true"></textarea>
+    <fieldset id="slack-files" hidden>
+      <legend>Files to include</legend>
+      <div id="slack-filelist"></div>
+    </fieldset>
+    <p class="slack-err" id="slack-err" role="alert"></p>
+    <div class="link-btns"><button class="btn" id="slack-cancel">Cancel</button><button class="btn primary" id="slack-send">Send</button></div>
   </div>
 </div>
 
@@ -2178,7 +2259,7 @@ const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'s
    Undo toast, say). The disguised-program question's own keys (Escape and
    Enter cancel) are unchanged; the picture and the shortcut sheet keep
    their own return. Topmost first, as their z-index stacks them. */
-const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#compose-ov','#welcome-ov','#assist-ov'];
 const DLG_FROM=new Map();
 function topDialog(){
   for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
@@ -2234,9 +2315,9 @@ function go(v){
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
   if(v==='inbox')renderSplitLock();
-  if(v==='docs'){renderFolders();renderDocs()}
+  if(v==='docs'){renderFolders();renderDocs();renderCloudSource();loadConnections()}
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
-  if(v==='set'){renderSettings();refreshQuota()}
+  if(v==='set'){renderSettings();refreshQuota();loadConnections()}
   if(v==='search')setTimeout(()=>$('#search-input').focus(),50);
 }
 $$('#rail .nav-item,#mnav button').forEach(b=>{if(b.dataset.view)b.onclick=()=>go(b.dataset.view)});
@@ -3323,6 +3404,7 @@ function openMail(id){
     rereadBodies([m]).then(n=>{if(n&&selMail===id)openMail(id)}).finally(()=>REREADING.delete(id));
   }
   const d=$('#mail-detail');
+  if(SAVETO&&d.contains(SAVETO.btn))closeSaveTo(false);
   d.classList.add('open');
   const nm=msgFrom(m);
   /* Mail from Sent is on the server like the inbox's; RATA's own record of
@@ -3336,6 +3418,8 @@ function openMail(id){
   if(body===undefined&&!whole)bodyOf(m).then(b=>{if(b&&selMail===id)openMail(id)});
   const atts=(whole&&whole.atts)||m.atts||[];
   const savable=native;
+  /* K1: Save to ▾ by each attachment, and Share to Slack, when connected. */
+  const clouds=savable&&cloudTargets().length>0,slack=slackReady();
   const unsub=unsubOf(m);
   /* A long message, or one with attachments, is fetched in full when opened:
      the stored copy is the start of it, and the attachments are not kept. */
@@ -3377,6 +3461,7 @@ function openMail(id){
         ${unsub?`<button class="btn" id="md-unsub" title="${esc(unsub.web?'Opens '+unsub.host+' in your browser, after asking':'Writes to '+unsub.to+' to leave this list')}">Unsubscribe</button>`:''}
         ${canGoHome(m)&&folderOf(m)!=='junk'?'<button class="btn" id="md-home">Move to inbox</button>':''}
         ${native&&!m.sent?'<div class="md-sortwrap"><button class="btn" id="md-file">Move to \u25be</button><div class="md-sortmenu md-filemenu" id="md-filemenu"></div></div>':''}
+        ${slack&&folderOf(m)!=='junk'?'<button class="btn" id="md-slack">Share to Slack</button>':''}
         ${canGoHome(m)&&folderOf(m)==='junk'?'<button class="btn primary" id="md-home">Not spam</button>':''}
         <button class="btn danger" id="md-del">Delete</button>`}
       </div>
@@ -3390,7 +3475,7 @@ function openMail(id){
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     <section class="md-convo" id="md-convo" hidden></section>
     ${atts.length?`<div class="md-atts">${picsHTML}${atts.map((a,k)=>savable&&a.i!==undefined
-      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}</span>`
+      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}${clouds?`<button class="att-conv" data-cloud="${k}" aria-haspopup="true" aria-expanded="false" title="Save ${esc(a.n)} to a connected cloud">Save to \u25be</button>`:''}</span>`
       :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
@@ -3456,6 +3541,8 @@ function openMail(id){
   if($('#md-home'))$('#md-home').onclick=()=>leave('inbox',folderOf(m)==='junk'?'Marked not spam — it appears in your inbox at the next refresh':'Moved to your inbox — it appears there at the next refresh');
   $$('#mail-detail [data-att]').forEach(b=>b.onclick=()=>saveAttachment(m,atts[+b.dataset.att],b));
   $$('#mail-detail [data-conv]').forEach(b=>b.onclick=()=>convertAttachment(m,atts[+b.dataset.conv],b));
+  $$('#mail-detail [data-cloud]').forEach(b=>b.onclick=()=>saveToMenu(b,c=>attachmentToCloud(m,atts[+b.dataset.cloud],c,b)));
+  if($('#md-slack'))$('#md-slack').onclick=()=>shareMessageToSlack(m,atts,savable);
   $$('#mail-detail [data-pic]').forEach(b=>b.onclick=()=>openPicture(m,atts[+b.dataset.pic],b));
   if($('#md-pics-more'))$('#md-pics-more').onclick=()=>{PIC_MORE.add(id);openMail(id)};
   if(picsOn.length)loadPictures(m,atts,picsOn);
@@ -3842,7 +3929,7 @@ function keyTyping(el){
    a disguised program, deleting the account, the licence box, the welcome,
    a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||['#link-ov','#warn-ov','#welcome-ov','#pic-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
@@ -3907,15 +3994,19 @@ $('#doc-viewtoggle').onclick=()=>{docList=!docList;$('#doc-viewtoggle').textCont
    decides what to show. There is no free tier: an account with no plan is
    unsubscribed, and is told the price rather than handed a lesser product. */
 const TIERS={
-  base:      {label:'RATA Base',      price:12.99,mail:2,sellable:true,   split:false,ai:false,files:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
-  pro:       {label:'RATA Pro',       price:23.99,mail:null,sellable:true,split:true, ai:true, files:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
+  base:      {label:'RATA Base',      price:12.99,mail:2,sellable:true,   split:false,ai:false,files:false,connect:false,crm:false,sms:false,automations:false,ratamail:0,   domains:0},
+  pro:       {label:'RATA Pro',       price:23.99,mail:null,sellable:true,split:true, ai:true, files:true, connect:true, crm:false,sms:false,automations:false,ratamail:null,domains:0},
   /* mail:null means no ceiling — Base is the only plan that has one.
      ratamail and domains mirror lib/plan.js; nothing on this page reads
      them, and RATA hosts no mail (lib/plan.js, NO_DOMAIN_HOSTING). */
   /* Not on sale — see lib/plan.js. Kept so an account that somehow holds it
      still resolves to a tier rather than to nothing. */
-  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, crm:true, sms:true, automations:true, ratamail:null,domains:null,sellable:false},
+  enterprise:{label:'RATA Enterprise',price:72, mail:null,split:true, ai:true, files:true, connect:true, crm:true, sms:true, automations:true, ratamail:null,domains:null,sellable:false},
 };
+/* `connect` (K1): cloud files and Share to Slack, in the app only, shown
+   once the app answers for them (connections_status). Not in lib/plan.js
+   yet: the website neither sells nor serves it until the real connections
+   ship, and nothing there may promise it (tests/app.test.mjs). */
 const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
 /* Which plan this is. On the website, the subscription the site recorded
    (S.settings.plan). In the desktop app, the licence on this computer — the
@@ -3942,6 +4033,8 @@ function takeStanding(st){
   }
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
+  /* What is connected, and whether this plan may use it (K1). */
+  loadConnections();
 }
 addEventListener('rata-standing',e=>takeStanding(e.detail));
 const can=f=>!!(tier()&&tier()[f]);
@@ -3949,8 +4042,475 @@ const can=f=>!!(tier()&&tier()[f]);
    it and what that costs. */
 function needPlan(feature,what){
   const up=Object.keys(TIERS).find(k=>TIERS[k][feature]);
-  return up?`${what} comes with ${TIERS[up].label} — $${TIERS[up].price} a month. Upgrade in Settings.`
+  return up?`${what} comes with ${TIERS[up].label}, ${money(TIERS[up].price)} a month. Upgrade in Settings.`
            :`${what} is not part of your plan.`;
+}
+
+/* ---------------- CONNECTED ACCOUNTS (K1) ----------------
+   On Pro, in the app: cloud files to open, convert and save (Microsoft
+   OneDrive and Google Drive by signing in in the browser; iCloud Drive and
+   Adobe's Creative Cloud Files through their folders on this computer,
+   since neither company lets another app into its cloud), and Share to
+   Slack, which sends and never reads. Rust holds every token and does
+   every request (bridge.js documents the commands). Until a build answers
+   connections_status, CONN.available stays false and none of this shows,
+   on any plan. Base sees the rows with the plan sentence and no Connect;
+   Disconnect is always offered, since taking access away needs no plan.
+   Every name, account, note and place that comes back is the provider's
+   or a stranger's text and is drawn with textContent only. Nothing here is
+   kept in the workspace: what is connected is Rust's to say. */
+const CONN_SERVICES=[
+  {service:'microsoft',kind:'files',label:'Microsoft OneDrive',place:'OneDrive'},
+  {service:'google',kind:'files',label:'Google Drive',place:'Google Drive',note:'RATA sees only the files you choose and the ones it saves.'},
+  {service:'apple',kind:'folder',label:'Apple: iCloud Drive (the folder on this computer)',place:'iCloud Drive',
+    note:'Apple does not let other apps sign in to iCloud Drive, so RATA uses the iCloud Drive folder on this computer. Install iCloud for Windows on a PC.'},
+  {service:'adobe',kind:'folder',label:'Adobe: Creative Cloud Files (the folder on this computer)',place:'Creative Cloud Files',
+    note:'Adobe does not let other apps open your Adobe cloud documents, so RATA uses the Creative Cloud Files folder that Adobe’s desktop app keeps on this computer.'},
+  {service:'slack',kind:'share',label:'Slack',place:'Slack',note:'Send a message or a file to a channel or a person. RATA sends only what you choose, and reads nothing from Slack.'},
+];
+let CONN={available:false,list:[]},CONN_SEEN='';
+const CONN_WAIT=new Set();
+/* Whether this plan connects accounts: in the app, the licence's own
+   `connect` when Rust sends it (licence.rs), else the plan ladder. */
+const canConnect=()=>window.__RATA_NATIVE__&&LIC&&LIC.licensed&&LIC.plan&&typeof LIC.plan.connect==='boolean'?LIC.plan.connect:can('connect');
+const connOn=()=>CONN.available&&canConnect();
+/* The clouds a file can be saved to or opened from: connected, on Pro. */
+const cloudTargets=()=>connOn()?CONN.list.filter(c=>c.kind!=='share'&&c.connected):[];
+const slackReady=()=>!!window.__RATA_NATIVE__&&connOn()&&CONN.list.some(c=>c.service==='slack'&&c.connected);
+const jsonPost=(path,b,method='POST')=>apiFetch(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+const failWhy=(r,e)=>String((r&&r.error)||(e&&(e.message||e))||'no answer');
+async function loadConnections(){
+  let r=null;
+  if(window.__RATA_NATIVE__){try{r=await apiFetch('/api/connections')}catch(e){r=null}}
+  if(!r||r.available!==true||!Array.isArray(r.services))CONN={available:false,list:[]};
+  else CONN={available:true,list:CONN_SERVICES.map(d=>{
+    /* A service this build cannot do yet (available: false) is not shown
+       at all; the services arrive one card at a time. */
+    const x=r.services.find(s=>s&&s.service===d.service);if(!x||x.available===false)return null;
+    return {...d,kind:['files','folder','share'].includes(x.kind)?x.kind:d.kind,connected:x.connected===true,
+      account:x.connected===true?String(x.account||''):'',note:x.note?String(x.note):(d.note||'')};
+  }).filter(Boolean)};
+  if(!CONN.list.length)CONN.available=false;
+  renderConnections();
+  return CONN;
+}
+/* Everything that shows a connection, drawn again. A message open in the
+   reading pane is drawn again only when what it offers changed. */
+function renderConnections(){
+  if(!S)return;
+  renderConnSettings();renderCloudSource();renderBrCloud();
+  if(currentView==='docs')renderDocs();
+  const seen=cloudTargets().map(c=>c.service).join()+'|'+slackReady();
+  if(seen!==CONN_SEEN){
+    CONN_SEEN=seen;
+    if(selMail&&$('#mail-detail').classList.contains('open')&&S.messages.some(m=>m.id===selMail))openMail(selMail);
+  }
+}
+function renderConnSettings(){
+  const sec=$('#conn-sec');if(!sec)return;
+  sec.hidden=!CONN.available;
+  if(!CONN.available)return;
+  const pro=canConnect(),list=$('#conn-list');
+  $('#conn-lead').textContent=pro
+    ?'Open, convert and save files in your cloud storage, and share to Slack. RATA asks each service only for what you do here, and your mail never goes to them.'
+    :needPlan('connect','Connecting your cloud files and Slack');
+  list.replaceChildren();
+  if(!pro){
+    const row=document.createElement('div');row.className='set-row';
+    const g=document.createElement('div');g.className='grow';
+    const b=document.createElement('b');b.textContent='Cloud files and Slack';
+    const s=document.createElement('span');s.textContent='OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack come with '+TIERS.pro.label+'.';
+    g.append(b,s);
+    const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
+    up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
+    row.append(g,up);list.append(row);
+  }
+  for(const c of CONN.list){
+    const row=document.createElement('div');row.className='set-row conn-row';row.dataset.conn=c.service;
+    const g=document.createElement('div');g.className='grow';
+    const b=document.createElement('b');b.textContent=c.label;
+    const state=document.createElement('span');state.className='conn-state';
+    state.textContent=c.connected?(c.kind==='folder'?'Using '+(c.account||'its folder on this computer'):'Connected'+(c.account?' as '+c.account:'')):'Not connected';
+    g.append(b,state);
+    if(c.note){const n=document.createElement('span');n.className='conn-note';n.textContent=c.note;g.append(n)}
+    row.append(g);
+    if(CONN_WAIT.has(c.service)){
+      const w=document.createElement('span');w.className='conn-wait';w.setAttribute('role','status');
+      w.textContent=c.kind==='folder'?'Looking for the folder…':'Finish signing in in your browser';
+      const x=document.createElement('button');x.className='btn';x.dataset.connCancel=c.service;x.textContent='Cancel';x.setAttribute('aria-label','Cancel connecting '+c.place);
+      x.onclick=()=>{x.disabled=true;jsonPost('/api/connections/cancel',{service:c.service}).catch(()=>{})};
+      row.append(w,x);
+    }else if(c.connected){
+      const x=document.createElement('button');x.className='btn';x.dataset.connOff=c.service;x.textContent='Disconnect';x.setAttribute('aria-label','Disconnect '+c.place);
+      x.onclick=()=>disconnectService(c.service);
+      row.append(x);
+    }else if(pro){
+      const x=document.createElement('button');x.className='btn';x.dataset.connOn=c.service;x.textContent='Connect';x.setAttribute('aria-label','Connect '+c.place);
+      x.onclick=()=>connectService(c.service);
+      row.append(x);
+    }
+    list.append(row);
+  }
+}
+/* The focus stays on the row it was on as its buttons change. */
+function connFocus(svc){
+  const row=$(`#conn-list [data-conn="${svc}"]`);const b=row&&row.querySelector('button');
+  if(b)b.focus({preventScroll:true});
+}
+async function connectService(svc){
+  const c=CONN.list.find(x=>x.service===svc);if(!c||!canConnect()||CONN_WAIT.has(svc))return;
+  CONN_WAIT.add(svc);renderConnSettings();connFocus(svc);
+  let r;try{r=await jsonPost('/api/connections',{service:svc})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  CONN_WAIT.delete(svc);
+  await loadConnections();connFocus(svc);
+  if(r&&r.ok){audit('connect.add',c.place);toast(c.place+' is connected')}
+  else if(r&&r.cancelled)toast('Stopped. '+c.place+' is not connected.');
+  else toast('Could not connect '+c.place+': '+failWhy(r));
+}
+async function disconnectService(svc){
+  const c=CONN.list.find(x=>x.service===svc);if(!c)return;
+  let r;try{r=await jsonPost('/api/connections',{service:svc},'DELETE')}catch(e){r={ok:false,error:failWhy(null,e)}}
+  await loadConnections();connFocus(svc);
+  if(r&&r.ok){audit('connect.remove',c.place);toast(c.place+' is disconnected. RATA no longer uses it.')}
+  else toast('Could not disconnect '+c.place+': '+failWhy(r));
+}
+
+/* ---- Files in a cloud ----
+   The Files section's source: this computer, or one connected cloud. A
+   cloud shows one folder at a time, folders first, with the way back up as
+   a path. A file opens in the Format Bridge or is kept in Files like a
+   converted document; nothing is fetched until one of those is pressed. */
+let CLOUD={src:'local',trail:[],items:[],loading:false,error:'',truncated:false};
+const cloudPlace=svc=>(CONN.list.find(c=>c.service===svc)||{}).place||'';
+function renderCloudSource(){
+  const bar=$('#cloud-src');if(!bar)return;
+  const clouds=cloudTargets();
+  if(CLOUD.src!=='local'&&!clouds.some(c=>c.service===CLOUD.src))CLOUD={src:'local',trail:[],items:[],loading:false,error:''};
+  bar.hidden=!clouds.length;
+  $('#view-docs').classList.toggle('cloud-mode',CLOUD.src!=='local');
+  if(currentView==='docs')$('#tb-eyebrow').textContent=CLOUD.src==='local'?TITLES.docs[0]:'In '+cloudPlace(CLOUD.src);
+  bar.replaceChildren();
+  if(!clouds.length)return;
+  const lbl=document.createElement('span');lbl.className='cloud-src-lbl';lbl.textContent='Files from';lbl.setAttribute('aria-hidden','true');
+  bar.append(lbl);
+  for(const [svc,name] of [['local','On this computer'],...clouds.map(c=>[c.service,c.place])]){
+    const b=document.createElement('button');b.className='pill'+(CLOUD.src===svc?' on':'');b.dataset.cloudSrc=svc;
+    b.textContent=name;b.setAttribute('aria-pressed',String(CLOUD.src===svc));
+    b.onclick=()=>{if(svc==='local'){CLOUD={src:'local',trail:[],items:[],loading:false,error:''};renderCloudSource();renderDocs()}else cloudOpen(svc,[{id:null,name:cloudPlace(svc)}])};
+    bar.append(b);
+  }
+  if(CLOUD.src!=='local')renderCloudPane();
+}
+async function cloudOpen(svc,trail,focusList){
+  CLOUD={src:svc,trail,items:CLOUD.src===svc?CLOUD.items:[],loading:true,error:''};
+  renderCloudSource();
+  let r;try{r=await jsonPost('/api/cloud/list',{service:svc,folder:trail[trail.length-1].id})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(CLOUD.src!==svc||CLOUD.trail!==trail)return;
+  CLOUD.loading=false;
+  if(!r||!r.ok){CLOUD.error=failWhy(r);CLOUD.items=[];CLOUD.truncated=false}
+  else{
+    if(trail.length===1&&r.folder&&r.folder.name)trail[0]={id:trail[0].id,name:r.folder.name};
+    /* The path Rust shows ("iCloud Drive / Taxes") names the crumbs, one
+       part a level; a name with " / " in it keeps the names browsed by. */
+    const parts=r.folder&&r.folder.path?r.folder.path.split(' / '):[];
+    if(parts.length===trail.length)parts.forEach((p,i)=>{if(p)trail[i]={id:trail[i].id,name:p}});
+    CLOUD.truncated=!!r.truncated;
+    const byName=(a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'});
+    CLOUD.items=[...r.items.filter(x=>x.kind==='folder').sort(byName),...r.items.filter(x=>x.kind!=='folder').sort(byName)];
+  }
+  renderCloudPane();
+  if(focusList){const f=$('#cloud-body .cloud-list button')||$('#cloud-body .cloud-crumbs [aria-current]');if(f)f.focus({preventScroll:true})}
+}
+const cloudExt=n=>{const m=String(n||'').match(/\.([A-Za-z0-9]{1,5})$/);return m?m[1].toLowerCase():''};
+function renderCloudPane(){
+  const body=$('#cloud-body');if(!body||CLOUD.src==='local')return;
+  const svc=CLOUD.src,place=cloudPlace(svc),c=CONN.list.find(x=>x.service===svc)||{};
+  $('#cloud-title').textContent='Files in '+place;
+  body.replaceChildren();
+  const nav=document.createElement('nav');nav.className='cloud-crumbs';nav.setAttribute('aria-label','Folder path in '+place);
+  const ol=document.createElement('ol');
+  CLOUD.trail.forEach((t,i)=>{
+    const li=document.createElement('li');
+    if(i){const sep=document.createElement('span');sep.className='sep';sep.setAttribute('aria-hidden','true');sep.textContent='/';li.append(sep)}
+    if(i===CLOUD.trail.length-1){const s=document.createElement('span');s.setAttribute('aria-current','location');s.tabIndex=-1;s.textContent=t.name||place;li.append(s)}
+    else{const b=document.createElement('button');b.textContent=t.name||place;b.onclick=()=>cloudOpen(svc,CLOUD.trail.slice(0,i+1),true);li.append(b)}
+    ol.append(li);
+  });
+  nav.append(ol);body.append(nav);
+  if(c.note&&c.kind!=='share'){const p=document.createElement('p');p.className='cloud-note';p.textContent=c.note;body.append(p)}
+  const ul=document.createElement('ul');ul.className='cloud-list';ul.setAttribute('aria-label',(CLOUD.trail[CLOUD.trail.length-1]||{}).name||place);
+  const say=(text,cls,role)=>{const li=document.createElement('li');li.className=cls;if(role)li.setAttribute('role',role);li.textContent=text;ul.append(li);return li};
+  if(CLOUD.loading&&!CLOUD.items.length)say('Loading…','cloud-empty','status');
+  else if(CLOUD.error){
+    const li=say('Could not open this folder: '+CLOUD.error,'cloud-empty','alert');
+    const again=document.createElement('button');again.className='btn';again.textContent='Try again';again.style.marginLeft='10px';
+    again.onclick=()=>cloudOpen(svc,CLOUD.trail,true);li.append(again);
+  }else if(!CLOUD.items.length)say('Nothing in this folder.','cloud-empty');
+  if(!CLOUD.error&&CLOUD.truncated){const p=document.createElement('p');p.className='cloud-note';p.textContent='This folder holds more than RATA lists. These are the first '+CLOUD.items.length+'.';body.append(p)}
+  for(const it of CLOUD.error?[]:CLOUD.items){
+    const li=document.createElement('li');li.className='cloud-item';
+    const ic=document.createElement('span');ic.className='cloud-ic';ic.setAttribute('aria-hidden','true');
+    const nm=document.createElement('span');nm.className='cloud-name';nm.textContent=it.name;
+    if(it.kind==='folder'){
+      ic.textContent='📁';
+      const b=document.createElement('button');b.className='cloud-folder';b.dataset.cloudFolder=it.id;
+      b.append(ic,nm);const vh=document.createElement('span');vh.className='vh';vh.textContent=', folder';b.append(vh);
+      b.onclick=()=>cloudOpen(svc,[...CLOUD.trail,{id:it.id,name:it.name}],true);
+      li.append(b);
+    }else{
+      ic.textContent=(cloudExt(it.name)||'file').toUpperCase();
+      const meta=document.createElement('span');meta.className='cloud-meta';
+      /* `offline`: an iCloud placeholder, not on this computer until
+         iCloud downloads it; reading it is refused with Rust's reason. */
+      meta.textContent=[it.offline?'In iCloud':'',it.size!=null?fmtSize(it.size):'',it.modified?new Date(it.modified*1000).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):''].filter(Boolean).join(' · ');
+      const acts=document.createElement('span');acts.className='cloud-acts';
+      if(BR_KINDS[cloudExt(it.name)]){
+        const ob=document.createElement('button');ob.className='btn';ob.dataset.cloudBridge=it.id;ob.textContent='Open in Bridge';ob.setAttribute('aria-label','Open in Bridge: '+it.name);
+        ob.onclick=()=>cloudToBridge(svc,it,ob);acts.append(ob);
+      }
+      const kb=document.createElement('button');kb.className='btn';kb.dataset.cloudKeep=it.id;kb.textContent='Add to Files';kb.setAttribute('aria-label','Add to Files: '+it.name);
+      kb.onclick=()=>cloudToFiles(svc,it,kb);acts.append(kb);
+      li.append(ic,nm,meta,acts);
+    }
+    ul.append(li);
+  }
+  body.append(ul);
+}
+/* One file's bytes from a cloud (cloud_read), as a File. */
+async function cloudRead(svc,it){
+  let r;try{r=await jsonPost('/api/cloud/read',{service:svc,id:it.id})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(!r||!r.ok){toast('Could not open '+it.name+' from '+cloudPlace(svc)+': '+failWhy(r));return null}
+  const bin=atob(r.data||''),bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return new File([bytes],r.name||it.name,{type:r.mime||''});
+}
+async function cloudToBridge(svc,it,btn){
+  btn.disabled=true;
+  const f=await cloudRead(svc,it);
+  if(btn.isConnected)btn.disabled=false;
+  if(!f)return;
+  bridgeInit();
+  await brIngest(f);
+  if(BR.name!==f.name)return;
+  audit('cloud.open',f.name+' from '+cloudPlace(svc));
+  document.querySelector('.bridge-card').scrollIntoView({behavior:glide(),block:'start'});
+  $('#br-go').focus({preventScroll:true});
+  toast(f.name+', from '+cloudPlace(svc)+', is ready. Choose what to turn it into.');
+}
+/* Kept in Files the way a converted document is: the file in the vault,
+   and its text (when the Bridge reads its kind) for search and the Bridge. */
+async function cloudToFiles(svc,it,btn){
+  btn.disabled=true;
+  const f=await cloudRead(svc,it);
+  if(btn.isConnected)btn.disabled=false;
+  if(!f)return;
+  const ext=cloudExt(f.name);
+  let content='';
+  if(BR_KINDS[ext]){try{content=(await brParse(f)).text}catch(e){content=''}}
+  const id='d'+Date.now()+'k';
+  const doc={id,name:f.name,fmt:(ext||'file').replace(/[^a-z0-9]/gi,'').slice(0,5).toUpperCase()||'FILE',origin:'cloud',prov:'cloud',cloud:cloudPlace(svc),
+    size:fmtSize(f.size),bytes:f.size,ts:Date.now(),content,hasFile:true};
+  S.documents.unshift(doc);
+  try{await fvPut(id,f)}catch(e){doc.hasFile=false}
+  save();audit('cloud.keep',f.name+' from '+cloudPlace(svc));
+  renderDocs();
+  toast(f.name+' is in your Files, from '+cloudPlace(svc));
+}
+/* Into a cloud: the folder being browsed there, else its top. */
+async function cloudSave(c,name,data,confirmed){
+  const folder=CLOUD.src===c.service&&CLOUD.trail.length?CLOUD.trail[CLOUD.trail.length-1].id:null;
+  let r;try{r=await jsonPost('/api/cloud/save',{service:c.service,folder,name,data,confirmed:!!confirmed})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  /* A program named to look like a document: Rust saves it only after the
+     same question Save asks (cloud.rs, kind needs-confirmation). */
+  if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){
+    if(!await askDisguised({n:name},true))return false;
+    return cloudSave(c,name,data,true);
+  }
+  if(!r||!r.ok){toast('Could not save '+name+' to '+c.place+': '+failWhy(r));return false}
+  audit('cloud.save',(r.name||name)+' → '+c.place);
+  toast('Saved '+(r.name||name)+' to '+(r.where||c.place));
+  if(CLOUD.src===c.service&&currentView==='docs')cloudOpen(c.service,CLOUD.trail);
+  return true;
+}
+async function cloudSaveBlob(c,blob,name){return cloudSave(c,name,await fileBase64(blob))}
+/* Save to ▾: the connected clouds, by the button pressed. Arrow keys move
+   in it, Escape and a press elsewhere close it, and the focus goes back. */
+let SAVETO=null;
+function closeSaveTo(back){
+  if(!SAVETO)return;
+  const {btn,menu}=SAVETO;SAVETO=null;
+  menu.remove();btn.setAttribute('aria-expanded','false');
+  if(back&&btn.isConnected)btn.focus({preventScroll:true});
+}
+function saveToMenu(btn,pick){
+  const was=SAVETO&&SAVETO.btn===btn;
+  closeSaveTo(false);
+  if(was)return;
+  const clouds=cloudTargets();if(!clouds.length)return;
+  const menu=document.createElement('div');menu.className='saveto-menu';menu.id='saveto-menu';
+  menu.setAttribute('role','group');menu.setAttribute('aria-label','Save to');
+  for(const c of clouds){
+    const b=document.createElement('button');b.type='button';b.dataset.saveto=c.service;b.textContent=c.place;
+    b.onclick=()=>{closeSaveTo(true);pick(c)};
+    menu.append(b);
+  }
+  menu.addEventListener('keydown',e=>{
+    const bs=[...menu.querySelectorAll('button')],i=bs.indexOf(document.activeElement);
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();bs[(i+(e.key==='ArrowDown'?1:bs.length-1))%bs.length].focus()}
+    else if(e.key==='Home'||e.key==='End'){e.preventDefault();bs[e.key==='Home'?0:bs.length-1].focus()}
+  });
+  menu.addEventListener('focusout',e=>{if(SAVETO&&SAVETO.menu===menu&&!menu.contains(e.relatedTarget)&&e.relatedTarget!==btn)closeSaveTo(false)});
+  document.body.append(menu);
+  SAVETO={btn,menu};
+  placeSaveTo();
+  btn.setAttribute('aria-expanded','true');btn.setAttribute('aria-controls','saveto-menu');
+  menu.querySelector('button').focus({preventScroll:true});
+}
+addEventListener('keydown',e=>{if(SAVETO&&e.key==='Escape'){e.preventDefault();e.stopPropagation();closeSaveTo(true)}},true);
+addEventListener('pointerdown',e=>{if(SAVETO&&!SAVETO.menu.contains(e.target)&&!SAVETO.btn.contains(e.target))closeSaveTo(false)},true);
+/* By its button, below it or above when there is no room; it follows the
+   button when something scrolls, and closes once the button is gone. */
+function placeSaveTo(){
+  if(!SAVETO)return;
+  const {btn,menu}=SAVETO;
+  const r=btn.getBoundingClientRect();
+  if(!btn.isConnected||!r.width||r.bottom<0||r.top>innerHeight){closeSaveTo(false);return}
+  const w=menu.offsetWidth,h=menu.offsetHeight;
+  menu.style.left=Math.max(8,Math.min(r.left,innerWidth-w-8))+'px';
+  menu.style.top=(r.bottom+4+h>innerHeight-8?Math.max(8,r.top-4-h):r.bottom+4)+'px';
+}
+addEventListener('scroll',e=>{if(SAVETO&&!SAVETO.menu.contains(e.target))placeSaveTo()},true);
+addEventListener('resize',placeSaveTo);
+/* The Format Bridge's own Save to: convert, then into the cloud. */
+function renderBrCloud(){
+  const b=$('#br-cloud');if(!b)return;
+  b.hidden=!cloudTargets().length;
+  if(b.hidden&&SAVETO&&SAVETO.btn===b)closeSaveTo(false);
+}
+$('#br-cloud').onclick=()=>saveToMenu($('#br-cloud'),c=>brConvert({cloud:c}));
+/* An attachment straight into a cloud: read from the mailbox like Convert
+   (read_attachment), never saved on this computer on the way. A program
+   named as a document is asked about first, as Save asks. */
+async function attachmentToCloud(m,a,c,btn,confirmed){
+  if(!a)return;
+  if(a.disguised&&!confirmed){if(!await askDisguised(a,true))return;confirmed=true}
+  if(btn)btn.disabled=true;
+  let r;
+  try{r=await jsonPost('/api/mail/attachment/read',{email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:!!confirmed})}
+  catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(btn&&btn.isConnected)btn.disabled=false;
+  if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){a.disguised=true;return attachmentToCloud(m,a,c,btn)}
+  if(!r||!r.ok){toast('Could not read '+a.n+': '+failWhy(r));return}
+  await cloudSave(c,r.name||a.n,r.data,confirmed);
+}
+
+/* ---- Share to Slack ----
+   A message, or a file in Files, to one channel or person. The dialog is
+   filled in for the customer to change: the target is chosen from Slack's
+   own list, the text is theirs to edit, each file is ticked to go. Nothing
+   is fetched for the files and nothing is sent until Send. */
+let SLACK=null;
+function slackName(t){return t.kind==='channel'&&!t.name.startsWith('#')?'#'+t.name:t.name}
+async function openSlack(o){
+  if(!slackReady())return;
+  if(SLACK)closeSlack();
+  SLACK={files:o.files||[],targets:null,chosen:null,busy:false,error:''};
+  $('#slack-text').value=o.text||'';
+  $('#slack-q').value='';$('#slack-err').textContent='';
+  $('#slack-send').disabled=false;$('#slack-send').textContent='Send';
+  const fl=$('#slack-filelist');fl.replaceChildren();
+  SLACK.files.forEach((f,i)=>{
+    const l=document.createElement('label');l.className='slack-file';
+    const cb=document.createElement('input');cb.type='checkbox';cb.id='slack-file-'+i;cb.checked=!!f.checked;
+    const n=document.createElement('span');n.className='slack-name';n.textContent=f.name;
+    l.append(cb,n);fl.append(l);
+  });
+  $('#slack-files').hidden=!SLACK.files.length;
+  renderSlackTargets();
+  dlgOpen($('#slack-ov'));
+  $('#slack-ov').classList.add('open');
+  $('#slack-q').focus();
+  const mine=SLACK;
+  let r;try{r=await apiFetch('/api/slack/targets')}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(SLACK!==mine)return;
+  if(!r||!r.ok){SLACK.error='Could not get your channels and people from Slack: '+failWhy(r);SLACK.targets=[]}
+  else SLACK.targets=r.targets;
+  renderSlackTargets();
+}
+function renderSlackTargets(){
+  const box=$('#slack-targets');if(!SLACK)return;
+  box.replaceChildren();
+  const note=(t,role)=>{const p=document.createElement('p');p.className='slack-wait';if(role)p.setAttribute('role',role);p.textContent=t;box.append(p)};
+  if(!SLACK.targets){note('Loading your channels and people…','status');return}
+  if(SLACK.error){note(SLACK.error,'alert');return}
+  const q=$('#slack-q').value.trim().toLowerCase().replace(/^#/,'');
+  const shown=SLACK.targets.filter(t=>!q||t.name.toLowerCase().replace(/^#/,'').includes(q));
+  if(!shown.length){note(SLACK.targets.length?'No channel or person matches.':'Slack lists no channel or person to send to.');return}
+  for(const t of shown){
+    const l=document.createElement('label');l.className='slack-opt';
+    const rb=document.createElement('input');rb.type='radio';rb.name='slack-target';rb.value=t.id;rb.checked=SLACK.chosen===t.id;
+    rb.onchange=()=>{if(rb.checked)SLACK.chosen=t.id};
+    const n=document.createElement('span');n.className='slack-name';n.textContent=slackName(t);
+    const k=document.createElement('span');k.className='slack-kind';k.textContent=t.kind==='person'?'Person':'Channel';
+    l.append(rb,n,k);box.append(l);
+  }
+}
+function closeSlack(){
+  const was=$('#slack-ov').classList.contains('open');
+  SLACK=null;$('#slack-ov').classList.remove('open');
+  if(was)dlgClose($('#slack-ov'));
+}
+async function sendSlack(){
+  if(!SLACK||SLACK.busy)return;
+  const err=$('#slack-err');err.textContent='';
+  const t=(SLACK.targets||[]).find(x=>x.id===SLACK.chosen);
+  if(!t){err.textContent='Choose a channel or a person to send to.';return}
+  const text=$('#slack-text').value.trim();
+  const picked=SLACK.files.filter((f,i)=>{const cb=$('#slack-file-'+i);return cb&&cb.checked});
+  if(!text&&!picked.length){err.textContent='Write a message or choose a file to send.';return}
+  const mine=SLACK,send=$('#slack-send');
+  mine.busy=true;send.disabled=true;send.textContent='Sending…';
+  const done=why=>{if(SLACK!==mine)return;mine.busy=false;send.disabled=false;send.textContent='Send';err.textContent=why};
+  const files=[];
+  for(const f of picked){
+    try{files.push(await f.get())}catch(e){done('Not sent: '+f.name+' could not be read. '+failWhy(null,e));return}
+    if(SLACK!==mine)return;
+  }
+  let r;try{r=await jsonPost('/api/slack/share',{target:t.id,text,files})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(SLACK!==mine)return;
+  if(!r||!r.ok){done('Not sent: '+failWhy(r));return}
+  closeSlack();
+  audit('slack.share',slackName(t)+(files.length?' with '+files.map(f=>f.name).join(', '):''));
+  toast('Shared to '+(r.where||slackName(t)+' in Slack'));
+}
+$('#slack-send').onclick=sendSlack;
+$('#slack-cancel').onclick=closeSlack;
+$('#slack-close').onclick=closeSlack;
+$('#slack-q').addEventListener('input',renderSlackTargets);
+$('#slack-ov').addEventListener('click',e=>{if(e.target.id==='slack-ov')closeSlack()});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#slack-ov').classList.contains('open')){e.preventDefault();e.stopPropagation();closeSlack()}},true);
+/* What a message is shared as: its subject, who it is from, and the start
+   of its text (from disk, never m.body); its attachments to tick. */
+async function shareMessageToSlack(m,atts,savable){
+  const words=String((await bodyOf(m))??m.prev??'').replace(/\r\n?/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  const start=words.length>500?words.slice(0,500).trimEnd()+'…':words;
+  const who=m.sent?'To '+(m.toName||m.toAddr||''):'From '+msgFrom(m)+(m.fromAddr&&m.fromAddr!==msgFrom(m)?' ('+m.fromAddr+')':'');
+  const files=savable?atts.filter(a=>a&&a.i!==undefined&&!a.disguised).map(a=>({name:a.n,checked:false,get:async()=>{
+    const r=await jsonPost('/api/mail/attachment/read',{email:mailEmailOf(m),folder:folderArg(m),uid:m.uid,uidvalidity:m.uidvalidity,index:a.i,confirmed:false});
+    if(!r||!r.ok)throw new Error(failWhy(r));
+    return {name:r.name||a.n,data:r.data};
+  }})):[];
+  openSlack({text:(m.subj||'(no subject)')+'\n'+who+'\n\n'+start,files});
+}
+/* A document in Files: its file, ticked, and its name. */
+function shareDocToSlack(d){
+  const files=d.hasFile?[{name:d.name,checked:true,get:async()=>{
+    const blob=await fvGet(d.id);
+    if(!blob)throw new Error('Only its text is on this computer.');
+    return {name:d.name,data:await fileBase64(blob)};
+  }}]:[];
+  const text=d.hasFile?d.name:d.name+'\n\n'+String(d.content||'').slice(0,500);
+  openSlack({text,files});
 }
 
 /* ---------------- THE FILE LIBRARY ----------------
@@ -4019,6 +4579,8 @@ function fileInto(docId,folder){
 
 function renderDocs(){
   const g=$('#doc-grid');
+  /* A Save to menu never outlives the button it was opened from. */
+  if(SAVETO&&g.contains(SAVETO.btn))closeSaveTo(false);
   g.classList.toggle('listmode',docList);
   let pool=S.documents.slice();
   if(hasFileLibrary()&&folderFilter!=='all')pool=pool.filter(d=>folderFilter==='none'?!d.folder:d.folder===folderFilter);
@@ -4029,14 +4591,15 @@ function renderDocs(){
       ?`<div class="empty"><b>Nothing in ${folderFilter==='none'?'Unfiled':esc(folderFilter)}</b>Drag a file onto a folder to put it there.</div>`
       :'<div class="empty"><b>No files yet</b>Drop a document on the Format Bridge above and choose Convert into Documents.</div>';
     return}
+  const clouds=cloudTargets().length>0,slack=slackReady();
   g.innerHTML=pool.map(d=>`
     <div class="doc-card" data-doc="${d.id}" draggable="${hasFileLibrary()?'true':'false'}">
-      <div class="doc-ic">${d.fmt}</div>
+      <div class="doc-ic">${esc(d.fmt)}</div>
       <div class="doc-name">${esc(d.name)}</div>
-      <div class="doc-meta"><span class="badge ${d.prov}">${d.prov}</span>${d.origin==='rata'?'<span class="badge email">Rata</span>':''}${d.folder?`<span class="badge job">📁 ${esc(d.folder)}</span>`:''}<span class="doc-sz">${d.size}</span></div>
+      <div class="doc-meta">${d.cloud?`<span class="badge cloud">${esc(d.cloud)}</span>`:`<span class="badge ${d.prov}">${d.prov}</span>`}${d.origin==='rata'?'<span class="badge email">Rata</span>':''}${d.folder?`<span class="badge job">📁 ${esc(d.folder)}</span>`:''}<span class="doc-sz">${d.size}</span></div>
       ${d.role==='converted'&&d.fromName?`<div class="doc-pairline">⇄ translated from <b>${esc(d.fromName)}</b>${d.lang?' · '+esc(d.lang):''}</div>`:''}
       ${d.role==='source'?`<div class="doc-pairline">⇄ original — kept alongside its conversion</div>`:''}
-      <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}</div>
+      <div class="doc-convert">${d.hasFile?`<button class="cv" data-dl="${d.id}" style="background:var(--tint-soft);color:var(--tint-deep)">⤓ File</button>`:''}${d.content?`<button class="cv" data-bridge="${d.id}" style="background:var(--tint);color:#fff">⇄ Bridge</button>`:''}${d.hasFile&&clouds?`<button class="cv" data-saveto="${d.id}" aria-haspopup="true" aria-expanded="false">Save to \u25be</button>`:''}${slack?`<button class="cv" data-slack="${d.id}">Share to Slack</button>`:''}</div>
     </div>`).join('');
   if(hasFileLibrary()){
     g.querySelectorAll('.doc-card[data-doc]').forEach(c=>{
@@ -4057,6 +4620,14 @@ function renderDocs(){
     document.querySelector('.bridge-card').scrollIntoView({behavior:glide(),block:'start'});
     toast('Loaded into the Bridge — pick a destination');
   });
+  /* K1: a kept file into a connected cloud, or to Slack. */
+  g.querySelectorAll('.cv[data-saveto]').forEach(b=>b.onclick=()=>saveToMenu(b,async c=>{
+    const d=S.documents.find(x=>x.id===b.dataset.saveto);if(!d)return;
+    const blob=await fvGet(d.id).catch(()=>null);
+    if(!blob){toast('Only the text of '+d.name+' is on this computer, so there is no file to save.');return}
+    await cloudSaveBlob(c,blob,d.name);
+  }));
+  g.querySelectorAll('.cv[data-slack]').forEach(b=>b.onclick=()=>{const d=S.documents.find(x=>x.id===b.dataset.slack);if(d)shareDocToSlack(d)});
   g.querySelectorAll('.cv[data-dl]').forEach(b=>b.onclick=async()=>{
     const d=S.documents.find(x=>x.id===b.dataset.dl);if(!d)return;
     try{
@@ -6414,28 +6985,34 @@ function mdToBlocks(text,plain){
   flush();
   return out;
 }
+/* A file read into the Bridge's model, without loading it into the Bridge:
+   what brIngest shows, and what a cloud file kept in Files is searched by. */
+async function brParse(file){
+  const ext=file.name.split('.').pop().toLowerCase();
+  const buf=await file.arrayBuffer();
+  let blocks=null,sheets=null;
+  if(ext==='pdf'){
+    blocks=await pdfToBlocks(buf);
+  }else if(ext==='docx'){
+    const mam=await brLib('mammoth','mammoth');
+    blocks=htmlToBlocks((await mam.convertToHtml({arrayBuffer:buf})).value||'');
+  }else if(ext==='xlsx'||ext==='csv'){
+    const X=await brLib('xlsx','XLSX');
+    const wb=X.read(buf,{type:'array'});
+    sheets=wb.SheetNames.map(n=>({name:n,rows:X.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:''})})).filter(sh=>sh.rows.length);
+    if(!sheets.length)sheets=[{name:wb.SheetNames[0]||'Sheet1',rows:[]}];
+  }else{
+    const t=new TextDecoder().decode(buf);
+    blocks=ext==='html'||ext==='htm'?htmlToBlocks(t):mdToBlocks(t,ext==='txt');
+  }
+  return {blocks,sheets,rows:sheets?sheets[0].rows:null,text:sheets?sheets.map(sh=>sh.rows.map(r=>r.join(',')).join('\n')).join('\n\n'):blocksText(blocks)};
+}
 async function brIngest(file){
   const name=file.name,ext=name.split('.').pop().toLowerCase();
   if(!BR_KINDS[ext]){toast('That format can’t be converted yet — use .pdf, .docx, .xlsx, .csv, .txt, .md or .html');return}
   try{
-    const buf=await file.arrayBuffer();
-    let blocks=null,sheets=null;
-    if(ext==='pdf'){
-      blocks=await pdfToBlocks(buf);
-    }else if(ext==='docx'){
-      const mam=await brLib('mammoth','mammoth');
-      blocks=htmlToBlocks((await mam.convertToHtml({arrayBuffer:buf})).value||'');
-    }else if(ext==='xlsx'||ext==='csv'){
-      const X=await brLib('xlsx','XLSX');
-      const wb=X.read(buf,{type:'array'});
-      sheets=wb.SheetNames.map(n=>({name:n,rows:X.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:''})})).filter(sh=>sh.rows.length);
-      if(!sheets.length)sheets=[{name:wb.SheetNames[0]||'Sheet1',rows:[]}];
-    }else{
-      const t=new TextDecoder().decode(buf);
-      blocks=ext==='html'||ext==='htm'?htmlToBlocks(t):mdToBlocks(t,ext==='txt');
-    }
-    const rows=sheets?sheets[0].rows:null;
-    BR={name,kind:BR_KINDS[ext],blocks,sheets,rows,text:sheets?sheets.map(sh=>sh.rows.map(r=>r.join(',')).join('\n')).join('\n\n'):blocksText(blocks),eco:BR.eco,file,srcId:null};
+    const {blocks,sheets,rows,text}=await brParse(file);
+    BR={name,kind:BR_KINDS[ext],blocks,sheets,rows,text,eco:BR.eco,file,srcId:null};
     $('#br-name').textContent=BR.name;
     $('#br-kind').textContent=BR.kind+' · '+(sheets?sheets.reduce((n,sh)=>n+sh.rows.length,0)+' rows'+(sheets.length>1?' in '+sheets.length+' sheets':''):BR.text.split(/\s+/).filter(Boolean).length+' words');
     $('#br-loaded').style.display='block';
@@ -6609,6 +7186,8 @@ async function brConvert(saveToDocs){
   finally{go.disabled=false;go.textContent='Convert & download'}
 }
 async function brFinish(blob,fname,saveToDocs,fmt){
+  /* Save to ▾ (K1): the converted file goes to a connected cloud. */
+  if(saveToDocs&&saveToDocs.cloud){await cloudSaveBlob(saveToDocs.cloud,blob,fname);return}
   if(!saveToDocs){await brDownload(blob,fname);return}
   const pair='p'+Date.now();
   const stamp=Date.now();

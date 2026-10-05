@@ -7,7 +7,7 @@
    nothing leaves this page, and no mailbox is opened. Reloading keeps what
    you did (in this browser only); "Reset demo" starts again. */
 (function () {
-  const DEMO_VERSION = '5';
+  const DEMO_VERSION = '6';
   const UID = 'local_demo2';
   const ME = 'Riley Carter';
   const DAY = 86400000, HOUR = 3600000, MIN = 60000;
@@ -32,8 +32,8 @@
   let PLAN = 'pro';
   try { PLAN = localStorage.getItem('rata_demo_plan') === 'base' ? 'base' : 'pro'; } catch (e) {}
   const PLANS = {
-    base: { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false },
-    pro: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
+    base: { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: false },
+    pro: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true, connect: true },
   };
   const ACTIVE = PLAN === 'base' ? MAILBOXES.slice(0, 2) : MAILBOXES;
   const active = (email) => ACTIVE.some((m) => m.email === email);
@@ -436,6 +436,145 @@ Marcus` }));
   }
   if (document.readyState === 'complete') seedFiles(); else addEventListener('load', () => setTimeout(seedFiles, 1500));
 
+  /* Connected accounts (K1, Pro): sample clouds and a Slack workspace.
+     Microsoft OneDrive holds the hospital's work files, Google Drive the
+     two side businesses and a little personal, iCloud Drive (the folder on
+     this computer) recipes and travel, and Adobe's Creative Cloud Files
+     signed agreements. Every file is made by RATA's own writers, so Open in
+     Bridge reads real bytes. Saving to a cloud keeps the file here for this
+     page only. Slack "Saltmarsh ED" sends nothing anywhere. All invented. */
+  const NOTE_GOOGLE = 'RATA sees only the files you choose and the ones it saves.';
+  const NOTE_APPLE = 'Apple does not let other apps sign in to iCloud Drive, so RATA uses the iCloud Drive folder on this computer. Install iCloud for Windows on a PC.';
+  const NOTE_ADOBE = 'Adobe does not let other apps open your Adobe cloud documents, so RATA uses the Creative Cloud Files folder that Adobe’s desktop app keeps on this computer.';
+  const SERVICES = [
+    { service: 'microsoft', label: 'Microsoft OneDrive', kind: 'files', account: LARK },
+    { service: 'google', label: 'Google Drive', kind: 'files', account: HOME, note: NOTE_GOOGLE },
+    { service: 'apple', label: 'Apple: iCloud Drive (the folder on this computer)', kind: 'folder', account: 'iCloud Drive on this computer', note: NOTE_APPLE },
+    { service: 'adobe', label: 'Adobe: Creative Cloud Files (the folder on this computer)', kind: 'folder', account: 'Creative Cloud Files on this computer', note: NOTE_ADOBE },
+    { service: 'slack', label: 'Slack', kind: 'share', account: 'Riley Carter in Saltmarsh ED' },
+  ];
+  const PLACE = { microsoft: 'OneDrive', google: 'Google Drive', apple: 'iCloud Drive', adobe: 'Creative Cloud Files' };
+  const NOT_PRO = 'Connected accounts come with RATA Pro. Upgrade at mailrata.org.';
+  /* Every refusal as the app's cloud.rs makes one: { service, kind, error }. */
+  const refuse = (service, kind, error) => ({ service: String(service || ''), kind, error });
+  const STILL_IN_ICLOUD = 'That file is still in iCloud. Open it in Finder once to download it, then try again.';
+  /* As rata_mail::names::looks_disguised, for the demo's one example. */
+  const disguised = (n) => /\.(pdf|docx?|xlsx?|pptx?|txt|jpe?g|png|csv|rtf|html?)\.(exe|scr|com|bat|cmd|js|vbs|msi|jar|ps1|cpl|reg|url|iso|one)$/i.test(String(n).trim());
+  let CONNECTED = PLAN === 'pro' ? { microsoft: true, slack: true } : {};
+  try { const kept = JSON.parse(localStorage.getItem('rata_demo_conn') || 'null'); if (kept && typeof kept === 'object') CONNECTED = kept; } catch (e) {}
+  const keepConn = () => { try { localStorage.setItem('rata_demo_conn', JSON.stringify(CONNECTED)); } catch (e) {} };
+  const entry = (s) => ({ service: s.service, label: s.label, kind: s.kind, available: true, connected: !!CONNECTED[s.service],
+    ...(CONNECTED[s.service] ? { account: s.account } : {}), ...(s.note ? { note: s.note } : {}) });
+  const WAITING = {};
+
+  /* The clouds: folders hold folders and files; a file is made on first
+     read. Sizes are what the listing shows until then. */
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const MIMES = { pdf: 'application/pdf', docx: DOCX_MIME, xlsx: XLSX_MIME, md: 'text/markdown', txt: 'text/plain', csv: 'text/csv' };
+  const mimeOf = (name) => MIMES[String(name).split('.').pop().toLowerCase()] || 'application/octet-stream';
+  const pdf = (blocks) => () => blocksToPdf(blocks);
+  const docx = (blocks, title) => async () => blocksToDocx(blocks, title);
+  const text = (t) => async () => new Blob([t.replace(/^\n/, '')], { type: 'text/plain' });
+  const sheet = (sheets) => async () => {
+    const X = await brLib('xlsx', 'XLSX');
+    const wb = X.utils.book_new();
+    for (const [name, rows] of Object.entries(sheets)) X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(rows), name);
+    return new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: XLSX_MIME });
+  };
+  /* `modified` in seconds, as cloud.rs lists it. `offline`: an iCloud
+     placeholder that iCloud has not downloaded to this computer yet. */
+  const F = (name, ago, size, make, extra) => ({ kind: 'file', name, modified: Math.floor((now - ago) / 1000), size, make, ...(extra || {}) });
+  const D = (name, items) => ({ kind: 'folder', name, items });
+  const TREES = {
+    microsoft: D('OneDrive', [
+      D('ED schedules', [
+        F('November ED schedule.xlsx', 2 * HOUR, 14200, sheet({ November: [['Date', 'Day 7a-7p', 'Night 7p-7a'], ['8 Nov', 'A. Shah', 'R. Carter'], ['9 Nov', 'J. Ruiz', 'R. Carter'], ['14 Nov', 'M. Bell (swap)', 'K. Osei'], ['22 Nov', 'A. Shah', 'R. Carter']] })),
+        F('Holiday coverage 2026.docx', 6 * DAY, 9100, docx([H('Holiday coverage 2026'), P('Emergency Department, Larkspur Valley Health.'), TABLE([['Holiday', 'Day', 'Night'], ['Thanksgiving', 'J. Ruiz', 'R. Carter'], ['Christmas Eve', 'R. Carter', 'K. Osei'], ['New Year’s Day', 'A. Shah', 'J. Ruiz']]), P('Swaps through the medical director by 1 November.')], 'Holiday coverage 2026')),
+      ]),
+      D('Policies', [
+        F('Sepsis bundle protocol 2026.pdf', 9 * DAY, 38000, pdf([H('Sepsis bundle protocol 2026'), P('Larkspur Valley Health, Emergency Department. Effective 1 October 2026.'), H('Within the first hour', 2), LI('Measure lactate; repeat if over 2 mmol/L'), LI('Blood cultures before antibiotics'), LI('Broad-spectrum antibiotics'), LI('30 mL/kg crystalloid for hypotension or lactate of 4 or more'), H('Changes this year', 2), P('Reassessment documentation now has its own template in the chart.')])),
+        F('Handoff checklist.docx', 20 * DAY, 8400, docx([H('ED handoff checklist'), LI('Patient summary and working diagnosis'), LI('Pending results and who follows them up'), LI('Consults called and expected'), LI('Disposition plan'), P('Pilot on three units from October.')], 'ED handoff checklist')),
+        F('Visitor policy, ED.pdf', 45 * DAY, 21000, pdf([H('Visitor policy: Emergency Department'), P('Two visitors per patient in the department, one at a time in resuscitation bays.'), P('Quiet hours from 22:00 to 06:00.')])),
+      ]),
+      F('Reappointment checklist.docx', 3 * DAY, 7300, docx([H('Reappointment checklist'), LI('Current CV'), LI('BLS and ACLS cards'), LI('DEA registration'), P('Packet due 31 October to the Medical Staff Office.')], 'Reappointment checklist')),
+    ]),
+    google: D('My Drive', [
+      D('Tidepool CPR', [
+        F('Pricing 2026.pdf', 12 * DAY, 19000, pdf([H('Tidepool CPR Training: pricing 2026'), TABLE([['Class', 'Length', 'Per person'], ['BLS for healthcare providers', '4 hours', '$75'], ['Heartsaver CPR and AED', '3 hours', '$60'], ['Infant and child CPR', '4 hours', '$65']]), P('Groups of 8 or more at your site: no travel charge within 30 miles.')])),
+        F('Class roster template.xlsx', 30 * DAY, 11000, sheet({ Roster: [['Name', 'Organisation', 'Card number', 'Passed'], ['', '', '', '']] })),
+        F('Little Oaks booking notes.md', 3 * HOUR, 600, text('\n# Little Oaks Daycare\n\n- 12 staff, infant and child CPR\n- Saturday morning in November, at the centre\n- Quote sent: $780 including cards\n')),
+      ]),
+      D('Clearchart Writing', [
+        F('Sleep and shift work, outline.docx', 1 * DAY, 9800, docx([H('Sleep and shift work: outline'), P('For Wellness Quarterly, winter issue. 1,200 words, due 15 November.'), H('Sections', 2), LI('Why nights are hard on the body clock'), LI('Anchor sleep and the nap that helps'), LI('Light, caffeine and the drive home'), LI('Days off without losing the week')], 'Sleep and shift work, outline')),
+        F('Invoices 2026.xlsx', 8 * DAY, 12500, sheet({ Invoices: [['Invoice', 'Client', 'Amount', 'Paid'], ['CW-031', 'Wellness Quarterly', 700, 'yes'], ['CW-032', 'Harbor Health Blog', 450, 'yes'], ['CW-033', 'Wellness Quarterly', 1050, 'no']] })),
+        F('Sources.md', 2 * DAY, 400, text('\n# Sources to read\n\n- Shift work and circadian health, review article\n- Napping on night shifts, guidance for clinicians\n')),
+      ]),
+      D('Personal', [
+        F('Budget 2026.xlsx', 15 * DAY, 13000, sheet({ Budget: [['Month', 'Income', 'Spent'], ['July', 9800, 6100], ['August', 9800, 5900], ['September', 10200, 6400]] })),
+        /* A program named to look like a PDF, as a careless download might
+           be: Add it to Files and Save it to a cloud, and RATA asks first. */
+        F('Scanned receipt.pdf.exe', 1 * DAY, 4, text('MZ (a demo file, not a program)')),
+      ]),
+    ]),
+    apple: D('iCloud Drive', [
+      D('Recipes', [
+        F('Mom’s lentil soup.md', 40 * DAY, 700, text('\n# Mom’s lentil soup\n\n- 1 cup red lentils\n- 1 onion, 2 carrots, 2 celery sticks\n- 1 litre stock, cumin, lemon\n\nSoften the vegetables, add the rest, 25 minutes, lemon at the end.\n')),
+        F('Weeknight dinners.docx', 22 * DAY, 8100, docx([H('Weeknight dinners'), LI('Sheet-pan chicken and peppers'), LI('Salmon, rice and greens'), LI('Lentil soup from the freezer'), P('Post-call nights: anything from the freezer.')], 'Weeknight dinners')),
+      ]),
+      D('Travel', [
+        F('Coast trip itinerary.pdf', 10 * DAY, 17000, pdf([H('Coast trip, 18 to 20 October'), TABLE([['Day', 'Plan'], ['Saturday', 'Train 08:14, coach 6, seat 42. Lighthouse walk.'], ['Sunday', 'Tide pools at low tide, 10:40.'], ['Monday', 'Train home 16:05.']])])),
+        F('Packing list.md', 4 * DAY, 300, text('\n# Packing list\n\n- Rain jacket\n- Walking boots\n- Charger and book\n')),
+        F('Passport scan.pdf', 200 * DAY, 820000, text(''), { offline: true }),
+      ]),
+    ]),
+    adobe: D('Creative Cloud Files', [
+      D('Signed agreements', [
+        F('Wellness Quarterly contributor agreement, signed.pdf', 90 * DAY, 26000, pdf([H('Contributor agreement'), P('Between Wellness Quarterly and Clearchart Medical Writing (Riley Carter).'), P('Rate per piece as agreed in writing. First publication rights; rights return after 12 months.'), P('Signed by both parties.')])),
+        F('Little Oaks training agreement, signed.pdf', 5 * DAY, 22000, pdf([H('Training agreement'), P('Between Tidepool CPR Training and Little Oaks Daycare.'), P('Infant and child CPR class for 12 staff, on site, Saturday in November. $780 including certification cards.'), P('Signed by both parties.')])),
+        F('Harbourside Gym services agreement, signed.pdf', 60 * DAY, 23000, pdf([H('Services agreement'), P('Between Tidepool CPR Training and Harbourside Gym.'), P('BLS for fitness staff, up to 10 participants a class, invoiced per class.'), P('Signed by both parties.')])),
+      ]),
+    ]),
+  };
+  /* Ids for every folder and file, once. */
+  const BY_ID = {};
+  for (const [svc, root] of Object.entries(TREES)) {
+    let n = 0;
+    const walk = (node, parent) => {
+      node.id = node === root ? '' : svc + '-' + (++n);
+      node.parent = parent; node.svc = svc;
+      if (node.id) BY_ID[node.id] = node;
+      (node.items || []).forEach((x) => walk(x, node));
+    };
+    walk(root, null);
+  }
+  let savedN = 0;
+  const cloudOf = (service) => {
+    if (PLAN !== 'pro') throw refuse(service, 'plan', NOT_PRO);
+    if (!TREES[service]) throw refuse(service, 'unknown', 'RATA does not connect to that.');
+    if (!CONNECTED[service]) throw refuse(service, 'not-connected', PLACE[service] + ' is not connected. Connect it in Settings, under Connected accounts.');
+    return TREES[service];
+  };
+  const folderIn = (service, id) => {
+    const root = cloudOf(service);
+    if (id == null || id === '') return root;
+    const f = BY_ID[id];
+    if (!f || f.kind !== 'folder' || f.svc !== service) throw refuse(service, 'gone', 'That folder is no longer in ' + PLACE[service] + '.');
+    return f;
+  };
+  const pathOf = (node) => { const names = []; for (let x = node; x; x = x.parent) names.unshift(x.name); return names.join(' / '); };
+  const SLACK = [
+    { id: 'C01', name: 'ed-staff', kind: 'channel' },
+    { id: 'C02', name: 'shift-swaps', kind: 'channel' },
+    { id: 'C03', name: 'quality', kind: 'channel' },
+    { id: 'U01', name: 'Marcus Bell', kind: 'person' },
+    { id: 'U02', name: 'Dr. Omar Haddad', kind: 'person' },
+  ];
+  const slackOn = () => {
+    if (PLAN !== 'pro') throw refuse('slack', 'plan', NOT_PRO);
+    if (!CONNECTED.slack) throw refuse('slack', 'not-connected', 'Slack is not connected. Connect it in Settings, under Connected accounts.');
+  };
+
   const all = () => MAIL;
   const find = (uid) => MAIL.concat(...Object.values(IN_FOLDER)).find((m) => m.uid === uid);
   let SENT = 0;
@@ -505,6 +644,66 @@ Marcus` }));
       case 'unlink_mailbox': return null;
       case 'forget_everything': return { mailboxes: 0 };
       case 'install_update': return null;
+      case 'connections_status': return SERVICES.map(entry);
+      case 'connect_service': {
+        if (PLAN !== 'pro') throw refuse(args && args.service, 'plan', NOT_PRO);
+        const s = SERVICES.find((x) => x.service === (args && args.service));
+        if (!s) throw refuse(args && args.service, 'unknown', 'RATA does not connect to that.');
+        /* The real app waits for the browser, or looks for the folder;
+           here, a moment. Cancel stops it. */
+        /* A Cancel that arrived before this call did (each waits a moment
+           first) counts too. */
+        const done = WAITING[s.service] === 'cancelled' ? false
+          : await new Promise((r) => { const t = setTimeout(() => r(true), 1500); WAITING[s.service] = () => { clearTimeout(t); r(false); }; });
+        delete WAITING[s.service];
+        if (!done) return { cancelled: true };
+        CONNECTED[s.service] = true; keepConn();
+        return entry(s);
+      }
+      case 'cancel_connect':
+        if (typeof WAITING[args && args.service] === 'function') { WAITING[args.service](); return true; }
+        if (args && args.service) { WAITING[args.service] = 'cancelled'; setTimeout(() => { if (WAITING[args.service] === 'cancelled') delete WAITING[args.service]; }, 2000); }
+        return true;
+      case 'disconnect_service': {
+        const s = SERVICES.find((x) => x.service === (args && args.service));
+        if (!s) throw refuse(args && args.service, 'unknown', 'RATA does not connect to that.');
+        delete CONNECTED[s.service]; keepConn();
+        return entry(s);
+      }
+      case 'cloud_list': {
+        const f = folderIn(args.service, args.folder);
+        const items = f.items.map((x) => ({ id: x.id, name: x.name, kind: x.kind, ...(x.kind === 'file' ? { size: x.size, modified: x.modified } : {}), ...(x.offline ? { offline: true } : {}) }));
+        return { folder: { id: f.id, name: f.name, ...(f.parent ? { parent: f.parent.id } : {}), path: pathOf(f) }, items, truncated: false };
+      }
+      case 'cloud_read': {
+        cloudOf(args.service);
+        const x = BY_ID[args.id];
+        if (!x || x.kind !== 'file' || x.svc !== args.service) throw refuse(args.service, 'gone', 'That file is no longer in ' + PLACE[args.service] + '.');
+        if (x.offline) throw refuse(args.service, 'offline', STILL_IN_ICLOUD);
+        x.made = x.made || Promise.resolve(x.make());
+        const blob = await x.made;
+        x.size = blob.size;
+        return { name: x.name, mime: mimeOf(x.name), data: await b64(blob) };
+      }
+      case 'cloud_save': {
+        const f = folderIn(args.service, args.folder);
+        const name = String(args.name || 'file');
+        if (disguised(name) && args.confirmed !== true) throw refuse(args.service, 'needs-confirmation', name + ' is a program named to look like a document. RATA saves it only after you say so.');
+        const taken = (n) => f.items.some((x) => x.name === n);
+        let as = name, k = 1;
+        while (taken(as)) { k++; as = name.replace(/(\.[^.]*)?$/, (ext) => ' (' + k + ')' + (ext || '')); }
+        const blob = new Blob([fromB64(String(args.data || ''))], { type: mimeOf(as) });
+        const node = { kind: 'file', name: as, modified: Math.floor(Date.now() / 1000), size: blob.size, made: Promise.resolve(blob), make: () => blob, id: args.service + '-saved-' + (++savedN), parent: f, svc: args.service };
+        BY_ID[node.id] = node; f.items.push(node);
+        return { name: as, id: node.id, where: pathOf(f), size: blob.size };
+      }
+      case 'slack_targets': slackOn(); return SLACK;
+      case 'slack_share': {
+        slackOn();
+        const t = SLACK.find((x) => x.id === args.target);
+        if (!t) throw refuse('slack', 'gone', 'That channel or person is no longer in Saltmarsh ED.');
+        return { where: (t.kind === 'channel' ? '#' : '') + t.name + ' in Saltmarsh ED (a demo: nothing left this page)' };
+      }
       default: throw 'This demo does not do that (' + cmd + ').';
     }
   } } };
