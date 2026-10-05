@@ -358,6 +358,10 @@ console.log('\n— new mail in the background says so on the desktop —');
 {
   const pg = await open(true);
   let uid = 60;
+  /* Initials come from letters and digits only, and a person's avatar from
+     their name, never their nickname. */
+  const ini = await pg.evaluate(() => ['Marcus (charge RN)', 'Dr. Anita Shah', '  ', '(—)', 'émile zola', '42 Ann'].map(initials));
+  check(JSON.stringify(ini) === JSON.stringify(['MC', 'DA', '?', '?', 'ÉZ', '4A']), `initials skip punctuation: ${JSON.stringify(ini)}`);
   const mk = (folder, extra) => { uid++; return Object.assign({ id: 'me@example.com_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: 'me@example.com', acct_label: 'Example',
     from_name: 'Ann', from_addr: 'ann@example.org', to_name: '', to_addr: 'me@example.com', subject: 'Subject ' + uid, preview: 'p', body: 'b',
     ts: Date.now() - (100 - uid) * 1000, unread: true, starred: false, uid, uidvalidity: 7, message_id: 'n' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {}); };
