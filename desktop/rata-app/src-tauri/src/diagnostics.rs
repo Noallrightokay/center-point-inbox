@@ -7,10 +7,13 @@
 //! in, whether it is parked, its last error, the latest failure of each other
 //! kind of operation (J1), how its special folders were found and what RATA
 //! has seen of it this session. **Never** an address (a mailbox is `Mailbox 1`), a password, a
-//! token, the licence key, message text, or a path that could carry the
-//! account's name. Every sentence that came from a server or an error goes
-//! through [`clean`] first, and the whole block through [`no_at`] last, so
-//! not even an `@` survives.
+//! token, the licence key, message text, a path that could carry the
+//! account's name, or a name a person chose: a folder of the customer's, an
+//! attachment's file name, a subject (SEC-8). An error is kept without the
+//! names its operation touched ([`without_names`], when it is kept), every
+//! sentence that came from a server or an error goes through [`clean`]
+//! first, and the whole block through [`no_at`] last, so not even an `@`
+//! survives.
 //!
 //! Everything here comes from what the app already holds. Nothing signs in,
 //! dials or asks a server anything to fill it.
@@ -456,6 +459,314 @@ fn clean_plain(text: &str) -> String {
     home_out(&addresses_out(&said_within(text, &[], LINE_MOST)))
 }
 
+/// A name a person chose, which a public bug report must never carry
+/// (SEC-8): one of the customer's own folders (a label such as "Therapy
+/// notes"), an attachment's file name (chosen by whoever sent it), what a
+/// message is about. Each operation knows which of these it touched; the
+/// error it keeps for the block is cleaned of every one of them as it is
+/// kept ([`without_names`]), so no name is held even in memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Name {
+    /// A folder, as the server's LIST gave it (modified UTF-7).
+    Folder(String),
+    /// A file's name, as the message or the composer gave it.
+    File(String),
+    /// A message's subject.
+    Subject(String),
+}
+
+/// A name standing where it was: what a reader of the block sees instead.
+const FOLDER: &str = "[folder]";
+const FILE: &str = "[file]";
+const SUBJECT: &str = "[subject]";
+/// A quoted span in an error that touched names of more than one kind, or
+/// only a subject.
+const NAMED: &str = "[name]";
+
+/// A spelling this short is taken out only where it stands as a word of its
+/// own: a folder called "To" takes out the word "to", never the "To" of
+/// "Tomorrow".
+const WORD_ONLY: usize = 4;
+
+/// The start of a spelling at least this long is taken out too, where it
+/// stands alone: a server's line cut short mid-name.
+const CUT_FROM: usize = 6;
+
+impl Name {
+    fn label(&self) -> &'static str {
+        match self {
+            Name::Folder(_) => FOLDER,
+            Name::File(_) => FILE,
+            Name::Subject(_) => SUBJECT,
+        }
+    }
+
+    /// Every spelling the name can come back in: from RATA's own sentence,
+    /// or from a server echoing it in its own words.
+    fn spellings(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        match self {
+            Name::Folder(raw) => {
+                // As LIST gave it, as the engine writes it (decoded), and
+                // the other way: a server that took the name in UTF-8 can
+                // still answer in modified UTF-7.
+                let decoded = rata_mail::imap::utf7_imap(raw);
+                let wholes = [
+                    raw.clone(),
+                    decoded.clone(),
+                    utf7_encode(raw),
+                    utf7_encode(&decoded),
+                ];
+                for whole in &wholes {
+                    out.push(whole.clone());
+                    // Each level alone, and the levels as the folder list
+                    // shows them ("Personal / Therapy notes").
+                    let parts: Vec<&str> = whole
+                        .split(['/', '.', '\\'])
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("inbox"))
+                        .collect();
+                    out.extend(parts.iter().map(|p| p.to_string()));
+                    out.extend(parts.iter().map(|p| rata_mail::imap::utf7_imap(p)));
+                    out.push(parts.join(" / "));
+                }
+            }
+            Name::File(raw) => {
+                for whole in [raw.clone(), rata_mail::safe_file_name(raw)] {
+                    // "name (2).pdf" is how a second copy is saved.
+                    if let Some((stem, _)) = whole.rsplit_once('.') {
+                        out.push(stem.to_string());
+                    }
+                    out.push(whole);
+                }
+            }
+            Name::Subject(s) => out.push(s.clone()),
+        }
+        // As an IMAP quoted string carries it.
+        let quoted: Vec<String> = out
+            .iter()
+            .map(|s| s.replace('\\', "\\\\").replace('"', "\\\""))
+            .collect();
+        out.extend(quoted);
+        let mut out: Vec<String> = out
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("inbox"))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
+/// `text` with every name in `names` taken out, in every spelling it could
+/// come back in, ignoring case (Unicode's, not only ASCII's): each becomes
+/// `[folder]`, `[file]` or `[subject]`. Then, since a server can echo a name
+/// in a form none of those spellings foresaw, everything it put in quotes
+/// goes too. Nothing changes when there are no names.
+pub fn without_names(text: &str, names: &[Name]) -> String {
+    if names.is_empty() {
+        return text.to_string();
+    }
+    let mut spelled: Vec<(Vec<char>, &'static str)> = names
+        .iter()
+        .flat_map(|n| {
+            n.spellings()
+                .into_iter()
+                .map(move |s| (fold(&s), n.label()))
+        })
+        .filter(|(s, _)| !s.is_empty())
+        .collect();
+    // The longest first, so a whole name goes before any level of it.
+    spelled.sort_by_key(|(s, _)| std::cmp::Reverse(s.len()));
+
+    let chars: Vec<char> = text.chars().collect();
+    // Each character folded, and which character each folded one came from.
+    let mut folded: Vec<char> = Vec::with_capacity(chars.len());
+    let mut from: Vec<usize> = Vec::with_capacity(chars.len());
+    for (i, c) in chars.iter().enumerate() {
+        for l in c.to_lowercase() {
+            folded.push(l);
+            from.push(i);
+        }
+    }
+    let word = |i: usize| chars.get(i).is_some_and(|c| c.is_alphanumeric());
+    let mut out = String::with_capacity(text.len());
+    let mut p = 0;
+    while p < folded.len() {
+        let at = from[p];
+        // A match starts where a character of the text starts.
+        let starts = p == 0 || from[p - 1] != at;
+        let after_word = at > 0 && word(at - 1);
+        let mut taken: Option<(usize, &str)> = None;
+        if starts {
+            for (needle, label) in &spelled {
+                let n = needle.len();
+                let same = folded[p..]
+                    .iter()
+                    .zip(needle)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if same == 0 {
+                    continue;
+                }
+                // Where the match ends: at the end of a character, and
+                // whether a letter or digit follows it.
+                let end = p + same;
+                let whole_char = end == folded.len() || from[end] != from[end - 1];
+                let word_after = word(from[end - 1] + 1);
+                let len = if same == n {
+                    // The whole spelling; a short one only as a word of
+                    // its own.
+                    if !whole_char || (n < WORD_ONLY && (after_word || word_after)) {
+                        continue;
+                    }
+                    n
+                } else if n >= CUT_FROM
+                    && same >= CUT_FROM
+                    && whole_char
+                    && !after_word
+                    && !word_after
+                {
+                    // The start of one, where a line was cut: a whole word
+                    // or more of it, standing alone.
+                    same
+                } else {
+                    continue;
+                };
+                taken = Some((len, label));
+                break;
+            }
+        }
+        match taken {
+            Some((len, label)) => {
+                out.push_str(label);
+                // On to the next character of the text after the match.
+                let last = from[p + len - 1];
+                while p < folded.len() && from[p] <= last {
+                    p += 1;
+                }
+            }
+            None => {
+                if starts {
+                    out.push(chars[at]);
+                }
+                p += 1;
+            }
+        }
+    }
+    unquoted(&out, quote_label(names))
+}
+
+/// What a quoted span becomes: the kind of name the operation touched, or
+/// `[name]` when it touched more than one kind.
+fn quote_label(names: &[Name]) -> &'static str {
+    let first = names.first().map(Name::label).unwrap_or(NAMED);
+    if first == SUBJECT {
+        return NAMED;
+    }
+    if names.iter().all(|n| n.label() == first) {
+        first
+    } else {
+        NAMED
+    }
+}
+
+/// `text` with whatever stands in quotes, "straight", “curly”, «angled» or
+/// 'single', replaced by `label`, the quotes kept. A single quote opens only
+/// where no letter stands before it and closes only where none follows, so
+/// "doesn't" is not one. A straight quote escaped with a backslash, as IMAP
+/// writes one inside a quoted string, does not close it. A span holding
+/// only a name already taken out stays as it is.
+fn unquoted(text: &str, label: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let word = |i: usize| chars.get(i).is_some_and(|c| c.is_alphanumeric());
+    let close_of = |i: usize| -> Option<char> {
+        match chars[i] {
+            '"' => Some('"'),
+            '\u{201c}' => Some('\u{201d}'),
+            '\u{ab}' => Some('\u{bb}'),
+            '\'' if (i == 0 || !word(i - 1))
+                && chars.get(i + 1).is_some_and(|c| !c.is_whitespace()) =>
+            {
+                Some('\'')
+            }
+            _ => None,
+        }
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(close) = close_of(i) else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        let mut j = i + 1;
+        let end = loop {
+            match chars.get(j) {
+                None => break None,
+                Some('\\') if close == '"' => j += 2,
+                Some(&c) if c == close && (close != '\'' || !word(j + 1)) => break Some(j),
+                Some(_) => j += 1,
+            }
+        };
+        let Some(end) = end else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        let inside: String = chars[i + 1..end].iter().collect();
+        out.push(chars[i]);
+        if [FOLDER, FILE, SUBJECT, NAMED].contains(&inside.as_str()) {
+            out.push_str(&inside);
+        } else {
+            out.push_str(label);
+        }
+        out.push(close);
+        i = end + 1;
+    }
+    out
+}
+
+/// `s` folded for comparing without case.
+fn fold(s: &str) -> Vec<char> {
+    s.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// IMAP's modified UTF-7 (RFC 3501 §5.1.3), the other way from
+/// `rata_mail::imap::utf7_imap`: how a server may spell "Entwürfe" back.
+fn utf7_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run: Vec<u16> = Vec::new();
+    let flush = |run: &mut Vec<u16>, out: &mut String| {
+        if run.is_empty() {
+            return;
+        }
+        let bytes: Vec<u8> = run.iter().flat_map(|u| u.to_be_bytes()).collect();
+        let b64 = rata_mail::words::base64_encode(&bytes);
+        out.push('&');
+        out.push_str(&b64.trim_end_matches('=').replace('/', ","));
+        out.push('-');
+        run.clear();
+    };
+    for c in s.chars() {
+        if (' '..='~').contains(&c) {
+            flush(&mut run, &mut out);
+            if c == '&' {
+                out.push_str("&-");
+            } else {
+                out.push(c);
+            }
+        } else {
+            let mut units = [0u16; 2];
+            run.extend_from_slice(c.encode_utf16(&mut units));
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
 /// `text` with every `needle` replaced by `with`, ignoring ASCII case.
 fn replace_ci(text: &str, needle: &str, with: &str) -> String {
     if needle.is_empty() {
@@ -599,5 +910,64 @@ mod tests {
         n.failed(Op::Action, trouble("archive"));
         assert_eq!(n.failed[&Op::Action].worked_since, None);
         assert_eq!(n.failed.len(), 2);
+    }
+
+    /// SEC-8: a name goes in every spelling it comes back in, and a short
+    /// one only where it stands alone.
+    #[test]
+    fn a_name_goes_in_every_spelling() {
+        let folder = |raw: &str| vec![Name::Folder(raw.into())];
+        let gone = |text: &str, names: &[Name]| without_names(text, names);
+        assert_eq!(utf7_encode("Entwürfe"), "Entw&APw-rfe");
+        assert_eq!(utf7_encode("日本語"), "&ZeVnLIqe-");
+        assert_eq!(utf7_encode("Tom & Jerry"), "Tom &- Jerry");
+
+        let entw = folder("INBOX.Entw&APw-rfe.Akte 7");
+        for said in [
+            "NO Mailbox \"INBOX.Entw&APw-rfe.Akte 7\" doesn't exist",
+            "NO Mailbox \"INBOX.Entwürfe.Akte 7\" doesn't exist",
+            "NO Mailbox \"inbox.ENTWÜRFE.akte 7\" doesn't exist",
+            "NO Mailbox \"Entwürfe / Akte 7\" doesn't exist",
+        ] {
+            assert_eq!(
+                gone(said, &entw),
+                "NO Mailbox \"[folder]\" doesn't exist",
+                "{said}"
+            );
+        }
+        // A level alone, unquoted, keeps the words around it.
+        assert_eq!(
+            gone("NO Akte 7 is busy, try later", &entw),
+            "NO [folder] is busy, try later"
+        );
+        // Quoted by the server in a form no spelling foresaw.
+        assert_eq!(
+            gone("NO [NONEXISTENT] 'Entwu\u{308}rfe' gone", &entw),
+            "NO [NONEXISTENT] '[folder]' gone"
+        );
+        // Cut short: a start of it standing alone, never a longer word.
+        let therapy = folder("Therapy notes");
+        assert_eq!(
+            gone("NO cannot open Therapy no", &therapy),
+            "NO cannot open [folder]"
+        );
+        assert_eq!(gone("NO Therapist", &therapy), "NO Therapist");
+        // A short name only as a word of its own.
+        let to = folder("To");
+        assert_eq!(
+            gone("Tomorrow: to the folder To, then to", &to),
+            "Tomorrow: [folder] the folder [folder], then [folder]"
+        );
+        // A file as sent, as saved, and as a second copy is saved.
+        let file = vec![Name::File("Smith v. Smith\u{202e}fdp.exe".into())];
+        let safe = rata_mail::safe_file_name("Smith v. Smith\u{202e}fdp.exe");
+        assert!(!gone(&format!("{safe} could not be saved"), &file).contains("Smith"));
+        assert!(!gone("Smith v. Smith\u{202e}fdp (2).exe", &file).contains("Smith"));
+        // Nothing to take out, nothing changed; quotes too.
+        assert_eq!(gone("NO \"x\" 'y'", &[]), "NO \"x\" 'y'");
+        // Kinds mixed: a quoted span says only that it was a name.
+        let mixed = vec![Name::File("a.pdf".into()), Name::Subject("Hi".into())];
+        assert_eq!(gone("552 \"b.pdf\" no", &mixed), "552 \"[name]\" no");
+        assert_eq!(gone("552 a.pdf: Hi", &mixed), "552 [file]: [subject]");
     }
 }

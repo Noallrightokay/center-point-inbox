@@ -1900,8 +1900,9 @@ fn folder_label(name: &str, delimiter: Option<&str>) -> String {
 
 /// IMAP's modified UTF-7 (RFC 3501 §5.1.3), which is how servers spell a
 /// folder called "Entwürfe": `Entw&APw-rfe`. Anything that does not decode
-/// is shown as it came.
-fn utf7_imap(s: &str) -> String {
+/// is shown as it came. Public so the app can take a folder's name out of
+/// Copy diagnostics in the spelling this engine writes it in (SEC-8).
+pub fn utf7_imap(s: &str) -> String {
     fn sextet(c: u8) -> Option<u32> {
         Some(match c {
             b'A'..=b'Z' => c - b'A',
