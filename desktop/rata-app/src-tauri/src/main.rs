@@ -16,6 +16,7 @@
 mod cloud;
 mod commands;
 mod core;
+mod created;
 mod diagnostics;
 mod licence;
 mod links;
@@ -205,6 +206,11 @@ fn main() {
             commands::cloud_save,
             commands::slack_targets,
             commands::slack_share,
+            commands::create_file,
+            commands::open_created,
+            commands::created_list,
+            commands::created_read,
+            commands::forget_created,
         ])
         .run(context)
         .expect("RATA could not start");

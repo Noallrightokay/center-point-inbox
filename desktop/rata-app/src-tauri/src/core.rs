@@ -555,7 +555,7 @@ impl Rata {
 
     /// How many times Delete account has run since RATA started: the
     /// `epoch` a renewal carries to `set_licence`.
-    fn epoch(&self) -> u64 {
+    pub(crate) fn epoch(&self) -> u64 {
         self.forgotten.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -1168,6 +1168,10 @@ impl Rata {
             // here (K5): only their paths, which are RATA's to forget. The
             // folders and the files in them are the customer's, untouched.
             store.clear_connections();
+            // The files made with Create file (K6): only RATA's record of
+            // them, so none can be opened from RATA again. The files are
+            // the customer's documents and stay where they are.
+            store.clear_created();
             store
                 .save()
                 .map_err(|e| format!("The licence could not be removed: {e}"))?;
@@ -2863,9 +2867,34 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> 
 }
 
 /// Write `bytes` to a new file in `dir` named `name`, or `name (2)` and so on
-/// if that is taken. Created exclusively, so an existing file is never
-/// overwritten, even one that appears between the check and the write.
+/// if that is taken (`write_unmarked`), then mark it as a download
+/// (`mark`). Every file whose bytes could be a stranger's goes this way:
+/// attachments, Format Bridge downloads, saves into a connected folder.
 pub(crate) fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let path = write_unmarked(dir, name, bytes)?;
+    // Tagged as a download, so SmartScreen, Protected View and
+    // Gatekeeper look at it. Best effort: never fails the save.
+    let _ = crate::mark::from_internet(&path);
+    #[cfg(test)]
+    MARKED.with(|m| m.set(m.get() + 1));
+    Ok(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many files `write_new` marked on this thread, so a test can tell
+    /// a marked write from an unmarked one on Linux, where the mark is
+    /// nothing.
+    pub(crate) static MARKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `write_new` without the mark, for the one kind of file that is the
+/// customer's own from its first byte: a blank document RATA made with
+/// Create file (`created`). Marked, Word would open the customer's own new
+/// file in Protected View. Created exclusively, so an existing file is
+/// never overwritten, even one that appears between the check and the
+/// write.
+pub(crate) fn write_unmarked(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
     let (stem, ext) = match name.rfind('.') {
@@ -2887,9 +2916,6 @@ pub(crate) fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result
             Ok(mut f) => {
                 f.write_all(bytes)?;
                 drop(f);
-                // Tagged as a download, so SmartScreen, Protected View and
-                // Gatekeeper look at it. Best effort: never fails the save.
-                let _ = crate::mark::from_internet(&path);
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
