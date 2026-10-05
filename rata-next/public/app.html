@@ -2156,7 +2156,9 @@ async function verifyChain(){
    (DESIGN.md): a person is told apart without adding a second accent. */
 const AV_COLORS=['#4A5363','#56684D','#8A4F3F','#5E4F80','#3C6570','#4F5B7A','#6B4A60'];
 const avColor=n=>AV_COLORS[[...String(n)].reduce((a,c)=>a+c.charCodeAt(0),0)%AV_COLORS.length];
-const initials=n=>String(n).split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
+/* The first letter or digit of the first two words that have one, so
+   "Marcus (charge RN)" is MC, never M(. */
+const initials=n=>String(n).split(/\s+/).map(w=>(w.match(/[\p{L}\p{N}]/u)||[])[0]).filter(Boolean).slice(0,2).join('').toUpperCase()||'?';
 function rel(ts){
   const d=Date.now()-ts;
   if(d<3600e3)return Math.max(1,Math.round(d/60e3))+'m';
@@ -3535,7 +3537,7 @@ function openPerson(cid){
   d.innerHTML=`
     <button class="md-back" id="pd-back">← People</button>
     <div class="thread-head">
-      <div class="avatar" style="background:${avColor(c.name)}">${initials(c.nick||c.name)}</div>
+      <div class="avatar" style="background:${avColor(c.name)}">${initials(c.name)}</div>
       <div class="who"><b>${esc(c.nick||c.name)}${c.nick?` <span style="color:var(--faint);font-weight:400;font-size:12px">(${esc(c.name)})</span>`:''}</b><span>${esc(c.addr||'No email address yet')}</span></div>
     </div>
     <div class="thread-scroll" id="thread-scroll">${all.length?all.map(m=>bubbleHTML(m)).join(''):'<div class="empty"><b>No messages yet</b>Mail with them appears here as it arrives.</div>'}</div>
