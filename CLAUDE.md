@@ -213,7 +213,10 @@ latest failure of every operation and say how each special folder was found
 (J1);
 v0.1.47 keeps folder, file and subject names out of Copy diagnostics,
 stops a link still in progress when Delete account runs, and lets a
-Microsoft mailbox whose list entry lost `auth` renew again (SEC-8). An
+Microsoft mailbox whose list entry lost `auth` renew again (SEC-8);
+v0.1.48 finds a company mailbox behind a mail filter from its SPF record or
+autodiscover name (L1), and carries K5's folder commands, which no screen
+calls yet. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
