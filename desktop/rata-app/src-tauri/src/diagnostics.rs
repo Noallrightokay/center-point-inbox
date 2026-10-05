@@ -4,8 +4,9 @@
 //! The repository the report goes to is public, so the block says only what
 //! a fix needs and nothing a stranger could use: the build, the system, the
 //! licence's plan and day, and for each mailbox its servers, how it signs
-//! in, whether it is parked, its last error and what RATA has seen of it this
-//! session. **Never** an address (a mailbox is `Mailbox 1`), a password, a
+//! in, whether it is parked, its last error, the latest failure of each other
+//! kind of operation (J1), how its special folders were found and what RATA
+//! has seen of it this session. **Never** an address (a mailbox is `Mailbox 1`), a password, a
 //! token, the licence key, message text, or a path that could carry the
 //! account's name. Every sentence that came from a server or an error goes
 //! through [`clean`] first, and the whole block through [`no_at`] last, so
@@ -14,7 +15,10 @@
 //! Everything here comes from what the app already holds. Nothing signs in,
 //! dials or asks a server anything to fill it.
 
+use std::collections::BTreeMap;
+
 use rata_mail::credential::said_within;
+use rata_mail::{FoundBy, Placed};
 
 use crate::licence::on_day;
 
@@ -60,11 +64,54 @@ pub enum Licensed {
 #[derive(Debug, Clone)]
 pub struct Trouble {
     pub at: u64,
-    /// What was being done: `refresh`, `send`.
+    /// What was being done: `refresh`, `send`; for an [`Op`], what of it
+    /// (`archive`, `save attachment`…), or nothing when the op says it all.
     pub doing: &'static str,
     /// The problem's kind (`net`, `auth`, `oauth`…).
     pub kind: String,
     pub said: String,
+}
+
+/// The operations besides a refresh and a send whose latest failure is kept
+/// for each mailbox (J1), in the order the block lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Op {
+    /// Read, unread, star, unstar, delete, archive, move (`change`).
+    Action,
+    /// Load older mail, the gaps a refresh left, and re-reading by number.
+    Older,
+    /// Fetching one message whole: opening it in full, saving or converting
+    /// an attachment, its pictures.
+    Open,
+    /// Searching on the server.
+    Search,
+    /// Saving the composer's draft to Drafts.
+    Draft,
+    /// Listing the customer's own folders, or reading one.
+    Folders,
+    /// The connection waiting for new mail (IMAP IDLE).
+    Watch,
+}
+
+impl Op {
+    fn label(self) -> &'static str {
+        match self {
+            Op::Action => "action",
+            Op::Older => "older mail",
+            Op::Open => "message fetch",
+            Op::Search => "server search",
+            Op::Draft => "draft save",
+            Op::Folders => "folders",
+            Op::Watch => "new-mail watch",
+        }
+    }
+}
+
+/// The latest failure of one [`Op`], and when it first worked after it.
+#[derive(Debug, Clone)]
+pub struct Failed {
+    pub trouble: Trouble,
+    pub worked_since: Option<u64>,
 }
 
 /// What the app has noticed about one mailbox since it started, kept in
@@ -78,8 +125,47 @@ pub struct Noted {
     pub folders: std::collections::BTreeSet<&'static str>,
     /// Archive is Gmail's All Mail, found by its `\All` attribute.
     pub all_mail: bool,
+    /// How the latest refresh that listed the folders found each special
+    /// one.
+    pub places: Option<Placed>,
     /// `host:port` of the submission server the last message went through.
     pub smtp_used: Option<String>,
+    /// The latest failure of each other kind of operation.
+    pub failed: BTreeMap<Op, Failed>,
+    /// The server said it has no IDLE, so new mail waits for the timer.
+    pub no_idle: bool,
+}
+
+impl Noted {
+    /// `op` failed: this replaces whatever failure of it was kept.
+    pub fn failed(&mut self, op: Op, trouble: Trouble) {
+        self.failed.insert(
+            op,
+            Failed {
+                trouble,
+                worked_since: None,
+            },
+        );
+    }
+
+    /// `op` worked. A failure kept for it stays, since what went wrong is
+    /// still worth knowing, but now says when it first worked again. For an
+    /// action that takes the same action: a star that works says nothing
+    /// about an archive that did not.
+    pub fn worked(&mut self, op: Op, doing: &str, at: u64) {
+        if let Some(f) = self.failed.get_mut(&op)
+            && f.worked_since.is_none()
+            && (op != Op::Action || f.trouble.doing == doing)
+        {
+            f.worked_since = Some(at);
+        }
+    }
+
+    /// Whether anything kept came from an error, so may hold a secret to
+    /// take out.
+    pub fn has_errors(&self) -> bool {
+        self.last_error.is_some() || !self.failed.is_empty()
+    }
 }
 
 /// One mailbox, as the block needs it. `email` and `secrets` are only for
@@ -221,10 +307,42 @@ pub fn render(f: &Facts) -> String {
                 .map(|t| when(t, f.now))
                 .unwrap_or_else(|| "none since RATA started".into())
         ));
+        if m.noted.failed.is_empty() {
+            out.push("  Other failures: none since RATA started".into());
+        }
+        for (op, failed) in &m.noted.failed {
+            let t = &failed.trouble;
+            out.push(format!(
+                "  Last failed {}{}: {} ({}): {}{}",
+                op.label(),
+                if t.doing.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", t.doing)
+                },
+                when(t.at, f.now),
+                tidy(&t.kind),
+                tidy(&t.said),
+                failed
+                    .worked_since
+                    .map(|w| format!(" — worked again {}", when(w, f.now)))
+                    .unwrap_or_default()
+            ));
+        }
         out.push(format!("  Special folders seen: {}", folders(&m.noted)));
         out.push(format!(
+            "  Special folders found: {}",
+            found(m.noted.places.as_ref())
+        ));
+        out.push(format!(
             "  Live connection (new mail as it arrives): {}",
-            if m.live { "up" } else { "down" }
+            if m.live {
+                "up"
+            } else if m.noted.no_idle {
+                "down, the server does not offer IDLE (new mail comes with the five-minute refresh)"
+            } else {
+                "down"
+            }
         ));
     }
     no_at(&out.join("\n"))
@@ -252,6 +370,32 @@ fn folders(n: &Noted) -> String {
     } else {
         seen.join(", ")
     }
+}
+
+/// How the latest refresh that listed the folders found each special one:
+/// by the attribute the server declares, by one of RATA's own fixed names
+/// (that list's spelling, never the server's, which could be a label the
+/// customer made), or as Gmail's All Mail.
+fn found(places: Option<&Placed>) -> String {
+    let Some(p) = places else {
+        return "not listed yet since RATA started".into();
+    };
+    let how = |by: Option<FoundBy>| match by {
+        None => "none on this server".to_string(),
+        Some(FoundBy::Attribute) => "by attribute".into(),
+        Some(FoundBy::Name(name)) => format!("by name (\"{name}\")"),
+        Some(FoundBy::AllMail) => "Gmail's All Mail (by its \\All attribute)".into(),
+    };
+    [
+        ("Sent", p.sent),
+        ("Spam", p.junk),
+        ("Drafts", p.drafts),
+        ("Archive", p.archive),
+    ]
+    .into_iter()
+    .map(|(folder, by)| format!("{folder}: {}", how(by)))
+    .collect::<Vec<_>>()
+    .join("; ")
 }
 
 /// How a submission server is spoken to, from the port it answered on.
@@ -407,5 +551,53 @@ mod tests {
     fn the_port_says_how_smtp_was_spoken_to() {
         assert_eq!(smtp_mode("smtp.example.com:465"), "TLS from the start");
         assert_eq!(smtp_mode("smtp.example.com:587"), "STARTTLS");
+    }
+
+    /// J1: how each special folder was found, in RATA's own words.
+    #[test]
+    fn a_special_folder_says_how_it_was_found() {
+        assert_eq!(found(None), "not listed yet since RATA started");
+        let p = Placed {
+            sent: Some(FoundBy::Name("Sent Items")),
+            junk: Some(FoundBy::Attribute),
+            drafts: None,
+            archive: Some(FoundBy::AllMail),
+        };
+        assert_eq!(
+            found(Some(&p)),
+            "Sent: by name (\"Sent Items\"); Spam: by attribute; Drafts: none on this server; Archive: Gmail's All Mail (by its \\All attribute)"
+        );
+    }
+
+    /// J1: a failure is kept until the same operation fails again; working
+    /// again is said beside it, and for an action only by the same action.
+    #[test]
+    fn a_failure_stays_and_says_when_it_worked_again() {
+        let trouble = |doing| Trouble {
+            at: 10,
+            doing,
+            kind: "no-place".into(),
+            said: "No Archive.".into(),
+        };
+        let mut n = Noted::default();
+        assert!(!n.has_errors());
+        n.failed(Op::Action, trouble("archive"));
+        n.failed(Op::Open, trouble("save attachment"));
+        assert!(n.has_errors());
+        n.worked(Op::Action, "star", 20);
+        assert_eq!(n.failed[&Op::Action].worked_since, None);
+        n.worked(Op::Action, "archive", 30);
+        n.worked(Op::Action, "archive", 40);
+        assert_eq!(n.failed[&Op::Action].worked_since, Some(30));
+        // Any fetch of a whole message working says the fetching works.
+        n.worked(Op::Open, "open in full", 50);
+        assert_eq!(n.failed[&Op::Open].worked_since, Some(50));
+        // Another operation's success touches nothing else.
+        n.worked(Op::Search, "", 60);
+        assert!(!n.failed.contains_key(&Op::Search));
+        // Failing again starts over.
+        n.failed(Op::Action, trouble("archive"));
+        assert_eq!(n.failed[&Op::Action].worked_since, None);
+        assert_eq!(n.failed.len(), 2);
     }
 }

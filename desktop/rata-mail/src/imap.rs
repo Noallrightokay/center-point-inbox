@@ -1007,6 +1007,34 @@ pub struct Newest {
     /// is [`Archived`]) hold now, near their top: see [`Present`]. One per
     /// folder whose listing the server answered; none for the others.
     pub present: Vec<Present>,
+    /// How Sent, Archive, Spam and Drafts were found on this server, when
+    /// the refresh listed the folders: for Copy diagnostics.
+    pub places: Option<Placed>,
+}
+
+/// How one special folder was found, for Copy diagnostics. Never the
+/// server's own name for it, which may be one of the customer's labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoundBy {
+    /// By the purpose the server declares for it (RFC 6154).
+    Attribute,
+    /// By one of RATA's own fixed names (`SENT_NAMES` and the rest): this
+    /// is that list's spelling, not the server's, so it is never anything
+    /// the customer typed.
+    Name(&'static str),
+    /// Gmail's All Mail (`\All`, and no `\Archive`), searched for what is
+    /// archived.
+    AllMail,
+}
+
+/// How each special folder a refresh reads was found: `None` where the
+/// server has none RATA recognises.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Placed {
+    pub sent: Option<FoundBy>,
+    pub archive: Option<FoundBy>,
+    pub junk: Option<FoundBy>,
+    pub drafts: Option<FoundBy>,
 }
 
 /// Which messages of one folder are there now: every UID from `floor` up to,
@@ -1149,7 +1177,11 @@ async fn newest_everywhere<C: Connect>(
     if !dial.revive(session).await {
         return Ok(found);
     }
-    let places = places(session).await;
+    // A listing that failed is not "no special folders": diagnostics then
+    // says nothing about how they were found.
+    let listed = listing(session).await;
+    let places = listed.as_deref().map(places_in).unwrap_or_default();
+    found.places = listed.is_some().then_some(places.how);
     for folder in [Folder::Sent, Folder::Archive, Folder::Junk, Folder::Drafts] {
         let Some(name) = places.name(&folder) else {
             continue;
@@ -1478,6 +1510,7 @@ async fn refresh_archived<C: Connect>(
             uids: listed,
         }),
         present: vec![],
+        places: None,
     })
 }
 
@@ -1675,6 +1708,8 @@ struct Places {
     /// holds the inbox, Sent and Drafts: only what [`GMAIL_ARCHIVED`] finds
     /// in it is archived.
     all_mail: bool,
+    /// How each was found.
+    how: Placed,
 }
 
 impl Places {
@@ -1734,29 +1769,38 @@ fn places_in(listed: &[async_imap::types::Name]) -> Places {
         .filter(|n| selectable(n) && !n.name().eq_ignore_ascii_case("INBOX"))
         .collect();
     let mut taken: Vec<String> = Vec::new();
-    let mut pick = |attr: A, fallback: &[&str]| -> Option<String> {
+    let mut pick = |attr: A, fallback: &[&'static str]| -> Option<(String, FoundBy)> {
         let by_attr = usable
             .iter()
-            .find(|n| n.attributes().contains(&attr) && !taken.iter().any(|t| t == n.name()));
+            .find(|n| n.attributes().contains(&attr) && !taken.iter().any(|t| t == n.name()))
+            .map(|n| (n, FoundBy::Attribute));
         let by_name = || {
             fallback.iter().find_map(|want| {
-                usable.iter().find(|n| {
-                    n.name().eq_ignore_ascii_case(want) && !taken.iter().any(|t| t == n.name())
-                })
+                usable
+                    .iter()
+                    .find(|n| {
+                        n.name().eq_ignore_ascii_case(want) && !taken.iter().any(|t| t == n.name())
+                    })
+                    .map(|n| (n, FoundBy::Name(want)))
             })
         };
-        let found = by_attr.or_else(by_name)?.name().to_string();
+        let (found, how) = by_attr.or_else(by_name)?;
+        let found = found.name().to_string();
         taken.push(found.clone());
-        Some(found)
+        Some((found, how))
     };
-    let sent = pick(A::Sent, SENT_NAMES);
-    let junk = pick(A::Junk, JUNK_NAMES);
-    let drafts = pick(A::Drafts, DRAFTS_NAMES);
-    let (archive, all_mail) = match pick(A::Archive, ARCHIVE_NAMES) {
-        Some(archive) => (Some(archive), false),
+    let split = |p: Option<(String, FoundBy)>| match p {
+        Some((name, how)) => (Some(name), Some(how)),
+        None => (None, None),
+    };
+    let (sent, sent_how) = split(pick(A::Sent, SENT_NAMES));
+    let (junk, junk_how) = split(pick(A::Junk, JUNK_NAMES));
+    let (drafts, drafts_how) = split(pick(A::Drafts, DRAFTS_NAMES));
+    let (archive, all_mail, archive_how) = match pick(A::Archive, ARCHIVE_NAMES) {
+        Some((archive, how)) => (Some(archive), false, Some(how)),
         None => match pick(A::All, &[]) {
-            Some(all) => (Some(all), true),
-            None => (None, false),
+            Some((all, _)) => (Some(all), true, Some(FoundBy::AllMail)),
+            None => (None, false, None),
         },
     };
     Places {
@@ -1765,6 +1809,12 @@ fn places_in(listed: &[async_imap::types::Name]) -> Places {
         junk,
         drafts,
         all_mail,
+        how: Placed {
+            sent: sent_how,
+            archive: archive_how,
+            junk: junk_how,
+            drafts: drafts_how,
+        },
     }
 }
 
@@ -6760,6 +6810,12 @@ mod tests {
                     junk: Some("Junk Email".into()),
                     drafts: None,
                     all_mail: false,
+                    how: Placed {
+                        sent: Some(FoundBy::Attribute),
+                        archive: Some(FoundBy::Attribute),
+                        junk: Some(FoundBy::Attribute),
+                        drafts: None,
+                    },
                 }
             );
             // Gmail's All Mail is every message, inbox and Sent included:
@@ -6773,6 +6829,12 @@ mod tests {
                     junk: Some("[Gmail]/Spam".into()),
                     drafts: None,
                     all_mail: true,
+                    how: Placed {
+                        sent: Some(FoundBy::Attribute),
+                        archive: Some(FoundBy::AllMail),
+                        junk: Some(FoundBy::Attribute),
+                        drafts: None,
+                    },
                 }
             );
             let (mut s, _) = scripted_folders(NAMES_ONLY, "x").await;
@@ -6784,6 +6846,13 @@ mod tests {
                     junk: Some("INBOX.spam".into()),
                     drafts: None,
                     all_mail: false,
+                    // RATA's own spelling of the name, never the server's.
+                    how: Placed {
+                        sent: Some(FoundBy::Name("INBOX.Sent")),
+                        archive: Some(FoundBy::Name("INBOX.Archive")),
+                        junk: Some(FoundBy::Name("INBOX.Spam")),
+                        drafts: None,
+                    },
                 }
             );
         });
@@ -7319,6 +7388,16 @@ mod tests {
             assert_eq!((inbox.uidvalidity, inbox.uids), (7, vec![1, 2, 3]));
             assert!(listed_in(&found, &Folder::Archive).is_none());
             assert!(found.archived.is_some());
+            // And diagnostics hears how each special folder was found.
+            assert_eq!(
+                found.places,
+                Some(Placed {
+                    sent: Some(FoundBy::Attribute),
+                    archive: Some(FoundBy::AllMail),
+                    junk: Some(FoundBy::Attribute),
+                    drafts: None,
+                })
+            );
         });
     }
 

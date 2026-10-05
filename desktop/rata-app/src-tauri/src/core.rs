@@ -23,7 +23,7 @@ use rata_mail::{
 use rata_mail::{SEARCH_LIMIT, search_folder, search_query};
 use serde::Serialize;
 
-use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Noted, Trouble};
+use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Noted, Op, Trouble};
 use crate::licence::{self, Licence, Plan, Reason};
 use crate::oauth::{self, Ended, Microsoft, TokenError};
 use crate::store::{Auth, Mailbox, Store, now};
@@ -1223,6 +1223,20 @@ impl Rata {
         uidvalidity: u32,
         limit: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let r = self
+            .older_now(email, folder, before_uid, uidvalidity, limit)
+            .await;
+        self.kept(email, Op::Older, "", r)
+    }
+
+    async fn older_now(
+        &self,
+        email: &str,
+        folder: Folder,
+        before_uid: u32,
+        uidvalidity: u32,
+        limit: u32,
+    ) -> Result<Vec<Message>, Problem> {
         let m = self.usable(email)?;
         // Capped here as well as in the interface: a page is a page, and a
         // runaway request must not try to pull a whole mailbox at once.
@@ -1248,6 +1262,11 @@ impl Rata {
     /// The customer's own folders in one mailbox, for picking one to read or
     /// to move mail to.
     pub async fn folders(&self, email: &str) -> Result<Vec<OwnFolder>, Problem> {
+        let r = self.folders_now(email).await;
+        self.kept(email, Op::Folders, "list", r)
+    }
+
+    async fn folders_now(&self, email: &str) -> Result<Vec<OwnFolder>, Problem> {
         let m = self.usable(email)?;
         let problem = |kind: &str, error: String| Problem {
             email: m.email.clone(),
@@ -1279,6 +1298,16 @@ impl Rata {
         folder: Folder,
         limit: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let r = self.folder_mail_now(email, folder, limit).await;
+        self.kept(email, Op::Folders, "read a folder", r)
+    }
+
+    async fn folder_mail_now(
+        &self,
+        email: &str,
+        folder: Folder,
+        limit: u32,
+    ) -> Result<Vec<Message>, Problem> {
         let m = self.usable(email)?;
         let found = self
             .signed(&m, |acct| {
@@ -1292,6 +1321,17 @@ impl Rata {
     /// Particular messages again, by UID — mail stored before RATA could
     /// decode message bodies. Refused on the same terms as older mail.
     pub async fn reread(
+        &self,
+        email: &str,
+        folder: Folder,
+        uids: &[u32],
+        uidvalidity: u32,
+    ) -> Result<Vec<Message>, Problem> {
+        let r = self.reread_now(email, folder, uids, uidvalidity).await;
+        self.kept(email, Op::Older, "re-read", r)
+    }
+
+    async fn reread_now(
         &self,
         email: &str,
         folder: Folder,
@@ -1317,6 +1357,16 @@ impl Rata {
     /// The page asks for the inbox only in this version; the engine refuses
     /// the customer's own folders and Gmail's archive.
     pub async fn search(
+        &self,
+        email: &str,
+        folder: Folder,
+        query: &str,
+    ) -> Result<ServerFound, Problem> {
+        let r = self.search_now(email, folder, query).await;
+        self.kept(email, Op::Search, "", r)
+    }
+
+    async fn search_now(
         &self,
         email: &str,
         folder: Folder,
@@ -1381,6 +1431,17 @@ impl Rata {
         uid: u32,
         uidvalidity: u32,
     ) -> Result<Opened, Problem> {
+        let r = self.open_message_now(email, folder, uid, uidvalidity).await;
+        self.kept(email, Op::Open, "open in full", r)
+    }
+
+    async fn open_message_now(
+        &self,
+        email: &str,
+        folder: Folder,
+        uid: u32,
+        uidvalidity: u32,
+    ) -> Result<Opened, Problem> {
         let raw = self.whole(email, folder, uid, uidvalidity).await?;
         let b = body::read_whole(&raw);
         let remote_images = b.html.as_ref().is_some_and(|h| h.remote_images);
@@ -1406,8 +1467,12 @@ impl Rata {
         confirmed: bool,
         dir: &Path,
     ) -> Result<Saved, Problem> {
-        let (info, bytes) = self.attachment_of(email, &at).await?;
-        save_fetched(email, &info, &bytes, confirmed, dir)
+        let r = async {
+            let (info, bytes) = self.attachment_of(email, &at).await?;
+            save_fetched(email, &info, &bytes, confirmed, dir)
+        }
+        .await;
+        self.kept(email, Op::Open, "save attachment", r)
     }
 
     /// One attachment's bytes, for the interface to convert (the Format
@@ -1420,8 +1485,12 @@ impl Rata {
         at: AttachmentAt,
         confirmed: bool,
     ) -> Result<Handed, Problem> {
-        let (info, bytes) = self.attachment_of(email, &at).await?;
-        hand_fetched(email, info, bytes, confirmed)
+        let r = async {
+            let (info, bytes) = self.attachment_of(email, &at).await?;
+            hand_fetched(email, info, bytes, confirmed)
+        }
+        .await;
+        self.kept(email, Op::Open, "convert attachment", r)
     }
 
     /// The pictures among one message's attachments, for the page to show in
@@ -1451,7 +1520,8 @@ impl Rata {
             self.usable(email)?;
             return Ok(Vec::new());
         }
-        let raw = self.whole(email, folder, uid, uidvalidity).await?;
+        let raw = self.whole(email, folder, uid, uidvalidity).await;
+        let raw = self.kept(email, Op::Open, "pictures", raw)?;
         Ok(pictures_fetched(&raw, indexes))
     }
 
@@ -1831,6 +1901,33 @@ impl Rata {
         prior: Option<DraftRef>,
     ) -> Result<Drafted, Problem> {
         let email = draft.from.trim().to_ascii_lowercase();
+        let r = self.save_draft_now(draft, draft_id, rev, prior).await;
+        // A mailbox with no Drafts folder keeps drafts here: not an error to
+        // the page, but what a report about drafts needs to know.
+        if let Ok(Drafted::NoPlace { error }) = &r {
+            self.note_failed(
+                &email,
+                Op::Draft,
+                "",
+                &Problem {
+                    email: email.clone(),
+                    kind: "no-place".into(),
+                    error: error.clone(),
+                },
+            );
+            return r;
+        }
+        self.kept(&email, Op::Draft, "", r)
+    }
+
+    async fn save_draft_now(
+        &self,
+        draft: Draft,
+        draft_id: &str,
+        rev: u32,
+        prior: Option<DraftRef>,
+    ) -> Result<Drafted, Problem> {
+        let email = draft.from.trim().to_ascii_lowercase();
         let problem = |kind: &str, error: String| Problem {
             email: email.clone(),
             kind: kind.into(),
@@ -1984,20 +2081,52 @@ impl Rata {
             })
             .await
             .map_err(|p| {
+                self.note_failed(email, Op::Watch, "connect", &p);
                 if p.kind == "net" || p.kind == "oauth" {
                     Unwatched::Failed(p.error)
                 } else {
                     Unwatched::NotNow
                 }
             })?;
+        let failed = |kind: &str, why: &str| {
+            self.note_failed(
+                email,
+                Op::Watch,
+                "connect",
+                &Problem {
+                    email: email.to_string(),
+                    kind: kind.into(),
+                    error: why.to_string(),
+                },
+            );
+        };
         match watched {
-            Ok(w) => Ok(w),
-            Err(Watched::Unsupported) => Err(Unwatched::Unsupported),
-            Err(Watched::Auth(_)) => {
+            Ok(w) => {
+                self.note(email, |n| {
+                    n.no_idle = false;
+                    n.worked(Op::Watch, "connect", now());
+                });
+                Ok(w)
+            }
+            Err(Watched::Unsupported) => {
+                self.note(email, |n| n.no_idle = true);
+                Err(Unwatched::Unsupported)
+            }
+            Err(Watched::Auth(why)) => {
+                failed("auth", &why);
                 self.note_auth_failure(email);
                 Err(Unwatched::NotNow)
             }
-            Err(Watched::Host(why) | Watched::Net(why) | Watched::OAuth(why)) => {
+            Err(Watched::Host(why)) => {
+                failed("host", &why);
+                Err(Unwatched::Failed(why))
+            }
+            Err(Watched::Net(why)) => {
+                failed("net", &why);
+                Err(Unwatched::Failed(why))
+            }
+            Err(Watched::OAuth(why)) => {
+                failed("oauth", &why);
                 Err(Unwatched::Failed(why))
             }
             Err(Watched::Arrived | Watched::Quiet) => Err(Unwatched::Failed(String::new())),
@@ -2020,6 +2149,74 @@ impl Rata {
             said: said.to_string(),
         };
         self.note(email, |n| n.last_error = Some(trouble));
+    }
+
+    /// Keep, for Copy diagnostics, how one operation on a mailbox went
+    /// (J1), and hand its answer back unchanged.
+    fn kept<T>(
+        &self,
+        email: &str,
+        op: Op,
+        doing: &'static str,
+        r: Result<T, Problem>,
+    ) -> Result<T, Problem> {
+        match &r {
+            Ok(_) => self.note(email, |n| n.worked(op, doing, now())),
+            Err(p) => self.note_failed(email, op, doing, p),
+        }
+        r
+    }
+
+    /// Keep an operation's failure as its latest — unless nothing was
+    /// tried: no licence, a mailbox RATA does not have, a program's name the
+    /// customer has yet to answer about, or a mailbox already parked (the
+    /// block says so on its own line, and the refusal that parked it was
+    /// kept when it happened).
+    fn note_failed(&self, email: &str, op: Op, doing: &'static str, p: &Problem) {
+        if matches!(
+            p.kind.as_str(),
+            "unlicensed" | "unknown" | "needs-confirmation"
+        ) {
+            return;
+        }
+        let parked_already = self
+            .store
+            .lock()
+            .ok()
+            .and_then(|s| s.find(email).cloned())
+            .is_some_and(|m| m.auth_failed_at.is_some() && parked(&m).error == p.error);
+        if parked_already {
+            return;
+        }
+        let trouble = Trouble {
+            at: now(),
+            doing,
+            kind: p.kind.clone(),
+            said: p.error.clone(),
+        };
+        self.note(email, |n| n.failed(op, trouble));
+    }
+
+    /// The watching connection of `email` ended with `how`: kept as the
+    /// watch's latest failure. Called by `watch::watch_one`.
+    pub fn watch_ended(&self, email: &str, how: &Watched) {
+        let (kind, why) = match how {
+            Watched::Auth(why) => ("auth", why.as_str()),
+            Watched::OAuth(why) => ("oauth", why.as_str()),
+            Watched::Host(why) => ("host", why.as_str()),
+            Watched::Net(why) => ("net", why.as_str()),
+            Watched::Unsupported | Watched::Arrived | Watched::Quiet => return,
+        };
+        self.note_failed(
+            email,
+            Op::Watch,
+            "connection lost",
+            &Problem {
+                email: email.to_string(),
+                kind: kind.into(),
+                error: why.to_string(),
+            },
+        );
     }
 
     /// Settings → Copy diagnostics: one plain-text block for a bug report,
@@ -2059,7 +2256,7 @@ impl Rata {
                     .get(&m.email.to_ascii_lowercase())
                     .cloned()
                     .unwrap_or_default();
-                let secrets = if noted.last_error.is_some() {
+                let secrets = if noted.has_errors() {
                     self.secrets_of(&m)
                 } else {
                     Vec::new()
@@ -2140,6 +2337,35 @@ impl Rata {
         uidvalidity: u32,
         action: Action,
     ) -> Changed {
+        let doing = action_word(&action);
+        let c = self
+            .change_now(email, folder, uids, uidvalidity, action)
+            .await;
+        if c.ok {
+            self.note(email, |n| n.worked(Op::Action, doing, now()));
+        } else {
+            self.note_failed(
+                email,
+                Op::Action,
+                doing,
+                &Problem {
+                    email: email.to_string(),
+                    kind: c.kind.clone().unwrap_or_default(),
+                    error: c.error.clone().unwrap_or_default(),
+                },
+            );
+        }
+        c
+    }
+
+    async fn change_now(
+        &self,
+        email: &str,
+        folder: Folder,
+        uids: &[u32],
+        uidvalidity: u32,
+        action: Action,
+    ) -> Changed {
         // Parked after a refused sign-in: sending the same password again to
         // flag a message is exactly the repeated failure that gets an account
         // locked, so it waits for the relink like refresh does (`usable`).
@@ -2188,10 +2414,29 @@ impl Rata {
     }
 }
 
+/// What an action is called in diagnostics: never the folder a message was
+/// moved to, which may be a label the customer named.
+fn action_word(action: &Action) -> &'static str {
+    match action {
+        Action::Read => "mark read",
+        Action::Unread => "mark unread",
+        Action::Star => "star",
+        Action::Unstar => "unstar",
+        Action::Trash => "delete",
+        Action::Archive => "archive",
+        Action::Inbox => "move to inbox",
+        Action::Move(_) => "move to a folder",
+    }
+}
+
 /// The special folders one refresh of `email` shows exist, added to what
 /// is noted: from the mail, the read/starred and the gaps it brought, and
-/// the Drafts and Gmail archive listings.
+/// the Drafts and Gmail archive listings; and how the server's listing
+/// showed each was found, when it was listed.
 fn seen_folders(email: &str, found: &Newest, n: &mut Noted) {
+    if found.places.is_some() {
+        n.places = found.places;
+    }
     let tag = |f: &Folder| match f {
         Folder::Sent => Some("sent"),
         Folder::Junk => Some("junk"),
@@ -5251,5 +5496,237 @@ mod tests {
         ] {
             assert!(block.contains(kept), "{kept:?} not in:\n{block}");
         }
+    }
+
+    /// A mailbox whose keychain entry is gone: every operation fails with
+    /// "missing" before anything is dialled.
+    fn ghost(app: &Rata) {
+        app.remember(Mailbox {
+            email: "ghost@example.com".into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Ghost".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::Password,
+        })
+        .unwrap();
+    }
+
+    /// J1: each operation's latest failure is kept and named in the block,
+    /// one line per kind of operation; nothing is kept where nothing was
+    /// tried (no licence, a mailbox RATA does not have, one already parked).
+    #[test]
+    fn diagnostics_keep_the_latest_failure_of_each_operation() {
+        rt().block_on(async {
+            let app = rata(tmpfile("diag-ops"));
+            ghost(&app);
+            let who = "ghost@example.com";
+            let c = app
+                .change(who, Folder::Inbox, &[1], 7, Action::Archive)
+                .await;
+            assert_eq!(c.kind.as_deref(), Some("missing"), "{c:?}");
+            let c = app
+                .change(
+                    who,
+                    Folder::Inbox,
+                    &[1],
+                    7,
+                    Action::Move(Folder::Named("Therapy notes".into())),
+                )
+                .await;
+            assert!(!c.ok);
+            assert!(app.older(who, Folder::Inbox, 40, 7, 50).await.is_err());
+            assert!(app.open_message(who, Folder::Inbox, 1, 7).await.is_err());
+            assert!(app.search(who, Folder::Inbox, "invoice").await.is_err());
+            assert!(app.folders(who).await.is_err());
+            assert!(
+                app.folder_mail(who, Folder::Named("Therapy notes".into()), 50)
+                    .await
+                    .is_err()
+            );
+            let draft = Draft {
+                from: who.into(),
+                ..draft_to("a@example.org")
+            };
+            assert!(app.save_draft(draft, DRAFT_ID, 1, None).await.is_err());
+            assert!(matches!(app.watch(who).await, Err(Unwatched::NotNow)));
+
+            let block = app.diagnostics(false, &[]);
+            for kept in [
+                "Last failed action (move to a folder): ",
+                "Last failed older mail: ",
+                "Last failed message fetch (open in full): ",
+                "Last failed server search: ",
+                "Last failed draft save: ",
+                "Last failed folders (read a folder): ",
+                "Last failed new-mail watch (connect): ",
+                "(missing): ",
+                "Special folders found: not listed yet since RATA started",
+            ] {
+                assert!(block.contains(kept), "{kept:?} not in:\n{block}");
+            }
+            // One line per kind: the archive's failure gave way to the move's,
+            // and a custom folder's name is never written.
+            for gone in ["(archive)", "Therapy", "Other failures: none", "ghost", "@"] {
+                assert!(!block.contains(gone), "{gone:?} in:\n{block}");
+            }
+            assert_eq!(block.matches("Last failed ").count(), 7, "{block}");
+
+            // Nothing was tried, so nothing is kept.
+            let app = rata(tmpfile("diag-ops-none"));
+            linked(&app, "owner@example.com", "imap.example.com");
+            app.note_auth_failure("owner@example.com");
+            let c = app
+                .change("owner@example.com", Folder::Inbox, &[1], 7, Action::Trash)
+                .await;
+            assert_eq!(c.kind.as_deref(), Some("auth"));
+            assert!(
+                app.older("owner@example.com", Folder::Inbox, 40, 7, 50)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                app.older("nobody@example.com", Folder::Inbox, 40, 7, 50)
+                    .await
+                    .is_err()
+            );
+            let block = app.diagnostics(false, &[]);
+            assert!(!block.contains("Last failed "), "{block}");
+            assert!(
+                block.contains("Other failures: none since RATA started"),
+                "{block}"
+            );
+            let app = unlicensed(tmpfile("diag-ops-unlic"));
+            ghost(&app);
+            assert!(
+                app.search("ghost@example.com", Folder::Inbox, "x")
+                    .await
+                    .is_err()
+            );
+            assert!(
+                app.notes
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .all(|n| n.failed.is_empty())
+            );
+        });
+    }
+
+    /// J1: the new lines go into a public bug report like the old: a
+    /// password a server echoed into an action, older mail, a fetch or the
+    /// watch, in the clear or in base64, never reaches the block, and nor
+    /// does any address. The keychain is read for them even when no refresh
+    /// or send has failed.
+    #[test]
+    fn diagnostics_take_secrets_and_addresses_out_of_every_failure() {
+        let app = rata(tmpfile("diag-ops-secret"));
+        let pass = "Hunter2-Correct-Horse";
+        app.vault.put("owner@example.com", pass).unwrap();
+        app.remember(Mailbox {
+            email: "owner@example.com".into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Example Mail".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::Password,
+        })
+        .unwrap();
+        let b64 = rata_mail::words::base64_encode(pass.as_bytes());
+        let plain =
+            rata_mail::words::base64_encode(format!("\0owner@example.com\0{pass}").as_bytes());
+        let said = |what: &str| {
+            format!(
+                "Owner@Example.com could not {what}: imap.example.com said: LOGIN owner@example.com \"{pass}\" ({b64}) {plain}; ask postmaster@example.com."
+            )
+        };
+        let problem = |what: &str| Problem {
+            email: "owner@example.com".into(),
+            kind: "net".into(),
+            error: said(what),
+        };
+        app.note_failed(
+            "owner@example.com",
+            Op::Action,
+            "archive",
+            &problem("archive"),
+        );
+        app.note_failed("OWNER@example.com", Op::Older, "", &problem("page"));
+        app.note_failed(
+            "owner@example.com",
+            Op::Open,
+            "save attachment",
+            &problem("fetch"),
+        );
+        app.watch_ended("owner@example.com", &Watched::Net(said("wait")));
+        // A watch that ends quietly is not a failure.
+        app.watch_ended("owner@example.com", &Watched::Quiet);
+        app.note("owner@example.com", |n| {
+            n.worked(Op::Older, "", now());
+            n.no_idle = true;
+        });
+        let mut found = Newest {
+            places: Some(rata_mail::Placed {
+                sent: Some(rata_mail::FoundBy::Attribute),
+                archive: Some(rata_mail::FoundBy::Name("Archive")),
+                junk: None,
+                drafts: Some(rata_mail::FoundBy::Attribute),
+            }),
+            ..Newest::default()
+        };
+        app.note("owner@example.com", |n| {
+            seen_folders("owner@example.com", &found, n)
+        });
+        // A refresh that could not list the folders keeps what was known.
+        found.places = None;
+        app.note("owner@example.com", |n| {
+            seen_folders("owner@example.com", &found, n)
+        });
+
+        let block = app.diagnostics(false, &[]);
+        assert!(
+            app.notes.lock().unwrap()["owner@example.com"]
+                .last_error
+                .is_none()
+        );
+        for gone in [
+            pass,
+            b64.as_str(),
+            plain.as_str(),
+            "@",
+            "owner",
+            "Owner",
+            "Hunter2",
+        ] {
+            assert!(!block.contains(gone), "{gone:?} in:\n{block}");
+        }
+        assert!(
+            !block
+                .to_ascii_lowercase()
+                .contains(&b64.to_ascii_lowercase())
+        );
+        for kept in [
+            "Last error: none since RATA started",
+            "Last failed action (archive): ",
+            "(net): Mailbox 1 could not archive: imap.example.com said: LOGIN Mailbox 1",
+            "ask [address].",
+            "Last failed older mail: ",
+            "Mailbox 1 could not page",
+            " — worked again ",
+            "Last failed message fetch (save attachment): ",
+            "Last failed new-mail watch (connection lost): ",
+            "Mailbox 1 could not wait",
+            "Special folders found: Sent: by attribute; Spam: none on this server; Drafts: by attribute; Archive: by name (\"Archive\")",
+            "Live connection (new mail as it arrives): down, the server does not offer IDLE",
+        ] {
+            assert!(block.contains(kept), "{kept:?} not in:\n{block}");
+        }
+        assert_eq!(block.matches(" — worked again ").count(), 1, "{block}");
     }
 }
