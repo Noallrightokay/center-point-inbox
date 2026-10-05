@@ -696,7 +696,8 @@ pub fn read(service: Service, stored: &Path, id: &str) -> Result<Got, Refusal> {
 /// the connected folder. The name is cleaned as every file RATA saves is,
 /// and an existing file is never overwritten (`write_new`: `name (2).pdf`).
 /// A program named to look like a document needs `confirmed`, as an
-/// attachment saved to Downloads does.
+/// attachment saved to Downloads does. A name in `avoid` (a file Create
+/// file made, `Rata::created_paths`) is never taken, even when free.
 ///
 /// The file is marked as a download, like everything `write_new` writes.
 /// The bytes come from the page, and Save to on an attachment makes them a
@@ -712,6 +713,7 @@ pub fn save(
     name: &str,
     bytes: &[u8],
     confirmed: bool,
+    avoid: &[PathBuf],
 ) -> Result<Placed, Refusal> {
     if bytes.len() > SAVE_MAX {
         return Err(Refusal::new(
@@ -737,7 +739,7 @@ pub fn save(
         ));
     }
     let place = shown(service, &parts);
-    let path = write_new(&dir, &clean, bytes).map_err(|e| {
+    let path = write_new(&dir, &clean, bytes, avoid).map_err(|e| {
         Refusal::new(
             service,
             "disk",
@@ -902,11 +904,25 @@ impl Rata {
         confirmed: bool,
     ) -> Result<Placed, Refusal> {
         let (service, root) = self.connected(key)?;
-        save(service, &root, folder, name, bytes, confirmed)
+        save(
+            service,
+            &root,
+            folder,
+            name,
+            bytes,
+            confirmed,
+            &self.created_paths(),
+        )
     }
 }
 
 /// Share to Slack, which needs the owner's Slack app (K3).
+// K3: when Slack sending is built here, escape the posted text first. Slack
+// reads `<!channel>`, `<!here>`, `<@U…>`, `<#C…>` and `<https://x|label>`
+// in a message as live mentions and links, so `&`, `<` and `>` must go as
+// `&amp;`, `&lt;` and `&gt;` (in that order), and bidi controls and
+// zero-width characters must be stripped, so a mail's text cannot ping a
+// whole channel or show one address while linking to another.
 pub fn no_slack() -> Refusal {
     Refusal::new(Service::Slack, "unavailable", NO_SLACK)
 }
@@ -1194,7 +1210,7 @@ mod tests {
             assert_eq!(e.kind, "refused", "list {id:?}");
             let e = read(Service::Adobe, &root, id).unwrap_err();
             assert_eq!(e.kind, "refused", "read {id:?}");
-            let e = save(Service::Adobe, &root, Some(id), "x.txt", b"x", false).unwrap_err();
+            let e = save(Service::Adobe, &root, Some(id), "x.txt", b"x", false, &[]).unwrap_err();
             assert_eq!(e.kind, "refused", "save {id:?}");
             assert!(!e.error.contains(s.shown()), "{}", e.error);
         }
@@ -1269,6 +1285,7 @@ mod tests {
             "dropped.txt",
             b"x",
             false,
+            &[],
         )
         .unwrap_err();
         assert_eq!(e.kind, "refused");
@@ -1301,6 +1318,7 @@ mod tests {
             "b.txt",
             b"b",
             false,
+            &[],
         )
         .unwrap_err();
         assert_eq!(e.kind, "not-found");
@@ -1337,7 +1355,7 @@ mod tests {
         let root = s.dir("root");
         s.dir("root/Taxes");
         let put = |folder: Option<&str>, name: &str, body: &[u8], yes: bool| {
-            save(Service::Apple, &root, folder, name, body, yes)
+            save(Service::Apple, &root, folder, name, body, yes, &[])
         };
         let first = put(Some("Taxes"), "return.pdf", b"one", false).unwrap();
         assert_eq!(first.name, "return.pdf");

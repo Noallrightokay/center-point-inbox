@@ -14,8 +14,9 @@
 //! The connected folders (`cloud`, K5) are the same idea: the page names a
 //! service and an id RATA gave out, and Rust decides the folder and the
 //! name, never leaving the folder the customer connected. Create file
-//! (`created`, K6) too: the page hands over a blank document's bytes and,
-//! later, only the id RATA gave it, and only such a file is ever opened.
+//! (`created`, K6) too: the page names a format, a name and a place, RATA
+//! writes its own blank of that format, and later the page names the file
+//! only by the id RATA gave it; only such a file is ever opened.
 
 use std::sync::Arc;
 
@@ -465,6 +466,7 @@ pub struct Picture {
 #[tauri::command]
 pub fn save_file(
     handle: AppHandle,
+    app: App<'_>,
     name: String,
     data: String,
 ) -> Result<crate::core::Saved, String> {
@@ -472,7 +474,12 @@ pub fn save_file(
     if data.len() > crate::core::SAVE_MAX / 3 * 4 + 4 {
         return Err("That file is too large to save from RATA.".into());
     }
-    crate::core::save_file(&dir, &name, &rata_mail::words::base64(data.as_bytes()))
+    crate::core::save_file(
+        &dir,
+        &name,
+        &rata_mail::words::base64(data.as_bytes()),
+        &app.created_paths(),
+    )
 }
 
 /// A web address from the interface — a link in the text of a message, or
@@ -650,8 +657,8 @@ pub fn slack_share() -> Result<(), Refusal> {
     Err(crate::cloud::no_slack())
 }
 
-// Create file (K6, `created`): a blank document the page builds, saved by
-// Rust into Documents / RATA or a connected folder and opened in the app
+// Create file (K6, `created`): a blank document RATA writes from its own
+// template into Documents / RATA or a connected folder and opens in the app
 // this computer uses for its format. The page names a format, a name, a
 // place and, afterwards, the id RATA gave the file; never a path. These are
 // the only files RATA ever opens, and `created` checks each one again every
@@ -682,8 +689,14 @@ fn documents(handle: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 /// Make a blank file of `format` (docx, xlsx, pptx, md, txt or csv) named
-/// after `name` in `where` (`documents`, `apple` or `adobe`) from the page's
-/// bytes (base64), and open it. A file that would not open is still made.
+/// after `name` in `where` (`documents`, `apple` or `adobe`), and open it. A
+/// file that would not open is still made.
+///
+/// The bytes are RATA's own blank of the format (`created::Format::blank`),
+/// never the page's (SEC-9). A page that still sends `data`, as builds
+/// before SEC-9 did, has it ignored rather than refused: there is no
+/// parameter for it, so it is never decoded or looked at, and Create file
+/// keeps working while the page and Rust change in either order.
 #[tauri::command]
 pub async fn create_file(
     handle: AppHandle,
@@ -691,23 +704,14 @@ pub async fn create_file(
     format: String,
     name: String,
     r#where: String,
-    data: String,
 ) -> Result<Made, FileRefusal> {
-    if data.len() > crate::created::CREATE_MAX / 3 * 4 + 4 {
-        return Err(FileRefusal {
-            kind: "too-large",
-            error: "That file is too large for RATA to make.".into(),
-        });
-    }
     let docs = documents(&handle);
     let rata = app.inner().clone();
     off_window(move || {
-        let bytes = rata_mail::words::base64(data.as_bytes());
         rata.create_file(
             &format,
             &name,
             &r#where,
-            &bytes,
             docs.as_deref(),
             &crate::created::system_open,
         )

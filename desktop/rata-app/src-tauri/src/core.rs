@@ -1567,7 +1567,7 @@ impl Rata {
         let r = async {
             let (info, bytes) = self.attachment_of(email, &at).await?;
             names.push(Name::File(info.name.clone()));
-            save_fetched(email, &info, &bytes, confirmed, dir)
+            save_fetched(email, &info, &bytes, confirmed, dir, &self.created_paths())
         }
         .await;
         self.kept(email, Op::Open, "save attachment", &names, r)
@@ -2785,17 +2785,19 @@ fn consented(
     })
 }
 
-/// A fetched attachment into `dir`, once `consented` allows it.
+/// A fetched attachment into `dir`, once `consented` allows it, never under
+/// a name in `avoid` (`write_unmarked`).
 fn save_fetched(
     email: &str,
     info: &body::Attachment,
     bytes: &[u8],
     confirmed: bool,
     dir: &Path,
+    avoid: &[PathBuf],
 ) -> Result<Saved, Problem> {
     consented(email, info, confirmed, "saves")?;
     let name = safe_file_name(&info.name);
-    let path = write_new(dir, &name, bytes).map_err(|e| Problem {
+    let path = write_new(dir, &name, bytes, avoid).map_err(|e| Problem {
         email: email.to_string(),
         kind: "disk".into(),
         error: format!("{name} could not be saved in {}: {e}", dir.display()),
@@ -2848,13 +2850,15 @@ pub const SAVE_MAX: usize = 100 * 1024 * 1024;
 /// saved into `dir` (the Downloads folder). The webview does not save a
 /// page's downloads on its own, so without this "Convert & download" did
 /// nothing at all in the app. The name is cleaned as an attachment's is and
-/// an existing file is never overwritten; RATA does not open what it saved.
-pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> {
+/// an existing file is never overwritten, nor a name in `avoid` taken (the
+/// files Create file made, `Rata::created_paths`); RATA does not open what
+/// it saved.
+pub fn save_file(dir: &Path, name: &str, bytes: &[u8], avoid: &[PathBuf]) -> Result<Saved, String> {
     if bytes.len() > SAVE_MAX {
         return Err("That file is too large to save from RATA.".into());
     }
     let name = safe_file_name(name);
-    let path = write_new(dir, &name, bytes)
+    let path = write_new(dir, &name, bytes, avoid)
         .map_err(|e| format!("It could not be saved in {} ({e}).", dir.display()))?;
     Ok(Saved {
         name: path
@@ -2870,8 +2874,13 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> 
 /// if that is taken (`write_unmarked`), then mark it as a download
 /// (`mark`). Every file whose bytes could be a stranger's goes this way:
 /// attachments, Format Bridge downloads, saves into a connected folder.
-pub(crate) fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    let path = write_unmarked(dir, name, bytes)?;
+pub(crate) fn write_new(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    avoid: &[PathBuf],
+) -> std::io::Result<PathBuf> {
+    let path = write_unmarked(dir, name, bytes, avoid)?;
     // Tagged as a download, so SmartScreen, Protected View and
     // Gatekeeper look at it. Best effort: never fails the save.
     let _ = crate::mark::from_internet(&path);
@@ -2894,12 +2903,38 @@ thread_local! {
 /// file in Protected View. Created exclusively, so an existing file is
 /// never overwritten, even one that appears between the check and the
 /// write.
-pub(crate) fn write_unmarked(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+///
+/// A name in `avoid` is passed over too, even when no file has it now
+/// (SEC-9): those are the paths of the files Create file made
+/// (`Rata::created_paths`), which RATA opens by their record, so a file
+/// saved under one after the customer deleted RATA's would be opened as
+/// RATA's. Compared without regard to case, as Windows and macOS name
+/// files; on Linux that passes over a few more names than it must.
+pub(crate) fn write_unmarked(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    avoid: &[PathBuf],
+) -> std::io::Result<PathBuf> {
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
     let (stem, ext) = match name.rfind('.') {
         Some(i) if i > 0 => (&name[..i], &name[i..]),
         _ => (name, ""),
+    };
+    // Records hold canonical paths; so the folder is compared as one.
+    let base = if avoid.is_empty() {
+        None
+    } else {
+        Some(dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
+    };
+    let avoided = |candidate: &str| {
+        base.as_ref().is_some_and(|base| {
+            let here = base.join(candidate).to_string_lossy().to_lowercase();
+            avoid
+                .iter()
+                .any(|a| a.to_string_lossy().to_lowercase() == here)
+        })
     };
     for n in 1..1000 {
         let candidate = if n == 1 {
@@ -2907,6 +2942,9 @@ pub(crate) fn write_unmarked(dir: &Path, name: &str, bytes: &[u8]) -> std::io::R
         } else {
             format!("{stem} ({n}){ext}")
         };
+        if avoided(&candidate) {
+            continue;
+        }
         let path = dir.join(&candidate);
         match std::fs::OpenOptions::new()
             .write(true)
@@ -3687,10 +3725,10 @@ mod tests {
     fn a_saved_attachment_never_overwrites_a_file() {
         let dir = std::env::temp_dir().join(format!("rata-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let a = write_new(&dir, "report.pdf", b"one").unwrap();
-        let b = write_new(&dir, "report.pdf", b"two").unwrap();
-        let c = write_new(&dir, "README", b"three").unwrap();
-        let d = write_new(&dir, "README", b"four").unwrap();
+        let a = write_new(&dir, "report.pdf", b"one", &[]).unwrap();
+        let b = write_new(&dir, "report.pdf", b"two", &[]).unwrap();
+        let c = write_new(&dir, "README", b"three", &[]).unwrap();
+        let d = write_new(&dir, "README", b"four", &[]).unwrap();
         assert_eq!(a.file_name().unwrap(), "report.pdf");
         assert_eq!(b.file_name().unwrap(), "report (2).pdf");
         assert_eq!(d.file_name().unwrap(), "README (2)");
@@ -3704,19 +3742,56 @@ mod tests {
     fn a_made_file_is_saved_clean_and_never_over_another() {
         let dir = std::env::temp_dir().join(format!("rata-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let a = save_file(&dir, "report.docx", b"one").unwrap();
-        let b = save_file(&dir, "report.docx", b"two").unwrap();
+        let a = save_file(&dir, "report.docx", b"one", &[]).unwrap();
+        let b = save_file(&dir, "report.docx", b"two", &[]).unwrap();
         assert_eq!(a.name, "report.docx");
         assert_eq!(b.name, "report (2).docx");
         assert_eq!(std::fs::read(&a.path).unwrap(), b"one");
-        let sly = save_file(&dir, "../../.bashrc", b"x").unwrap();
+        let sly = save_file(&dir, "../../.bashrc", b"x", &[]).unwrap();
         assert!(
             std::path::Path::new(&sly.path).starts_with(&dir),
             "{}",
             sly.path
         );
         let big = vec![0u8; SAVE_MAX + 1];
-        assert!(save_file(&dir, "big.bin", &big).is_err());
+        assert!(save_file(&dir, "big.bin", &big, &[]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SEC-9 (F2): a name a file Create file made is recorded under is
+    /// never taken by a save, in any case, even when no file has it now.
+    #[test]
+    fn a_save_never_takes_a_name_a_made_file_is_recorded_under() {
+        let dir = std::env::temp_dir().join(format!("rata-avoid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let held = [dir.join("Plan.docx"), dir.join("Plan (2).docx")];
+        // Each saved and then removed, so a computer that names files
+        // without regard to case sees the same names as Linux.
+        let gone = |p: &str| std::fs::remove_file(p).unwrap();
+        let a = save_file(&dir, "Plan.docx", b"x", &held).unwrap();
+        assert_eq!(a.name, "Plan (3).docx");
+        gone(&a.path);
+        let b = save_file(&dir, "PLAN.docx", b"x", &held).unwrap();
+        assert_eq!(b.name, "PLAN (3).docx");
+        gone(&b.path);
+        let c = save_fetched("a@x", &listed("plan.docx"), b"x", false, &dir, &held).unwrap();
+        assert_eq!(c.name, "plan (3).docx");
+        gone(&c.path);
+        assert!(!held[0].exists() && !held[1].exists());
+        // Reached through a path that is not canonical, still passed over.
+        let d = write_new(&dir.join("."), "Plan.docx", b"x", &held).unwrap();
+        assert_eq!(d.file_name().unwrap(), "Plan (3).docx");
+        // Other names, and every name with nothing held, as before.
+        assert_eq!(
+            save_file(&dir, "Notes.txt", b"x", &held).unwrap().name,
+            "Notes.txt"
+        );
+        assert_eq!(
+            save_file(&dir, "Plan.docx", b"x", &[]).unwrap().name,
+            "Plan.docx"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3746,7 +3821,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let who = "owner@example.com";
 
-        let e = save_fetched(who, &listed("invoice.pdf.exe"), b"MZ..", false, &dir).unwrap_err();
+        let e =
+            save_fetched(who, &listed("invoice.pdf.exe"), b"MZ..", false, &dir, &[]).unwrap_err();
         assert_eq!(e.kind, "needs-confirmation");
         assert!(
             e.error
@@ -3761,17 +3837,18 @@ mod tests {
             disguised: false,
             ..listed("scan.JPG.scr")
         };
-        let e = save_fetched(who, &unflagged, b"MZ..", false, &dir).unwrap_err();
+        let e = save_fetched(who, &unflagged, b"MZ..", false, &dir, &[]).unwrap_err();
         assert_eq!(e.kind, "needs-confirmation");
         assert!(e.error.contains("(.scr)"), "{}", e.error);
 
-        let saved = save_fetched(who, &listed("invoice.pdf.exe"), b"MZ..", true, &dir).unwrap();
+        let saved =
+            save_fetched(who, &listed("invoice.pdf.exe"), b"MZ..", true, &dir, &[]).unwrap();
         assert_eq!(saved.name, "invoice.pdf.exe");
         assert_eq!(std::fs::read(dir.join("invoice.pdf.exe")).unwrap(), b"MZ..");
 
         // Nothing else is asked about: a document, or a program that says so.
         for name in ["invoice.pdf", "setup.exe"] {
-            let saved = save_fetched(who, &listed(name), b"data", false, &dir).unwrap();
+            let saved = save_fetched(who, &listed(name), b"data", false, &dir, &[]).unwrap();
             assert_eq!(saved.name, name);
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -6204,7 +6281,7 @@ mod tests {
         std::fs::write(&dir, b"a file where the folder should be").unwrap();
         let mut names = folder_names(&therapy);
         names.push(Name::File(custody.into()));
-        let r = save_fetched(who, &listed(custody), b"data", false, &dir);
+        let r = save_fetched(who, &listed(custody), b"data", false, &dir, &[]);
         assert!(
             r.as_ref().is_err_and(|e| e.error.contains(custody)),
             "{r:?}"
