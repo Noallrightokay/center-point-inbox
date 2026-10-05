@@ -272,6 +272,21 @@ Don't spend time reporting these; they are known and planned:
     instead of "could not reach mailrata.org", and keeps your licence.
   - **Run briefing** sends each message as a number, never anything made
     from your mailbox's address.
+- **v0.1.46:**
+  - **Copy diagnostics says more:** besides the last failed refresh or send,
+    it now keeps the latest failure of each kind of action (delete,
+    archive, move, older mail, opening, pictures, search, saving a draft,
+    folders, the live new-mail connection), with "worked again" once it
+    does, and how your Sent, Spam, Drafts and Archive folders were found.
+    Paste it into your bug report as before.
+  - **Delete account and Remove** leave nothing behind even when a renewal
+    was still finishing in the background.
+- **v0.1.47:**
+  - **Copy diagnostics never names your folders, files or subjects:** they
+    show as `[folder]`, `[file]` or `[subject]`, however the server spelled
+    them. Read the block before you paste it anyway; it should hold nothing
+    you would not post publicly.
+  - **Delete account** also stops a mailbox you were still adding.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
