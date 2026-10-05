@@ -575,6 +575,53 @@ Marcus` }));
     if (!CONNECTED.slack) throw refuse('slack', 'not-connected', 'Slack is not connected. Connect it in Settings, under Connected accounts.');
   };
 
+  /* Create file (K6), as created.rs answers it: the page names a format, a
+     name and a place, and the app writes the blank file from its own
+     templates. Here the blank is made in this page (the Format Bridge's
+     .docx writer, SheetJS for .xlsx, nothing for text), kept in memory and
+     offered to download, since a browser has no app to open it in. The
+     demo has no blank presentation to hand over, so a .pptx is listed but
+     has no file. Making, opening and sending are Pro, as in the app. One
+     file is there from the start. */
+  const MADE_AT = { documents: 'Documents / RATA', apple: 'iCloud Drive', adobe: 'Creative Cloud Files' };
+  const MADE_FORMATS = ['docx', 'xlsx', 'pptx', 'md', 'txt', 'csv'];
+  const MADE_MIME = { ...MIMES, pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  const NOT_OPENED = 'In the demo the file is offered to download instead of opening in an app.';
+  const NO_DECK = 'The demo cannot make a presentation into a file. In RATA it opens in PowerPoint, Keynote or LibreOffice Impress.';
+  const madeBlank = async (format, stem) => {
+    if (format === 'docx') return blocksToDocx([], stem);
+    if (format === 'xlsx') {
+      const X = await brLib('xlsx', 'XLSX');
+      const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([]), 'Sheet1');
+      return new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: XLSX_MIME });
+    }
+    if (format === 'pptx') return null;
+    return new Blob([format === 'md' ? '# ' + stem + '\n' : ''], { type: MADE_MIME[format] });
+  };
+  const MADE = [{
+    id: '5eed0000000000a1', name: 'Shift swap form.docx', format: 'docx', where: 'documents', modified: Math.floor((now - 2 * DAY) / 1000), size: 9300,
+    make: docx([H('Shift swap form'), P('Emergency Department, Larkspur Valley Health.'), TABLE([['', 'Shift given', 'Shift taken'], ['Name', 'Riley Carter', ''], ['Date', '', ''], ['Hours', '7p to 7a', '']]), P('Both signatures, then to the charge nurse at least 48 hours before the shift.')], 'Shift swap form'),
+  }];
+  const madeRefuse = (kind, error) => ({ kind, error });
+  const madeOf = (id) => {
+    const f = MADE.find((x) => x.id === String(id || ''));
+    if (!f) throw madeRefuse('not-found', 'RATA did not make that file, or no longer remembers it.');
+    return f;
+  };
+  const madeBlob = async (f) => {
+    f.blob = f.blob || await f.make();
+    if (!f.blob) throw madeRefuse('disk', NO_DECK);
+    f.size = f.blob.size; return f.blob;
+  };
+  const madePro = () => { if (PLAN !== 'pro') throw madeRefuse('plan', 'Create file comes with RATA Pro. Upgrade at mailrata.org.'); };
+  const madeName = (typed, format, where) => {
+    const stem = String(typed || '').trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(new RegExp('\\.' + format + '$', 'i'), '').replace(/[. ]+$/, '').slice(0, 120) || 'Untitled';
+    let name = stem + '.' + format, k = 1;
+    while (MADE.some((x) => x.where === where && x.name.toLowerCase() === name.toLowerCase())) { k++; name = stem + ' (' + k + ').' + format; }
+    return name;
+  };
+  const madeListed = (f) => ({ id: f.id, name: f.name, format: f.format, where: MADE_AT[f.where], exists: true, size: f.size, modified: f.modified });
+
   const all = () => MAIL;
   const find = (uid) => MAIL.concat(...Object.values(IN_FOLDER)).find((m) => m.uid === uid);
   let SENT = 0;
@@ -703,6 +750,41 @@ Marcus` }));
         const t = SLACK.find((x) => x.id === args.target);
         if (!t) throw refuse('slack', 'gone', 'That channel or person is no longer in Saltmarsh ED.');
         return { where: (t.kind === 'channel' ? '#' : '') + t.name + ' in Saltmarsh ED (a demo: nothing left this page)' };
+      }
+      case 'create_file': {
+        const format = String(args.format || '').toLowerCase();
+        if (!MADE_FORMATS.includes(format)) throw madeRefuse('format', 'RATA makes Word, Excel, PowerPoint, Markdown, text and CSV files only.');
+        const where = String(args.where || '');
+        if (!MADE_AT[where]) throw madeRefuse('where', 'RATA cannot make a file there.');
+        madePro();
+        if (where !== 'documents' && !CONNECTED[where]) throw madeRefuse('not-connected', PLACE[where] + ' is not connected. Connect it in Settings, under Connected accounts.');
+        const name = madeName(args.name, format, where);
+        const blob = await madeBlank(format, name.replace(/\.[a-z]+$/, ''));
+        const f = { id: Array.from(crypto.getRandomValues(new Uint8Array(8)), (x) => x.toString(16).padStart(2, '0')).join(''), name, format, where,
+          modified: Math.floor(Date.now() / 1000), size: blob ? blob.size : 0, blob, make: async () => blob };
+        MADE.unshift(f);
+        if (blob) hand(name, blob).catch(() => {});
+        return { id: f.id, name, where: MADE_AT[where], opened: false, open_error: blob ? NOT_OPENED : NO_DECK };
+      }
+      case 'open_created': {
+        madePro();
+        const f = madeOf(args.id);
+        hand(f.name, await madeBlob(f)).catch(() => {});
+        throw madeRefuse('open', NOT_OPENED);
+      }
+      case 'created_list':
+        for (const f of MADE) if (!f.blob && f.format !== 'pptx') await madeBlob(f);
+        return MADE.map(madeListed);
+      case 'created_read': {
+        madePro();
+        const f = madeOf(args.id);
+        return { name: f.name, mime: MADE_MIME[f.format], data: await b64(await madeBlob(f)) };
+      }
+      case 'forget_created': {
+        const i = MADE.findIndex((x) => x.id === String(args.id || ''));
+        if (i < 0) return false;
+        MADE.splice(i, 1);
+        return true;
       }
       default: throw 'This demo does not do that (' + cmd + ').';
     }

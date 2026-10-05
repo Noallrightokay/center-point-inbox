@@ -798,6 +798,107 @@
       }
     },
 
+    /* ---- Create file (K6) ----
+
+       A blank document that Rust writes from the fixed templates compiled
+       into the app, saves and opens in the app this computer uses for its
+       format (created.rs). The page sends no bytes: a page that could hand
+       over a file's contents could have a document with an outside template
+       opened (security review F1). Until a build has `created_list`, the
+       GET below answers `available: false` and the page shows nothing of it
+       (the website, and builds before K6). The commands:
+
+       create_file({ format, name, where }) ->
+           { id, name, where, opened, open_error? }
+         format  'docx' | 'xlsx' | 'pptx' | 'md' | 'txt' | 'csv'
+         where   'documents' (Documents / RATA) | 'apple' | 'adobe' (the
+                 folder connected in K5, while it is connected)
+         name    as written, "Plan (2).docx" when the name was taken;
+                 `where` names the place to show ("Documents / RATA",
+                 "iCloud Drive"), never a path. A file that would not open
+                 is still made: opened false, open_error the reason.
+       open_created({ id }) -> { id, name, where }
+       created_list() -> [{ id, name, format, where, size?, modified?,
+           exists }], newest first. `exists` false: no longer where RATA
+         made it (moved, renamed, deleted); then no size or modified
+         (seconds since 1970).
+       created_read({ id }) -> { name, mime, data } (base64, at most 18 MB),
+         the file as it is on disk now: what Send with RATA attaches.
+       forget_created({ id }) -> bool. Forgets RATA's note only; the file
+         stays.
+       Making, opening and reading need a licence whose plan has `connect`
+       (Pro); the page offers them only then, and Rust refuses them
+       otherwise (kind plan). Listing and forgetting work on any plan.
+
+       Every refusal is a rejected { kind, error }; kind is one of format,
+       where, invalid, too-large, disk, not-found, moved, refused, open,
+       forgotten, unlicensed, plan, not-connected, gone. The page shows
+       `error`. Names, places and errors are drawn with textContent only. */
+    async '/api/created'(opts) {
+      const method = (opts?.method || 'GET').toUpperCase();
+      if (method === 'GET') {
+        let list;
+        try {
+          list = await invoke('created_list');
+        } catch {
+          /* No such command in this build: no Create file here. */
+          return { available: false };
+        }
+        if (!Array.isArray(list)) return { available: false };
+        const num = (n) => (n !== null && n !== '' && Number.isFinite(Number(n)) ? Number(n) : null);
+        return {
+          available: true,
+          files: list.filter((x) => x && typeof x === 'object' && x.id != null).map((x) => ({
+            id: String(x.id), name: String(x.name || ''), format: String(x.format || ''), where: String(x.where || ''),
+            exists: x.exists === true, size: x.exists === true ? num(x.size) : null, modified: x.exists === true ? num(x.modified) : null,
+          })),
+        };
+      }
+      const b = body(opts);
+      try {
+        /* Only these three: anything else the page sent (`data`) is
+           dropped here, never passed on. */
+        const r = await invoke('create_file', { format: String(b.format || ''), name: String(b.name || ''), where: String(b.where || '') });
+        return {
+          ok: true, id: String(r.id || ''), name: String(r.name || ''), where: String(r.where || ''), opened: r.opened === true,
+          ...(r.open_error ? { openError: String(r.open_error) } : {}),
+        };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/created/open'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('open_created', { id: String(b.id || '') });
+        return { ok: true, name: String((r && r.name) || ''), where: String((r && r.where) || '') };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    /* Only ever called when a message with the file goes, or Share to
+       Slack sends it: never to fill the composer. */
+    async '/api/created/read'(opts) {
+      const b = body(opts);
+      try {
+        const r = await invoke('created_read', { id: String(b.id || '') });
+        return { ok: true, name: String(r.name || ''), mime: String(r.mime || ''), data: String(r.data || '') };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
+    async '/api/created/forget'(opts) {
+      const b = body(opts);
+      try {
+        return { ok: true, forgotten: (await invoke('forget_created', { id: String(b.id || '') })) === true };
+      } catch (e) {
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind };
+      }
+    },
+
     async '/api/links'() {
       const s = await invoke('licence_status');
       if (!s.licensed) return cannot(s.message);

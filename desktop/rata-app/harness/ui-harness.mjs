@@ -326,6 +326,47 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         }
         throw 'unmocked ' + cmd;
       }
+      /* K6: Create file, as created.rs answers. Without M.made this build
+         has none of these commands. M.made.files are the records, newest
+         first; making, opening and reading need the plan's connect. */
+      case 'create_file': case 'open_created': case 'created_list': case 'created_read': case 'forget_created': {
+        const C = M.made;
+        if (!C) throw 'Command ' + cmd + ' not found';
+        const pro = !M.plan || (M.plan.connect !== undefined ? M.plan.connect : M.plan.key !== 'base');
+        const no = (kind, error) => ({ kind, error });
+        const at = { documents: 'Documents / RATA', apple: 'iCloud Drive', adobe: 'Creative Cloud Files' };
+        const rec = () => C.files.find((f) => f.id === args.id);
+        switch (cmd) {
+          case 'created_list': return C.files.map((f) => ({ id: f.id, name: f.name, format: f.format, where: f.where, exists: f.exists, ...(f.exists ? { size: f.size, modified: f.modified } : {}) }));
+          case 'create_file': {
+            if (!pro) throw no('plan', 'Create file comes with RATA Pro. Upgrade at mailrata.org.');
+            if (!at[args.where]) throw no('where', 'RATA cannot make a file there.');
+            if (args.where !== 'documents' && !(M.conn && M.conn.on[args.where])) throw no('not-connected', 'That folder is not connected.');
+            const name = (String(args.name).trim() || 'Untitled').replace(new RegExp('\\.' + args.format + '$', 'i'), '') + '.' + args.format;
+            const id = (C.seq = (C.seq || 0) + 1).toString(16).padStart(16, '0');
+            C.files.unshift({ id, name, format: args.format, where: at[args.where], exists: true, size: 4000, modified: 1790000000 });
+            return C.openFails ? { id, name, where: at[args.where], opened: false, open_error: 'RATA could not open ' + name + ' (NotFound). It is in ' + at[args.where] + '; open it from there.' }
+              : { id, name, where: at[args.where], opened: true };
+          }
+          case 'open_created': {
+            if (!pro) throw no('plan', 'Create file comes with RATA Pro.');
+            const f = rec(); if (!f) throw no('not-found', 'RATA did not make that file, or no longer remembers it.');
+            if (!f.exists) throw no('moved', f.name + ' is no longer in ' + f.where + '. It may have been moved, renamed or deleted.');
+            return { id: f.id, name: f.name, where: f.where };
+          }
+          case 'created_read': {
+            if (!pro) throw no('plan', 'Create file comes with RATA Pro.');
+            const f = rec(); if (!f) throw no('not-found', 'RATA did not make that file, or no longer remembers it.');
+            if (C.readFails || !f.exists) throw no('moved', f.name + ' is no longer in ' + f.where + '. It may have been moved, renamed or deleted.');
+            C.reads = (C.reads || 0) + 1;
+            return { name: f.name, mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: btoa('PK as on disk, read ' + C.reads) };
+          }
+          case 'forget_created': {
+            const n = C.files.length; C.files = C.files.filter((f) => f.id !== args.id); return C.files.length < n;
+          }
+        }
+        throw 'unmocked ' + cmd;
+      }
       case 'change_messages':
         /* What the mailbox answers, when a check says (BUG-M). */
         if (M.change) return M.change(args);
@@ -3983,6 +4024,255 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
   await pg.waitForTimeout(150);
   const gone = await pg.evaluate(() => ({ src: !document.querySelector('#cloud-src').hidden, mode: document.querySelector('#view-docs').classList.contains('cloud-mode'), br: !document.querySelector('#br-cloud').hidden, save: document.querySelectorAll('#doc-grid [data-saveto]').length }));
   check(!gone.src && !gone.mode && !gone.br && !gone.save, `with no cloud connected, Files is this computer's again and nothing offers Save to: ${JSON.stringify(gone)}`);
+  await pg.close();
+  await ctx.close();
+}
+
+console.log('\n— Create file: blank files the app makes and opens, Created by you, and Start in your browser (K6) —');
+{
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  const axe = async (pg, where) => {
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  const calls = (pg, name) => pg.evaluate((n) => __mock.calls.filter(([c]) => c === n).map(([, a]) => a), name);
+  const order = (pg) => pg.evaluate(() => __mock.calls.map(([c]) => c));
+  const EVIL = '<img src=x onerror=window.__pwned=1>';
+  const MADE = () => ({ files: [
+    { id: '00000000000000a1', name: 'Shift swap form.docx', format: 'docx', where: 'Documents / RATA', exists: true, size: 9300, modified: 1790000000 },
+    { id: '00000000000000b2', name: EVIL + '.md', format: 'md', where: 'iCloud Drive', exists: false },
+  ] });
+  const CONN = () => ({
+    on: { apple: true, slack: true },
+    services: [
+      { service: 'apple', label: 'iCloud Drive', kind: 'folder', account: 'iCloud Drive on this computer' },
+      { service: 'adobe', label: 'Creative Cloud Files', kind: 'folder', account: 'Creative Cloud Files on this computer' },
+      { service: 'slack', label: 'Slack', kind: 'share', account: 'Riley in Saltmarsh ED' },
+    ],
+    tree: {}, files: {}, targets: [{ id: 'C1', name: 'ed-staff', kind: 'channel' }], saved: [], shared: [], finish: null,
+  });
+  const LAUNCHED = ['https://docs.new', 'https://sheets.new', 'https://slides.new', 'https://forms.new', 'https://drive.google.com',
+    'https://word.cloud.microsoft/', 'https://excel.cloud.microsoft/', 'https://powerpoint.cloud.microsoft/', 'https://onenote.cloud.microsoft/', 'https://onedrive.live.com',
+    'https://acrobat.adobe.com/', 'https://www.adobe.com/acrobat/online/sign-pdf.html', 'https://www.adobe.com/acrobat/online/convert-pdf.html', 'https://new.express.adobe.com/',
+    'https://www.icloud.com/pages/', 'https://www.icloud.com/numbers/', 'https://www.icloud.com/keynote/',
+    'https://app.slack.com/client',
+    'https://app.docusign.com', 'https://www.adobe.com/sign.html', 'https://www.rabbitsign.com/dashboard'];
+
+  /* A build without created_list: no Create file, no Created by you. Start
+     in your browser is there whatever the build. */
+  {
+    const pg = await open(true);
+    await pg.evaluate(async () => { go('docs'); await loadCreated(); });
+    const b = await pg.evaluate(() => ({ btn: !document.querySelector('#create-btn').hidden, sec: !document.querySelector('#created-sec').hidden,
+      tiles: document.querySelectorAll('#launch-groups .launch-tile').length }));
+    const asked = (await calls(pg, 'created_list')).length;
+    check(asked > 0 && !b.btn && !b.sec && b.tiles === LAUNCHED.length, `a build without created_list shows no Create file, though it was asked (${asked}x), and still the browser apps: ${JSON.stringify(b)}`);
+    await pg.close();
+  }
+
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx });
+  const popups = [];
+  ctx.on('page', (p) => popups.push(p.url()));
+  await pg.evaluate(async ({ made, conn }) => {
+    __mock.made = made; __mock.conn = conn;
+    window.__pwned = undefined;
+    go('docs'); await loadConnections(); await loadCreated();
+  }, { made: MADE(), conn: CONN() });
+
+  /* Start in your browser: every group, every tile through open_link with
+     exactly its address, nothing opened in a window of the app's own. */
+  const launch = await pg.evaluate(() => ({
+    groups: [...document.querySelectorAll('#launch-groups .launch-group h3')].map((h) => h.textContent),
+    hrefs: [...document.querySelectorAll('#launch-groups .launch-tile')].map((a) => a.getAttribute('href')),
+    safe: [...document.querySelectorAll('#launch-groups .launch-tile')].every((a) => a.target === '_blank' && a.rel === 'noopener noreferrer'),
+    names: [...document.querySelectorAll('#launch-groups .launch-name')].map((n) => n.textContent),
+    expanded: document.querySelector('#launch-toggle').getAttribute('aria-expanded'),
+  }));
+  check(launch.groups.join() === 'Google,Microsoft,Adobe,Apple,Slack,Signing', `Start in your browser has each group: ${launch.groups.join()}`);
+  check(JSON.stringify(launch.hrefs) === JSON.stringify(LAUNCHED) && launch.safe, `each tile is a link to its vendor's own address, to a new tab on the website: ${launch.hrefs.length} tiles`);
+  check(launch.names.includes('RabbitSign') && launch.names.includes('Slack') && launch.expanded === 'true', `Slack and RabbitSign are among them, and the section is open: ${launch.names.filter((n) => /Slack|Rabbit/.test(n)).join(' | ')}`);
+  await pg.focus('#launch-toggle');
+  await pg.keyboard.press('Tab');
+  const first = await pg.evaluate(() => document.activeElement.getAttribute('href'));
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => (__mock.opened || []).length === 1);
+  check(first === 'https://docs.new' && (await pg.evaluate(() => __mock.opened[0])) === 'https://docs.new', `the first tile is reached by Tab and Enter opens it through open_link: ${first}`);
+  await pg.evaluate(() => { __mock.opened = []; document.querySelectorAll('#launch-groups .launch-tile').forEach((a) => a.click()); });
+  await pg.waitForFunction((n) => (__mock.opened || []).length === n, LAUNCHED.length);
+  await pg.waitForTimeout(200);
+  const opened = await pg.evaluate(() => __mock.opened);
+  check(JSON.stringify(opened) === JSON.stringify(LAUNCHED) && popups.length === 0, `every tile goes to open_link with exactly its address, and no window opens in the app (${popups.length})`);
+  await pg.click('#launch-toggle');
+  const shut = await pg.evaluate(() => ({ exp: document.querySelector('#launch-toggle').getAttribute('aria-expanded'), hidden: document.querySelector('#launch-groups').hidden, kept: localStorage.getItem('rata_launch_open') }));
+  await pg.click('#launch-toggle');
+  check(shut.exp === 'false' && shut.hidden && shut.kept === '0' && await pg.evaluate(() => !document.querySelector('#launch-groups').hidden), `Hide folds the apps away and Show brings them back, remembered here: ${JSON.stringify(shut)}`);
+
+  /* Created by you. */
+  let list = await pg.evaluate(() => [...document.querySelectorAll('#created-list .created-item')].map((li) => ({
+    name: li.querySelector('.cloud-name').textContent, meta: li.querySelector('.cloud-meta').textContent,
+    acts: [...li.querySelectorAll('button')].map((b) => b.dataset.act).join() })));
+  check(list.length === 2 && list[0].name === 'Shift swap form.docx' && /^Documents \/ RATA · /.test(list[0].meta) && list[0].acts === 'open,send,slack,forget',
+    `a file made here lists where it is and Open, Send with RATA, Share to Slack and Forget: ${JSON.stringify(list[0])}`);
+  check(list[1].meta === 'Moved or deleted from iCloud Drive' && list[1].acts === 'forget' && list[1].name === EVIL + '.md'
+    && await pg.evaluate(() => !document.querySelector('#created-list img') && window.__pwned === undefined),
+  `a file no longer there says so and offers only Forget, its name drawn as text: ${JSON.stringify(list[1])}`);
+  await pg.click('#created-list [data-created="00000000000000a1"] [data-act="open"]');
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'open_created'));
+  check((await calls(pg, 'open_created'))[0].id === '00000000000000a1' && /Shift swap form\.docx opens in your computer's app/.test((await toasts(pg)).join('|')), 'Open asks the app to open that file, by its id');
+
+  /* The dialog, by keyboard. */
+  await pg.focus('#create-btn');
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#create-ov.open');
+  let dlg = await pg.evaluate(() => ({
+    focus: document.activeElement.name + ':' + document.activeElement.value,
+    kinds: [...document.querySelectorAll('#create-formats label')].map((l) => l.textContent),
+    where: [...document.querySelectorAll('#create-where input')].map((i) => i.value + ':' + i.checked),
+    note: document.querySelector('#create-where-note').hidden ? '' : document.querySelector('#create-where-note').textContent,
+    name: document.querySelector('#create-name').value, plan: document.querySelector('#create-plan').hidden,
+  }));
+  check(dlg.focus === 'create-kind:docx' && dlg.kinds.length === 6 && /^Word document \(\.docx\)Opens in Word, Pages or LibreOffice Writer$/.test(dlg.kinds[0])
+    && /^PowerPoint presentation \(\.pptx\)/.test(dlg.kinds[2]) && /^CSV table \(\.csv\)/.test(dlg.kinds[5]) && dlg.name === 'Untitled' && dlg.plan,
+  `Create file opens with Word chosen and focused, six kinds named with their apps, and Untitled: ${JSON.stringify(dlg.kinds.map((k) => k.slice(0, 26)))}`);
+  check(dlg.where.join() === 'documents:true,apple:false' && /Connect iCloud Drive or Creative Cloud Files in Settings/.test(dlg.note),
+    `where: Documents, and iCloud Drive because it is connected (not Creative Cloud Files, which is not): ${JSON.stringify(dlg)}`);
+  await pg.keyboard.press('ArrowDown');
+  const arrow = await pg.evaluate(() => document.activeElement.value + ':' + document.activeElement.checked + ':' + CREATE_KIND);
+  check(arrow === 'xlsx:true:xlsx', `the arrow keys move through the kinds: ${arrow}`);
+  await pg.focus('#create-go');
+  await pg.keyboard.press('Tab');
+  await pg.keyboard.press('Tab');
+  check(await pg.evaluate(() => document.querySelector('#create-ov').contains(document.activeElement)), 'Tab stays inside the dialog');
+  await axe(pg, 'the Create file dialog');
+  await pg.keyboard.press('Escape');
+  dlg = await pg.evaluate(() => ({ open: document.querySelector('#create-ov').classList.contains('open'), focus: document.activeElement.id }));
+  check(!dlg.open && dlg.focus === 'create-btn' && (await calls(pg, 'create_file')).length === 0, `Escape cancels, makes nothing, and gives the focus back: ${JSON.stringify(dlg)}`);
+
+  /* Each kind: the app is asked for a format, a name and a place, never bytes. */
+  for (const [kind, where] of [['docx', 'apple'], ['xlsx', 'documents'], ['pptx', 'documents'], ['txt', 'documents'], ['md', 'documents'], ['csv', 'documents']]) {
+    await pg.click('#create-btn');
+    await pg.waitForSelector('#create-ov.open');
+    await pg.check(`#create-formats input[value="${kind}"]`);
+    await pg.check(`#create-where input[value="${where}"]`);
+    await pg.fill('#create-name', 'Plan ' + kind);
+    await pg.click('#create-go');
+    await pg.waitForFunction(() => !document.querySelector('#create-ov').classList.contains('open'));
+  }
+  const made = await calls(pg, 'create_file');
+  check(made.length === 6 && made.every((a) => Object.keys(a).sort().join() === 'format,name,where') && made.map((a) => a.format + '>' + a.where).join() === 'docx>apple,xlsx>documents,pptx>documents,txt>documents,md>documents,csv>documents',
+    `each kind asks the app for exactly its format, name and place, and sends no file: ${JSON.stringify(made.map((a) => a.format + '>' + a.where + ':' + a.name))}`);
+  let t = (await toasts(pg)).join('|');
+  check(t.includes("Created Plan docx.docx in iCloud Drive. It opens in your computer's app.") && t.includes('Created Plan csv.csv in Documents / RATA.'), `the toast says where it was made, and that it opens: ${t.slice(0, 120)}`);
+  list = await pg.evaluate(() => [...document.querySelectorAll('#created-list .cloud-name')].map((n) => n.textContent));
+  check(list[0] === 'Plan csv.csv' && list.length === 8, `the list shows it at once, newest first: ${list.slice(0, 3).join(', ')}`);
+  await pg.evaluate(() => { __mock.made.openFails = true; });
+  await pg.click('#create-btn');
+  await pg.waitForSelector('#create-ov.open');
+  await pg.click('#create-go');
+  await pg.waitForFunction(() => window.__toasts.some((x) => /could not be opened/.test(x)));
+  t = (await toasts(pg)).join('|');
+  check(/Created Untitled\.csv in Documents \/ RATA, but it could not be opened: RATA could not open Untitled\.csv \(NotFound\)\. It is in Documents \/ RATA; open it from there\./.test(t),
+    `a file made but not opened says so, with the app's reason: ${t}`);
+  await pg.evaluate(() => { __mock.made.openFails = false; });
+  /* A refusal stays in the dialog. */
+  await pg.evaluate(() => { __mock.conn.on = { slack: true }; });
+  await pg.click('#create-btn');
+  await pg.waitForSelector('#create-ov.open');
+  await pg.evaluate(() => { const i = document.querySelector('#create-where input'); i.value = 'apple'; i.checked = true; });
+  await pg.click('#create-go');
+  await pg.waitForFunction(() => document.querySelector('#create-err').textContent);
+  const refused = await pg.evaluate(() => ({ err: document.querySelector('#create-err').textContent, open: document.querySelector('#create-ov').classList.contains('open') }));
+  check(refused.open && refused.err === 'Not created: That folder is not connected.', `the app's refusal is shown in the dialog, which stays open: ${JSON.stringify(refused)}`);
+  await pg.evaluate(() => { __mock.conn.on = { apple: true, slack: true }; });
+  /* Start in your browser from the dialog. */
+  await pg.click('#create-web');
+  dlg = await pg.evaluate(() => ({ open: document.querySelector('#create-ov').classList.contains('open'), focus: document.activeElement.getAttribute('href') }));
+  check(!dlg.open && dlg.focus === 'https://docs.new', `Start in your browser closes the dialog and puts the keyboard on the first app: ${JSON.stringify(dlg)}`);
+  check(await pg.evaluate(() => !/[–—]/.test(document.querySelector('#create-ov').textContent + document.querySelector('#created-sec').textContent + document.querySelector('#launch-sec').textContent)),
+    'no em or en dash in the dialog, Created by you or Start in your browser');
+  await axe(pg, 'Files with Created by you and Start in your browser');
+
+  /* Send with RATA: attached by reference, read when it goes, through Undo. */
+  await pg.evaluate(() => { S.settings.undoSend = 5; window.__RATA_SEND_SECOND = 400; });
+  const sent0 = (await calls(pg, 'send_mail')).length;
+  await pg.click('#created-list [data-created="00000000000000a1"] [data-act="send"]');
+  await pg.waitForSelector('#compose-ov.open');
+  let cmp = await pg.evaluate(() => ({ files: [...document.querySelectorAll('#cmp-files .cmp-file')].map((f) => f.textContent), subj: document.querySelector('#cmp-subj').value, focus: document.activeElement.id }));
+  check(cmp.files.length === 1 && /^Shift swap form\.docx/.test(cmp.files[0]) && cmp.subj === 'Shift swap form' && cmp.focus === 'cmp-to' && (await calls(pg, 'created_read')).length === 0,
+    `Send with RATA opens the composer with the file attached by name, nothing read yet: ${JSON.stringify(cmp)}`);
+  await pg.fill('#cmp-to', 'ann@example.org');
+  await pg.click('#cmp-send');
+  await pg.waitForSelector('#send-toast.show #st-undo:not([hidden])');
+  const rec = await pg.evaluate(() => obRead()[0]);
+  check(rec && rec.files.length === 1 && rec.files[0].created === '00000000000000a1' && (!rec.data || rec.data[0] == null) && (await calls(pg, 'created_read')).length === 0,
+    `while it counts, the outbox keeps the file by its id and no bytes, and nothing has been read: ${JSON.stringify(rec && rec.files)}`);
+  await pg.click('#st-undo');
+  await pg.waitForSelector('#compose-ov.open');
+  cmp = await pg.evaluate(() => ({ files: [...document.querySelectorAll('#cmp-files .cmp-file')].map((f) => f.textContent), to: document.querySelector('#cmp-to').value, ref: CMP_FILES[0] && CMP_FILES[0].created }));
+  check(cmp.files.length === 1 && cmp.to === 'ann@example.org' && cmp.ref === '00000000000000a1' && (await calls(pg, 'created_read')).length === 0, `Undo brings the draft back with the file still attached by reference: ${JSON.stringify(cmp)}`);
+  await pg.evaluate(() => { window.__RATA_SEND_SECOND = 40; });
+  await pg.click('#cmp-send');
+  await pg.waitForFunction((n) => __mock.calls.filter(([c]) => c === 'send_mail').length === n + 1, sent0);
+  const seq = await order(pg);
+  const went = (await calls(pg, 'send_mail')).at(-1).draft;
+  const lastSend = seq.lastIndexOf('send_mail'), lastRead = seq.lastIndexOf('created_read');
+  check(lastRead > -1 && lastRead < lastSend && (await calls(pg, 'created_read')).length === 1 && went.attachments.length === 1 && went.attachments[0].name === 'Shift swap form.docx'
+    && atob(went.attachments[0].data) === 'PK as on disk, read 1', `the file is read once, when the message goes, just before it is sent: ${JSON.stringify(went.attachments.map((a) => a.name))}`);
+  /* A file that cannot be read stops the send; the draft stays. */
+  await pg.evaluate(() => { S.settings.undoSend = 0; __mock.made.readFails = true; window.__toasts = []; });
+  await pg.click('#created-list [data-created="00000000000000a1"] [data-act="send"]');
+  await pg.waitForSelector('#compose-ov.open');
+  await pg.fill('#cmp-to', 'bo@example.org');
+  await pg.click('#cmp-send');
+  await pg.waitForFunction(() => window.__toasts.some((x) => /^Not sent/.test(x)));
+  cmp = await pg.evaluate(() => ({ open: document.querySelector('#compose-ov').classList.contains('open'), to: document.querySelector('#cmp-to').value, files: CMP_FILES.length, say: window.__toasts.find((x) => /^Not sent/.test(x)) }));
+  check(cmp.open && cmp.to === 'bo@example.org' && cmp.files === 1 && cmp.say === 'Not sent: Shift swap form.docx is no longer in Documents / RATA. It may have been moved, renamed or deleted.'
+    && (await calls(pg, 'send_mail')).length === sent0 + 1, `a file that cannot be read stops the send with the app's reason, and the draft stays: ${JSON.stringify(cmp)}`);
+  await pg.evaluate(() => { __mock.made.readFails = false; newDraft(); closeCompose(); });
+
+  /* Share to Slack: the file, read when Send is pressed. */
+  await pg.click('#created-list [data-created="00000000000000a1"] [data-act="slack"]');
+  await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+  const sl = await pg.evaluate(() => [...document.querySelectorAll('#slack-filelist label')].map((l) => l.textContent + ':' + l.querySelector('input').checked));
+  const reads = (await calls(pg, 'created_read')).length;
+  await pg.click('#slack-targets input[value="C1"]');
+  await pg.click('#slack-send');
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'slack_share'));
+  const shared = (await calls(pg, 'slack_share'))[0];
+  check(sl.join() === 'Shift swap form.docx:true' && shared.files[0].name === 'Shift swap form.docx' && /^PK as on disk/.test(atob(shared.files[0].data)) && (await calls(pg, 'created_read')).length === reads + 1,
+    `Share to Slack offers the file ticked and reads it when sent: ${JSON.stringify(sl)}`);
+
+  /* Forget. */
+  await pg.click('#created-list [data-created="00000000000000b2"] [data-act="forget"]');
+  await pg.waitForFunction(() => !document.querySelector('#created-list [data-created="00000000000000b2"]'));
+  const fg = await pg.evaluate(() => ({ asked: __mock.calls.filter(([c]) => c === 'forget_created').map(([, a]) => a.id), focus: !!document.activeElement.closest('#created-list') }));
+  check(fg.asked.join() === '00000000000000b2' && fg.focus && (await toasts(pg)).some((x) => x === 'RATA no longer lists ' + EVIL + '.md.'), `Forget asks the app to forget that one, and the focus stays in the list: ${JSON.stringify(fg)}`);
+
+  /* Base: the plan sentence, and only Forget. */
+  await pg.evaluate(async () => {
+    __mock.plan = { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: false };
+    takeStanding(await apiFetch('/api/licence')); await loadConnections(); go('docs'); await loadCreated();
+  });
+  const base = await pg.evaluate(() => ({
+    btn: !document.querySelector('#create-btn').hidden, plan: document.querySelector('#created-plan').hidden ? '' : document.querySelector('#created-plan').textContent,
+    acts: [...document.querySelectorAll('#created-list .created-item')].map((li) => [...li.querySelectorAll('button')].map((b) => b.dataset.act).join()),
+  }));
+  check(base.btn && /comes with RATA Pro, \$23\.99 a month/.test(base.plan) && base.acts.every((a) => a === 'forget'), `on Base, Created by you names the plan and offers only Forget: ${JSON.stringify(base)}`);
+  await pg.click('#create-btn');
+  await pg.waitForSelector('#create-ov.open');
+  dlg = await pg.evaluate(() => ({ plan: document.querySelector('#create-plan').textContent, go: !document.querySelector('#create-go').hidden && document.querySelector('#create-go').getClientRects().length > 0,
+    kinds: document.querySelector('#create-kinds').getClientRects().length, web: document.querySelector('#create-web').getClientRects().length > 0, focus: document.activeElement.id }));
+  check(/^Create file comes with RATA Pro, \$23\.99 a month\. Upgrade in Settings\.$/.test(dlg.plan) && !dlg.go && !dlg.kinds && dlg.web && dlg.focus === 'create-close',
+    `on Base the dialog says which plan has it, offers no Create, and still the browser apps: ${JSON.stringify(dlg)}`);
+  await pg.keyboard.press('Escape');
+  check((await calls(pg, 'create_file')).length === 8, 'and nothing more was made');
   await pg.close();
   await ctx.close();
 }
