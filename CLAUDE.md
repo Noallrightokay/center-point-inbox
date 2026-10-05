@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 305 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 145 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 152 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 | `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (426 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
@@ -363,8 +363,17 @@ the list's lock from emptying the keychain to saving the list, and a
 Microsoft renewal that answers later writes its rotated token, caches its
 access token, or parks the mailbox only if `still_linked` (still listed,
 still OAuth, same `added_at`), so it lands wholly before Unlink or finds
-the mailbox gone or linked again. `forget_everything` bumps a counter
-(`forgotten`) that `Standing` carries as `epoch`; `renew()` passes it to
+the mailbox gone or linked again. `still_linked` is the same `added_at`
+and `auth` as when the renewal began and a Microsoft sign-in still in the
+keychain, which matches `account()` (SEC-8: a list entry an older RATA
+rewrote without `auth` could not renew under 0.1.46), so a late renewal
+never writes over a password relinked meanwhile. Delete account cancels a
+Microsoft sign-in waiting for the browser, and every link is kept through
+`keep_linked`, which under the list's lock re-checks the epoch, the licence
+and the plan's limit (`may_link_in`) before writing the keychain, the list
+and the access token, so a link begun before Delete account keeps nothing
+(SEC-8). `forget_everything` bumps a counter (`forgotten`) as it begins and
+again once the licence is gone, which `Standing` carries as `epoch`; `renew()` passes it to
 `set_licence` as `since`, and one older than the last Delete account is
 refused without writing, so a renewal waiting on mailrata.org cannot store
 the licence again. The licence box sends no `since`. Only after Rust says ok does the page clear IndexedDB,
@@ -1555,7 +1564,19 @@ through `Rata::watch_ended`), each shown as `Last failed <op> (<what>)`. A
 later success of the same operation (for actions, the same action) keeps
 the line and adds "worked again <when>"; a new failure replaces it. Nothing
 is kept for unlicensed, unknown, `needs-confirmation` or an already parked
-mailbox, and the live line says when the server has no IDLE. Every free sentence
+mailbox, and the live line says when the server has no IDLE. **No names
+(SEC-8).** A failure is cleaned as it is kept, so no name is held even in
+memory: `kept`, `note_failed` and `note_error` take the names the operation
+touched (`diagnostics::Name`: a named folder, a Move's destination, an
+attachment's fetched name, a draft's or a sent message's subject and files),
+and `without_names` replaces each with `[folder]`, `[file]` or `[subject]`
+in every spelling a server could echo (raw, decoded and modified UTF-7,
+IMAP-quoted, each level and `A / B`, `safe_file_name`'s form and stem, a cut
+start of 6 or more characters), ignoring case; anything else in quotes
+becomes `[name]`. It removes too much rather than too little. The refresh
+"Last error" cannot name a special folder (a failing one is dropped), and
+the send line leaves out the subject and attachment names.
+`rata_mail::imap::utf7_imap` is public for this. Every free sentence
 goes through `diagnostics::clean`: the mailbox's address becomes `Mailbox
 N`, then `credential::said_within` (600) with that mailbox's secrets, read
 from the keychain only when it has an error to show; any other address
