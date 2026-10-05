@@ -279,8 +279,9 @@ Be realistic about this before promising anything to a customer.
 - Adding a mailbox by address and app password, and telling a wrong
   password (`auth`) from a refused or expired OAuth token (`oauth`) and from
   a server that cannot be reached (`net`)
-- Server discovery: RATA asks the domain's DNS (SRV, then MX, then conventional
-  names), which is what makes `you@yourcompany.com` work when it is really Google
+- Server discovery: RATA asks the domain's DNS (SRV, then MX, then, behind a
+  mail filter or an MX it does not know, the domain's SPF record and
+  autodiscover name, then conventional names), which is what makes `you@yourcompany.com` work when it is really Google
 - New mail within seconds on servers that offer IMAP IDLE (nearly all do),
   and by itself on every server (at start, every five minutes and when you come
   back to the window) from the inbox, Sent, Archive, Spam and Drafts of several

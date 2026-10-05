@@ -705,14 +705,17 @@ fn verified(cand: &Candidate) -> Verify {
 }
 
 /// The one other server a refused password is tried at: Zoho's organisation
-/// host, `imappro.zoho.<region>`, for a company domain whose MX named Zoho
-/// and whose region's `imap.zoho.<region>` refused it. Zoho documents that
-/// host for organisation accounts, and the region is the MX's, so the
-/// password goes nowhere it was not already meant for. Never for a Zoho
-/// address of Zoho's own (the table's, a personal account), a server RATA
-/// guessed or was told, or a token.
+/// host, `imappro.zoho.<region>`, for a company domain whose MX (or, behind
+/// a filter, whose SPF record) named Zoho and whose region's
+/// `imap.zoho.<region>` refused it. Zoho documents that host for
+/// organisation accounts, and the region is the one the domain's DNS
+/// named, so the password goes nowhere it was not already meant for. Never
+/// for a Zoho address of Zoho's own (the table's, a personal account), a
+/// server RATA guessed or was told, or a token.
 fn zoho_second_chance(cand: &Candidate, credential: &Credential) -> Option<Candidate> {
-    if cand.source != Source::Mx || !matches!(credential, Credential::Password(_)) {
+    if !matches!(cand.source, Source::Mx | Source::Spf)
+        || !matches!(credential, Credential::Password(_))
+    {
         return None;
     }
     let host = crate::discover::zoho_pro(&cand.host)?;
@@ -890,7 +893,8 @@ fn typed_host_failed(given: &str, why: Option<&str>) -> String {
 
 /// Whether a candidate's server is one RATA knows — from its own table of
 /// providers, or a provider it recognised in the domain's MX — rather than
-/// one it guessed or was told.
+/// one it guessed or was told. A provider found by SPF or autodiscover
+/// (L1) is not: that is evidence, not the MX's own answer.
 fn known(cand: &Candidate) -> bool {
     matches!(cand.source, Source::Table | Source::Mx)
 }
@@ -5922,7 +5926,17 @@ mod tests {
             source: Source::Mx,
             ..gmail.clone()
         }));
-        for source in [Source::Srv, Source::Guess, Source::Override] {
+        // Nor a provider found only as evidence behind a filter (L1): an
+        // SPF record says who sends, which is not quite who holds the
+        // mailbox, so one that cannot be reached still leaves the box
+        // asking for the server.
+        for source in [
+            Source::Srv,
+            Source::Guess,
+            Source::Override,
+            Source::Spf,
+            Source::Autodiscover,
+        ] {
             assert!(!known(&Candidate {
                 source,
                 ..gmail.clone()
@@ -9040,6 +9054,127 @@ mod tests {
             ["imap.zoho.eu: LOGIN", "imappro.zoho.eu: LOGIN"],
             "{log:?}"
         );
+    }
+
+    /// What discovery hands `verify` for `email` when DNS answers as `dns`
+    /// does: `verify_with` without the network.
+    fn found_by_dns(dns: &crate::resolve::scripted::Dns, email: &str) -> Discovery {
+        rt_act().block_on(crate::resolve::discover_with(dns, email, None))
+    }
+
+    #[test]
+    fn a_microsoft_365_mailbox_found_behind_a_filter_is_never_sent_a_password() {
+        use crate::resolve::scripted::Dns;
+        for dns in [
+            Dns::new()
+                .mx("eu-smtp-inbound-1.mimecast.com")
+                .txt("acme.com", "v=spf1 include:spf.protection.outlook.com -all"),
+            Dns::new()
+                .mx("mx0a-001.pphosted.com")
+                .cname("autodiscover.acme.com", "autodiscover.outlook.com"),
+            Dns::new()
+                .mx("mx01.hornetsecurity.com")
+                .txt("acme.com", "v=spf1 redirect=_spf.acme.com")
+                .txt(
+                    "_spf.acme.com",
+                    "v=spf1 include:spf.protection.outlook.com ~all",
+                ),
+        ] {
+            let found = found_by_dns(&dns, "ann@acme.com");
+            // Every guess answers, so a password sent anywhere would show.
+            let (got, log) = link_against(
+                "ann@acme.com",
+                found,
+                &[
+                    ("imap.acme.com", Some(Answer::Accept)),
+                    ("mail.acme.com", Some(Answer::Accept)),
+                    ("acme.com", Some(Answer::Accept)),
+                ],
+            );
+            match got {
+                Verify::Microsoft(label) => assert_eq!(label, "Microsoft 365"),
+                other => panic!("{:?}: {other:?}", dns.asked()),
+            }
+            // Answered before any socket opened: Microsoft's or the guesses'.
+            assert!(logins(&log).is_empty(), "{log:?}");
+        }
+    }
+
+    #[test]
+    fn a_provider_found_by_spf_is_signed_in_to_like_one_found_by_its_mx() {
+        use crate::resolve::scripted::Dns;
+        // Zoho behind a filter: the region the SPF names, then its
+        // organisation host once when the region refuses the password.
+        let dns = Dns::new()
+            .mx("eu-smtp-inbound-1.mimecast.com")
+            .txt("acme.de", "v=spf1 include:zohomail.eu ~all");
+        let (got, log) = link_against(
+            "ann@acme.de",
+            found_by_dns(&dns, "ann@acme.de"),
+            &[
+                ("imap.zoho.eu", Some(Answer::Refuse)),
+                ("imappro.zoho.eu", Some(Answer::Accept)),
+            ],
+        );
+        match got {
+            Verify::Ok(v) => {
+                assert_eq!(v.host, "imappro.zoho.eu");
+                assert_eq!(v.label, "Zoho Mail");
+                assert_eq!(v.source, Source::Spf);
+                assert_eq!(
+                    v.help.as_deref(),
+                    Some("accounts.zoho.eu → Security → App passwords")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            logins(&log),
+            ["imap.zoho.eu: LOGIN", "imappro.zoho.eu: LOGIN"],
+            "{log:?}"
+        );
+
+        // Google Workspace behind a filter refuses the password: that is
+        // the answer, named for Google, and no guess is sent it.
+        let dns = Dns::new()
+            .mx("eu-smtp-inbound-1.mimecast.com")
+            .txt("acme.com", "v=spf1 include:_spf.google.com ~all");
+        let (got, log) = link_against(
+            "ann@acme.com",
+            found_by_dns(&dns, "ann@acme.com"),
+            &[
+                ("imap.gmail.com", Some(Answer::Refuse)),
+                ("imap.acme.com", Some(Answer::Accept)),
+            ],
+        );
+        match got {
+            Verify::Refused(why) => {
+                assert!(why.starts_with("Google Workspace"), "{why}");
+                assert!(why.contains("myaccount.google.com/apppasswords"), "{why}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(logins(&log), ["imap.gmail.com: LOGIN"], "{log:?}");
+
+        // Google that cannot be reached is not a provider RATA is sure of:
+        // the guesses are tried, then the box asks for the server, naming
+        // the filter as before.
+        let (got, _) = link_against(
+            "ann@acme.com",
+            found_by_dns(&dns, "ann@acme.com"),
+            &[
+                ("imap.gmail.com", None),
+                ("imap.acme.com", None),
+                ("mail.acme.com", None),
+                ("acme.com", None),
+            ],
+        );
+        match got {
+            Verify::NeedsHost(why) => {
+                assert!(why.contains("eu-smtp-inbound-1.mimecast.com"), "{why}")
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
