@@ -309,6 +309,17 @@ Don't spend time reporting these; they are known and planned:
   - **Settings → Connected accounts:** connect your iCloud Drive or Creative
     Cloud Files folder. OneDrive, Google Drive and Share to Slack come in a
     later version.
+- **v0.1.50:**
+  - **Share to Slack (RATA Pro):** on a build where it is switched on,
+    Settings → Connected accounts → Slack → Connect signs in to Slack in your
+    browser, and **Share to Slack** on a message or a file sends it to a
+    channel or a person. RATA only sends what you choose; it never reads your
+    Slack. Where Slack is not switched on yet, nothing about it shows.
+  - **Safer files:** a program named to look like a document (for example
+    `invoice.pdf.exe`) can no longer be added to Files from a connected
+    folder; a message waiting to send when RATA closed, with a file you made
+    attached, comes back to the composer for you to check instead of going
+    by itself.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.
