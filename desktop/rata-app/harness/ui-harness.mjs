@@ -3315,6 +3315,11 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
      printed with where they are. */
   const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
   const axe = async (pg, where) => {
+    /* A toast whose timer runs out while axe reads the page fades in the
+       middle of the scan, and its half-faded text was measured as poor
+       contrast (CI, #142). Hold it as it is during the scan, then let it
+       go as it would have. */
+    const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
     /* Measure the settled screen: wait for every CSS transition and
        animation still running (a theme switch or a resize starts them) to
        finish. Twice on CI a fade in progress was measured as poor contrast
@@ -3327,6 +3332,7 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
       new Promise((r) => setTimeout(r, 2000)),
     ]));
     const r = await new AxeBuilder({ page: pg }).analyze();
+    if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
     const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
     check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
@@ -3655,11 +3661,17 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
 {
   const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
   const axe = async (pg, where) => {
+    /* A toast whose timer runs out while axe reads the page fades in the
+       middle of the scan, and its half-faded text was measured as poor
+       contrast (CI, #142). Hold it as it is during the scan, then let it
+       go as it would have. */
+    const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
     await pg.evaluate(() => Promise.race([
       Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
       new Promise((r) => setTimeout(r, 2000)),
     ]));
     const r = await new AxeBuilder({ page: pg }).analyze();
+    if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
     const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
     check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
@@ -4032,11 +4044,17 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
 {
   const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
   const axe = async (pg, where) => {
+    /* A toast whose timer runs out while axe reads the page fades in the
+       middle of the scan, and its half-faded text was measured as poor
+       contrast (CI, #142). Hold it as it is during the scan, then let it
+       go as it would have. */
+    const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
     await pg.evaluate(() => Promise.race([
       Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
       new Promise((r) => setTimeout(r, 2000)),
     ]));
     const r = await new AxeBuilder({ page: pg }).analyze();
+    if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
     const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
     for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
     check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
