@@ -331,7 +331,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 /* ---------- docs / compliance / conn / settings (carried) ---------- */
 #view-docs{flex-direction:column}
 .doc-toolbar{display:flex;gap:7px;align-items:center;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--hair-2);flex-wrap:wrap}
-.doc-grid{flex:1;overflow-y:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px;align-content:start}
+.doc-grid{padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:14px;align-content:start}
 .doc-grid.listmode{display:block;padding:12px}
 .doc-card{background:var(--card);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:11px;box-shadow:var(--edge);transition:var(--lift)}
 .doc-card:hover{box-shadow:inset 0 0 0 1px var(--faint)}
@@ -354,7 +354,12 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .cloud-src{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .cloud-src[hidden],#br-cloud[hidden]{display:none}
 .cloud-src .cloud-src-lbl{font-size:12.5px;color:var(--faint);margin-right:2px}
-#view-docs.cloud-mode #folder-bar,#view-docs.cloud-mode #doc-grid,#view-docs.cloud-mode #doc-viewtoggle{display:none}
+#view-docs.cloud-mode #folder-bar,#view-docs.cloud-mode #doc-grid,#view-docs.cloud-mode #doc-viewtoggle,#view-docs.cloud-mode #docs-scroll{display:none}
+#create-btn[hidden],#created-sec[hidden]{display:none}
+.docs-scroll{flex:1;min-height:0;overflow-y:auto}
+#created-sec{margin:0 18px 2px}
+.created-title{font-size:13px;font-weight:600;color:var(--slate);margin:0 0 8px}
+.created-item .cloud-meta.gone{color:var(--slate);font-family:var(--sans)}
 #view-docs:not(.cloud-mode) #cloud-pane{display:none}
 #cloud-pane{flex:1;overflow-y:auto;padding:18px 22px 28px}
 .cloud-crumbs ol{display:flex;flex-wrap:wrap;align-items:center;gap:2px;list-style:none;margin:0 0 12px;padding:0;font-size:13.5px}
@@ -677,11 +682,55 @@ button.cv-row:hover{background:var(--fill-2)}
 #slack-text:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
 .slack-err{margin-top:10px;font-size:13px;color:var(--red)}
 .slack-err:empty{display:none}
+#create-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
+#create-ov.open{display:flex}
+#create-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#create-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
+#create-card legend,#create-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
+#create-card fieldset legend{margin-top:0}
+#create-name{width:100%}
+.create-opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px;border-radius:var(--r-sm);box-shadow:var(--edge);padding:4px}
+.create-opt{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:6px;font-size:13.5px;cursor:pointer}
+.create-opt:hover{background:var(--fill-2)}
+.create-opt input{margin-top:3px}
+.create-opt .create-hint{display:block;font-size:12px;color:var(--slate)}
+.create-note{margin:8px 0 0;font-size:12.5px;color:var(--slate)}
+.create-note[hidden]{display:none}
+.create-web{margin-top:16px;padding-top:14px;border-top:1px solid var(--hair-2);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.create-web .create-note{margin:0}
+#create-card [hidden]{display:none}
+.created-plan{margin:0 0 8px}
+/* Start in your browser: doors to other companies' apps. Tiles, not cards,
+   quieter than the files beside them; the colour is each vendor's own, the
+   honest sign that these open somebody else's application. */
+#launch-sec{margin:14px 18px 2px}
+.launch-head{display:flex;align-items:center;gap:10px}
+.launch-head .created-title{margin:0}
+.launch-head .btn{min-height:26px;padding:3px 10px;font-size:12.5px}
+.launch-lead{margin:6px 0 12px;max-width:66ch;font-size:13px;color:var(--slate)}
+#launch-groups{display:flex;flex-direction:column;gap:18px}
+#launch-groups[hidden],.launch-lead[hidden]{display:none}
+.launch-group-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:8px}
+.launch-group-head h3{margin:0;font-size:13.5px;font-weight:600}
+.launch-group-head span:last-child{font-size:12.5px;color:var(--slate)}
+.launch-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;align-self:center}
+.launch-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.launch-tile{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"badge name go" "badge kind go";column-gap:11px;row-gap:1px;align-items:center;
+  padding:10px 12px;border:1px solid var(--hair-2);border-radius:var(--r-sm);background:var(--card);text-decoration:none;color:inherit;transition:var(--lift)}
+.launch-tile:hover{background:var(--fill-2)}
+.launch-tile:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+.launch-badge{grid-area:badge;width:28px;height:28px;display:flex;align-items:center;justify-content:center}
+.launch-badge.letter{border:2px solid;border-radius:6px;font-weight:700;font-size:14px;color:var(--ink)}
+.brand-glyph{display:block}
+.launch-name{grid-area:name;font-weight:600;font-size:13.5px}
+.launch-kind{grid-area:kind;font-size:12px;color:var(--slate)}
+.launch-go{grid-area:go;color:var(--slate);font-size:13px}
+.launch-tile:hover .launch-go{color:var(--tint)}
 /* Save to: the clouds connected, as a small menu by the button pressed. */
 .saveto-menu{position:fixed;z-index:70;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;min-width:190px;animation:pop .16s ease-out}
 .saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
 .saveto-menu button:hover{background:var(--fill-2)}
-@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,.saveto-menu{animation:none}}
+@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu{animation:none}}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -977,6 +1026,7 @@ body.send-counting #toast{bottom:76px}
       </div>
       <div class="doc-toolbar">
         <div class="cloud-src" id="cloud-src" role="group" aria-label="Where your files are" hidden></div>
+        <button class="btn" id="create-btn" aria-haspopup="dialog" hidden>Create file</button>
         <span style="flex:1"></span>
         <button class="btn" id="doc-viewtoggle">List view</button>
       </div>
@@ -999,7 +1049,19 @@ body.send-counting #toast{bottom:76px}
           <div class="br-note" id="br-note"></div>
         </div>
       </div>
-      <div class="doc-grid" id="doc-grid"></div>
+      <div class="docs-scroll" id="docs-scroll">
+        <section id="created-sec" aria-labelledby="created-title" hidden>
+          <h2 class="created-title" id="created-title">Created by you</h2>
+          <p class="create-note created-plan" id="created-plan" hidden></p>
+          <ul class="cloud-list" id="created-list" aria-labelledby="created-title"></ul>
+        </section>
+        <section id="launch-sec" aria-labelledby="launch-title">
+          <div class="launch-head"><h2 class="created-title" id="launch-title">Start in your browser</h2><button class="btn" id="launch-toggle" aria-expanded="true" aria-controls="launch-groups">Hide</button></div>
+          <p class="launch-lead" id="launch-lead">Make something in the app you already use on the web. Each opens in your browser, signed in as you there, and what you make stays with that service until you download it.</p>
+          <div id="launch-groups"></div>
+        </section>
+        <div class="doc-grid" id="doc-grid"></div>
+      </div>
       <section id="cloud-pane" aria-labelledby="cloud-title"><h2 class="vh" id="cloud-title">Files</h2><div id="cloud-body"></div></section>
     </section>
 
@@ -1190,6 +1252,31 @@ body.send-counting #toast{bottom:76px}
     </fieldset>
     <p class="slack-err" id="slack-err" role="alert"></p>
     <div class="link-btns"><button class="btn" id="slack-cancel">Cancel</button><button class="btn primary" id="slack-send">Send</button></div>
+  </div>
+</div>
+
+<div id="create-ov" role="dialog" aria-modal="true" aria-labelledby="create-title" aria-describedby="create-lead">
+  <div id="create-card">
+    <div class="keys-head"><h2 id="create-title">Create file</h2><button class="cmp-close" id="create-close" aria-label="Cancel, making nothing">✕</button></div>
+    <p class="link-lead" id="create-lead">RATA makes a blank file and opens it in the app your computer uses for that kind of file. Send it with RATA from Files when it is ready.</p>
+    <p class="create-note" id="create-plan" hidden></p>
+    <fieldset id="create-kinds">
+      <legend>Kind of file</legend>
+      <div class="create-opts" id="create-formats"></div>
+    </fieldset>
+    <label class="slack-lbl" for="create-name" id="create-name-lbl">Name</label>
+    <input type="text" class="txt" id="create-name" maxlength="120" autocomplete="off" spellcheck="false">
+    <fieldset id="create-places">
+      <legend>Where to keep it</legend>
+      <div class="create-opts" id="create-where"></div>
+      <p class="create-note" id="create-where-note" hidden></p>
+    </fieldset>
+    <p class="slack-err" id="create-err" role="alert"></p>
+    <div class="link-btns"><button class="btn" id="create-cancel">Cancel</button><button class="btn primary" id="create-go">Create</button></div>
+    <div class="create-web">
+      <p class="create-note" id="create-web-lead">Or start in an app you use on the web. A file made there stays with that service until you download it.</p>
+      <button class="btn" id="create-web" aria-describedby="create-web-lead">Start in your browser</button>
+    </div>
   </div>
 </div>
 
@@ -2259,7 +2346,7 @@ const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'s
    Undo toast, say). The disguised-program question's own keys (Escape and
    Enter cancel) are unchanged; the picture and the shortcut sheet keep
    their own return. Topmost first, as their z-index stacks them. */
-const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
 const DLG_FROM=new Map();
 function topDialog(){
   for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
@@ -2315,7 +2402,7 @@ function go(v){
   if(v==='docs')bridgeInit();
   if(v==='people'){renderPeopleFilters();renderPeople()}
   if(v==='inbox')renderSplitLock();
-  if(v==='docs'){renderFolders();renderDocs();renderCloudSource();loadConnections()}
+  if(v==='docs'){renderFolders();renderDocs();renderCloudSource();renderLaunch();loadConnections();loadCreated()}
   if(v==='comp'){renderProfiles();renderRules();renderCompStats();renderChain()}
   if(v==='set'){renderSettings();refreshQuota();loadConnections()}
   if(v==='search')setTimeout(()=>$('#search-input').focus(),50);
@@ -3929,7 +4016,7 @@ function keyTyping(el){
    a disguised program, deleting the account, the licence box, the welcome,
    a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
@@ -4098,7 +4185,7 @@ async function loadConnections(){
    reading pane is drawn again only when what it offers changed. */
 function renderConnections(){
   if(!S)return;
-  renderConnSettings();renderCloudSource();renderBrCloud();
+  renderConnSettings();renderCloudSource();renderBrCloud();renderCreated();
   if(currentView==='docs')renderDocs();
   const seen=cloudTargets().map(c=>c.service).join()+'|'+slackReady();
   if(seen!==CONN_SEEN){
@@ -4512,6 +4599,348 @@ function shareDocToSlack(d){
   const text=d.hasFile?d.name:d.name+'\n\n'+String(d.content||'').slice(0,500);
   openSlack({text,files});
 }
+
+/* ---------------- CREATE FILE (K6) ----------------
+   A blank Word, Excel, PowerPoint, text, Markdown or CSV file that the app
+   writes from its own fixed templates into Documents / RATA or a connected
+   iCloud Drive or Creative Cloud Files folder, and opens there in the app
+   this computer uses for that kind of file (created.rs). The page names
+   only a format, a name and a place: it never hands over bytes. Files lists
+   what was made under Created by you, to open again, Send with RATA
+   (attached by reference and read from disk only when the message goes),
+   Share to Slack or Forget. Only the app answers created_list; until it
+   does (the website, an older build) none of this shows. Making, opening
+   and sending are Pro (the licence's `connect`); Base sees the plan
+   sentence and can still Forget. Every name, place and error comes from
+   the app or the disk and is drawn with textContent. */
+const CREATE_KINDS=[
+  {key:'docx',label:'Word document (.docx)',hint:'Opens in Word, Pages or LibreOffice Writer'},
+  {key:'xlsx',label:'Excel spreadsheet (.xlsx)',hint:'Opens in Excel, Numbers or LibreOffice Calc'},
+  {key:'pptx',label:'PowerPoint presentation (.pptx)',hint:'Opens in PowerPoint, Keynote or LibreOffice Impress'},
+  {key:'txt',label:'Text (.txt)',hint:'Opens in your text editor'},
+  {key:'md',label:'Markdown (.md)',hint:'Opens in your Markdown or text editor'},
+  {key:'csv',label:'CSV table (.csv)',hint:'Opens in Excel, Numbers or a text editor'},
+];
+const CREATE_MIME={docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',md:'text/markdown',txt:'text/plain',csv:'text/csv'};
+let CREATED={available:false,list:[]},CREATE_BUSY=false,CREATE_KIND='docx';
+async function loadCreated(){
+  let r=null;
+  if(window.__RATA_NATIVE__){try{r=await apiFetch('/api/created')}catch(e){r=null}}
+  CREATED=r&&r.available===true&&Array.isArray(r.files)?{available:true,list:r.files}:{available:false,list:[]};
+  renderCreated();
+  return CREATED;
+}
+const createPlan=what=>needPlan('connect',what);
+/* Where a file can be made: Documents, and each connected folder (iCloud
+   Drive, Creative Cloud Files). */
+function createPlaces(){
+  return [{key:'documents',label:'Documents (RATA folder)'},...cloudTargets().filter(c=>c.kind==='folder'&&(c.service==='apple'||c.service==='adobe')).map(c=>({key:c.service,label:c.place}))];
+}
+function renderCreateForm(){
+  const pro=canConnect();
+  ['#create-kinds','#create-name-lbl','#create-name','#create-places','#create-go'].forEach(s=>{$(s).hidden=!pro});
+  const plan=$('#create-plan');plan.hidden=pro;plan.textContent=pro?'':createPlan('Create file');
+  const kinds=$('#create-formats');kinds.replaceChildren();
+  for(const k of CREATE_KINDS){
+    const l=document.createElement('label');l.className='create-opt';
+    const rb=document.createElement('input');rb.type='radio';rb.name='create-kind';rb.value=k.key;rb.checked=k.key===CREATE_KIND;
+    rb.setAttribute('aria-describedby','create-hint-'+k.key);
+    rb.onchange=()=>{if(rb.checked)CREATE_KIND=k.key};
+    const t=document.createElement('span');
+    const n=document.createElement('span');n.textContent=k.label;
+    const h=document.createElement('span');h.className='create-hint';h.id='create-hint-'+k.key;h.textContent=k.hint;
+    t.append(n,h);l.append(rb,t);kinds.append(l);
+  }
+  const places=createPlaces(),where=$('#create-where');where.replaceChildren();
+  places.forEach((p,i)=>{
+    const l=document.createElement('label');l.className='create-opt';
+    const rb=document.createElement('input');rb.type='radio';rb.name='create-where';rb.value=p.key;rb.checked=!i;
+    const n=document.createElement('span');n.textContent=p.label;
+    l.append(rb,n);where.append(l);
+  });
+  /* The cloud folders this build has, while one is not connected yet. */
+  const folders=CONN.available?CONN.list.filter(c=>c.kind==='folder'):[];
+  const note=$('#create-where-note');
+  note.textContent=pro&&folders.length&&places.length-1<folders.length?'Connect iCloud Drive or Creative Cloud Files in Settings, under Connected accounts, to make files there too.':'';
+  note.hidden=!note.textContent;
+}
+function openCreate(){
+  if(!CREATED.available||CREATE_BUSY)return;
+  if($('#create-ov').classList.contains('open'))return;
+  $('#create-name').value='Untitled';$('#create-err').textContent='';
+  $('#create-go').disabled=false;$('#create-go').textContent='Create';
+  renderCreateForm();
+  dlgOpen($('#create-ov'));
+  $('#create-ov').classList.add('open');
+  (canConnect()?$('#create-formats input:checked'):$('#create-close')).focus();
+}
+function closeCreate(){
+  const was=$('#create-ov').classList.contains('open');
+  $('#create-ov').classList.remove('open');
+  if(was)dlgClose($('#create-ov'));
+}
+async function createFile(){
+  if(CREATE_BUSY||!canConnect())return;
+  const err=$('#create-err');err.textContent='';
+  const kind=($('#create-formats input:checked')||{}).value,where=($('#create-where input:checked')||{}).value;
+  if(!kind||!where){err.textContent='Choose a kind of file and where to keep it.';return}
+  const name=$('#create-name').value.trim()||'Untitled';
+  const go=$('#create-go');
+  CREATE_BUSY=true;go.disabled=true;go.textContent='Creating…';
+  let r;try{r=await jsonPost('/api/created',{format:kind,name,where})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  CREATE_BUSY=false;go.disabled=false;go.textContent='Create';
+  if(!r||!r.ok){err.textContent='Not created: '+failWhy(r);return}
+  closeCreate();
+  audit('file.create',r.name+' in '+r.where);
+  toast(r.opened?`Created ${r.name} in ${r.where}. It opens in your computer's app.`:`Created ${r.name} in ${r.where}, but it could not be opened: ${r.openError||'no reason was given.'}`);
+  await loadCreated();
+}
+$('#create-btn').onclick=openCreate;
+$('#create-go').onclick=createFile;
+$('#create-cancel').onclick=closeCreate;
+$('#create-close').onclick=closeCreate;
+$('#create-web').onclick=()=>{closeCreate();showLaunch(true)};
+$('#create-name').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();createFile()}});
+$('#create-ov').addEventListener('click',e=>{if(e.target.id==='create-ov')closeCreate()});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#create-ov').classList.contains('open')){e.preventDefault();e.stopPropagation();closeCreate()}},true);
+/* A file the app may have seen moved while RATA was in the background. */
+addEventListener('focus',()=>{if(currentView==='docs'&&CREATED.available)loadCreated()});
+function renderCreated(){
+  const btn=$('#create-btn'),sec=$('#created-sec'),ul=$('#created-list');if(!btn||!sec||!ul)return;
+  btn.hidden=!CREATED.available;
+  if(!CREATED.available&&$('#create-ov').classList.contains('open'))closeCreate();
+  sec.hidden=!CREATED.available||!CREATED.list.length;
+  const had=document.activeElement&&ul.contains(document.activeElement)?{id:document.activeElement.closest('[data-created]')?.dataset.created,act:document.activeElement.dataset.act}:null;
+  ul.replaceChildren();
+  if(sec.hidden)return;
+  const pro=canConnect(),slack=slackReady();
+  const plan=$('#created-plan');plan.hidden=pro;plan.textContent=pro?'':createPlan('Opening and sending the files you made');
+  for(const f of CREATED.list){
+    const li=document.createElement('li');li.className='cloud-item created-item';li.dataset.created=f.id;
+    const ic=document.createElement('span');ic.className='cloud-ic';ic.setAttribute('aria-hidden','true');ic.textContent=String(f.format||'').toUpperCase()||'FILE';
+    const nm=document.createElement('span');nm.className='cloud-name';nm.textContent=f.name;
+    const meta=document.createElement('span');meta.className='cloud-meta'+(f.exists?'':' gone');
+    meta.textContent=f.exists?[f.where,f.modified?new Date(f.modified*1000).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):'',f.size!=null?fmtSize(f.size):''].filter(Boolean).join(' · ')
+      :'Moved or deleted from '+f.where;
+    const acts=document.createElement('span');acts.className='cloud-acts';
+    const act=(key,label,fn)=>{const b=document.createElement('button');b.className='btn';b.dataset.act=key;b.textContent=label;b.setAttribute('aria-label',label+': '+f.name);b.onclick=()=>fn(f,b);acts.append(b)};
+    if(f.exists&&pro){
+      act('open','Open',openCreated);
+      act('send','Send with RATA',sendCreated);
+      if(slack)act('slack','Share to Slack',shareCreatedToSlack);
+    }
+    act('forget','Forget',forgetCreated);
+    li.append(ic,nm,meta,acts);ul.append(li);
+  }
+  if(had){
+    const row=had.id&&ul.querySelector(`[data-created="${CSS.escape(had.id)}"]`);
+    const b=row&&(row.querySelector(`[data-act="${had.act}"]`)||row.querySelector('button'));
+    if(b)b.focus({preventScroll:true});
+  }
+}
+async function openCreated(f,btn){
+  btn.disabled=true;
+  let r;try{r=await jsonPost('/api/created/open',{id:f.id})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(btn.isConnected)btn.disabled=false;
+  if(!r||!r.ok){toast('Could not open '+f.name+': '+failWhy(r));await loadCreated();return}
+  toast(`${r.name||f.name} opens in your computer's app.`);
+}
+/* What the composer holds for a file made here: its id and name, never its
+   bytes. They are read from disk when the message goes (deliver), so it is
+   sent as it is then, with every edit made in the meantime. */
+const createdRef=f=>({created:String(f.id),name:String(f.name),type:CREATE_MIME[f.format]||'application/octet-stream',size:f.size!=null?Number(f.size):null});
+const isCreatedRef=f=>!!f&&typeof f==='object'&&!(f instanceof Blob)&&typeof f.created==='string';
+async function readCreated(f){
+  let r;try{r=await jsonPost('/api/created/read',{id:f.created})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(!r||!r.ok)throw new Error(failWhy(r));
+  return {name:r.name||f.name,mime:r.mime||f.type||'application/octet-stream',data:r.data};
+}
+function sendCreated(f){
+  newDraft();
+  CMP_FILES=[createdRef(f)];
+  $('#cmp-subj').value=String(f.name).replace(/\.[A-Za-z0-9]{1,5}$/,'');
+  openCompose();
+  liveScan();
+}
+function shareCreatedToSlack(f){
+  const ref=createdRef(f);
+  openSlack({text:f.name,files:[{name:f.name,checked:true,get:async()=>{const g=await readCreated(ref);return {name:g.name,data:g.data}}}]});
+}
+async function forgetCreated(f){
+  let r;try{r=await jsonPost('/api/created/forget',{id:f.id})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  if(!r||!r.ok){toast('Could not forget '+f.name+': '+failWhy(r));return}
+  const i=CREATED.list.findIndex(x=>x.id===f.id);
+  await loadCreated();
+  audit('file.forget',f.name);
+  toast(f.exists?`RATA no longer lists ${f.name}. The file stays in ${f.where}.`:`RATA no longer lists ${f.name}.`);
+  /* The focus goes to the row that took its place, else to Create file. */
+  const rows=[...$('#created-list').querySelectorAll('[data-created]')];
+  const next=rows[Math.min(Math.max(i,0),rows.length-1)];
+  const b=next&&next.querySelector('button');
+  (b||$('#create-btn')).focus({preventScroll:true});
+}
+
+/* ---- Start in your browser ----
+   The apps people already make things in, on the web: each tile opens the
+   real application in the browser, signed in as whoever the customer is
+   there. Nothing is embedded and nothing comes back by itself: a file made
+   there stays with that service until it is downloaded. In the app a tile
+   goes to the browser through open_link (never into this window); on the
+   website it is an ordinary link to a new tab. Restored from 0.1.5 (removed
+   in 0.1.6 with the screens that led nowhere), now inside Files.
+
+   Every address was checked on 5 October 2026 to answer from the vendor's
+   own host (following redirects, signed out):
+   - Google: docs.new, sheets.new, slides.new and forms.new are Google's own
+     shortcuts ("Instantly create new docs, events, spreadsheets and more
+     from your browser", Google Workspace Updates, 29 October 2019,
+     workspaceupdates.googleblog.com/2019/10/google-dot-new.html); each
+     goes to docs.google.com/<kind>/create. drive.google.com is Drive.
+   - Microsoft: office.com/launch/<app> now lands on the Microsoft 365 home,
+     not the app, so the apps are at cloud.microsoft, Microsoft's unified
+     domain for Microsoft 365 ("Unified cloud.microsoft domain for Microsoft
+     365 apps", learn.microsoft.com/en-us/microsoft-365/enterprise/
+     cloud-microsoft-domain, which names Word, Excel, PowerPoint and OneNote
+     as already on it): word., excel., powerpoint. and onenote.cloud.microsoft
+     each answer from their own host.
+     onedrive.live.com is OneDrive (signed out it shows Microsoft's
+     OneDrive page).
+   - Adobe: acrobat.adobe.com answers itself; the Fill & Sign and convert
+     pages and Acrobat Sign's page on adobe.com were read through a fetch,
+     since adobe.com refuses this machine's proxy. sign.adobe.com no longer
+     serves its own certificate, so Acrobat Sign is adobe.com/sign.html.
+     new.express.adobe.com is Adobe Express's new-design page.
+   - Apple: www.icloud.com/pages/, /numbers/ and /keynote/ (an unknown path
+     there is a 404, so these are real).
+   - Slack: app.slack.com/client opens Slack in the browser (an unknown
+     path is a 404).
+   - DocuSign: app.docusign.com goes to apps.docusign.com's sign-in.
+   - RabbitSign: www.rabbitsign.com/dashboard, the address its own site
+     links to for the app, goes to login.rabbitsign.com.
+   The marks are the ones 0.1.5 drew (scripts/brand-icons.mjs, removed with
+   it): Google's from simple-icons (CC0), the others drawn here, since the
+   free sets carry none for Microsoft, Adobe, Apple's apps or DocuSign.
+   Slack and RabbitSign have none either and show their first letter. */
+const BRAND={
+  acrobat:{h:'#EC1C24',t:"Adobe Acrobat",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4.2 14.6c.9 0 1.7-.8 2.5-2.2a18 18 0 0 1 3.3-.9c.9.7 1.7 1.1 2.4 1.1.8 0 1.3-.4 1.3-1 0-.7-.7-1.1-1.9-1.1-.6 0-1.3.1-2.1.2-.8-.8-1.5-1.8-2-2.9.3-1.1.5-2 .5-2.7 0-1-.4-1.6-1.1-1.6s-1.1.6-1.1 1.5c0 .8.3 1.8.8 2.9-.4 1.2-.9 2.4-1.5 3.6-1.5.6-2.4 1.4-2.4 2.2 0 .6.4.9 1.3.9zm.2-1.1c-.3 0-.4-.1-.4-.3 0-.3.5-.8 1.4-1.2-.4.9-.7 1.5-1 1.5zm2.4-2.5c.4-.8.7-1.6 1-2.4.4.7.9 1.4 1.4 2-.8.1-1.6.2-2.4.4zm.9-4.9c0-.4.1-.6.3-.6s.3.2.3.6c0 .4-.1 1-.3 1.6-.2-.6-.3-1.2-.3-1.6zm5 5.5c.5 0 .8.1.8.4 0 .2-.2.3-.5.3-.4 0-.9-.2-1.5-.6.5-.1.9-.1 1.2-.1z'},
+  adobeexpress:{h:'#FF3366',t:"Adobe Express",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm8 4.4-4 9.2h1.9l.8-2h2.6l.8 2H18l-4-9.2h-2zm1 2.6 .9 2.9h-1.8l.9-2.9z'},
+  adobesign:{h:'#EC1C24',t:"Adobe Acrobat Sign",s:'drawn',d:'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2.6 14.9h10.8v1.2H6.6v-1.2zm1.1-2.1 5.9-5.9a.8.8 0 0 1 1.1 0l1.4 1.4a.8.8 0 0 1 0 1.1l-5.9 5.9H7.7v-2.5zm7.5-4.7.9-.9a.5.5 0 0 0 0-.8l-.8-.8a.5.5 0 0 0-.8 0l-.9.9 1.6 1.6z'},
+  docusign:{h:'#FFCC22',t:"DocuSign",s:'drawn',d:'M5 2h9l5 5v15H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm9 1.8V7h3.2L14 3.8zM8.2 10.4h3c2 0 3.4 1.3 3.4 3.3s-1.4 3.3-3.4 3.3h-3v-6.6zm1.7 1.5v3.6h1.2c1 0 1.7-.7 1.7-1.8s-.7-1.8-1.7-1.8H9.9z'},
+  excel:{h:'#217346',t:"Microsoft Excel",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8 9l1.9 3.3L7.8 16h1.9l1.2-2.3 1.2 2.3h2l-2.1-3.7L13.9 9h-1.9l-1.1 2.1L9.9 9H8z'},
+  gdocs:{h:'#4285F4',t:"Google Docs",s:'official',d:'M14.727 6.727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zm-.545 10.455H7.09v-1.364h7.09v1.364zm2.727-3.273H7.091v-1.364h9.818v1.364zm0-3.273H7.091V9.273h9.818v1.363zM14.727 6h6l-6-6v6z'},
+  gdrive:{h:'#4285F4',t:"Google Drive",s:'official',d:'M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z'},
+  gforms:{h:'#7248B9',t:"Google Forms",s:'official',d:'M14.727 6h6l-6-6v6zm0 .727H14V0H4.91c-.905 0-1.637.732-1.637 1.636v20.728c0 .904.732 1.636 1.636 1.636h14.182c.904 0 1.636-.732 1.636-1.636V6.727h-6zM7.91 17.318a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm0-3.273a.819.819 0 1 1 .001-1.637.819.819 0 0 1 0 1.637zm0-3.272a.819.819 0 1 1 .001-1.638.819.819 0 0 1 0 1.638zm9 6.409h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818v-1.364h6.818v1.364zm0-3.273h-6.818V9.273h6.818v1.363z'},
+  gsheets:{h:'#34A853',t:"Google Sheets",s:'official',d:'M11.318 12.545H7.91v-1.909h3.41v1.91zM14.728 0v6h6l-6-6zm1.363 10.636h-3.41v1.91h3.41v-1.91zm0 3.273h-3.41v1.91h3.41v-1.91zM20.727 6.5v15.864c0 .904-.732 1.636-1.636 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.318v6.5h6.5zm-3.273 2.773H6.545v7.909h10.91v-7.91zm-6.136 4.636H7.91v1.91h3.41v-1.91z'},
+  gslides:{h:'#FBBC04',t:"Google Slides",s:'official',d:'M16.09 15.273H7.91v-4.637h8.18v4.637zm1.728-8.523h2.91v15.614c0 .904-.733 1.636-1.637 1.636H4.909a1.636 1.636 0 0 1-1.636-1.636V1.636C3.273.732 4.005 0 4.909 0h9.068v6.75h3.841zm-.363 2.523H6.545v7.363h10.91V9.273zm-2.728-5.979V6h6.001l-6-6v3.294z'},
+  keynote:{h:'#1C9BF0',t:"Keynote",s:'drawn',d:'M4 4h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-6.2l2.4 3.4-1.4 1L12 16.6l-2.8 3.8-1.4-1L10.2 16H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1.8 2.6v6.8h12.4V6.6H5.8z'},
+  numbers:{h:'#31A952',t:"Numbers",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 17V13h1.8v4H7.5zm3.2 0V9.5h1.8V17h-1.8zm3.2 0v-5.6h1.8V17h-1.8z'},
+  onedrive:{h:'#0078D4',t:"Microsoft OneDrive",s:'drawn',d:'M10.2 6.3a5.1 5.1 0 0 1 4.6 2.9 3.9 3.9 0 0 1 .7-.1 3.9 3.9 0 0 1 3.8 3.2 3.2 3.2 0 0 1-.7 6.3H6.1A4.1 4.1 0 0 1 5.4 10a5.1 5.1 0 0 1 4.8-3.7z'},
+  onenote:{h:'#7719AA',t:"Microsoft OneNote",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.4 9v8.6h1.7v-5.4l3.1 5.4h1.8V9h-1.7v5.3L10.2 9H8.4z'},
+  pages:{h:'#F2870D',t:"Pages",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.5 9.5h9V11h-9V9.5zm0 3h9V14h-9v-1.5zm0 3h6V17h-6v-1.5z'},
+  powerpoint:{h:'#D24726',t:"Microsoft PowerPoint",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM8.6 9v8.6h1.8v-2.8h1.4c1.8 0 3-1.1 3-2.9S13.6 9 11.8 9H8.6zm1.8 1.5h1.2c.9 0 1.4.5 1.4 1.4s-.5 1.4-1.4 1.4h-1.2v-2.8z'},
+  word:{h:'#2B579A',t:"Microsoft Word",s:'drawn',d:'M6 2h8l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1.5V6h2.5L14 3.5zM7.4 9l1.1 6.2L9.7 9h1.4l1.2 6.2L13.4 9h1.5l-1.9 8.6h-1.6l-1.2-6-1.2 6H7.4L5.5 9h1.9z'},
+};
+const LAUNCH=[
+  {eco:'Google',accent:'#1a73e8',note:'Opens in your Google account.',apps:[
+    {name:'Docs',kind:'Document',url:'https://docs.new',icon:'gdocs'},
+    {name:'Sheets',kind:'Spreadsheet',url:'https://sheets.new',icon:'gsheets'},
+    {name:'Slides',kind:'Presentation',url:'https://slides.new',icon:'gslides'},
+    {name:'Forms',kind:'Form',url:'https://forms.new',icon:'gforms'},
+    {name:'Drive',kind:'All your files',url:'https://drive.google.com',icon:'gdrive'},
+  ]},
+  {eco:'Microsoft',accent:'#2b579a',note:'Opens in Microsoft 365 on the web.',apps:[
+    {name:'Word',kind:'Document',url:'https://word.cloud.microsoft/',icon:'word'},
+    {name:'Excel',kind:'Spreadsheet',url:'https://excel.cloud.microsoft/',icon:'excel'},
+    {name:'PowerPoint',kind:'Presentation',url:'https://powerpoint.cloud.microsoft/',icon:'powerpoint'},
+    {name:'OneNote',kind:'Notebook',url:'https://onenote.cloud.microsoft/',icon:'onenote'},
+    {name:'OneDrive',kind:'All your files',url:'https://onedrive.live.com',icon:'onedrive'},
+  ]},
+  {eco:'Adobe',accent:'#e34f26',note:'PDFs and design.',apps:[
+    {name:'Acrobat',kind:'Read and edit PDFs',url:'https://acrobat.adobe.com/',icon:'acrobat'},
+    {name:'Fill & Sign',kind:'Sign a PDF',url:'https://www.adobe.com/acrobat/online/sign-pdf.html',icon:'adobesign'},
+    {name:'Convert',kind:'To and from PDF',url:'https://www.adobe.com/acrobat/online/convert-pdf.html',icon:'acrobat'},
+    {name:'Express',kind:'Design',url:'https://new.express.adobe.com/',icon:'adobeexpress'},
+  ]},
+  {eco:'Apple',accent:'#ff9f0a',note:'iCloud on the web, in any browser.',apps:[
+    {name:'Pages',kind:'Document',url:'https://www.icloud.com/pages/',icon:'pages'},
+    {name:'Numbers',kind:'Spreadsheet',url:'https://www.icloud.com/numbers/',icon:'numbers'},
+    {name:'Keynote',kind:'Presentation',url:'https://www.icloud.com/keynote/',icon:'keynote'},
+  ]},
+  {eco:'Slack',accent:'#4a154b',note:'Your workspaces, in the browser.',apps:[
+    {name:'Slack',kind:'Messages and channels',url:'https://app.slack.com/client'},
+  ]},
+  {eco:'Signing',accent:'#6b46c1',note:'Send something out for signature.',apps:[
+    {name:'DocuSign',kind:'Send for signature',url:'https://app.docusign.com',icon:'docusign'},
+    {name:'Acrobat Sign',kind:'Send for signature',url:'https://www.adobe.com/sign.html',icon:'adobesign'},
+    {name:'RabbitSign',kind:'Send for signature',url:'https://www.rabbitsign.com/dashboard'},
+  ]},
+];
+const SVG_NS='http://www.w3.org/2000/svg';
+function brandMark(key,size){
+  const b=BRAND[key];if(!b)return null;
+  const svg=document.createElementNS(SVG_NS,'svg');
+  svg.setAttribute('class','brand-glyph');svg.setAttribute('viewBox','0 0 24 24');
+  svg.setAttribute('width',String(size));svg.setAttribute('height',String(size));
+  svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');svg.setAttribute('fill',b.h);
+  /* The drawn marks cut their detail out of the body (evenodd); the
+     official ones are built for nonzero. */
+  if(b.s==='drawn')svg.setAttribute('fill-rule','evenodd');
+  const p=document.createElementNS(SVG_NS,'path');p.setAttribute('d',b.d);svg.append(p);
+  return svg;
+}
+const LAUNCH_KEY='rata_launch_open';
+function launchOpen(){try{return localStorage.getItem(LAUNCH_KEY)!=='0'}catch(e){return true}}
+function renderLaunch(){
+  const host=$('#launch-groups');if(!host)return;
+  const open=launchOpen();
+  host.hidden=!open;$('#launch-lead').hidden=!open;
+  const t=$('#launch-toggle');t.setAttribute('aria-expanded',String(open));t.textContent=open?'Hide':'Show';
+  if(host.childElementCount)return;
+  LAUNCH.forEach((g,gi)=>{
+    const sec=document.createElement('section');sec.className='launch-group';sec.setAttribute('aria-labelledby','launch-g'+gi);
+    const head=document.createElement('div');head.className='launch-group-head';
+    const dot=document.createElement('span');dot.className='launch-dot';dot.setAttribute('aria-hidden','true');dot.style.background=g.accent;
+    const h=document.createElement('h3');h.id='launch-g'+gi;h.textContent=g.eco;
+    const note=document.createElement('span');note.textContent=g.note;
+    head.append(dot,h,note);
+    const ul=document.createElement('ul');ul.className='launch-grid';
+    for(const a of g.apps){
+      const li=document.createElement('li');
+      const tile=document.createElement('a');tile.className='launch-tile';tile.href=a.url;tile.target='_blank';tile.rel='noopener noreferrer';
+      tile.dataset.launch=g.eco+' · '+a.name;
+      const badge=document.createElement('span');badge.className='launch-badge';badge.setAttribute('aria-hidden','true');
+      const mark=brandMark(a.icon,22);
+      if(mark)badge.append(mark);else{badge.classList.add('letter');badge.style.borderColor=g.accent;badge.textContent=a.name[0]}
+      const nm=document.createElement('span');nm.className='launch-name';nm.textContent=a.name;
+      const kd=document.createElement('span');kd.className='launch-kind';kd.textContent=a.kind;
+      const go=document.createElement('span');go.className='launch-go';go.setAttribute('aria-hidden','true');go.textContent='↗';
+      const vh=document.createElement('span');vh.className='vh';vh.textContent=(g.eco===a.name||g.eco==='Signing'?'':', '+g.eco)+', opens in your browser';
+      tile.append(badge,nm,kd,go,vh);
+      /* In the app, the browser through open_link; on the website, the
+         link itself, to a new tab. */
+      tile.addEventListener('click',e=>{
+        audit('app.open',tile.dataset.launch);
+        if(window.__RATA_NATIVE__){e.preventDefault();openLink(a.url)}
+      });
+      li.append(tile);ul.append(li);
+    }
+    sec.append(head,ul);host.append(sec);
+  });
+}
+/* `focus`: open it and put the keyboard on its first tile (from Create file). */
+function showLaunch(focus){
+  if(focus){try{localStorage.setItem(LAUNCH_KEY,'1')}catch(e){}}
+  renderLaunch();
+  if(focus){
+    const sec=$('#launch-sec');sec.scrollIntoView({behavior:glide(),block:'start'});
+    const f=sec.querySelector('.launch-tile');if(f)f.focus({preventScroll:true});
+  }
+}
+$('#launch-toggle').onclick=()=>{
+  try{localStorage.setItem(LAUNCH_KEY,launchOpen()?'0':'1')}catch(e){}
+  renderLaunch();
+};
 
 /* ---------------- THE FILE LIBRARY ----------------
    A business keeps files by what they are for — this client, that quarter —
@@ -5418,7 +5847,7 @@ function queueDraftSave(why){
 async function saveDraft(d,email,why){
   const srv=d.srv;
   if(srv.discarded||d.edits<=srv.saved||DRAFT_NOPLACE.has(email))return;
-  if(d.files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX)return;
+  if(filesSize(d.files)>ATTACH_MAX)return;
   const recOf=x=>x&&S.messages.find(m=>folderOf(m)==='drafts'&&mailEmailOf(m)===x.email&&m.uid===x.uid&&m.uidvalidity===x.uidvalidity);
   /* RATA's copy in this mailbox is replaced; one in another (From changed)
      is not this mailbox's to remove, so it goes to the Trash after. */
@@ -5428,7 +5857,8 @@ async function saveDraft(d,email,why){
   let r;
   try{
     const attachments=[];
-    for(const f of d.files)attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
+    /* A file made with Create file goes as it is on disk now. */
+    for(const f of d.files)attachments.push(isCreatedRef(f)?await readCreated(f):{name:f.name,mime:f.type||'application/octet-stream',data:await fileBase64(f)});
     r=await apiFetch('/api/mail/draft/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       from:d.acct.label,to:d.to,cc:d.cc,bcc:d.bcc,subject:d.subj,body:d.body,inReplyTo:d.replying,attachments,
       forward:d.fwd?{email:d.fwd.email,folder:d.fwd.folder||'inbox',uid:d.fwd.uid,uidvalidity:d.fwd.uidvalidity,indexes:d.fwd.atts.map(a=>a.i)}:null,
@@ -5535,12 +5965,15 @@ async function forwardMessage(m,targetAcctId){
   $('#cmp-to').focus();
 }
 const ATTACH_MAX=18*1024*1024;
+/* Files picked here, and files made with Create file (K6), whose size is the
+   one last listed: the app checks the real one when it reads them. */
+const filesSize=files=>files.reduce((t,f)=>t+(Number(f.size)||0),0);
 const kb=n=>n<1024?n+' B':n<1048576?Math.round(n/1024)+' KB':(n/1048576).toFixed(1)+' MB';
 function renderCmpFiles(){
   const el=$('#cmp-files');if(!el)return;
-  const total=CMP_FILES.reduce((t,f)=>t+f.size,0);
+  const total=filesSize(CMP_FILES);
   const fwd=CMP_FWD?CMP_FWD.atts:[];
-  el.innerHTML=fwd.map((a,i)=>`<span class="cmp-file" title="From the message being forwarded"><span>↪ ${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><button type="button" data-rmfwd="${i}" aria-label="Remove ${esc(a.n)}">✕</button></span>`).join('')+CMP_FILES.map((f,i)=>`<span class="cmp-file"><span>${esc(f.name)}</span><span class="sz">${kb(f.size)}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
+  el.innerHTML=fwd.map((a,i)=>`<span class="cmp-file" title="From the message being forwarded"><span>↪ ${esc(a.n)}</span><span class="sz">${esc(a.s||'')}</span><button type="button" data-rmfwd="${i}" aria-label="Remove ${esc(a.n)}">✕</button></span>`).join('')+CMP_FILES.map((f,i)=>`<span class="cmp-file"${isCreatedRef(f)?' title="Attached as it is on your computer when the message is sent"':''}><span>${esc(f.name)}</span><span class="sz">${f.size!=null?kb(f.size):''}</span><button type="button" data-rmfile="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
     +(total>ATTACH_MAX?`<span class="cmp-file" style="color:var(--red,#c33)">${kb(total)} in all — over the ${kb(ATTACH_MAX)} most providers accept</span>`:'');
   el.querySelectorAll('[data-rmfile]').forEach(b=>b.onclick=()=>{CMP_FILES.splice(+b.dataset.rmfile,1);draftEdited();renderCmpFiles()});
   el.querySelectorAll('[data-rmfwd]').forEach(b=>b.onclick=()=>{CMP_FWD.atts.splice(+b.dataset.rmfwd,1);draftEdited();renderCmpFiles()});
@@ -5934,10 +6367,12 @@ const draftRef=m=>m?{id:m.id,prov:m.prov,acct:m.acct,mailbox:m.mailbox,uid:m.uid
 function obRecord(it,data){
   const s=it.snap;
   return {id:it.id,at:it.at,state:'waiting',acctId:it.acctId,real:it.real,to:it.to,cc:it.cc,bcc:it.bcc,subj:it.subj,body:it.body,
-    replying:it.replying,fwd:it.fwd,finished:draftRef(it.finished),files:it.files.map(f=>({name:f.name,type:f.type,size:f.size})),data:data||null,
+    replying:it.replying,fwd:it.fwd,finished:draftRef(it.finished),files:it.files.map(f=>isCreatedRef(f)?{created:f.created,name:f.name,type:f.type,size:f.size}:{name:f.name,type:f.type,size:f.size}),data:data||null,
     look:{to:s.to,cc:s.cc,bcc:s.bcc,subj:s.subj,ccOn:s.ccOn,bccOn:s.bccOn,sig:s.sig,draft:s.draft}};
 }
-const readFiles=files=>Promise.all(files.map(f=>fileBase64(f)));
+/* A file made with Create file is not read here: deliver reads it from disk
+   at the moment the message goes, so its place is null. */
+const readFiles=files=>Promise.all(files.map(f=>isCreatedRef(f)?null:fileBase64(f)));
 const b64File=(d,f)=>new File([Uint8Array.from(atob(d),c=>c.charCodeAt(0))],f.name,{type:f.type||''});
 /* The composer, whole, and back again. */
 function snapCompose(){
@@ -6051,14 +6486,16 @@ function outboxResume(){
   let n=0;
   for(const r of obRead()){
     if(!r||!r.id)continue;
-    const whole=!(r.files||[]).length||(Array.isArray(r.data)&&r.data.length===r.files.length);
+    /* Files made with Create file are kept by reference, and need no bytes. */
+    const refs=(r.files||[]).map(f=>f&&typeof f.created==='string'?createdRef({id:f.created,name:f.name,size:f.size,format:cloudExt(f.name)}):null);
+    const whole=refs.every(Boolean)||(Array.isArray(r.data)&&r.data.length===r.files.length);
     let files=[];
-    try{files=whole?(r.files||[]).map((f,i)=>b64File(r.data[i],f)):[]}catch(e){}
+    try{files=whole?(r.files||[]).map((f,i)=>refs[i]||b64File(r.data[i],f)):refs.filter(Boolean)}catch(e){}
     if(r.state!=='waiting'||!whole||files.length!==(r.files||[]).length){
       obDrop(r.id);
       putBack(snapFromRecord(r,files),r.state!=='waiting'
         ?`RATA closed while “${r.subj}” was being sent, so it may have gone. Look in Sent before sending it again.`
-        :`“${r.subj}” was not sent: RATA closed before it went, and its files were too large to keep. Attach ${(r.files||[]).map(f=>f.name).join(', ')} again.`);
+        :`“${r.subj}” was not sent: RATA closed before it went, and its files were too large to keep. Attach ${(r.files||[]).filter((f,i)=>!refs[i]).map(f=>f.name).join(', ')} again.`);
       continue;
     }
     const fin=r.finished?(S.messages.find(m=>m.id===r.finished.id)||r.finished):null;
@@ -6081,7 +6518,16 @@ async function deliver(it,sb){
     if(sb){sb.disabled=true;sb.textContent=files.length?'Attaching…':'Sending…'}
     try{
       const data=await (it.ready||(it.ready=readFiles(files)));
-      const attachments=files.map((f,i)=>({name:f.name,mime:f.type||'application/octet-stream',data:data[i]}));
+      /* A file made with Create file (K6) is read from disk now, as it is
+         at the moment the message goes. One that cannot be read stops the
+         send with the app's reason, and the draft is put back whole. */
+      const attachments=[];
+      for(let i=0;i<files.length;i++){
+        const f=files[i];
+        if(!isCreatedRef(f)){attachments.push({name:f.name,mime:f.type||'application/octet-stream',data:data[i]});continue}
+        try{attachments.push(await readCreated(f))}
+        catch(e){if(sb){sb.disabled=false;sb.textContent='Send'}return {ok:false,error:'Not sent: '+String(e&&e.message||e)}}
+      }
       if(sb)sb.textContent='Sending…';
       /* Handed to the app from here: if RATA closes now, the next start
          cannot tell whether it went, so it never sends it again. */
@@ -6103,7 +6549,7 @@ async function deliver(it,sb){
   const first=fieldAddrs(to)[0]||'';
   const match=S.contacts.find(c=>c.addr&&c.addr.toLowerCase()===first);
   S.messages.push({id:'x'+Date.now(),ch:'email',prov:mAcct?'imap':'local',acct:acct&&realSent?acct.id:undefined,real:realSent,cid:null,toId:match?.id||null,sent:true,toName:to,...(sentId?{messageId:sentId}:{}),...(realSent&&it.replying?{inReplyTo:it.replying}:{}),subj,prev:body.slice(0,90),body,ts:Date.now(),unread:false,starred:false,
-    atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:kb(f.size)}))):[]});
+    atts:realSent?(fwd?fwd.atts.map(a=>({n:a.n,f:a.f,s:a.s})):[]).concat(files.map(f=>({n:f.name,f:((f.name.match(/\.([A-Za-z0-9]{1,5})$/)||[])[1]||'FILE').toUpperCase(),s:f.size!=null?kb(f.size):''}))):[]});
   /* The draft this finished is sent: its copy in Drafts goes to the Trash,
      as every mail app does, rather than waiting there to be sent twice. */
   const finished=realSent&&it.finished&&it.finished.uid?it.finished:null;
@@ -6142,7 +6588,7 @@ $('#cmp-send').onclick=async()=>{
   const acct=S.linked.find(l=>l.id===prov),mAcct=acct&&acct.type==='mail'?acct:null;
   const files=CMP_FILES.slice(),fwd=CMP_FWD&&CMP_FWD.atts.length?CMP_FWD:null;
   if((files.length||fwd)&&!mAcct){toast('Attachments go with real mail — choose a linked mailbox in From');return}
-  if(files.reduce((t,f)=>t+f.size,0)>ATTACH_MAX){toast('Those files are too large to send together — most providers refuse mail over 25 MB. Remove some, or send a link instead.');return}
+  if(filesSize(files)>ATTACH_MAX){toast('Those files are too large to send together — most providers refuse mail over 25 MB. Remove some, or send a link instead.');return}
   if(mAcct&&!/.+@.+\..+/.test(to)){toast('Real send needs a valid email address in To');return}
   /* A save of this draft to Drafts may be on its way (F1). It lands first,
      so the copy that goes to the Trash after is the latest, and no save
