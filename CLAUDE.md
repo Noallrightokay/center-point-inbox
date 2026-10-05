@@ -25,8 +25,8 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 305 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 145 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`). 152 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 813 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 | `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (426 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
@@ -210,7 +210,13 @@ servers, and says the server's own reason when a renewal is refused (I3);
 v0.1.46 leaves nothing behind when a sign-in or licence renewal finishes
 after Unlink or Delete account (SEC-7), and makes Copy diagnostics keep the
 latest failure of every operation and say how each special folder was found
-(J1). An
+(J1);
+v0.1.47 keeps folder, file and subject names out of Copy diagnostics,
+stops a link still in progress when Delete account runs, and lets a
+Microsoft mailbox whose list entry lost `auth` renew again (SEC-8);
+v0.1.48 finds a company mailbox behind a mail filter from its SPF record or
+autodiscover name (L1), and carries K5's folder commands, which no screen
+calls yet. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -363,8 +369,17 @@ the list's lock from emptying the keychain to saving the list, and a
 Microsoft renewal that answers later writes its rotated token, caches its
 access token, or parks the mailbox only if `still_linked` (still listed,
 still OAuth, same `added_at`), so it lands wholly before Unlink or finds
-the mailbox gone or linked again. `forget_everything` bumps a counter
-(`forgotten`) that `Standing` carries as `epoch`; `renew()` passes it to
+the mailbox gone or linked again. `still_linked` is the same `added_at`
+and `auth` as when the renewal began and a Microsoft sign-in still in the
+keychain, which matches `account()` (SEC-8: a list entry an older RATA
+rewrote without `auth` could not renew under 0.1.46), so a late renewal
+never writes over a password relinked meanwhile. Delete account cancels a
+Microsoft sign-in waiting for the browser, and every link is kept through
+`keep_linked`, which under the list's lock re-checks the epoch, the licence
+and the plan's limit (`may_link_in`) before writing the keychain, the list
+and the access token, so a link begun before Delete account keeps nothing
+(SEC-8). `forget_everything` bumps a counter (`forgotten`) as it begins and
+again once the licence is gone, which `Standing` carries as `epoch`; `renew()` passes it to
 `set_licence` as `since`, and one older than the last Delete account is
 refused without writing, so a renewal waiting on mailrata.org cannot store
 the licence again. The licence box sends no `since`. Only after Rust says ok does the page clear IndexedDB,
@@ -1452,9 +1467,26 @@ from `option_env!("RATA_MS_CLIENT_ID")` (not a secret). A build without it,
 and the website, keep C0's words: `MS_HELP`/`MS365_HELP` in the engine and
 `MS_NOT_YET` in the page ("…cannot be added to RATA yet…"). Not seen
 against a real Microsoft sign-in until the owner's registration (C4) and
-B2's Outlook column. Not handled: a Microsoft 365 domain behind a mail
-filter such as Mimecast (typing `outlook.office365.com` works around it),
-shared or delegated mailboxes.
+B2's Outlook column. A Microsoft 365 domain behind a mail filter such as
+Mimecast is found since L1 (below) by its autodiscover CNAME or SPF record;
+still not handled: such a domain that publishes neither, or whose SPF names
+two providers, and shared or delegated mailboxes.
+**Behind a mail filter (L1).** When SRV and the MX rules name no provider
+(the MX is a filter, unknown, or missing), `resolve.rs` reads, by DNS only,
+a CNAME of `autodiscover.<domain>` to `autodiscover.outlook.com` (Microsoft
+365, `Source::Autodiscover`) and the domain's one `v=spf1` record, read
+strictly (RFC 7208; only passing includes; one `redirect=` hop, ignored with
+`all`; macros skipped; more than one record, an unknown term or two
+providers is no evidence), whose includes name Microsoft 365, Google
+Workspace, Zoho by region (`zohomail.`/`zoho.`/`one.zoho.com`), Fastmail,
+Hostinger, iCloud, Titan, Rackspace, Migadu or Namecheap Private Email
+(`Source::Spf`); host, label and help come from that provider's MX rule, so
+Microsoft found this way gets Sign in with Microsoft and `verify` keeps a
+password away from it. At most three lookups. Order: SRV, MX rules,
+evidence, conventional names, except that an unknown MX under the address's
+own domain keeps the conventional names first (an on-premises Exchange that
+sends through Microsoft 365 has that SPF). `zoho_second_chance` covers
+`Source::Spf`. `discover_with<D: Lookup>` takes a scripted DNS in tests.
 **Drafts saved to the server (F1, v0.1.41).** In the app the composer's
 draft is APPENDed to the mailbox's Drafts folder with `\Seen \Draft` set
 (`\Seen` since 0.1.43, BUG-M, so it never comes back unread) when the
@@ -1555,7 +1587,19 @@ through `Rata::watch_ended`), each shown as `Last failed <op> (<what>)`. A
 later success of the same operation (for actions, the same action) keeps
 the line and adds "worked again <when>"; a new failure replaces it. Nothing
 is kept for unlicensed, unknown, `needs-confirmation` or an already parked
-mailbox, and the live line says when the server has no IDLE. Every free sentence
+mailbox, and the live line says when the server has no IDLE. **No names
+(SEC-8).** A failure is cleaned as it is kept, so no name is held even in
+memory: `kept`, `note_failed` and `note_error` take the names the operation
+touched (`diagnostics::Name`: a named folder, a Move's destination, an
+attachment's fetched name, a draft's or a sent message's subject and files),
+and `without_names` replaces each with `[folder]`, `[file]` or `[subject]`
+in every spelling a server could echo (raw, decoded and modified UTF-7,
+IMAP-quoted, each level and `A / B`, `safe_file_name`'s form and stem, a cut
+start of 6 or more characters), ignoring case; anything else in quotes
+becomes `[name]`. It removes too much rather than too little. The refresh
+"Last error" cannot name a special folder (a failing one is dropped), and
+the send line leaves out the subject and attachment names.
+`rata_mail::imap::utf7_imap` is public for this. Every free sentence
 goes through `diagnostics::clean`: the mailbox's address becomes `Mailbox
 N`, then `credential::said_within` (600) with that mailbox's secrets, read
 from the keychain only when it has an error to show; any other address

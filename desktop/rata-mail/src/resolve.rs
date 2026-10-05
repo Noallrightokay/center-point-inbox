@@ -4,17 +4,25 @@
 //! tables and rules in [`crate::discover`] so those stay testable without one.
 //!
 //! Order matters and is deliberate: a domain's own SRV record, then its MX,
-//! then the conventional names. Conventional names go *last* so a stale
-//! `imap.<domain>` left over from an old setup cannot outrank what the MX
-//! actually says today.
+//! then, only when neither named a provider, the evidence a domain leaves
+//! of where its mailboxes are (its SPF record and its `autodiscover` name,
+//! L1), then the conventional names. Conventional names go *last* so a
+//! stale `imap.<domain>` left over from an old setup cannot outrank what
+//! the DNS actually says today.
 
 use std::net::IpAddr;
 
-use hickory_resolver::{Resolver as HickoryResolver, TokioResolver, proto::rr::RData};
+use std::future::Future;
+
+use hickory_resolver::{
+    Resolver as HickoryResolver, TokioResolver,
+    proto::rr::{RData, RecordType},
+};
 
 use crate::discover::{
-    Candidate, IMAP_PORT, MS_SIGN_IN, MxRule, Source, conventional, is_microsoft,
-    is_microsoft_consumer, mx_rule, no_imap, table,
+    Candidate, IMAP_PORT, MS_SIGN_IN, MailHost, MxRule, Source, autodiscover_provider,
+    conventional, is_microsoft, is_microsoft_consumer, mx_rule, no_imap, parse_spf, spf_provider,
+    spf_record, table,
 };
 use crate::guard::{HostVerdict, check_literal, check_resolved, normalise};
 use crate::key::domain_of;
@@ -92,6 +100,63 @@ impl Resolver {
             return None;
         }
         Some((target, first.port))
+    }
+
+    /// TXT records, each one's strings joined as RFC 7208 §3.3 says (a
+    /// long SPF record is published as several strings of at most 255
+    /// bytes). A failed lookup is no records.
+    pub async fn txt(&self, name: &str) -> Vec<String> {
+        match self.inner.txt_lookup(name).await {
+            Ok(r) => r
+                .answers()
+                .iter()
+                .filter_map(|rec| match &rec.data {
+                    RData::TXT(txt) => Some(
+                        txt.txt_data
+                            .iter()
+                            .map(|part| String::from_utf8_lossy(part))
+                            .collect::<String>(),
+                    ),
+                    _ => None,
+                })
+                .collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// Where a name is an alias for, if it is one: the first CNAME answer,
+    /// which is the name's own record. A failed lookup is no alias.
+    pub async fn cname(&self, name: &str) -> Option<String> {
+        let lookup = self.inner.lookup(name, RecordType::CNAME).await.ok()?;
+        lookup.answers().iter().find_map(|rec| match &rec.data {
+            RData::CNAME(c) => Some(c.0.to_utf8().trim_end_matches('.').to_string()),
+            _ => None,
+        })
+    }
+}
+
+/// What discovery asks DNS. The machine's resolver answers in the app, a
+/// script in the tests, so every rule of the order below is tested without
+/// the network. Each answers "nothing" when the lookup fails.
+pub(crate) trait Lookup {
+    fn mx(&self, domain: &str) -> impl Future<Output = Vec<String>> + Send;
+    fn srv_imaps(&self, domain: &str) -> impl Future<Output = Option<(String, u16)>> + Send;
+    fn txt(&self, name: &str) -> impl Future<Output = Vec<String>> + Send;
+    fn cname(&self, name: &str) -> impl Future<Output = Option<String>> + Send;
+}
+
+impl Lookup for Resolver {
+    fn mx(&self, domain: &str) -> impl Future<Output = Vec<String>> + Send {
+        Resolver::mx(self, domain)
+    }
+    fn srv_imaps(&self, domain: &str) -> impl Future<Output = Option<(String, u16)>> + Send {
+        Resolver::srv_imaps(self, domain)
+    }
+    fn txt(&self, name: &str) -> impl Future<Output = Vec<String>> + Send {
+        Resolver::txt(self, name)
+    }
+    fn cname(&self, name: &str) -> impl Future<Output = Option<String>> + Send {
+        Resolver::cname(self, name)
     }
 }
 
@@ -180,6 +245,15 @@ fn tidy_typed_host(raw: &str) -> &str {
 
 /// Everything worth trying for an address, best first.
 pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&str>) -> Discovery {
+    discover_with(resolver, email, host_override).await
+}
+
+/// [`discover`], asking `dns`.
+pub(crate) async fn discover_with<D: Lookup + Sync>(
+    dns: &D,
+    email: &str,
+    host_override: Option<&str>,
+) -> Discovery {
     let domain = domain_of(email);
 
     // A server address the customer typed is honoured or refused out loud —
@@ -240,7 +314,7 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
 
     // A domain at Microsoft 365 is found here like any other: its SRV or MX
     // names Microsoft's host, and `verify` then keeps a password away from it.
-    if let Some((target, port)) = resolver.srv_imaps(&domain).await {
+    if let Some((target, port)) = dns.srv_imaps(&domain).await {
         let microsoft = is_microsoft(&target);
         hosts.push(Candidate {
             host: target,
@@ -255,8 +329,9 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
         });
     }
 
-    for exchange in resolver.mx(&domain).await {
-        match mx_rule(&exchange) {
+    let exchanges = dns.mx(&domain).await;
+    for exchange in &exchanges {
+        match mx_rule(exchange) {
             Some(MxRule::Refuse(why)) => return Discovery::Refuse(why.into()),
             Some(MxRule::Filtered) => {
                 filtered_by.get_or_insert_with(|| exchange.trim_end_matches('.').to_string());
@@ -276,6 +351,31 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
         }
     }
 
+    // Neither the SRV nor the MX named a provider: the MX is a filter, a
+    // name RATA does not know, or missing. What the domain publishes for
+    // its own sending and for Outlook's setup still says where its
+    // mailboxes are, Microsoft 365 or Google Workspace behind a Mimecast
+    // most often.
+    let mut evidence = if hosts.is_empty() {
+        found_elsewhere(dns, &domain).await
+    } else {
+        vec![]
+    };
+    // An unrecognised MX under the domain itself (`mail.acme.com` for
+    // acme.com) is usually the domain's own server, which the conventional
+    // names find, as they did before L1; an on-premises Exchange that
+    // sends through Microsoft 365 has exactly this SPF. So its evidence
+    // goes after them. Behind a filter, or a provider RATA does not know,
+    // the evidence goes first.
+    let own_mx = filtered_by.is_none()
+        && exchanges.iter().any(|mx| {
+            let mx = mx.trim_end_matches('.').to_ascii_lowercase();
+            mx == domain || mx.ends_with(&format!(".{domain}"))
+        });
+    if !own_mx {
+        add_new(&mut hosts, std::mem::take(&mut evidence));
+    }
+
     for guess in conventional(email) {
         if !hosts.iter().any(|c| c.host == guess) {
             hosts.push(Candidate {
@@ -287,8 +387,151 @@ pub async fn discover(resolver: &Resolver, email: &str, host_override: Option<&s
             });
         }
     }
+    add_new(&mut hosts, evidence);
 
     Discovery::Candidates { hosts, filtered_by }
+}
+
+/// Append each candidate whose host is not already listed.
+fn add_new(hosts: &mut Vec<Candidate>, more: Vec<Candidate>) {
+    for c in more {
+        if !hosts.iter().any(|h| h.host == c.host) {
+            hosts.push(c);
+        }
+    }
+}
+
+/// A provider found as evidence rather than by the MX.
+fn evidenced(h: MailHost, source: Source) -> Candidate {
+    Candidate {
+        host: h.host.into(),
+        port: IMAP_PORT,
+        label: h.label.into(),
+        help: Some(h.help.into()),
+        source,
+    }
+}
+
+/// Where a domain's mailboxes are, by what it publishes besides its MX
+/// (L1). DNS only, and at most three lookups: the domain's TXT and
+/// `autodiscover.<domain>`'s CNAME, side by side, then one `redirect=` of
+/// its SPF record, never a second. `include:`s are read by name, never
+/// looked up. A lookup that fails is no evidence.
+///
+/// The autodiscover CNAME comes first: only a Microsoft 365 mailbox needs
+/// it. The SPF record counts only when every provider it includes is the
+/// same one; a domain whose SPF names both Google and Microsoft (half way
+/// through a move, or one sending through the other) says nothing about
+/// which holds the mailboxes.
+async fn found_elsewhere<D: Lookup + Sync>(dns: &D, domain: &str) -> Vec<Candidate> {
+    let auto = format!("autodiscover.{domain}");
+    let (txt, alias) = tokio::join!(dns.txt(domain), dns.cname(&auto));
+
+    let mut out: Vec<Candidate> = Vec::new();
+    if let Some(h) = alias.as_deref().and_then(autodiscover_provider) {
+        out.push(evidenced(h, Source::Autodiscover));
+    }
+
+    let Some(spf) = spf_record(&txt).and_then(parse_spf) else {
+        return out;
+    };
+    let mut includes = spf.includes;
+    if let Some(next) = spf.redirect {
+        // One hop. A redirect that leads to no record, two records or a
+        // broken one makes the whole record an error (RFC 7208 §6.1),
+        // which is evidence of nothing. Its own redirect is not followed.
+        if next.contains('%') {
+            return out;
+        }
+        let more = dns.txt(&next).await;
+        let Some(more) = spf_record(&more).and_then(parse_spf) else {
+            return out;
+        };
+        includes.extend(more.includes);
+    }
+    let mut named: Vec<MailHost> = Vec::new();
+    for h in includes.iter().filter_map(|i| spf_provider(i)) {
+        if !named.iter().any(|n| n.host == h.host) {
+            named.push(h);
+        }
+    }
+    if let [only] = named.as_slice() {
+        add_new(&mut out, vec![evidenced(only.clone(), Source::Spf)]);
+    }
+    out
+}
+
+/// A DNS that answers from a script, and remembers what it was asked.
+#[cfg(test)]
+pub(crate) mod scripted {
+    use std::sync::Mutex;
+
+    use super::Lookup;
+
+    #[derive(Default)]
+    pub(crate) struct Dns {
+        srv: Option<(String, u16)>,
+        mx: Vec<String>,
+        txt: Vec<(String, String)>,
+        cname: Vec<(String, String)>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Dns {
+        pub(crate) fn new() -> Self {
+            Self::default()
+        }
+        pub(crate) fn srv(mut self, host: &str, port: u16) -> Self {
+            self.srv = Some((host.into(), port));
+            self
+        }
+        pub(crate) fn mx(mut self, exchange: &str) -> Self {
+            self.mx.push(exchange.into());
+            self
+        }
+        /// One TXT record at `name`; call again for a second.
+        pub(crate) fn txt(mut self, name: &str, record: &str) -> Self {
+            self.txt.push((name.into(), record.into()));
+            self
+        }
+        pub(crate) fn cname(mut self, name: &str, target: &str) -> Self {
+            self.cname.push((name.into(), target.into()));
+            self
+        }
+        /// Every lookup made, in order, as `"TXT acme.com"`.
+        pub(crate) fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+        fn note(&self, what: &str, name: &str) {
+            self.asked.lock().unwrap().push(format!("{what} {name}"));
+        }
+    }
+
+    impl Lookup for Dns {
+        async fn mx(&self, domain: &str) -> Vec<String> {
+            self.note("MX", domain);
+            self.mx.clone()
+        }
+        async fn srv_imaps(&self, domain: &str) -> Option<(String, u16)> {
+            self.note("SRV", domain);
+            self.srv.clone()
+        }
+        async fn txt(&self, name: &str) -> Vec<String> {
+            self.note("TXT", name);
+            self.txt
+                .iter()
+                .filter(|(n, _)| n == name)
+                .map(|(_, r)| r.clone())
+                .collect()
+        }
+        async fn cname(&self, name: &str) -> Option<String> {
+            self.note("CNAME", name);
+            self.cname
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t.clone())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +729,389 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         });
+    }
+
+    // ------------------------------------------ L1: evidence behind a filter
+
+    use super::scripted::Dns;
+    use crate::discover::{MS_IMAP, spf_provider};
+
+    const MIMECAST: &str = "eu-smtp-inbound-1.mimecast.com";
+
+    fn found(dns: &Dns, email: &str) -> (Vec<Candidate>, Option<String>) {
+        match rt().block_on(discover_with(dns, email, None)) {
+            Discovery::Candidates { hosts, filtered_by } => (hosts, filtered_by),
+            other => panic!("{email}: {other:?}"),
+        }
+    }
+
+    fn guesses(hosts: &[Candidate]) -> Vec<&str> {
+        hosts
+            .iter()
+            .filter(|c| c.source == Source::Guess)
+            .map(|c| c.host.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn behind_a_filter_each_providers_spf_names_its_host() {
+        for (include, host, label) in [
+            ("spf.protection.outlook.com", MS_IMAP, "Microsoft 365"),
+            ("_spf.google.com", "imap.gmail.com", "Google Workspace"),
+            ("spf.messagingengine.com", "imap.fastmail.com", "Fastmail"),
+            (
+                "_spf.mail.hostinger.com",
+                "imap.hostinger.com",
+                "Hostinger Email",
+            ),
+            ("icloud.com", "imap.mail.me.com", "iCloud Mail"),
+            ("spf.titan.email", "imap.titan.email", "Titan"),
+            ("emailsrvr.com", "secure.emailsrvr.com", "Rackspace Email"),
+            ("spf.migadu.com", "imap.migadu.com", "Migadu"),
+            (
+                "spf.privateemail.com",
+                "mail.privateemail.com",
+                "Namecheap Private Email",
+            ),
+            ("zohomail.com", "imap.zoho.com", "Zoho Mail"),
+            ("one.zoho.com", "imap.zoho.com", "Zoho Mail"),
+            ("zoho.com", "imap.zoho.com", "Zoho Mail"),
+            ("zohomail.eu", "imap.zoho.eu", "Zoho Mail"),
+            ("zoho.eu", "imap.zoho.eu", "Zoho Mail"),
+            ("zohomail.in", "imap.zoho.in", "Zoho Mail"),
+            ("zoho.in", "imap.zoho.in", "Zoho Mail"),
+            ("zohomail.com.au", "imap.zoho.com.au", "Zoho Mail"),
+            ("zohomail.jp", "imap.zoho.jp", "Zoho Mail"),
+            ("zohocloud.ca", "imap.zohocloud.ca", "Zoho Mail"),
+            ("zohomail.sa", "imap.zoho.sa", "Zoho Mail"),
+            ("zohomail.com.cn", "imap.zoho.com.cn", "Zoho Mail"),
+            ("ZOHO.COM.", "imap.zoho.com", "Zoho Mail"),
+        ] {
+            let dns = Dns::new()
+                .mx(MIMECAST)
+                .txt("acme.com", "google-site-verification=abc")
+                .txt(
+                    "acme.com",
+                    &format!("v=spf1 ip4:192.0.2.1 include:{include} ~all"),
+                );
+            let (hosts, filtered_by) = found(&dns, "ann@acme.com");
+            let first = &hosts[0];
+            assert_eq!(first.host, host, "{include}: {hosts:?}");
+            assert_eq!(first.label, label, "{include}");
+            assert_eq!(first.source, Source::Spf, "{include}");
+            assert_eq!(first.port, IMAP_PORT, "{include}");
+            // The provider's own help, the one its MX gives.
+            let help = spf_provider(include).expect(include).help;
+            assert_eq!(first.help.as_deref(), Some(help), "{include}");
+            // The filter is still named, and the guesses are still behind.
+            assert_eq!(filtered_by.as_deref(), Some(MIMECAST), "{include}");
+            assert_eq!(
+                guesses(&hosts),
+                ["imap.acme.com", "mail.acme.com", "acme.com"],
+                "{include}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_microsoft_365_domain_behind_a_filter_is_offered_microsofts_sign_in() {
+        let dns = Dns::new()
+            .mx(MIMECAST)
+            .mx("eu-smtp-inbound-2.mimecast.com")
+            .txt(
+                "acme.com",
+                "v=spf1 include:spf.protection.outlook.com include:_netblocks.mimecast.com -all",
+            );
+        let (hosts, filtered_by) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].host, MS_IMAP, "{hosts:?}");
+        assert!(is_microsoft(&hosts[0].host));
+        assert_eq!(hosts[0].label, "Microsoft 365");
+        assert_eq!(hosts[0].help.as_deref(), Some(MS_SIGN_IN));
+        assert_eq!(hosts[0].source, Source::Spf);
+        assert_eq!(filtered_by.as_deref(), Some(MIMECAST));
+    }
+
+    #[test]
+    fn an_autodiscover_alias_to_outlook_names_microsoft_365() {
+        // No SPF at all: the alias alone is enough.
+        let dns = Dns::new()
+            .mx("mx0a-001.pphosted.com")
+            .cname("autodiscover.acme.com", "autodiscover.outlook.com.");
+        let (hosts, filtered_by) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].host, MS_IMAP, "{hosts:?}");
+        assert_eq!(hosts[0].label, "Microsoft 365");
+        assert_eq!(hosts[0].help.as_deref(), Some(MS_SIGN_IN));
+        assert_eq!(hosts[0].source, Source::Autodiscover);
+        assert_eq!(filtered_by.as_deref(), Some("mx0a-001.pphosted.com"));
+        assert_eq!(guesses(&hosts).len(), 3);
+
+        // With a Microsoft SPF too, Microsoft is listed once, by its alias.
+        let both = Dns::new()
+            .mx(MIMECAST)
+            .cname("autodiscover.acme.com", "autodiscover.outlook.com")
+            .txt("acme.com", "v=spf1 include:spf.protection.outlook.com -all");
+        let (hosts, _) = found(&both, "ann@acme.com");
+        assert_eq!(hosts.iter().filter(|c| c.host == MS_IMAP).count(), 1);
+        assert_eq!(hosts[0].source, Source::Autodiscover);
+
+        // An alias anywhere else names nobody.
+        for target in [
+            "autodiscover.acme.com",
+            "autodiscover.outlook.com.evil.example",
+            "outlook.office365.com",
+            "autodiscover.secureserver.net",
+        ] {
+            let dns = Dns::new()
+                .mx(MIMECAST)
+                .cname("autodiscover.acme.com", target);
+            let (hosts, _) = found(&dns, "ann@acme.com");
+            assert!(
+                hosts.iter().all(|c| c.source == Source::Guess),
+                "{target}: {hosts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_mx_nobody_recognises_is_read_with_the_spf_too() {
+        let dns = Dns::new()
+            .mx("mx01.hornetsecurity.com")
+            .txt("acme.de", "v=spf1 include:_spf.google.com ~all");
+        let (hosts, filtered_by) = found(&dns, "ann@acme.de");
+        assert_eq!(hosts[0].host, "imap.gmail.com", "{hosts:?}");
+        assert_eq!(hosts[0].label, "Google Workspace");
+        assert_eq!(hosts[0].source, Source::Spf);
+        // Not a filter RATA knows, so none is named.
+        assert_eq!(filtered_by, None);
+        assert_eq!(guesses(&hosts), ["imap.acme.de", "mail.acme.de", "acme.de"]);
+
+        // No MX at all is read the same way.
+        let dns = Dns::new().txt("acme.de", "v=spf1 include:_spf.google.com ~all");
+        let (hosts, _) = found(&dns, "ann@acme.de");
+        assert_eq!(hosts[0].source, Source::Spf);
+    }
+
+    #[test]
+    fn a_domains_own_mx_keeps_its_conventional_names_first() {
+        // An on-premises server (or Exchange sending through Microsoft
+        // 365): the names it always had come first, as before L1, and the
+        // evidence after them.
+        let dns = Dns::new().mx("mail.acme.com.").txt(
+            "acme.com",
+            "v=spf1 mx include:spf.protection.outlook.com -all",
+        );
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        let order: Vec<_> = hosts.iter().map(|c| (c.host.as_str(), c.source)).collect();
+        assert_eq!(
+            order,
+            [
+                ("imap.acme.com", Source::Guess),
+                ("mail.acme.com", Source::Guess),
+                ("acme.com", Source::Guess),
+                (MS_IMAP, Source::Spf),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_provider_the_mx_names_needs_no_more_lookups() {
+        let dns = Dns::new()
+            .mx("aspmx.l.google.com")
+            .txt("acme.com", "v=spf1 include:spf.protection.outlook.com -all")
+            .cname("autodiscover.acme.com", "autodiscover.outlook.com");
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].host, "imap.gmail.com");
+        assert_eq!(hosts[0].source, Source::Mx);
+        assert!(hosts.iter().all(|c| c.host != MS_IMAP), "{hosts:?}");
+        assert_eq!(dns.asked(), ["SRV acme.com", "MX acme.com"]);
+
+        // Nor an SRV answer.
+        let dns = Dns::new()
+            .srv("imap.acme.com", 993)
+            .mx(MIMECAST)
+            .txt("acme.com", "v=spf1 include:_spf.google.com -all");
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].source, Source::Srv);
+        assert!(hosts.iter().all(|c| c.source != Source::Spf), "{hosts:?}");
+        assert_eq!(dns.asked(), ["SRV acme.com", "MX acme.com"]);
+
+        // Nor a typed server, nor the table.
+        let dns = Dns::new().mx(MIMECAST);
+        let _ = rt().block_on(discover_with(&dns, "ann@acme.com", Some("mail.acme.com")));
+        let _ = rt().block_on(discover_with(&dns, "ann@gmail.com", None));
+        assert!(dns.asked().is_empty(), "{:?}", dns.asked());
+    }
+
+    #[test]
+    fn only_a_passing_include_is_evidence() {
+        for (record, evidence) in [
+            ("v=spf1 include:_spf.google.com -all", true),
+            ("v=spf1 +include:_spf.google.com -all", true),
+            ("V=SPF1 INCLUDE:_SPF.GOOGLE.COM -ALL", true),
+            ("v=spf1 include:_spf.google.com. -all", true),
+            ("v=spf1   include:_spf.google.com\t-all", true),
+            ("v=spf1 -include:_spf.google.com -all", false),
+            ("v=spf1 ~include:_spf.google.com -all", false),
+            ("v=spf1 ?include:_spf.google.com -all", false),
+            ("v=spf1 include:%{d}._spf.google.com -all", false),
+            ("v=spf1 include:mail._spf.google.com -all", false),
+            ("v=spf1 include:google.com -all", false),
+            ("v=spf1 include:zcsend.net -all", false),
+            (
+                "v=spf1 include:sendgrid.net include:mailgun.org -all",
+                false,
+            ),
+            ("v=spf1 include:zohomail.ca -all", false),
+        ] {
+            let dns = Dns::new().mx(MIMECAST).txt("acme.com", record);
+            let (hosts, _) = found(&dns, "ann@acme.com");
+            assert_eq!(
+                hosts.iter().any(|c| c.source == Source::Spf),
+                evidence,
+                "{record}: {hosts:?}"
+            );
+            // Whatever the record says, nothing is refused because of it.
+            assert_eq!(guesses(&hosts).len(), 3, "{record}");
+        }
+    }
+
+    #[test]
+    fn a_redirect_is_followed_one_hop_and_no_further() {
+        let dns = Dns::new()
+            .mx(MIMECAST)
+            .txt("acme.com", "v=spf1 redirect=_spf.acme.com")
+            .txt(
+                "_spf.acme.com",
+                "v=spf1 include:spf.protection.outlook.com redirect=_spf2.acme.com",
+            )
+            .txt("_spf2.acme.com", "v=spf1 include:_spf.google.com -all");
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].host, MS_IMAP, "{hosts:?}");
+        assert_eq!(hosts[0].source, Source::Spf);
+        assert!(
+            hosts.iter().all(|c| c.host != "imap.gmail.com"),
+            "{hosts:?}"
+        );
+        let asked = dns.asked();
+        assert!(
+            asked.contains(&"TXT _spf.acme.com".to_string()),
+            "{asked:?}"
+        );
+        assert!(
+            !asked.contains(&"TXT _spf2.acme.com".to_string()),
+            "{asked:?}"
+        );
+        // At most three lookups beyond the SRV and MX: TXT, CNAME, one hop.
+        assert_eq!(asked.len(), 5, "{asked:?}");
+
+        // A record with `all` has no redirect to follow.
+        let dns = Dns::new()
+            .mx(MIMECAST)
+            .txt("acme.com", "v=spf1 redirect=_spf.acme.com ~all")
+            .txt("_spf.acme.com", "v=spf1 include:_spf.google.com -all");
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        assert!(hosts.iter().all(|c| c.source != Source::Spf), "{hosts:?}");
+        assert!(!dns.asked().contains(&"TXT _spf.acme.com".to_string()));
+
+        // A redirect to nothing, to two records or to a broken one makes
+        // the whole record an error: the base's own include is not kept.
+        for target in [
+            vec![],
+            vec![
+                "v=spf1 include:_spf.google.com -all",
+                "v=spf1 include:_spf.google.com -all",
+            ],
+            vec!["v=spf1 nonsense:x -all"],
+        ] {
+            let mut dns = Dns::new().mx(MIMECAST).txt(
+                "acme.com",
+                "v=spf1 include:_spf.google.com redirect=_spf.acme.com",
+            );
+            for r in &target {
+                dns = dns.txt("_spf.acme.com", r);
+            }
+            let (hosts, _) = found(&dns, "ann@acme.com");
+            assert!(
+                hosts.iter().all(|c| c.source != Source::Spf),
+                "{target:?}: {hosts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_or_doubled_spf_record_is_no_evidence() {
+        for records in [
+            // Two SPF records: an error, whichever is meant.
+            vec![
+                "v=spf1 include:_spf.google.com -all",
+                "v=spf1 include:_spf.google.com -all",
+            ],
+            vec!["v=spf1 include: -all"],
+            vec!["v=spf1 include -all"],
+            vec!["v=spf1 frobnicate:_spf.google.com include:_spf.google.com"],
+            vec!["v=spf1 include:_spf.google.com redirect=a.example redirect=b.example"],
+            vec!["v=spf1 include:_spf.google.com -redirect=a.example"],
+            vec!["v=spf1 include:_spf.google.com all:x"],
+            vec!["v=spf1 include:_spf.google.com +"],
+            vec!["v=spf10 include:_spf.google.com -all"],
+            vec!["spf1 include:_spf.google.com -all"],
+            vec![" v=spf1 include:_spf.google.com -all"],
+            vec!["include:_spf.google.com"],
+            // Two providers: a move half done says nothing about either.
+            vec!["v=spf1 include:_spf.google.com include:spf.protection.outlook.com -all"],
+        ] {
+            let mut dns = Dns::new().mx(MIMECAST);
+            for r in &records {
+                dns = dns.txt("acme.com", r);
+            }
+            let (hosts, _) = found(&dns, "ann@acme.com");
+            assert!(
+                hosts.iter().all(|c| c.source == Source::Guess),
+                "{records:?}: {hosts:?}"
+            );
+        }
+        // The same provider twice is still one, among other terms.
+        let dns = Dns::new().mx(MIMECAST).txt(
+            "acme.com",
+            "v=spf1 include:zoho.eu include:zohomail.eu exp=why.acme.com ip6:2001:db8::/32 a/24 -all",
+        );
+        let (hosts, _) = found(&dns, "ann@acme.com");
+        assert_eq!(hosts[0].host, "imap.zoho.eu", "{hosts:?}");
+        assert_eq!(hosts.iter().filter(|c| c.source == Source::Spf).count(), 1);
+    }
+
+    #[test]
+    fn with_no_evidence_the_conventional_names_are_tried_as_before() {
+        let dns = Dns::new()
+            .mx(MIMECAST)
+            .txt("acme.com", "v=spf1 include:_netblocks.mimecast.com -all");
+        let (hosts, filtered_by) = found(&dns, "ann@acme.com");
+        let all: Vec<_> = hosts.iter().map(|c| (c.host.as_str(), c.source)).collect();
+        assert_eq!(
+            all,
+            [
+                ("imap.acme.com", Source::Guess),
+                ("mail.acme.com", Source::Guess),
+                ("acme.com", Source::Guess),
+            ]
+        );
+        assert_eq!(filtered_by.as_deref(), Some(MIMECAST));
+
+        // Nothing answering at all, the same.
+        let (hosts, filtered_by) = found(&Dns::new(), "ann@acme.com");
+        assert!(hosts.iter().all(|c| c.source == Source::Guess));
+        assert_eq!(hosts.len(), 3);
+        assert_eq!(filtered_by, None);
+    }
+
+    #[test]
+    fn a_refusing_mx_still_refuses_whatever_the_spf_says() {
+        let dns = Dns::new()
+            .mx("mail.protonmail.ch")
+            .txt("acme.com", "v=spf1 include:_spf.google.com -all");
+        assert!(matches!(
+            rt().block_on(discover_with(&dns, "ann@acme.com", None)),
+            Discovery::Refuse(_)
+        ));
     }
 }

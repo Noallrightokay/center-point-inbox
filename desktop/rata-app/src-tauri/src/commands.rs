@@ -11,6 +11,11 @@
 //! that writes a file, `save_attachment`, takes a message and an attachment
 //! number: the folder (Downloads), the file name and the bytes are all decided
 //! in Rust, so the page can at most save a real attachment into Downloads.
+//! The connected folders (`cloud`, K5) are the same idea: the page names a
+//! service and an id RATA gave out, and Rust decides the folder and the
+//! name, never leaving the folder the customer connected. Create file
+//! (`created`, K6) too: the page hands over a blank document's bytes and,
+//! later, only the id RATA gave it, and only such a file is ever opened.
 
 use std::sync::Arc;
 
@@ -18,11 +23,13 @@ use tauri::{AppHandle, Manager, State};
 
 use rata_mail::{Action, DraftRef, File, Folder, Message, OwnFolder};
 
+use crate::cloud::{Listing, Os, Placed, Refusal, Status};
 use crate::core::ServerFound;
 use crate::core::{
     AttachmentAt, Changed, Delivered, Draft, Drafted, Forgotten, Forwarded, Found, Held, Linked,
     Opened, Problem, Rata, Refreshed, Saved, Standing,
 };
+use crate::created::{FileRefusal, Listed, Made, Reopened};
 use crate::store::Mailbox;
 
 type App<'a> = State<'a, Arc<Rata>>;
@@ -503,4 +510,242 @@ pub fn diagnostics(
     live: tauri::State<'_, crate::watch::Watching>,
 ) -> String {
     app.diagnostics(crate::update::has_key(handle.config()), &live.now())
+}
+
+// Connected accounts (Workstream K). Only iCloud Drive and Creative Cloud
+// Files can be connected in this copy, as the folders their own apps keep
+// on this computer (K5, `cloud`). The page names a service and an id RATA
+// gave out, never a path; every answer shows paths relative to the folder.
+
+/// Run file work off the window's thread: a listing of a large folder, or a
+/// 25 MB read and its base64, would otherwise hold the interface up.
+async fn on_disk<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Refusal> + Send + 'static,
+) -> Result<T, Refusal> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|_| {
+            Err(Refusal {
+                service: String::new(),
+                kind: "disk",
+                error: "RATA could not finish that. Try again.".into(),
+            })
+        })
+}
+
+/// Every service the page knows of: Microsoft, Google, Apple, Adobe and
+/// Slack, with which can be connected in this copy and which are.
+#[tauri::command]
+pub fn connections_status(app: App<'_>) -> Vec<Status> {
+    app.connections_status()
+}
+
+/// Connect iCloud Drive or Creative Cloud Files: find the folder its app
+/// keeps on this computer and remember it.
+#[tauri::command]
+pub async fn connect_service(
+    handle: AppHandle,
+    app: App<'_>,
+    service: String,
+) -> Result<Status, Refusal> {
+    let home = handle.path().home_dir().map_err(|_| Refusal {
+        service: service.clone(),
+        kind: "not-found",
+        error: "RATA could not find your home folder on this computer.".into(),
+    })?;
+    let rata = app.inner().clone();
+    on_disk(move || rata.connect_service(&service, Os::this(), &home)).await
+}
+
+/// Forget a connected folder. The folder and its files are left as they are.
+#[tauri::command]
+pub fn disconnect_service(app: App<'_>, service: String) -> Result<Status, Refusal> {
+    app.disconnect_service(&service)
+}
+
+/// Nothing to cancel: connecting a folder waits on nothing. The browser
+/// sign-ins of K2 to K4 will use this.
+#[tauri::command]
+pub fn cancel_connect() -> bool {
+    false
+}
+
+/// One folder of a connected service: `folder` is an id from an earlier
+/// listing, or none for the top.
+#[tauri::command]
+pub async fn cloud_list(
+    app: App<'_>,
+    service: String,
+    folder: Option<String>,
+) -> Result<Listing, Refusal> {
+    let rata = app.inner().clone();
+    on_disk(move || rata.cloud_list(&service, folder.as_deref())).await
+}
+
+/// One file of a connected service, by id, as base64 for the Format Bridge.
+#[tauri::command]
+pub async fn cloud_read(app: App<'_>, service: String, id: String) -> Result<CloudFile, Refusal> {
+    let rata = app.inner().clone();
+    on_disk(move || {
+        let got = rata.cloud_read(&service, &id)?;
+        Ok(CloudFile {
+            name: got.name,
+            mime: got.mime,
+            data: rata_mail::words::base64_encode(&got.data),
+        })
+    })
+    .await
+}
+
+/// A file read from a connected folder.
+#[derive(serde::Serialize)]
+pub struct CloudFile {
+    name: String,
+    mime: &'static str,
+    data: String,
+}
+
+/// A file the page made or holds (a conversion, an attachment), as base64,
+/// into a folder of a connected service. Never overwrites; `confirmed` is
+/// the answer a program named to look like a document needs.
+#[tauri::command]
+pub async fn cloud_save(
+    app: App<'_>,
+    service: String,
+    folder: Option<String>,
+    name: String,
+    data: String,
+    confirmed: Option<bool>,
+) -> Result<Placed, Refusal> {
+    if data.len() > crate::core::SAVE_MAX / 3 * 4 + 4 {
+        return Err(Refusal {
+            service,
+            kind: "too-large",
+            error: "That file is too large to save from RATA.".into(),
+        });
+    }
+    let rata = app.inner().clone();
+    on_disk(move || {
+        let bytes = rata_mail::words::base64(data.as_bytes());
+        rata.cloud_save(
+            &service,
+            folder.as_deref(),
+            &name,
+            &bytes,
+            confirmed == Some(true),
+        )
+    })
+    .await
+}
+
+/// Share to Slack's people and channels: not in this copy yet (K3).
+#[tauri::command]
+pub fn slack_targets() -> Result<(), Refusal> {
+    Err(crate::cloud::no_slack())
+}
+
+/// Share to Slack: not in this copy yet (K3).
+#[tauri::command]
+pub fn slack_share() -> Result<(), Refusal> {
+    Err(crate::cloud::no_slack())
+}
+
+// Create file (K6, `created`): a blank document the page builds, saved by
+// Rust into Documents / RATA or a connected folder and opened in the app
+// this computer uses for its format. The page names a format, a name, a
+// place and, afterwards, the id RATA gave the file; never a path. These are
+// the only files RATA ever opens, and `created` checks each one again every
+// time it is about to.
+
+/// File work off the window's thread, answering in Create file's shape.
+async fn off_window<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, FileRefusal> + Send + 'static,
+) -> Result<T, FileRefusal> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|_| {
+            Err(FileRefusal {
+                kind: "disk",
+                error: "RATA could not finish that. Try again.".into(),
+            })
+        })
+}
+
+/// The Documents folder. Like Downloads, Tauri finds it on Linux only
+/// through the desktop's `user-dirs.dirs`, so `~/Documents` stands in.
+fn documents(handle: &AppHandle) -> Option<std::path::PathBuf> {
+    let paths = handle.path();
+    paths
+        .document_dir()
+        .ok()
+        .or_else(|| paths.home_dir().ok().map(|h| h.join("Documents")))
+}
+
+/// Make a blank file of `format` (docx, xlsx, pptx, md, txt or csv) named
+/// after `name` in `where` (`documents`, `apple` or `adobe`) from the page's
+/// bytes (base64), and open it. A file that would not open is still made.
+#[tauri::command]
+pub async fn create_file(
+    handle: AppHandle,
+    app: App<'_>,
+    format: String,
+    name: String,
+    r#where: String,
+    data: String,
+) -> Result<Made, FileRefusal> {
+    if data.len() > crate::created::CREATE_MAX / 3 * 4 + 4 {
+        return Err(FileRefusal {
+            kind: "too-large",
+            error: "That file is too large for RATA to make.".into(),
+        });
+    }
+    let docs = documents(&handle);
+    let rata = app.inner().clone();
+    off_window(move || {
+        let bytes = rata_mail::words::base64(data.as_bytes());
+        rata.create_file(
+            &format,
+            &name,
+            &r#where,
+            &bytes,
+            docs.as_deref(),
+            &crate::created::system_open,
+        )
+    })
+    .await
+}
+
+/// Open a file RATA made again, by its id.
+#[tauri::command]
+pub async fn open_created(app: App<'_>, id: String) -> Result<Reopened, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || rata.open_created(&id, &crate::created::system_open)).await
+}
+
+/// The files RATA made, newest first, with whether each is still there.
+#[tauri::command]
+pub async fn created_list(app: App<'_>) -> Result<Vec<Listed>, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || Ok(rata.created_list())).await
+}
+
+/// A file RATA made, as it is on disk now, as base64 for Send with RATA.
+#[tauri::command]
+pub async fn created_read(app: App<'_>, id: String) -> Result<CloudFile, FileRefusal> {
+    let rata = app.inner().clone();
+    off_window(move || {
+        let got = rata.created_read(&id)?;
+        Ok(CloudFile {
+            name: got.name,
+            mime: got.mime,
+            data: rata_mail::words::base64_encode(&got.data),
+        })
+    })
+    .await
+}
+
+/// Forget a file RATA made. The file stays where it is.
+#[tauri::command]
+pub fn forget_created(app: App<'_>, id: String) -> Result<bool, FileRefusal> {
+    app.forget_created(&id)
 }

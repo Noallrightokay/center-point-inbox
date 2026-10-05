@@ -23,7 +23,7 @@ use rata_mail::{
 use rata_mail::{SEARCH_LIMIT, search_folder, search_query};
 use serde::Serialize;
 
-use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Noted, Op, Trouble};
+use crate::diagnostics::{self, Build, Licensed, MailboxFacts, Name, Noted, Op, Trouble};
 use crate::licence::{self, Licence, Plan, Reason};
 use crate::oauth::{self, Ended, Microsoft, TokenError};
 use crate::store::{Auth, Mailbox, Store, now};
@@ -58,7 +58,8 @@ pub struct Rata {
     /// When the last refresh finished, for Copy diagnostics.
     last_refresh: Mutex<Option<u64>>,
     /// Bumped by each Delete account (`forget_everything`), under the
-    /// list's lock: the `epoch` a licence renewal began under (SEC-7).
+    /// list's lock, as it begins and again once the licence is gone: the
+    /// `epoch` a licence renewal (SEC-7) or a link (SEC-8) began under.
     forgotten: std::sync::atomic::AtomicU64,
 }
 
@@ -505,13 +506,22 @@ pub struct Refused {
     pub message: String,
 }
 
-/// Whether `m` is still the mailbox listed under its address (SEC-7): still
-/// linked, still signing in with Microsoft, and not linked again since,
-/// which writes a new `added_at`.
-fn still_linked(store: &Store, m: &Mailbox) -> bool {
+/// Whether `m` is still the mailbox listed under its address, signing in
+/// with Microsoft (SEC-7): still listed, not linked again since (which
+/// writes a new `added_at`, and with Microsoft `auth: oauth`), and its
+/// keychain entry still a Microsoft sign-in.
+///
+/// The keychain decides "signing in with Microsoft", as it does in
+/// `account`: an older RATA rewrote some list entries without `auth`, so
+/// the list's word alone would turn such a mailbox's every renewal away
+/// (SEC-8). The keychain also catches a link with a password that has
+/// written the keychain but not yet the list, or that landed in the same
+/// second as the sign-in it replaces.
+fn still_linked(store: &Store, vault: &dyn Vault, m: &Mailbox) -> bool {
     store
         .find(&m.email)
-        .is_some_and(|now| now.auth.is_oauth() && now.added_at == m.added_at)
+        .is_some_and(|now| now.added_at == m.added_at && now.auth == m.auth)
+        && matches!(vault::get_secret(vault, &m.email), Ok(Secret::Refresh(_)))
 }
 
 /// A licence inside its last week should be renewed while there is still time
@@ -545,7 +555,7 @@ impl Rata {
 
     /// How many times Delete account has run since RATA started: the
     /// `epoch` a renewal carries to `set_licence`.
-    fn epoch(&self) -> u64 {
+    pub(crate) fn epoch(&self) -> u64 {
         self.forgotten.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -718,6 +728,12 @@ impl Rata {
         }
     }
 
+    /// The store, for the connected folders (`cloud`), which keep their
+    /// paths beside the mailbox list.
+    pub(crate) fn store(&self) -> &Mutex<Store> {
+        &self.store
+    }
+
     pub fn mailboxes(&self) -> Vec<Mailbox> {
         self.store
             .lock()
@@ -745,6 +761,9 @@ impl Rata {
                 error: "Enter the app password for this mailbox.".into(),
             };
         }
+        // Read before anything else: a Delete account from here on means
+        // this mailbox is not kept (SEC-8).
+        let began = self.epoch();
         if let Err(error) = self.may_link(&email) {
             return Linked::Failed { error };
         }
@@ -755,13 +774,6 @@ impl Rata {
             Verify::Failed(error) | Verify::OAuth(error) => Linked::Failed { error },
             Verify::Microsoft(label) => self.use_microsoft(&email, &label),
             Verify::Ok(found) => {
-                // The keychain first: a mailbox in the list whose password is
-                // not stored is a mailbox that fails on every refresh with no
-                // way for the customer to tell why. Any pieces of an earlier
-                // Microsoft sign-in go with it.
-                if let Err(error) = vault::put_password(self.vault.as_ref(), &email, password) {
-                    return Linked::Failed { error };
-                }
                 let mailbox = Mailbox {
                     email: email.clone(),
                     host: found.host.clone(),
@@ -777,13 +789,14 @@ impl Rata {
                     auth_failed_at: None,
                     auth: Auth::Password,
                 };
-                if let Err(e) = self.remember(mailbox.clone()) {
-                    // Roll the secret back rather than leaving one behind for a
-                    // mailbox that is not in the list.
-                    let _ = self.vault.forget(&email);
-                    return Linked::Failed { error: e };
+                // Any pieces of an earlier Microsoft sign-in go with the
+                // password's write.
+                match self.keep_linked(mailbox.clone(), began, || {
+                    vault::put_password(self.vault.as_ref(), &email, password)
+                }) {
+                    Ok(()) => Linked::Ok { mailbox },
+                    Err(error) => Linked::Failed { error },
                 }
-                Linked::Ok { mailbox }
             }
         }
     }
@@ -794,14 +807,23 @@ impl Rata {
     /// not be refused for being over the limit — that would strand somebody
     /// at their cap with a mailbox they cannot repair.
     fn may_link(&self, email: &str) -> Result<(), String> {
-        let plan = self.licensed()?;
-        let already = self
-            .store
-            .lock()
-            .map(|s| s.find(email).is_some())
-            .unwrap_or(false);
+        let store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+        self.may_link_in(&store, email)
+    }
+
+    /// [`Rata::may_link`], for a caller already holding the list's lock.
+    fn may_link_in(&self, store: &Store, email: &str) -> Result<(), String> {
+        let token = store.licence().map(licence::clean);
+        let plan = licence::check(
+            token.as_deref().unwrap_or(""),
+            self.public_key,
+            now() as i64,
+        )
+        .map(|l| licence::plan_def(&l.plan))
+        .map_err(|rejected| rejected.reason.explain().to_string())?;
+        let already = store.find(email).is_some();
         if !already && let Some(limit) = plan.mail {
-            let used = self.mailboxes().len() as u32;
+            let used = store.list().len() as u32;
             if used >= limit {
                 return Err(format!(
                     "{} includes {limit} mailbox{}. Upgrade at mailrata.org to add another.",
@@ -879,6 +901,9 @@ impl Rata {
                 configured: false,
             };
         };
+        // Read before the browser opens: a Delete account while the
+        // customer signs in means this mailbox is not kept (SEC-8).
+        let began = self.epoch();
         if let Err(error) = self.may_link(&email) {
             return Linked::Failed { error };
         }
@@ -899,7 +924,7 @@ impl Rata {
         // Microsoft's server and nowhere else, whatever the address's DNS says.
         let credential = Credential::oauth(email.clone(), tokens.access.clone());
         match verify_with(&self.resolver, &email, &credential, Some(MS_IMAP)).await {
-            Verify::Ok(_) => self.keep_microsoft(&email, label, tokens),
+            Verify::Ok(_) => self.keep_microsoft(&email, label, tokens, began),
             Verify::OAuth(why) => Linked::Failed {
                 error: hide(&not_opened(
                     &email,
@@ -985,16 +1010,21 @@ impl Rata {
 
     /// Keep a Microsoft mailbox whose sign-in has been proved: the refresh
     /// token where a password would be, the mailbox marked as signing in with
-    /// Microsoft, the access token in memory.
-    fn keep_microsoft(&self, email: &str, label: &str, tokens: oauth::Tokens) -> Linked {
+    /// Microsoft, the access token in memory. All through
+    /// [`Rata::keep_linked`], so a sign-in that ends after Delete account
+    /// keeps nothing.
+    fn keep_microsoft(
+        &self,
+        email: &str,
+        label: &str,
+        tokens: oauth::Tokens,
+        began: u64,
+    ) -> Linked {
         let Some(refresh) = tokens.refresh.as_deref() else {
             return Linked::Failed {
                 error: "Microsoft signed you in but did not let RATA stay signed in, so the mailbox would stop working within the hour. Nothing was added.".into(),
             };
         };
-        if let Err(error) = vault::put_refresh(self.vault.as_ref(), email, refresh) {
-            return Linked::Failed { error };
-        }
         let mailbox = Mailbox {
             email: email.to_string(),
             host: MS_IMAP.into(),
@@ -1006,18 +1036,67 @@ impl Rata {
             auth_failed_at: None,
             auth: Auth::OAuth,
         };
-        if let Err(error) = self.remember(mailbox.clone()) {
-            let _ = vault::forget_all(self.vault.as_ref(), email);
-            return Linked::Failed { error };
+        let access = oauth::Access {
+            token: tokens.access.clone(),
+            expires_at: oauth::expiry(now(), tokens.expires_in),
+        };
+        match self.keep_linked(mailbox.clone(), began, || {
+            vault::put_refresh(self.vault.as_ref(), email, refresh)?;
+            self.ms.keep(email, access);
+            Ok(())
+        }) {
+            Ok(()) => Linked::Ok { mailbox },
+            Err(error) => Linked::Failed { error },
         }
-        self.ms.keep(
-            email,
-            oauth::Access {
-                token: tokens.access,
-                expires_at: oauth::expiry(now(), tokens.expires_in),
-            },
-        );
-        Linked::Ok { mailbox }
+    }
+
+    /// Keep a mailbox whose sign-in has just been proved: `put` writes its
+    /// secret to the keychain (and, for Microsoft, the access token to
+    /// memory), then the list gains its line. The keychain first, as
+    /// always: a mailbox listed with no secret fails every refresh with no
+    /// way for the customer to tell why.
+    ///
+    /// All of it under the list's lock, and only after checking, under that
+    /// lock, that nothing has changed since the link began (SEC-8): no
+    /// Delete account since `began` (the epoch read when it began) and
+    /// still licensed, within the plan. Signing in can take minutes in the
+    /// browser; a link that finished after Delete account used to put the
+    /// mailbox and its secret back. `unlink` holds the same lock from the
+    /// keychain to the saved list, so the two never interleave: a link kept
+    /// first is removed by Delete account, and one kept after finds the
+    /// epoch moved and writes nothing.
+    fn keep_linked(
+        &self,
+        mailbox: Mailbox,
+        began: u64,
+        put: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+        if self.epoch() != began {
+            return Err(
+                "Delete account removed what RATA kept on this computer while this mailbox was being added, so it was not added."
+                    .into(),
+            );
+        }
+        self.may_link_in(&store, &mailbox.email)?;
+        put()?;
+        let email = mailbox.email.clone();
+        let before = store.find(&email).cloned();
+        store.put(mailbox);
+        if let Err(e) = store.save() {
+            // Back as it was on disk, and no secret left behind for a
+            // mailbox the saved list does not have.
+            match before {
+                Some(b) => store.put(b),
+                None => {
+                    store.remove(&email);
+                }
+            }
+            let _ = vault::forget_all(self.vault.as_ref(), &email);
+            self.ms.forget(&email);
+            return Err(format!("The mailbox list could not be saved: {e}"));
+        }
+        Ok(())
     }
 
     /// Forget a mailbox — from the list *and* from the keychain.
@@ -1058,15 +1137,19 @@ impl Rata {
     /// licensed, so trying again finishes the job instead of leaving a
     /// password behind. The page clears its own store afterwards; the
     /// customer's mailrata.org account is not this computer's to delete.
+    ///
+    /// A link in progress keeps nothing (SEC-8): a Microsoft sign-in waiting
+    /// for the browser is cancelled, and any other link, past the browser or
+    /// waiting on a server, began under an epoch this moves on, so
+    /// `keep_linked` refuses it.
     pub fn forget_everything(&self) -> Result<Forgotten, String> {
-        let boxes: Vec<String> = self
-            .store
-            .lock()
-            .map_err(|_| "the mailbox list is busy")?
-            .list()
-            .iter()
-            .map(|m| m.email.clone())
-            .collect();
+        self.ms.cancel();
+        let boxes: Vec<String> = {
+            let store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
+            self.forgotten
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            store.list().iter().map(|m| m.email.clone()).collect()
+        };
         for email in &boxes {
             self.unlink(email)
                 .map_err(|e| format!("{email} could not be removed: {e}"))?;
@@ -1081,6 +1164,14 @@ impl Rata {
                 ));
             }
             store.set_licence(None);
+            // The iCloud Drive and Creative Cloud Files folders connected
+            // here (K5): only their paths, which are RATA's to forget. The
+            // folders and the files in them are the customer's, untouched.
+            store.clear_connections();
+            // The files made with Create file (K6): only RATA's record of
+            // them, so none can be opened from RATA again. The files are
+            // the customer's documents and stay where they are.
+            store.clear_created();
             store
                 .save()
                 .map_err(|e| format!("The licence could not be removed: {e}"))?;
@@ -1175,7 +1266,7 @@ impl Rata {
                         if p.kind == "auth" {
                             self.note_auth_failure(&p.email);
                         }
-                        self.note_error(&p.email, "refresh", &p.kind, &p.error);
+                        self.note_error(&p.email, "refresh", &p.kind, &p.error, &[]);
                         out.problems.push(p);
                     }
                 }
@@ -1223,10 +1314,11 @@ impl Rata {
         uidvalidity: u32,
         limit: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let names = folder_names(&folder);
         let r = self
             .older_now(email, folder, before_uid, uidvalidity, limit)
             .await;
-        self.kept(email, Op::Older, "", r)
+        self.kept(email, Op::Older, "", &names, r)
     }
 
     async fn older_now(
@@ -1263,7 +1355,7 @@ impl Rata {
     /// to move mail to.
     pub async fn folders(&self, email: &str) -> Result<Vec<OwnFolder>, Problem> {
         let r = self.folders_now(email).await;
-        self.kept(email, Op::Folders, "list", r)
+        self.kept(email, Op::Folders, "list", &[], r)
     }
 
     async fn folders_now(&self, email: &str) -> Result<Vec<OwnFolder>, Problem> {
@@ -1298,8 +1390,9 @@ impl Rata {
         folder: Folder,
         limit: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let names = folder_names(&folder);
         let r = self.folder_mail_now(email, folder, limit).await;
-        self.kept(email, Op::Folders, "read a folder", r)
+        self.kept(email, Op::Folders, "read a folder", &names, r)
     }
 
     async fn folder_mail_now(
@@ -1327,8 +1420,9 @@ impl Rata {
         uids: &[u32],
         uidvalidity: u32,
     ) -> Result<Vec<Message>, Problem> {
+        let names = folder_names(&folder);
         let r = self.reread_now(email, folder, uids, uidvalidity).await;
-        self.kept(email, Op::Older, "re-read", r)
+        self.kept(email, Op::Older, "re-read", &names, r)
     }
 
     async fn reread_now(
@@ -1362,8 +1456,9 @@ impl Rata {
         folder: Folder,
         query: &str,
     ) -> Result<ServerFound, Problem> {
+        let names = folder_names(&folder);
         let r = self.search_now(email, folder, query).await;
-        self.kept(email, Op::Search, "", r)
+        self.kept(email, Op::Search, "", &names, r)
     }
 
     async fn search_now(
@@ -1431,8 +1526,9 @@ impl Rata {
         uid: u32,
         uidvalidity: u32,
     ) -> Result<Opened, Problem> {
+        let names = folder_names(&folder);
         let r = self.open_message_now(email, folder, uid, uidvalidity).await;
-        self.kept(email, Op::Open, "open in full", r)
+        self.kept(email, Op::Open, "open in full", &names, r)
     }
 
     async fn open_message_now(
@@ -1467,12 +1563,14 @@ impl Rata {
         confirmed: bool,
         dir: &Path,
     ) -> Result<Saved, Problem> {
+        let mut names = folder_names(&at.folder);
         let r = async {
             let (info, bytes) = self.attachment_of(email, &at).await?;
+            names.push(Name::File(info.name.clone()));
             save_fetched(email, &info, &bytes, confirmed, dir)
         }
         .await;
-        self.kept(email, Op::Open, "save attachment", r)
+        self.kept(email, Op::Open, "save attachment", &names, r)
     }
 
     /// One attachment's bytes, for the interface to convert (the Format
@@ -1485,12 +1583,14 @@ impl Rata {
         at: AttachmentAt,
         confirmed: bool,
     ) -> Result<Handed, Problem> {
+        let mut names = folder_names(&at.folder);
         let r = async {
             let (info, bytes) = self.attachment_of(email, &at).await?;
+            names.push(Name::File(info.name.clone()));
             hand_fetched(email, info, bytes, confirmed)
         }
         .await;
-        self.kept(email, Op::Open, "convert attachment", r)
+        self.kept(email, Op::Open, "convert attachment", &names, r)
     }
 
     /// The pictures among one message's attachments, for the page to show in
@@ -1520,8 +1620,9 @@ impl Rata {
             self.usable(email)?;
             return Ok(Vec::new());
         }
+        let names = folder_names(&folder);
         let raw = self.whole(email, folder, uid, uidvalidity).await;
-        let raw = self.kept(email, Op::Open, "pictures", raw)?;
+        let raw = self.kept(email, Op::Open, "pictures", &names, raw)?;
         Ok(pictures_fetched(&raw, indexes))
     }
 
@@ -1722,7 +1823,7 @@ impl Rata {
                     .store
                     .lock()
                     .map_err(|_| problem("net", "the mailbox list is busy".into()))?;
-                if !still_linked(&store, m) {
+                if !still_linked(&store, self.vault.as_ref(), m) {
                     return Err(problem(
                         "unknown",
                         format!(
@@ -1756,7 +1857,7 @@ impl Rata {
                 // began for, as above: one linked again meanwhile has a new
                 // sign-in, which this refusal says nothing about.
                 if let Ok(mut store) = self.store.lock()
-                    && still_linked(&store, m)
+                    && still_linked(&store, self.vault.as_ref(), m)
                 {
                     self.ms.forget(&m.email);
                     store.mark_auth(&m.email, Some(now()));
@@ -1845,6 +1946,9 @@ impl Rata {
                 _ => p.error,
             })?;
 
+        // What the message is about and the files it carries are kept out
+        // of Copy diagnostics, should the server repeat them (SEC-8).
+        let names = sent_names(&msg);
         let msg = &msg;
         // A refused token is refused at AUTH, before the message is handed
         // over, so trying again with a fresh one cannot send it twice.
@@ -1857,7 +1961,7 @@ impl Rata {
         {
             Ok(sent) => sent,
             Err(p) => {
-                self.note_error(&m.email, "send", &p.kind, &p.error);
+                self.note_error(&m.email, "send", &p.kind, &p.error, &names);
                 return Err(p.error);
             }
         };
@@ -1877,7 +1981,7 @@ impl Rata {
             Sent::Rejected(error) => ("rejected", error),
             Sent::Net(error) => ("net", error),
         };
-        self.note_error(&m.email, "send", kind, &error);
+        self.note_error(&m.email, "send", kind, &error, &names);
         Err(error)
     }
 
@@ -1901,7 +2005,10 @@ impl Rata {
         prior: Option<DraftRef>,
     ) -> Result<Drafted, Problem> {
         let email = draft.from.trim().to_ascii_lowercase();
-        let r = self.save_draft_now(draft, draft_id, rev, prior).await;
+        let mut names = draft_names(&draft);
+        let r = self
+            .save_draft_now(draft, draft_id, rev, prior, &mut names)
+            .await;
         // A mailbox with no Drafts folder keeps drafts here: not an error to
         // the page, but what a report about drafts needs to know.
         if let Ok(Drafted::NoPlace { error }) = &r {
@@ -1914,18 +2021,22 @@ impl Rata {
                     kind: "no-place".into(),
                     error: error.clone(),
                 },
+                &names,
             );
             return r;
         }
-        self.kept(&email, Op::Draft, "", r)
+        self.kept(&email, Op::Draft, "", &names, r)
     }
 
+    /// `names` gains the names of the files a forward brought, once they
+    /// are fetched (SEC-8).
     async fn save_draft_now(
         &self,
         draft: Draft,
         draft_id: &str,
         rev: u32,
         prior: Option<DraftRef>,
+        names: &mut Vec<Name>,
     ) -> Result<Drafted, Problem> {
         let email = draft.from.trim().to_ascii_lowercase();
         let problem = |kind: &str, error: String| Problem {
@@ -1945,6 +2056,7 @@ impl Rata {
             .outgoing(draft, true)
             .await
             .map_err(|e| problem("refused", e))?;
+        names.extend(sent_names(&msg));
         let (msg, prior) = (&msg, prior.as_ref());
         let saved = self
             .signed(&m, |acct| async move {
@@ -2040,6 +2152,9 @@ impl Rata {
         })
     }
 
+    /// A list entry written as it is, for the tests: a link goes through
+    /// `keep_linked`, which checks before it writes (SEC-8).
+    #[cfg(test)]
     fn remember(&self, m: Mailbox) -> Result<(), String> {
         let mut store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
         store.put(m);
@@ -2081,7 +2196,7 @@ impl Rata {
             })
             .await
             .map_err(|p| {
-                self.note_failed(email, Op::Watch, "connect", &p);
+                self.note_failed(email, Op::Watch, "connect", &p, &[]);
                 if p.kind == "net" || p.kind == "oauth" {
                     Unwatched::Failed(p.error)
                 } else {
@@ -2098,6 +2213,7 @@ impl Rata {
                     kind: kind.into(),
                     error: why.to_string(),
                 },
+                &[],
             );
         };
         match watched {
@@ -2140,29 +2256,34 @@ impl Rata {
         }
     }
 
-    /// Keep a mailbox's latest error, as the customer was shown it.
-    fn note_error(&self, email: &str, doing: &'static str, kind: &str, said: &str) {
+    /// Keep a mailbox's latest error, as the customer was shown it, less
+    /// every name in `names` (SEC-8): the subject and file names of a
+    /// message being sent.
+    fn note_error(&self, email: &str, doing: &'static str, kind: &str, said: &str, names: &[Name]) {
         let trouble = Trouble {
             at: now(),
             doing,
             kind: kind.to_string(),
-            said: said.to_string(),
+            said: diagnostics::without_names(said, names),
         };
         self.note(email, |n| n.last_error = Some(trouble));
     }
 
     /// Keep, for Copy diagnostics, how one operation on a mailbox went
-    /// (J1), and hand its answer back unchanged.
+    /// (J1), and hand its answer back unchanged. `names` is every name the
+    /// operation touched (a folder of the customer's, a file's name), which
+    /// a failure is kept without (SEC-8).
     fn kept<T>(
         &self,
         email: &str,
         op: Op,
         doing: &'static str,
+        names: &[Name],
         r: Result<T, Problem>,
     ) -> Result<T, Problem> {
         match &r {
             Ok(_) => self.note(email, |n| n.worked(op, doing, now())),
-            Err(p) => self.note_failed(email, op, doing, p),
+            Err(p) => self.note_failed(email, op, doing, p, names),
         }
         r
     }
@@ -2172,7 +2293,11 @@ impl Rata {
     /// customer has yet to answer about, or a mailbox already parked (the
     /// block says so on its own line, and the refusal that parked it was
     /// kept when it happened).
-    fn note_failed(&self, email: &str, op: Op, doing: &'static str, p: &Problem) {
+    ///
+    /// The error is kept without `names` (SEC-8): the block goes into public
+    /// bug reports, and an error can carry a folder the customer named or a
+    /// file a stranger named, in RATA's words or echoed in a server's.
+    fn note_failed(&self, email: &str, op: Op, doing: &'static str, p: &Problem, names: &[Name]) {
         if matches!(
             p.kind.as_str(),
             "unlicensed" | "unknown" | "needs-confirmation"
@@ -2192,7 +2317,7 @@ impl Rata {
             at: now(),
             doing,
             kind: p.kind.clone(),
-            said: p.error.clone(),
+            said: diagnostics::without_names(&p.error, names),
         };
         self.note(email, |n| n.failed(op, trouble));
     }
@@ -2216,6 +2341,7 @@ impl Rata {
                 kind: kind.into(),
                 error: why.to_string(),
             },
+            &[],
         );
     }
 
@@ -2338,6 +2464,7 @@ impl Rata {
         action: Action,
     ) -> Changed {
         let doing = action_word(&action);
+        let names = action_names(&folder, &action);
         let c = self
             .change_now(email, folder, uids, uidvalidity, action)
             .await;
@@ -2353,6 +2480,7 @@ impl Rata {
                     kind: c.kind.clone().unwrap_or_default(),
                     error: c.error.clone().unwrap_or_default(),
                 },
+                &names,
             );
         }
         c
@@ -2412,6 +2540,53 @@ impl Rata {
             Acted::Net(why) => Changed::failed("net", why),
         }
     }
+}
+
+/// The customer's own folder `folder` is, as a name to keep out of Copy
+/// diagnostics (SEC-8); none for the inbox and the special folders, whose
+/// errors name them in RATA's fixed words.
+fn folder_names(folder: &Folder) -> Vec<Name> {
+    match folder {
+        Folder::Named(name) => vec![Name::Folder(name.clone())],
+        _ => Vec::new(),
+    }
+}
+
+/// The folders an action touches: the one its messages are in, and the one
+/// it moves them to.
+fn action_names(folder: &Folder, action: &Action) -> Vec<Name> {
+    let mut names = folder_names(folder);
+    if let Action::Move(to) = action {
+        names.extend(folder_names(to));
+    }
+    names
+}
+
+/// What a draft being saved names before anything is fetched: its subject,
+/// the files picked for it, and the folder a forward's files come from.
+fn draft_names(draft: &Draft) -> Vec<Name> {
+    let mut names: Vec<Name> = draft
+        .attachments
+        .iter()
+        .map(|f| Name::File(f.name.clone()))
+        .collect();
+    if let Some(fw) = &draft.forward {
+        names.extend(folder_names(&fw.folder));
+    }
+    names.push(Name::Subject(draft.subject.clone()));
+    names
+}
+
+/// What a message ready to go names: its subject and every file it
+/// carries, a forward's included.
+fn sent_names(msg: &Outgoing) -> Vec<Name> {
+    let mut names: Vec<Name> = msg
+        .attachments
+        .iter()
+        .map(|f| Name::File(f.name.clone()))
+        .collect();
+    names.push(Name::Subject(msg.subject.clone()));
+    names
 }
 
 /// What an action is called in diagnostics: never the folder a message was
@@ -2692,9 +2867,34 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Saved, String> 
 }
 
 /// Write `bytes` to a new file in `dir` named `name`, or `name (2)` and so on
-/// if that is taken. Created exclusively, so an existing file is never
-/// overwritten, even one that appears between the check and the write.
-fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// if that is taken (`write_unmarked`), then mark it as a download
+/// (`mark`). Every file whose bytes could be a stranger's goes this way:
+/// attachments, Format Bridge downloads, saves into a connected folder.
+pub(crate) fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    let path = write_unmarked(dir, name, bytes)?;
+    // Tagged as a download, so SmartScreen, Protected View and
+    // Gatekeeper look at it. Best effort: never fails the save.
+    let _ = crate::mark::from_internet(&path);
+    #[cfg(test)]
+    MARKED.with(|m| m.set(m.get() + 1));
+    Ok(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many files `write_new` marked on this thread, so a test can tell
+    /// a marked write from an unmarked one on Linux, where the mark is
+    /// nothing.
+    pub(crate) static MARKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `write_new` without the mark, for the one kind of file that is the
+/// customer's own from its first byte: a blank document RATA made with
+/// Create file (`created`). Marked, Word would open the customer's own new
+/// file in Protected View. Created exclusively, so an existing file is
+/// never overwritten, even one that appears between the check and the
+/// write.
+pub(crate) fn write_unmarked(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
     let (stem, ext) = match name.rfind('.') {
@@ -2716,9 +2916,6 @@ fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
             Ok(mut f) => {
                 f.write_all(bytes)?;
                 drop(f);
-                // Tagged as a download, so SmartScreen, Protected View and
-                // Gatekeeper look at it. Best effort: never fails the save.
-                let _ = crate::mark::from_internet(&path);
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -4720,7 +4917,8 @@ mod tests {
 
             // Kept: the mailbox, marked; the refresh token in the keychain;
             // the access token in memory only.
-            let mailbox = match app.keep_microsoft("me@outlook.com", "Outlook", tokens) {
+            let began = app.standing().epoch;
+            let mailbox = match app.keep_microsoft("me@outlook.com", "Outlook", tokens, began) {
                 Linked::Ok { mailbox } => mailbox,
                 other => panic!("{other:?}"),
             };
@@ -4785,6 +4983,189 @@ mod tests {
                 Err(Linked::Failed { error }) => assert!(error.contains("browser"), "{error}"),
                 other => panic!("{other:?}"),
             }
+        });
+    }
+
+    /// SEC-8: Delete account pressed while Microsoft's page is open in the
+    /// browser stops that sign-in at once; nothing comes back when the
+    /// customer finishes it.
+    #[test]
+    fn delete_account_stops_a_sign_in_waiting_for_the_browser() {
+        rt().block_on(async {
+            let app = with_ms(tmpfile("ms-forget-waiting"), &nowhere());
+            let got = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                app.link_microsoft("me@outlook.com", |_| {
+                    assert_eq!(app.forget_everything().unwrap().mailboxes, 0);
+                    Ok(())
+                }),
+            )
+            .await
+            .expect("the sign-in was still waiting for the browser after Delete account");
+            assert!(matches!(got, Linked::Cancelled), "{got:?}");
+            assert!(!app.cancel_microsoft(), "nothing is left waiting");
+            assert!(app.mailboxes().is_empty());
+            assert!(app.vault.get("me@outlook.com").is_err());
+        });
+    }
+
+    fn signed_in(refresh: &str) -> oauth::Tokens {
+        oauth::Tokens {
+            access: "EwB-late-access".into(),
+            refresh: Some(refresh.into()),
+            expires_in: 3600,
+            signed_in_as: None,
+        }
+    }
+
+    /// SEC-8: a link that began before Delete account and finishes after it,
+    /// past the browser or waiting on the server, keeps nothing, even once
+    /// a licence is back: no list entry, no keychain entry, no token in
+    /// memory. One that began after it is kept as ever.
+    #[test]
+    fn a_link_finishing_after_delete_account_keeps_nothing() {
+        let app = with_ms(tmpfile("link-after-forget"), &nowhere());
+        let began = app.standing().epoch;
+        app.forget_everything().unwrap();
+        app.set_licence(Some(PRO.into()), None).unwrap();
+
+        match app.keep_microsoft("me@outlook.com", "Outlook", signed_in("M.R-late"), began) {
+            Linked::Failed { error } => assert!(error.contains("Delete account"), "{error}"),
+            other => panic!("{other:?}"),
+        }
+        let mailbox = |email: &str, auth| Mailbox {
+            email: email.into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Work".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: now(),
+            auth_failed_at: None,
+            auth,
+        };
+        let e = app
+            .keep_linked(mailbox("owner@example.com", Auth::Password), began, || {
+                vault::put_password(app.vault.as_ref(), "owner@example.com", "late-password")
+            })
+            .unwrap_err();
+        assert!(e.contains("Delete account"), "{e}");
+        assert!(app.mailboxes().is_empty());
+        assert!(app.vault.get("me@outlook.com").is_err());
+        assert!(app.vault.get("owner@example.com").is_err());
+        assert!(app.ms.cached("me@outlook.com").is_none());
+
+        // The licence is read again when the link is kept, not only when it
+        // began.
+        let now_epoch = app.standing().epoch;
+        app.set_licence(None, None).unwrap();
+        assert!(
+            app.keep_linked(
+                mailbox("owner@example.com", Auth::Password),
+                now_epoch,
+                || {
+                    vault::put_password(app.vault.as_ref(), "owner@example.com", "late-password")
+                }
+            )
+            .is_err()
+        );
+        assert!(app.vault.get("owner@example.com").is_err());
+
+        // Begun after Delete account: kept.
+        app.set_licence(Some(PRO.into()), None).unwrap();
+        let began = app.standing().epoch;
+        match app.keep_microsoft("me@outlook.com", "Outlook", signed_in("M.R-new"), began) {
+            Linked::Ok { mailbox } => assert_eq!(mailbox.auth, Auth::OAuth),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            vault::get_secret(app.vault.as_ref(), "me@outlook.com").unwrap(),
+            Secret::Refresh("M.R-new".into())
+        );
+        assert_eq!(
+            app.ms.cached("me@outlook.com").unwrap().token,
+            "EwB-late-access"
+        );
+    }
+
+    /// A Microsoft mailbox as an older RATA left it: the keychain holds the
+    /// marked sign-in, the list entry lost `auth` and reads as a password.
+    fn linked_ms_unmarked(app: &Rata, email: &str, refresh: &str) -> Mailbox {
+        linked_ms(app, email, refresh);
+        let m = Mailbox {
+            auth: Auth::Password,
+            ..app.mailboxes().remove(0)
+        };
+        app.remember(m.clone()).unwrap();
+        assert!(app.mailboxes()[0].auth.is_password());
+        m
+    }
+
+    /// SEC-8: `account` signs such a mailbox in with Microsoft, so its
+    /// renewals are kept too (SEC-7 had turned every one away as "removed
+    /// or linked again"), and a refused one parks it as ever.
+    #[test]
+    fn a_microsoft_mailbox_listed_without_its_auth_still_renews() {
+        rt().block_on(async {
+            let (url, _sent) = oauth::scripted_token_endpoint(
+                r#"{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-renewed","refresh_token":"M.R-rotated"}"#,
+                "200 OK",
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-unmarked"), &url);
+            let m = linked_ms_unmarked(&app, "me@outlook.com", "M.R-before");
+            let (acct, new) = app.account(&m, None).await.unwrap();
+            assert!(new);
+            assert_eq!(
+                acct.credential,
+                Credential::oauth("me@outlook.com", "EwB-renewed")
+            );
+            assert_eq!(
+                vault::get_secret(app.vault.as_ref(), "me@outlook.com").unwrap(),
+                Secret::Refresh("M.R-rotated".into())
+            );
+
+            let (url, _sent) = oauth::scripted_token_endpoint(
+                r#"{"error":"invalid_grant","error_description":"AADSTS70008: expired."}"#,
+                "400 Bad Request",
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-unmarked-revoked"), &url);
+            let m = linked_ms_unmarked(&app, "me@outlook.com", "M.R-before");
+            let p = app.account(&m, None).await.unwrap_err();
+            assert_eq!(p.kind, "microsoft", "{p:?}");
+            assert!(app.mailboxes()[0].auth_failed_at.is_some());
+        });
+    }
+
+    /// SEC-8 keeps SEC-7: linked again with a password while a renewal of
+    /// such a mailbox was out, written to the keychain and not yet to the
+    /// list (the list entry is unchanged, `added_at` too), the late answer
+    /// replaces neither the password nor parks anything.
+    #[test]
+    fn a_late_renewal_never_replaces_a_new_password() {
+        rt().block_on(async {
+            let (url, asked, release, _sent) = oauth::held_token_endpoint(
+                r#"{"token_type":"Bearer","expires_in":3600,"access_token":"EwB-late","refresh_token":"M.R-rotated-late"}"#,
+                "200 OK",
+                true,
+            )
+            .await;
+            let app = with_ms(tmpfile("ms-unmarked-relink"), &url);
+            let m = linked_ms_unmarked(&app, "me@outlook.com", "M.R-before");
+            let (got, ()) = tokio::join!(app.account(&m, None), async {
+                asked.await.unwrap();
+                vault::put_password(app.vault.as_ref(), "me@outlook.com", "a-new-app-password")
+                    .unwrap();
+                release.send(()).unwrap();
+            });
+            assert_eq!(got.unwrap_err().kind, "unknown");
+            assert_eq!(
+                vault::get_secret(app.vault.as_ref(), "me@outlook.com").unwrap(),
+                Secret::Password("a-new-app-password".into())
+            );
+            assert!(app.ms.cached("me@outlook.com").is_none());
+            assert!(app.mailboxes()[0].auth_failed_at.is_none());
         });
     }
 
@@ -5409,6 +5790,7 @@ mod tests {
             &format!(
                 "OWNER@example.com did not sync — imap.example.com could not be reached: imap.example.com said: LOGIN OWNER@example.com \"{pass}\" ({b64}) {plain}; write to postmaster@example.com. It will be tried again on the next refresh."
             ),
+            &[],
         );
         app.note(&"owner@example.com".to_uppercase(), |n| {
             n.folders.insert("sent");
@@ -5481,6 +5863,7 @@ mod tests {
             "send",
             "oauth",
             &format!("smtp.office365.com said: 535 {token} refused for someone@outlook.com"),
+            &[],
         );
         let block = app.diagnostics(true, &[]);
         for gone in [token, "EwBwA8l6", "refresh-token-value", "@", "someone"] {
@@ -5656,13 +6039,15 @@ mod tests {
             Op::Action,
             "archive",
             &problem("archive"),
+            &[],
         );
-        app.note_failed("OWNER@example.com", Op::Older, "", &problem("page"));
+        app.note_failed("OWNER@example.com", Op::Older, "", &problem("page"), &[]);
         app.note_failed(
             "owner@example.com",
             Op::Open,
             "save attachment",
             &problem("fetch"),
+            &[],
         );
         app.watch_ended("owner@example.com", &Watched::Net(said("wait")));
         // A watch that ends quietly is not a failure.
@@ -5728,5 +6113,272 @@ mod tests {
             assert!(block.contains(kept), "{kept:?} not in:\n{block}");
         }
         assert_eq!(block.matches(" — worked again ").count(), 1, "{block}");
+    }
+
+    /// SEC-8: the block goes into public bug reports, so a folder the
+    /// customer named and a file a stranger named never reach it, whether
+    /// RATA's own sentence carries the name or a server echoes it back:
+    /// as LIST gave it, decoded, in modified UTF-7, quoted, in capitals, a
+    /// level alone, or cut short. Every line still says what failed.
+    #[test]
+    fn diagnostics_never_carry_a_folder_or_a_file_name() {
+        let app = rata(tmpfile("diag-names"));
+        linked(&app, "owner@example.com", "imap.example.com");
+        let who = "owner@example.com";
+        // The block after every failure, since a later failure of the same
+        // operation takes an earlier one's place.
+        let blocks = std::cell::RefCell::new(Vec::new());
+        let shot = || blocks.borrow_mut().push(app.diagnostics(false, &[]));
+        let fail = |op: Op, doing: &'static str, names: &[Name], kind: &str, error: String| {
+            let r: Result<(), Problem> = Err(Problem {
+                email: who.into(),
+                kind: kind.into(),
+                error,
+            });
+            assert!(app.kept(who, op, doing, names, r).is_err());
+            shot();
+        };
+        // Personal/Thérapie notes, as a server lists it.
+        let therapie = Folder::Named("Personal/Th&AOk-rapie notes".into());
+        let therapy = Folder::Named("Therapy notes".into());
+        let custody = "Smith_v_Smith_custody.pdf";
+
+        // Reading a folder: the engine's own sentence, decoded.
+        fail(
+            Op::Folders,
+            "read a folder",
+            &folder_names(&therapie),
+            "net",
+            format!(
+                "{who} did not sync — imap.example.com could not be reached: its folder \u{201c}Personal/Thérapie notes\u{201d} could not be opened. It will be tried again on the next refresh."
+            ),
+        );
+        // Older mail: the server's words, the name as LIST gave it.
+        fail(
+            Op::Older,
+            "",
+            &folder_names(&therapie),
+            "stale",
+            "imap.example.com said: NO [NONEXISTENT] Mailbox \"Personal/Th&AOk-rapie notes\" doesn't exist".into(),
+        );
+        // Re-read, kept under older mail too, replaces it: in capitals, the
+        // level alone, unquoted.
+        fail(
+            Op::Older,
+            "re-read",
+            &folder_names(&therapie),
+            "net",
+            "imap.example.com said: NO Mailbox doesn't exist: THÉRAPIE NOTES".into(),
+        );
+        // An action: from one named folder to another, both echoed, one in
+        // an IMAP quoted string with its quote escaped.
+        let quoted = Folder::Named("Court \"draft\" papers".into());
+        fail(
+            Op::Action,
+            "move to a folder",
+            &action_names(&therapy, &Action::Move(quoted.clone())),
+            "no-place",
+            "The server would not move it from the folder \u{201c}Therapy notes\u{201d}: NO [TRYCREATE] \"Court \\\"draft\\\" papers\" is not there".into(),
+        );
+        // A server in UTF-8 that answers in modified UTF-7.
+        fail(
+            Op::Search,
+            "",
+            &folder_names(&Folder::Named("Thérapie".into())),
+            "net",
+            "imap.example.com said: BAD [CANNOT] cannot search Th&AOk-rapie".into(),
+        );
+        // A fetch in a named folder whose answer was cut short mid-name.
+        fail(
+            Op::Open,
+            "open in full",
+            &folder_names(&therapy),
+            "net",
+            "imap.example.com said: NO cannot open Therapy no".into(),
+        );
+
+        // Saving an attachment: RATA's own sentence names the file, as
+        // saved and as sent.
+        let dir = std::env::temp_dir().join(format!("rata-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"a file where the folder should be").unwrap();
+        let mut names = folder_names(&therapy);
+        names.push(Name::File(custody.into()));
+        let r = save_fetched(who, &listed(custody), b"data", false, &dir);
+        assert!(
+            r.as_ref().is_err_and(|e| e.error.contains(custody)),
+            "{r:?}"
+        );
+        assert!(
+            app.kept(who, Op::Open, "save attachment", &names, r)
+                .is_err()
+        );
+        let _ = std::fs::remove_file(&dir);
+        shot();
+        // Converting one: the name as the message gave it.
+        let r = hand_fetched(
+            who,
+            listed("Custody évaluation.docx"),
+            vec![0; READ_MAX + 1],
+            false,
+        );
+        assert!(r.as_ref().is_err_and(|e| e.kind == "too-large"));
+        assert!(
+            app.kept(
+                who,
+                Op::Open,
+                "convert attachment",
+                &[Name::File("Custody évaluation.docx".into())],
+                r.map(|_| ())
+            )
+            .is_err()
+        );
+        shot();
+
+        // A draft save and a send: a server that repeats a file's name and
+        // the subject.
+        let draft = Draft {
+            from: who.into(),
+            to: "lawyer@example.org".into(),
+            subject: "Hearing on the 14th".into(),
+            attachments: vec![File {
+                name: "affidavit-final.pdf".into(),
+                mime: "application/pdf".into(),
+                data: b"%PDF".to_vec(),
+            }],
+            forward: Some(Forwarded {
+                email: who.into(),
+                folder: therapy.clone(),
+                uid: 1,
+                uidvalidity: 7,
+                indexes: vec![0],
+            }),
+            ..Draft::default()
+        };
+        fail(
+            Op::Draft,
+            "",
+            &draft_names(&draft),
+            "refused",
+            "The attachments could not be forwarded: its folder \u{201c}Therapy notes\u{201d} could not be opened; APPEND refused affidavit-final.pdf (Hearing on the 14th)".into(),
+        );
+        let msg = Outgoing {
+            from: Address::parse(who).unwrap(),
+            from_name: None,
+            to: Address::parse_list("lawyer@example.org").unwrap(),
+            cc: vec![],
+            bcc: vec![],
+            subject: "Hearing on the 14th".into(),
+            body: String::new(),
+            in_reply_to: None,
+            attachments: vec![File {
+                name: custody.into(),
+                mime: "application/pdf".into(),
+                data: b"%PDF".to_vec(),
+            }],
+        };
+        app.note_error(
+            who,
+            "send",
+            "rejected",
+            &format!(
+                "smtp.example.com said: 552 5.7.0 '{custody}' blocked; subject \u{ab}Hearing on the 14th\u{bb}"
+            ),
+            &sent_names(&msg),
+        );
+        shot();
+
+        let blocks = blocks.into_inner();
+        assert_eq!(blocks.len(), 10);
+        let block = blocks.join("\n");
+        for gone in [
+            "Therapy",
+            "THERAPY",
+            "Thérapie",
+            "THÉRAPIE",
+            "Th&AOk-rapie",
+            "rapie",
+            "Personal",
+            "Court",
+            "draft\\",
+            "papers",
+            "Smith",
+            "custody",
+            "évaluation",
+            "affidavit",
+            "Hearing",
+        ] {
+            assert!(!block.contains(gone), "{gone:?} in:\n{block}");
+        }
+        for kept in [
+            "Last failed folders (read a folder): ",
+            "(net): Mailbox 1 did not sync — imap.example.com could not be reached: its folder \u{201c}[folder]\u{201d} could not be opened.",
+            "Last failed older mail: ",
+            "(stale): imap.example.com said: NO [NONEXISTENT] Mailbox \"[folder]\" doesn't exist",
+            "Last failed older mail (re-read): ",
+            "(net): imap.example.com said: NO Mailbox doesn't exist: [folder]",
+            "Last failed action (move to a folder): ",
+            "(no-place): The server would not move it from the folder \u{201c}[folder]\u{201d}: NO [TRYCREATE] \"[folder]\" is not there",
+            "Last failed server search: ",
+            "(net): imap.example.com said: BAD [CANNOT] cannot search [folder]",
+            "Last failed message fetch (open in full): ",
+            "(net): imap.example.com said: NO cannot open [folder]",
+            "Last failed message fetch (save attachment): ",
+            "(disk): [file] could not be saved in ",
+            "Last failed message fetch (convert attachment): ",
+            "(too-large): [file] is too large to convert in RATA",
+            "Last failed draft save: ",
+            "its folder \u{201c}[folder]\u{201d} could not be opened; APPEND refused [file] ([subject])",
+            "Last error: ",
+            "(send, rejected): smtp.example.com said: 552 5.7.0 '[file]' blocked; subject \u{ab}[subject]\u{bb}",
+        ] {
+            assert!(block.contains(kept), "{kept:?} not in:\n{block}");
+        }
+    }
+
+    /// SEC-8: every operation that can touch a named folder says which, and
+    /// a draft says its files, its forward's folder and its subject.
+    #[test]
+    fn each_operation_names_what_it_touched() {
+        assert!(folder_names(&Folder::Inbox).is_empty());
+        assert!(folder_names(&Folder::Sent).is_empty());
+        let a = Folder::Named("A".into());
+        let b = Folder::Named("B".into());
+        assert_eq!(
+            action_names(&a, &Action::Move(b.clone())),
+            vec![Name::Folder("A".into()), Name::Folder("B".into())]
+        );
+        assert_eq!(
+            action_names(&Folder::Inbox, &Action::Move(b)),
+            vec![Name::Folder("B".into())]
+        );
+        assert_eq!(
+            action_names(&a, &Action::Archive),
+            vec![Name::Folder("A".into())]
+        );
+        let draft = Draft {
+            subject: "S".into(),
+            attachments: vec![File {
+                name: "f.pdf".into(),
+                mime: String::new(),
+                data: vec![],
+            }],
+            forward: Some(Forwarded {
+                email: "owner@example.com".into(),
+                folder: a,
+                uid: 1,
+                uidvalidity: 1,
+                indexes: vec![0],
+            }),
+            ..Draft::default()
+        };
+        assert_eq!(
+            draft_names(&draft),
+            vec![
+                Name::File("f.pdf".into()),
+                Name::Folder("A".into()),
+                Name::Subject("S".into())
+            ]
+        );
     }
 }

@@ -655,6 +655,7 @@ not show.
 0.1.45 released and verified 2026-10-02 ([run 37061823962](https://github.com/Noallrightokay/center-point-inbox/actions/runs/37061823962)): gate, all four installer jobs and their installed smoke passed first time; `verify-release.sh v0.1.45`, now checking all five installers, passed each (licence key, id, no font CDN, title; the Intel Mac's title found in code). Its own launch step failed here only because the window took about 20 s to appear in this container after a restart, longer than the script's fixed 12 s wait; run by hand, the window was "RATA 0.1.45 beta". The script now waits for the window, up to a minute, and passes all six (five installers and the launch).
 A review of what 0.1.45 changed (2026-10-02) found no High or Medium and two Lows, fixed in SEC-7 ([#126](https://github.com/Noallrightokay/center-point-inbox/pull/126)): a Microsoft renewal or a licence renewal answering after Unlink or Delete account wrote its token back, and both licence routes sent the missing signing key's name to the caller. A late refusal parking a mailbox linked again meanwhile, the same race, was fixed after it. Both go out in 0.1.46.
 0.1.46 released and verified 2026-10-05 ([#129](https://github.com/Noallrightokay/center-point-inbox/pull/129)): gate, all four installer jobs and their installed smoke passed first time, and `verify-release.sh v0.1.46` passed all six (five installers and the launch, titled "RATA 0.1.46 beta"). It carries SEC-7 and J1 ([#128](https://github.com/Noallrightokay/center-point-inbox/pull/128): Copy diagnostics keeps the latest failure of each operation and how each special folder was found).
+A review of what 0.1.46 changed (2026-10-05) found no High, one Medium and two Lows, fixed in SEC-8 ([#132](https://github.com/Noallrightokay/center-point-inbox/pull/132)): J1's failure lines could carry a custom folder's name or a stranger's attachment name into the public diagnostics block; Delete account did not stop a link still in progress; and a Microsoft mailbox whose list entry lost `auth` could not renew. Released in 0.1.47 and verified 2026-10-05: gate, all four installer jobs and their installed smoke passed first time, and `verify-release.sh v0.1.47` passed all six.
 
 #### G3
 **Go/no-go.** Who: PM + [owner] · Walk Part 1. Every row needs a link into
@@ -1190,6 +1191,86 @@ the website's own Delete account goes to `/app`.
 #### Waves
 - **6**: I1, I2, I3 and I5 at once; I4 after I1 (both in `app.html`);
   I6 and I7 from I5's findings. G2 releases 0.1.45 when they are in.
+
+### Workstream K: connected accounts and Share to Slack (Pro, 2026-10-05)
+
+The owner asked for Microsoft, Google, Apple and Adobe accounts linked for
+their **cloud files** (open, convert in the Format Bridge, save), and
+**Share to Slack** (a message or a file sent to a channel or person), on
+Pro. Research (2026-10-05, official docs unless marked) decided what each
+can be. Every token stays in the keychain, every call is made from the
+customer's computer, and nothing passes through mailrata.org, so both
+owner rules hold. The website sells none of it until it ships (BUG-D).
+
+| Service | What RATA can do | Owner registers | Card |
+|---|---|---|---|
+| Microsoft OneDrive / SharePoint | Graph `Files.ReadWrite` (delegated, no admin consent) on the same Entra registration as mail, its own token, RATA's own browser over `/me/drive` (Microsoft's File Picker needs an iframe RATA's CSP refuses) | add Graph `Files.ReadWrite` to the C4 registration; publisher verification (free, needs a Microsoft partner account) | K2 |
+| Slack | send only: `chat:write`, `files:write` (`files.getUploadURLExternal` + `files.completeUploadExternal`; `files.upload` is gone since 2025-11-12), `im:write`, `channels:read`, `users:read`; user token over **PKCE** (GA 2026-03-30, no client secret, no server); refresh tokens expire after 30 days | a Slack app with PKCE turned on (one-way) and a `http://localhost` redirect | K3 |
+| Google Drive | `drive.file` only (non-sensitive): Google's desktop Picker opens in the browser (`trigger_onepick`), RATA sees only files picked or saved by it; desktop client secret is not a secret | a Google Cloud project, OAuth consent screen, brand verification (days) | K4 |
+| Apple iCloud Drive | **no public API** for a person's iCloud Drive (CloudKit reaches only an app's own containers); RATA uses the iCloud Drive folder on the computer (macOS `~/Library/Mobile Documents/com~apple~CloudDocs`, Windows `%USERPROFILE%\iCloud Drive` with iCloud for Windows) | nothing | K5 |
+| Adobe | **no public API** for a person's Document Cloud files (Acrobat Services is server-to-server and uploads files to Adobe, which breaks both rules); RATA uses the Creative Cloud Files folder Adobe's app keeps on the computer | nothing | K5 |
+
+Not built, and why: reading Slack in RATA (apps outside the Marketplace
+get `conversations.history` at 1 request a minute, 15 messages; listing
+needs 10 workspaces and up to ~3 months of review); Gmail sign-in by OAuth
+(`https://mail.google.com/` is restricted: a yearly CASA assessment,
+third-party figures $500–$4,500, weeks of review; app passwords keep
+working); Box (token exchange appears to need a client secret, so a
+server). Dropbox (PKCE, light review at 50 users) is the easiest addition
+if the owner wants one more.
+
+**Microsoft work accounts (found on the way).** Since Microsoft's
+MC1163922 (late 2025), organisations on the default consent policy no
+longer let users consent to `IMAP.AccessAsUser.All` for a third-party app:
+an administrator must. Personal accounts are unaffected. `help.html` says
+so; publisher verification is the owner's best step.
+
+#### K1
+**The screens, demo first.** Settings → Connected accounts, a source
+switch in Files, Save to on attachments, documents and Bridge outputs, and
+a Share to Slack dialog, gated by `can('connect')` (Pro), behind bridge
+routes whose Rust commands (`connections_status`, `connect_service`,
+`cloud_list`, `cloud_read`, `cloud_save`, `slack_targets`, `slack_share`)
+do not exist yet, so a release build shows none of it. The demo backend
+supplies them. Kinds: `files` (Microsoft, Google: a browser sign-in),
+`folder` (Apple, Adobe: the folder on this computer, said plainly), `share`
+(Slack). Region: `app.html`, `bridge.js`, the demo, the harness.
+
+#### K2
+**OneDrive in Rust.** `oauth.rs` gains a second resource (Graph) on the
+same registration and PKCE flow, asked for when the customer connects
+files; `cloud_*` over `/me/drive/items/{id}/children`, `/content`, and a
+simple upload under 4 MB (an upload session above). Tokens in the
+keychain under their own service. Needs the owner's Graph permission.
+
+#### K3
+**Share to Slack in Rust.** PKCE sign-in in the browser to the owner's
+Slack app (localhost redirect, as `oauth.rs`), user token and its rotation
+in the keychain, `slack_targets` from `conversations.list` (public,
+private, im) and `users.list`, `slack_share` with `chat.postMessage` and
+the two-step upload. Nothing reads Slack history. Needs the owner's Slack
+app.
+
+#### K4
+**Google Drive in Rust.** Desktop OAuth with PKCE and the Picker URL
+(`trigger_onepick=true`, `prompt=consent`, `drive.file` alone); the
+redirect brings `picked_file_ids`; `cloud_read` downloads them,
+`cloud_save` creates files (which `drive.file` then sees). Needs the
+owner's Google project and brand verification.
+
+#### K5
+**iCloud Drive and Creative Cloud Files as folders.** No registration:
+Rust looks for the folder (the paths above), else asks the customer to
+pick it with the system dialog, keeps only the path, and serves
+`cloud_list`/`cloud_read`/`cloud_save` from it with `safe_file_name` and
+`write_new`, never following a link out of the folder. Also the cheapest
+general answer: an Open/Save through the system dialog in the Format
+Bridge reaches every synced folder (OneDrive, Google Drive for desktop,
+Dropbox, Box) with no account at all.
+
+#### Waves
+- **7**: K1 (demo), then K5 (no owner input), then K2, K3 and K4 as the
+  owner's registrations arrive.
 
 ---
 
