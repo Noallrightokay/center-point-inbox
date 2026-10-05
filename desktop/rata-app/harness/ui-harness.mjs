@@ -279,6 +279,53 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         const f = (M.serverFound || {})[args.email] || { messages: [], matched: 0 };
         return { messages: f.messages, matched: f.matched };
       }
+      /* K1: connected accounts. Without M.conn this build has none of these
+         commands, as every release build has none today, and each rejects
+         the way Tauri rejects an unknown command. */
+      case 'connections_status': case 'connect_service': case 'cancel_connect': case 'disconnect_service':
+      case 'cloud_list': case 'cloud_read': case 'cloud_save': case 'slack_targets': case 'slack_share': {
+        const C = M.conn;
+        if (!C) throw 'Command ' + cmd + ' not found';
+        const pro = !M.plan || M.plan.key !== 'base';
+        /* As cloud.rs: every refusal is { service, kind, error }. */
+        const no = (kind, error) => ({ service: String((args && args.service) || ''), kind, error });
+        const entry = (s) => ({ service: s.service, label: s.label, kind: s.kind, ...(C.avail ? { available: C.avail.includes(s.service) } : {}), connected: !!C.on[s.service], ...(C.on[s.service] ? { account: s.account } : {}), ...(s.note ? { note: s.note } : {}) });
+        switch (cmd) {
+          case 'connections_status': return C.services.map(entry);
+          /* Waits, as the browser sign-in does, until the harness answers
+             with __mock.conn.finish() or Cancel does. */
+          case 'connect_service':
+            if (!pro) throw no('plan', 'Connected accounts come with RATA Pro. Upgrade at mailrata.org.');
+            return new Promise((r) => { C.finish = (ok = true) => { C.finish = null; if (ok) { C.on[args.service] = true; r(entry(C.services.find((s) => s.service === args.service))); } else r({ cancelled: true }); }; });
+          case 'cancel_connect':
+            if (C.finish) { C.finish(false); return true; }
+            return false;
+          case 'disconnect_service': delete C.on[args.service]; return entry(C.services.find((s) => s.service === args.service));
+          case 'cloud_list': {
+            if (!pro) throw no('plan', 'Connected accounts come with RATA Pro. Upgrade at mailrata.org.');
+            if (!C.on[args.service]) throw no('not-connected', 'That service is not connected.');
+            const f = C.tree[args.service][args.folder || 'root'];
+            if (!f) throw no('gone', 'That folder is no longer there.');
+            return { folder: { id: args.folder || '', name: f.name, ...(f.parent !== undefined ? { parent: f.parent } : {}), path: f.path }, items: f.items, truncated: !!f.truncated };
+          }
+          case 'cloud_read': {
+            const f = C.files[args.id];
+            if (f === 'offline') throw no('offline', 'That file is still in iCloud. Open it in Finder once to download it, then try again.');
+            if (!f) throw no('gone', 'That file is no longer there.');
+            return f;
+          }
+          case 'cloud_save':
+            C.saved.push(args);
+            if (/\.(pdf|docx?|xlsx?|txt|jpe?g|png)\.(exe|scr|js|bat|cmd|com)$/i.test(args.name) && args.confirmed !== true)
+              throw no('needs-confirmation', args.name + ' is a program named to look like a document. RATA saves it only after you say so.');
+            return { name: args.name, id: 'Documents/' + args.name, where: 'OneDrive / Documents', size: atob(args.data).length };
+          case 'slack_targets': return C.targets;
+          case 'slack_share':
+            C.shared.push(args);
+            return { where: '#ed-staff in Saltmarsh ED' };
+        }
+        throw 'unmocked ' + cmd;
+      }
       case 'change_messages':
         /* What the mailbox answers, when a check says (BUG-M). */
         if (M.change) return M.change(args);
@@ -3561,6 +3608,383 @@ console.log('\n— Delete account in the app removes what is on this computer, a
     && !after.keys.length && !after.dbs.length,
   `Delete permanently asks Rust to remove the mailboxes and licence first, then clears the store, the outbox and the sign-in: ${JSON.stringify(after)}`);
   await pg.close();
+}
+
+console.log('\n— connected accounts: cloud files and Share to Slack, Pro, shown only when the app answers for them (K1) —');
+{
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  const axe = async (pg, where) => {
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  const EVIL = '<img src=x onerror=window.__pwned=1>';
+  const svc = (service, label, kind, account, note) => ({ service, label, kind, account, ...(note ? { note } : {}) });
+  const CONN = () => ({
+    on: { microsoft: true },
+    services: [
+      svc('microsoft', 'Microsoft OneDrive', 'files', 'riley@example.org'),
+      svc('google', 'Google Drive', 'files', 'riley@gmail.example', 'RATA sees only the files you choose and the ones it saves.'),
+      svc('apple', 'iCloud Drive', 'folder', 'iCloud Drive on this computer'),
+      svc('adobe', 'Creative Cloud Files', 'folder', 'Creative Cloud Files on this computer'),
+      svc('slack', 'Slack', 'share', 'Riley in Saltmarsh ED'),
+    ],
+    tree: { microsoft: {
+      root: { name: 'OneDrive', path: 'OneDrive', items: [
+        { id: 'x2', name: 'Schedule.md', kind: 'file', size: 40, modified: 1790000000 },
+        { id: 'x1', name: EVIL + '.docx', kind: 'file', size: 1000, modified: 1790000000 },
+        { id: 'f1', name: 'Policies', kind: 'folder' },
+      ] },
+      /* The path names the crumbs, not the name it was opened by. */
+      f1: { name: 'Policies', parent: '', path: 'OneDrive / Policies 2026', truncated: true, items: [
+        { id: 'x3', name: 'Protocol.txt', kind: 'file', size: 20 },
+        { id: 'x4', name: 'Passport scan.pdf', kind: 'file', size: 820000, offline: true },
+      ] },
+    } },
+    files: {
+      x2: { name: 'Schedule.md', mime: 'text/markdown', data: btoa('# Schedule\n\n- Nights on the 8th and 9th\n') },
+      x3: { name: 'Protocol.txt', mime: 'text/plain', data: btoa('Measure lactate first.') },
+      x4: 'offline',
+    },
+    targets: [{ id: 'C1', name: 'ed-staff', kind: 'channel' }, { id: 'C2', name: 'shift-swaps', kind: 'channel' }, { id: 'U1', name: 'Marcus Bell', kind: 'person' }, { id: 'C9', name: EVIL, kind: 'channel' }],
+    saved: [], shared: [], finish: null,
+  });
+  const mk = (uid, extra) => Object.assign({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example',
+    from_name: 'Dr. Omar Haddad', from_addr: 'omar@example.org', to_name: '', to_addr: 'me@example.com', to_all: ['me@example.com'], cc: [], in_reply_to: '', subject: 'Quality minutes',
+    preview: 'Minutes attached', body: 'Minutes from Tuesday are attached.\n\n' + 'Item. '.repeat(200), ts: Date.now() - uid * 60e3, unread: false, starred: false, uid, uidvalidity: 7,
+    message_id: 'k' + uid + '@example.org', reply_to: '', truncated: false, attachments: [{ index: 1, name: 'Q3 figures.pdf', mime: 'application/pdf', size: 245760 }], html: false }, extra || {});
+  const calls = (pg, name) => pg.evaluate((n) => __mock.calls.filter(([c]) => c === n).map(([, a]) => a), name);
+  const bits = (pg) => pg.evaluate(() => ({
+    sec: !document.querySelector('#conn-sec').hidden, src: !document.querySelector('#cloud-src').hidden, br: !document.querySelector('#br-cloud').hidden,
+    attCloud: document.querySelectorAll('#mail-detail [data-cloud]').length, slack: !!document.querySelector('#md-slack'),
+    docSave: document.querySelectorAll('#doc-grid [data-saveto]').length, docSlack: document.querySelectorAll('#doc-grid [data-slack]').length,
+  }));
+
+  /* A build with none of the commands: nothing of the feature anywhere. */
+  {
+    const pg = await open(true);
+    await pg.evaluate(async (msg) => {
+      __mock.refresh = { messages: [msg], flags: [], problems: [], skipped: [] };
+      await serverSync('mail');
+      S.documents.unshift({ id: 'dk1', name: 'Kept.md', fmt: 'MD', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 10, ts: Date.now(), content: 'Kept', hasFile: true });
+      await fvPut('dk1', new Blob(['# Kept\n']));
+      go('set'); await loadConnections(); go('docs'); await loadConnections(); go('inbox'); openMail('me@example.com_5');
+    }, mk(5));
+    await pg.waitForFunction(() => OPENED.has('me@example.com_5'), null, { timeout: 5000 }).catch(() => {});
+    await pg.evaluate(() => { openMail('me@example.com_5'); go('docs'); });
+    const b = await bits(pg);
+    const asked = (await calls(pg, 'connections_status')).length;
+    check(asked > 0 && !b.sec && !b.src && !b.br && !b.attCloud && !b.slack && !b.docSave && !b.docSlack,
+      `a build without connections_status shows nothing of it, though it was asked (${asked}x): ${JSON.stringify(b)}`);
+    await pg.close();
+  }
+
+  /* A build that can do only some services yet (available: false for the
+     rest): only those show, and none of the others is offered anywhere. */
+  {
+    const pg = await open(true);
+    await pg.evaluate(async ({ c, msg }) => {
+      __mock.conn = c;
+      __mock.conn.avail = ['apple', 'adobe'];
+      __mock.conn.on = { microsoft: true, slack: true, apple: true };
+      __mock.refresh = { messages: [msg], flags: [], problems: [], skipped: [] };
+      await serverSync('mail');
+      S.documents.unshift({ id: 'dk2', name: 'Kept.md', fmt: 'MD', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 10, ts: Date.now(), content: 'Kept', hasFile: true });
+      await fvPut('dk2', new Blob(['# Kept\n']));
+      go('set'); await loadConnections();
+    }, { c: CONN(), msg: mk(6) });
+    const rows = await pg.evaluate(() => [...document.querySelectorAll('#conn-list .conn-row')].map((r) => r.dataset.conn));
+    check(rows.join() === 'apple,adobe', `only the services this build can do have rows: ${rows.join()}`);
+    await pg.evaluate(() => { go('inbox'); openMail('me@example.com_6'); });
+    await pg.waitForSelector('#mail-detail [data-cloud]', { timeout: 5000 }).catch(() => {});
+    const msgBits = await pg.evaluate(() => ({ slack: !!document.querySelector('#md-slack'), att: document.querySelectorAll('#mail-detail [data-cloud]').length }));
+    await pg.click('#mail-detail [data-cloud="0"]').catch(() => {});
+    const menu = await pg.evaluate(() => [...document.querySelectorAll('#saveto-menu button')].map((b) => b.dataset.saveto));
+    await pg.keyboard.press('Escape');
+    await pg.evaluate(() => go('docs'));
+    await pg.waitForSelector('#cloud-src:not([hidden])', { timeout: 5000 }).catch(() => {});
+    const src = await pg.evaluate(() => ({ chips: [...document.querySelectorAll('#cloud-src [data-cloud-src]')].map((b) => b.dataset.cloudSrc), docSlack: document.querySelectorAll('#doc-grid [data-slack]').length }));
+    check(!msgBits.slack && !src.docSlack && msgBits.att > 0 && menu.join() === 'apple' && src.chips.join() === 'local,apple',
+      `no Share to Slack, and Save to and Files offer only iCloud Drive, though OneDrive and Slack say connected: ${JSON.stringify({ ...msgBits, menu, ...src })}`);
+    await pg.evaluate(async () => { __mock.conn.avail = []; go('set'); await loadConnections(); });
+    check(await pg.evaluate(() => document.querySelector('#conn-sec').hidden), 'with no service available, the section stays hidden');
+    await pg.close();
+  }
+
+  /* Base: the rows say which plan has it, and offer no Connect. */
+  {
+    const pg = await open(true);
+    await pg.evaluate(async () => {
+      __mock.plan = { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false };
+      takeStanding(await apiFetch('/api/licence'));
+      go('set'); go('docs');
+    });
+    await pg.evaluate(async (c) => { __mock.conn = c; __mock.conn.on = {}; await loadConnections(); go('set'); await loadConnections(); }, CONN());
+    const base = await pg.evaluate(() => ({
+      shown: !document.querySelector('#conn-sec').hidden,
+      lead: document.querySelector('#conn-lead').textContent,
+      rows: document.querySelectorAll('#conn-list .conn-row').length,
+      connect: document.querySelectorAll('#conn-list [data-conn-on]').length,
+      plans: !!document.querySelector('#conn-plans'),
+      text: document.querySelector('#conn-sec').textContent,
+    }));
+    check(base.shown && base.rows === 5 && base.connect === 0 && base.plans && /comes with RATA Pro, \$23\.99 a month/.test(base.lead),
+      `Base sees the five rows, the plan sentence and See plans, and no Connect: ${JSON.stringify({ ...base, text: undefined })}`);
+    check(!/[–—]/.test(base.text), 'and the section has no em or en dash');
+    /* Connected before a downgrade: it can still be taken away, and is not used. */
+    await pg.evaluate(async () => { __mock.conn.on = { microsoft: true, slack: true }; await loadConnections(); go('docs'); });
+    const b = await bits(pg);
+    const off = await pg.evaluate(() => !!document.querySelector('#conn-list [data-conn-off="microsoft"]'));
+    check(off && !b.src && !b.br && !b.docSlack, `on Base a connection left from Pro can be disconnected and is not offered anywhere: ${JSON.stringify({ off, ...b })}`);
+    /* The licence's own `connect` (licence.rs) decides in the app, over the
+       plan ladder: a Pro licence that says false offers no Connect. */
+    const gate = await pg.evaluate(async () => {
+      __mock.conn.on = {};
+      __mock.plan = { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true, connect: false };
+      takeStanding(await apiFetch('/api/licence')); go('set'); await loadConnections();
+      const no = document.querySelectorAll('#conn-list [data-conn-on]').length;
+      __mock.plan = { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: true };
+      takeStanding(await apiFetch('/api/licence')); await loadConnections();
+      return { no, yes: document.querySelectorAll('#conn-list [data-conn-on]').length };
+    });
+    check(gate.no === 0 && gate.yes === 5, `the licence's connect flag decides, when the app sends one: ${JSON.stringify(gate)}`);
+    await pg.close();
+  }
+
+  /* Pro. */
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx });
+  await pg.evaluate(async ({ c, msg }) => {
+    __mock.conn = c;
+    __mock.readable = { 1: { name: 'Q3 figures.pdf', mime: 'application/pdf', data: btoa('%PDF-1.4 figures') } };
+    __mock.refresh = { messages: [msg], flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    go('set'); await loadConnections();
+  }, { c: CONN(), msg: mk(7) });
+  let st = await pg.evaluate(() => [...document.querySelectorAll('#conn-list .conn-row')].map((r) => ({
+    s: r.dataset.conn, name: r.querySelector('b').textContent, state: r.querySelector('.conn-state').textContent,
+    note: (r.querySelector('.conn-note') || {}).textContent || '', btn: (r.querySelector('button') || {}).textContent || '' })));
+  check(st.map((r) => r.s).join() === 'microsoft,google,apple,adobe,slack', `Settings lists the five services in order: ${st.map((r) => r.s).join()}`);
+  check(st[0].state === 'Connected as riley@example.org' && st[0].btn === 'Disconnect' && st[1].btn === 'Connect', `OneDrive shows its account and Disconnect, the others Connect: ${JSON.stringify(st.slice(0, 2))}`);
+  check(st[2].name === 'Apple: iCloud Drive (the folder on this computer)' && /Apple does not let other apps sign in to iCloud Drive/.test(st[2].note)
+    && st[3].name === 'Adobe: Creative Cloud Files (the folder on this computer)' && /Creative Cloud Files folder/.test(st[3].note) && /only the files you choose/.test(st[1].note),
+  `Apple and Adobe say they are a folder on this computer and why, Google what RATA sees: ${JSON.stringify(st.slice(1, 4).map((r) => [r.name, r.note.slice(0, 40)]))}`);
+  await axe(pg, 'Settings with Connected accounts');
+
+  /* Connect waits for the browser, and Cancel stops it. */
+  await pg.click('#conn-list [data-conn-on="google"]');
+  await pg.waitForSelector('#conn-list [data-conn="google"] .conn-wait');
+  let w = await pg.evaluate(() => ({ text: document.querySelector('#conn-list [data-conn="google"] .conn-wait').textContent, focus: document.activeElement.dataset.connCancel }));
+  check(w.text === 'Finish signing in in your browser' && w.focus === 'google', `Connect says to finish in the browser, with Cancel focused: ${JSON.stringify(w)}`);
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#conn-list [data-conn-on="google"]');
+  check((await calls(pg, 'cancel_connect')).length === 1 && /Stopped\. Google Drive is not connected/.test((await toasts(pg)).join('|')), 'Cancel stops it, and it stays unconnected');
+  await pg.click('#conn-list [data-conn-on="apple"]');
+  await pg.waitForSelector('#conn-list [data-conn="apple"] .conn-wait');
+  w = await pg.evaluate(() => document.querySelector('#conn-list [data-conn="apple"] .conn-wait').textContent);
+  check(w === 'Looking for the folder…', `a folder service looks for its folder rather than signing in: "${w}"`);
+  await pg.evaluate(() => __mock.conn.finish(true));
+  await pg.waitForSelector('#conn-list [data-conn-off="apple"]');
+  w = await pg.evaluate(() => ({ state: document.querySelector('#conn-list [data-conn="apple"] .conn-state').textContent, focus: document.activeElement.dataset.connOff }));
+  check(w.state === 'Using iCloud Drive on this computer' && w.focus === 'apple', `connected, it names the folder, and the focus is on its Disconnect: ${JSON.stringify(w)}`);
+  await pg.click('#conn-list [data-conn-on="slack"]');
+  await pg.waitForSelector('#conn-list [data-conn="slack"] .conn-wait');
+  await pg.evaluate(() => __mock.conn.finish(true));
+  await pg.waitForSelector('#conn-list [data-conn-off="slack"]');
+  await pg.click('#conn-list [data-conn-off="apple"]');
+  await pg.waitForSelector('#conn-list [data-conn-on="apple"]');
+  check((await calls(pg, 'disconnect_service')).map((a) => a.service).join() === 'apple', 'Disconnect asks the app to forget it');
+  check(await pg.evaluate(() => !('connections' in S) && !JSON.stringify(S.settings).includes('microsoft')), 'nothing about connections is kept in the workspace');
+
+  /* Files: browse a cloud folder. */
+  await pg.evaluate(() => { window.__pwned = undefined; go('docs'); });
+  await pg.waitForSelector('#cloud-src:not([hidden]) [data-cloud-src="microsoft"]');
+  const chips = await pg.evaluate(() => [...document.querySelectorAll('#cloud-src [data-cloud-src]')].map((b) => b.textContent + ':' + b.getAttribute('aria-pressed')));
+  check(chips.join() === 'On this computer:true,OneDrive:false', `the source switch offers this computer and each connected cloud: ${chips.join()}`);
+  await pg.click('#cloud-src [data-cloud-src="microsoft"]');
+  await pg.waitForSelector('#cloud-body .cloud-item');
+  let pane = await pg.evaluate(() => ({
+    mode: document.querySelector('#view-docs').classList.contains('cloud-mode'),
+    grid: getComputedStyle(document.querySelector('#doc-grid')).display,
+    crumbs: [...document.querySelectorAll('#cloud-body .cloud-crumbs li')].map((l) => l.textContent.trim()),
+    names: [...document.querySelectorAll('#cloud-body .cloud-name')].map((n) => n.textContent),
+    imgs: document.querySelectorAll('#cloud-body img').length, pwned: window.__pwned,
+    bridgeOn: [...document.querySelectorAll('#cloud-body [data-cloud-bridge]')].map((b) => b.dataset.cloudBridge),
+  }));
+  check(pane.mode && pane.grid === 'none' && pane.crumbs.join('|') === 'OneDrive' && pane.names[0] === 'Policies' && pane.names.length === 3
+    && pane.names.includes(EVIL + '.docx') && pane.names.includes('Schedule.md') && pane.bridgeOn.sort().join() === 'x1,x2',
+    `a cloud shows its folder in place of this computer's files, folders first: ${JSON.stringify(pane)}`);
+  check(pane.imgs === 0 && pane.pwned === undefined, 'a file named as HTML is shown as text and runs nothing');
+  await pg.focus('#cloud-body [data-cloud-folder="f1"]');
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => [...document.querySelectorAll('#cloud-body .cloud-name')].some((n) => n.textContent === 'Protocol.txt'));
+  pane = await pg.evaluate(() => ({ crumbs: [...document.querySelectorAll('#cloud-body .cloud-crumbs li')].map((l) => l.textContent.trim()), focus: document.activeElement.dataset.cloudBridge || document.activeElement.textContent }));
+  check(pane.crumbs.join('|') === 'OneDrive|/Policies 2026' && pane.focus === 'x4', `a folder opens by keyboard, with the path Rust shows and the focus on its first file: ${JSON.stringify(pane)}`);
+  const off = await pg.evaluate(() => ({
+    meta: [...document.querySelectorAll('#cloud-body .cloud-item')].find((li) => /Passport/.test(li.textContent)).querySelector('.cloud-meta').textContent,
+    more: [...document.querySelectorAll('#cloud-body .cloud-note')].map((p) => p.textContent).join('|'),
+  }));
+  check(/^In iCloud/.test(off.meta) && /holds more than RATA lists\. These are the first 2/.test(off.more), `a placeholder says it is in iCloud, and a cut listing says so: ${JSON.stringify(off)}`);
+  await pg.evaluate(() => { window.__toasts = []; });
+  await pg.click('#cloud-body [data-cloud-bridge="x4"]');
+  await pg.waitForFunction(() => window.__toasts.length > 0);
+  const offT = (await toasts(pg)).join('|');
+  check(/still in iCloud\. Open it in Finder once/.test(offT) && (await pg.evaluate(() => BR.name)) !== 'Passport scan.pdf', `opening one says why it cannot, in the app's words: "${offT}"`);
+  await pg.click('#cloud-body .cloud-crumbs button');
+  await pg.waitForSelector('#cloud-body [data-cloud-bridge="x2"]');
+
+  /* Open in Bridge, and Add to Files. */
+  await pg.click('#cloud-body [data-cloud-bridge="x2"]');
+  await pg.waitForFunction(() => BR.name === 'Schedule.md');
+  const br = await pg.evaluate(() => ({ name: BR.name, text: BR.text, shown: getComputedStyle(document.querySelector('#br-loaded')).display !== 'none' }));
+  check(br.shown && /Nights on the 8th/.test(br.text) && (await calls(pg, 'cloud_read')).some((a) => a.service === 'microsoft' && a.id === 'x2'),
+    `Open in Bridge reads the file from the cloud into the Format Bridge: ${JSON.stringify(br)}`);
+  await pg.click('#cloud-body [data-cloud-keep="x2"]');
+  await pg.waitForFunction(() => S.documents.some((d) => d.cloud === 'OneDrive') && window.__toasts.some((t) => /is in your Files/.test(t)));
+  const kept = await pg.evaluate(async () => { const d = S.documents.find((x) => x.cloud === 'OneDrive'); const b = await fvGet(d.id); return { name: d.name, has: d.hasFile, content: d.content, bytes: b ? await b.text() : null, fmt: d.fmt }; });
+  check(kept.name === 'Schedule.md' && kept.has && /Nights/.test(kept.content) && /^# Schedule/.test(kept.bytes || '') && kept.fmt === 'MD',
+    `Add to Files keeps the file and its text like a converted document: ${JSON.stringify(kept)}`);
+
+  /* Save a Files document to a cloud, through the menu by keyboard. */
+  await pg.click('#cloud-src [data-cloud-src="local"]');
+  await pg.waitForSelector('#doc-grid [data-saveto]');
+  const docId = await pg.evaluate(() => S.documents.find((x) => x.cloud === 'OneDrive').id);
+  await pg.focus(`#doc-grid [data-saveto="${docId}"]`);
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#saveto-menu');
+  let m = await pg.evaluate(() => ({ items: [...document.querySelectorAll('#saveto-menu button')].map((b) => b.textContent), focus: document.activeElement.dataset.saveto, exp: document.querySelector('[aria-controls="saveto-menu"]').getAttribute('aria-expanded') }));
+  check(m.items.join() === 'OneDrive' && m.focus === 'microsoft' && m.exp === 'true', `Save to lists the connected clouds and takes the focus: ${JSON.stringify(m)}`);
+  await pg.keyboard.press('Escape');
+  m = await pg.evaluate((id) => ({ open: !!document.querySelector('#saveto-menu'), back: document.activeElement.dataset.saveto === id }), docId);
+  check(!m.open && m.back && (await calls(pg, 'cloud_save')).length === 0, `Escape closes it, saves nothing, and gives the focus back: ${JSON.stringify(m)}`);
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#saveto-menu');
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'cloud_save'));
+  let saved = (await calls(pg, 'cloud_save'))[0];
+  check(saved.service === 'microsoft' && saved.name === 'Schedule.md' && atob(saved.data).startsWith('# Schedule') && /Saved Schedule\.md to OneDrive \/ Documents/.test((await toasts(pg)).join('|')),
+    `a Files document goes to the cloud chosen, and the toast says where: ${JSON.stringify({ ...saved, data: saved.data.length })}`);
+
+  /* The Format Bridge's output, to a cloud. */
+  await pg.click('#br-cloud');
+  await pg.click('#saveto-menu [data-saveto="microsoft"]');
+  await pg.waitForFunction(() => __mock.calls.filter(([c]) => c === 'cloud_save').length === 2);
+  saved = (await calls(pg, 'cloud_save'))[1];
+  check(saved.name === 'Schedule.docx' && atob(saved.data).startsWith('PK'), `Save to on the Bridge converts and saves the result: ${saved.name}`);
+
+  /* A program named as a document: the app refuses it unasked
+     (needs-confirmation), the page asks the disguised-program question,
+     and only Save anyway sends it again, confirmed. */
+  await pg.evaluate(async () => {
+    S.documents.unshift({ id: 'dexe', name: 'Invoice.pdf.exe', fmt: 'EXE', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 2, ts: Date.now() + 1, content: '', hasFile: true });
+    await fvPut('dexe', new Blob(['MZ']));
+    renderDocs();
+  });
+  const saves = async () => (await calls(pg, 'cloud_save')).length;
+  let before = await saves();
+  await pg.click('#doc-grid [data-saveto="dexe"]');
+  await pg.click('#saveto-menu [data-saveto="microsoft"]');
+  await pg.waitForSelector('#warn-ov.open');
+  const asked = await pg.evaluate(() => document.querySelector('#warn-title').textContent);
+  await pg.click('#warn-cancel');
+  await pg.waitForTimeout(150);
+  let after = await calls(pg, 'cloud_save');
+  check(/is a program \(\.exe\) named to look like a document\. Save it anyway\?/.test(asked) && after.length === before + 1 && after[after.length - 1].confirmed === false,
+    `the app's needs-confirmation brings the disguised-program question, and Cancel sends nothing more: "${asked}"`);
+  before = after.length;
+  await pg.click('#doc-grid [data-saveto="dexe"]');
+  await pg.click('#saveto-menu [data-saveto="microsoft"]');
+  await pg.waitForSelector('#warn-ov.open');
+  await pg.click('#warn-go');
+  await pg.waitForFunction((n) => __mock.calls.filter(([c]) => c === 'cloud_save').length === n + 2, before);
+  after = await calls(pg, 'cloud_save');
+  check(after[after.length - 2].confirmed === false && after[after.length - 1].confirmed === true && /Saved Invoice\.pdf\.exe to OneDrive \/ Documents/.test((await toasts(pg)).join('|')),
+    'Save anyway sends it again, confirmed, and it is saved');
+  await pg.evaluate(async () => { S.documents = S.documents.filter((d) => d.id !== 'dexe'); renderDocs(); });
+
+  /* An attachment's Save to, and Share to Slack from the message. */
+  await pg.evaluate(() => { go('inbox'); openMail('me@example.com_7'); });
+  await pg.waitForFunction(() => OPENED.has('me@example.com_7') && document.querySelector('#mail-detail [data-cloud]'));
+  const n0 = await saves();
+  await pg.click('#mail-detail [data-cloud="0"]');
+  await pg.click('#saveto-menu [data-saveto="microsoft"]');
+  await pg.waitForFunction((n) => __mock.calls.filter(([c]) => c === 'cloud_save').length === n + 1, n0);
+  saved = (await calls(pg, 'cloud_save')).at(-1);
+  check(saved.name === 'Q3 figures.pdf' && atob(saved.data) === '%PDF-1.4 figures' && (await calls(pg, 'read_attachment')).some((a) => a.index === 1),
+    `an attachment goes from the mailbox to the cloud through read_attachment: ${saved.name}`);
+
+  await pg.focus('#md-slack');
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+  let dlg = await pg.evaluate(() => ({
+    focus: document.activeElement.id, text: document.querySelector('#slack-text').value,
+    files: [...document.querySelectorAll('#slack-filelist input')].map((c) => c.checked),
+    names: [...document.querySelectorAll('#slack-targets .slack-name')].map((n) => n.textContent),
+    imgs: document.querySelectorAll('#slack-ov img').length, pwned: window.__pwned,
+  }));
+  const startOk = dlg.text.startsWith('Quality minutes\nFrom Dr. Omar Haddad (omar@example.org)\n\nMinutes from Tuesday are attached.') && dlg.text.length <= 'Quality minutes\nFrom Dr. Omar Haddad (omar@example.org)\n\n'.length + 501;
+  check(dlg.focus === 'slack-q' && startOk, `Share to Slack opens with the search focused and the subject, sender and start of the text to edit: ${JSON.stringify(dlg.text.slice(0, 90))} (${dlg.text.length})`);
+  check(dlg.files.length === 2 && dlg.files.every((c) => !c), `each attachment has a box, none ticked: ${JSON.stringify(dlg.files)}`);
+  check(dlg.names.includes('#ed-staff') && dlg.names.includes('Marcus Bell') && dlg.names.includes('#' + EVIL) && dlg.imgs === 0 && dlg.pwned === undefined,
+    `Slack's names are shown as text: ${JSON.stringify(dlg.names)}`);
+  await axe(pg, 'the Share to Slack dialog');
+  await pg.focus('#slack-send');
+  await pg.keyboard.press('Tab');
+  check(await pg.evaluate(() => document.activeElement.id === 'slack-close'), 'Tab stays inside the dialog');
+  await pg.keyboard.press('Escape');
+  dlg = await pg.evaluate(() => ({ open: document.querySelector('#slack-ov').classList.contains('open'), focus: document.activeElement.id, still: !!document.querySelector('#mail-detail.open') }));
+  check(!dlg.open && dlg.focus === 'md-slack' && dlg.still && (await calls(pg, 'slack_share')).length === 0, `Escape cancels, sends nothing, and gives the focus back: ${JSON.stringify(dlg)}`);
+  await pg.click('#md-slack');
+  await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+  await pg.click('#slack-send');
+  const err = await pg.evaluate(() => document.querySelector('#slack-err').textContent);
+  check(/Choose a channel or a person/.test(err) && (await calls(pg, 'slack_share')).length === 0, `Send with nobody chosen says so and sends nothing: "${err}"`);
+  await pg.fill('#slack-q', 'shift');
+  const left = await pg.evaluate(() => [...document.querySelectorAll('#slack-targets .slack-name')].map((n) => n.textContent));
+  check(left.join() === '#shift-swaps', `the search narrows the list: ${left.join()}`);
+  await pg.fill('#slack-q', '');
+  await pg.click('#slack-targets input[value="C1"]');
+  await pg.check('#slack-file-0');
+  await pg.fill('#slack-text', 'For Thursday.');
+  check((await calls(pg, 'slack_share')).length === 0, 'nothing is sent while the dialog is filled in');
+  await pg.click('#slack-send');
+  await pg.waitForFunction(() => !document.querySelector('#slack-ov').classList.contains('open'));
+  let shared = await calls(pg, 'slack_share');
+  check(shared.length === 1 && shared[0].target === 'C1' && shared[0].text === 'For Thursday.' && shared[0].files.length === 1 && shared[0].files[0].name === 'Q3 figures.pdf' && atob(shared[0].files[0].data) === '%PDF-1.4 figures',
+    `Send shares the text and the ticked file to the one chosen: ${JSON.stringify(shared.map((s) => ({ ...s, files: s.files.map((f) => f.name) })))}`);
+  check(/Shared to #ed-staff in Saltmarsh ED/.test((await toasts(pg)).join('|')), 'and the toast says where it went');
+
+  /* Share to Slack on a Files document: its file, ticked. */
+  await pg.evaluate(() => go('docs'));
+  await pg.waitForSelector('#doc-grid [data-slack]');
+  await pg.click(`#doc-grid [data-slack="${docId}"]`);
+  await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+  const docDlg = await pg.evaluate(() => ({ files: [...document.querySelectorAll('#slack-filelist label')].map((l) => l.textContent + ':' + l.querySelector('input').checked) }));
+  await pg.click('#slack-targets input[value="U1"]');
+  await pg.click('#slack-send');
+  await pg.waitForFunction(() => __mock.calls.filter(([c]) => c === 'slack_share').length === 2);
+  shared = (await calls(pg, 'slack_share'))[1];
+  check(docDlg.files.join() === 'Schedule.md:true' && shared.target === 'U1' && shared.files[0].name === 'Schedule.md' && atob(shared.files[0].data).startsWith('# Schedule'),
+    `a Files document is shared with its file: ${JSON.stringify(docDlg)}`);
+
+  /* The cloud folder, and Disconnect taking everything with it. */
+  await pg.click('#cloud-src [data-cloud-src="microsoft"]');
+  await pg.waitForSelector('#cloud-body .cloud-item');
+  await axe(pg, 'a cloud folder in Files');
+  await pg.evaluate(async () => { go('set'); await loadConnections(); });
+  await pg.click('#conn-list [data-conn-off="microsoft"]');
+  await pg.waitForSelector('#conn-list [data-conn-on="microsoft"]');
+  await pg.evaluate(() => go('docs'));
+  await pg.waitForTimeout(150);
+  const gone = await pg.evaluate(() => ({ src: !document.querySelector('#cloud-src').hidden, mode: document.querySelector('#view-docs').classList.contains('cloud-mode'), br: !document.querySelector('#br-cloud').hidden, save: document.querySelectorAll('#doc-grid [data-saveto]').length }));
+  check(!gone.src && !gone.mode && !gone.br && !gone.save, `with no cloud connected, Files is this computer's again and nothing offers Save to: ${JSON.stringify(gone)}`);
+  await pg.close();
+  await ctx.close();
 }
 
 await browser.close();
