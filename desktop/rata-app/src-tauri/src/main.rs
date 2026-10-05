@@ -13,6 +13,7 @@
 //! `/api/*` answered by [`commands`] instead of by Next.js. See `ui/bridge.js`
 //! for that seam.
 
+mod cloud;
 mod commands;
 mod core;
 mod diagnostics;
@@ -195,6 +196,15 @@ fn main() {
             commands::check_update,
             commands::install_update,
             commands::diagnostics,
+            commands::connections_status,
+            commands::connect_service,
+            commands::disconnect_service,
+            commands::cancel_connect,
+            commands::cloud_list,
+            commands::cloud_read,
+            commands::cloud_save,
+            commands::slack_targets,
+            commands::slack_share,
         ])
         .run(context)
         .expect("RATA could not start");
