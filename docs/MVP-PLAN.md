@@ -1268,6 +1268,8 @@ general answer: an Open/Save through the system dialog in the Format
 Bridge reaches every synced folder (OneDrive, Google Drive for desktop,
 Dropbox, Box) with no account at all.
 
+State (2026-10-05): K1 done ([#138](https://github.com/Noallrightokay/center-point-inbox/pull/138)), K5 done ([#134](https://github.com/Noallrightokay/center-point-inbox/pull/134)), K6's Rust side done ([#137](https://github.com/Noallrightokay/center-point-inbox/pull/137)); K6's page side (the Create file button, a pptx writer, Send with RATA) is next. K2 to K4 build to the contract comment in `bridge.js`.
+
 #### Waves
 - **7**: K1 (demo), then K5 (no owner input), then K2, K3 and K4 as the
   owner's registrations arrive.
