@@ -262,52 +262,59 @@ pub enum Heard {
 
 /// Read the request-target of a request to the listener (`/?code=…&state=…`),
 /// as Sign in with Microsoft hears it. The listener itself goes through
-/// [`heard_from`]; this is what its tests read.
+/// [`heard_with`]; this is what its tests read.
 #[cfg(test)]
 pub fn heard(target: &str, state: &str) -> Heard {
-    heard_from(target, state, "Microsoft")
+    heard_with(target, state, "Microsoft").0
 }
 
 /// Read the request-target of a request to the listener, for the provider
-/// named `who` ("Microsoft", "Slack"), the only word that differs.
-pub fn heard_from(target: &str, state: &str, who: &str) -> Heard {
+/// named `who` ("Microsoft", "Slack", "Google"), the only word that
+/// differs, with every field of an answer that is this sign-in's: Google's
+/// file chooser sends the files picked beside the code (`picked_file_ids`,
+/// `google`). No fields for a stray request.
+pub fn heard_with(target: &str, state: &str, who: &str) -> (Heard, HashMap<String, String>) {
+    let stray = || (Heard::Stray, HashMap::new());
     if !target.starts_with('/') || target.len() > HEAD_MAX {
-        return Heard::Stray;
+        return stray();
     }
     let Ok(url) = url::Url::parse(&format!("http://127.0.0.1{target}")) else {
-        return Heard::Stray;
+        return stray();
     };
     if url.path() != "/" {
-        return Heard::Stray;
+        return stray();
     }
     let mut seen: HashMap<String, String> = HashMap::new();
     for (k, v) in url.query_pairs() {
         // A repeated field is ambiguous, and nothing Microsoft sends.
         if seen.insert(k.into_owned(), v.into_owned()).is_some() {
-            return Heard::Stray;
+            return stray();
         }
     }
     match seen.get("state") {
         Some(s) if same(s, state) => {}
-        _ => return Heard::Stray,
+        _ => return stray(),
     }
-    if let Some(error) = seen.get("error") {
+    let heard = if let Some(error) = seen.get("error") {
         if error == "access_denied" {
-            return Heard::Ours(Callback::Denied);
+            Heard::Ours(Callback::Denied)
+        } else {
+            // The code only, never `error_description`: anything that
+            // learned `state` could write that, and the form would show it
+            // (security review L6).
+            Heard::Ours(Callback::Failed(error_code(error)))
         }
-        // The code only, never `error_description`: anything that learned
-        // `state` could write that, and the form would show it (security
-        // review L6).
-        return Heard::Ours(Callback::Failed(error_code(error)));
-    }
-    match seen.get("code") {
-        Some(code) if !code.is_empty() && code.len() <= 4096 => {
-            Heard::Ours(Callback::Code(code.clone()))
+    } else {
+        match seen.get("code") {
+            Some(code) if !code.is_empty() && code.len() <= 4096 => {
+                Heard::Ours(Callback::Code(code.clone()))
+            }
+            _ => Heard::Ours(Callback::Failed(format!(
+                "{who} sent the browser back without a sign-in code."
+            ))),
         }
-        _ => Heard::Ours(Callback::Failed(format!(
-            "{who} sent the browser back without a sign-in code."
-        ))),
-    }
+    };
+    (heard, seen)
 }
 
 /// An OAuth error code as the redirect carried it (`invalid_request`,
@@ -380,6 +387,20 @@ pub async fn wait_for_code_from(
     cancel: &Notify,
     who: &str,
 ) -> Result<String, Ended> {
+    wait_for_answer_from(listener, attempt, cancel, who)
+        .await
+        .map(|(code, _)| code)
+}
+
+/// [`wait_for_code_from`], with every field the browser brought back with
+/// the code (`heard_with`), for the caller to read what it expects and
+/// check it.
+pub async fn wait_for_answer_from(
+    listener: TcpListener,
+    attempt: &Attempt,
+    cancel: &Notify,
+    who: &str,
+) -> Result<(String, HashMap<String, String>), Ended> {
     loop {
         tokio::select! {
             _ = cancel.notified() => return Err(Ended::Cancelled),
@@ -387,18 +408,19 @@ pub async fn wait_for_code_from(
             got = listener.accept() => {
                 let Ok((stream, _)) = got else { continue };
                 match answer(stream, &attempt.state, who).await {
-                    Heard::Ours(Callback::Code(code)) => return Ok(code),
-                    Heard::Ours(Callback::Denied) => return Err(Ended::Denied),
-                    Heard::Ours(Callback::Failed(why)) => return Err(Ended::Failed(why)),
-                    Heard::Stray => continue,
+                    (Heard::Ours(Callback::Code(code)), fields) => return Ok((code, fields)),
+                    (Heard::Ours(Callback::Denied), _) => return Err(Ended::Denied),
+                    (Heard::Ours(Callback::Failed(why)), _) => return Err(Ended::Failed(why)),
+                    (Heard::Stray, _) => continue,
                 }
             }
         }
     }
 }
 
-/// Read one request's head, answer it, and say what it was.
-async fn answer(mut stream: TcpStream, state: &str, who: &str) -> Heard {
+/// Read one request's head, answer it, and say what it was, with every
+/// field of an answer that was this sign-in's.
+async fn answer(mut stream: TcpStream, state: &str, who: &str) -> (Heard, HashMap<String, String>) {
     let mut head = Vec::with_capacity(1024);
     let mut buf = [0u8; 1024];
     let read = timeout(HEAD_WAIT, async {
@@ -413,9 +435,9 @@ async fn answer(mut stream: TcpStream, state: &str, who: &str) -> Heard {
     let line = String::from_utf8_lossy(&head);
     let line = line.lines().next().unwrap_or("");
     let mut parts = line.split(' ');
-    let got = match (read, parts.next(), parts.next()) {
-        (Ok(()), Some("GET"), Some(target)) => heard_from(target, state, who),
-        _ => Heard::Stray,
+    let (got, fields) = match (read, parts.next(), parts.next()) {
+        (Ok(()), Some("GET"), Some(target)) => heard_with(target, state, who),
+        _ => (Heard::Stray, HashMap::new()),
     };
     let (status, words) = match &got {
         Heard::Ours(Callback::Code(_)) => (
@@ -436,7 +458,7 @@ async fn answer(mut stream: TcpStream, state: &str, who: &str) -> Heard {
     };
     let _ = stream.write_all(page(status, &words).as_bytes()).await;
     let _ = stream.shutdown().await;
-    got
+    (got, fields)
 }
 
 /// A tiny page with nothing external in it, and a policy that forbids
@@ -504,14 +526,20 @@ struct Raw {
 
 /// Read the token endpoint's answer.
 pub fn read_tokens(status: u16, body: &[u8]) -> Result<Tokens, TokenError> {
+    read_tokens_from(status, body, "Microsoft")
+}
+
+/// [`read_tokens`], for the provider named `who` ("Microsoft", "Google"),
+/// which every sentence names. Both answer as RFC 6749 section 5 says.
+pub fn read_tokens_from(status: u16, body: &[u8], who: &str) -> Result<Tokens, TokenError> {
     let Ok(raw) = serde_json::from_slice::<Raw>(body) else {
         return Err(if status >= 500 || status == 429 {
             TokenError::Net(format!(
-                "Microsoft's sign-in service is not answering properly right now (status {status}). RATA will try again."
+                "{who}'s sign-in service is not answering properly right now (status {status}). RATA will try again."
             ))
         } else {
             TokenError::Refused(format!(
-                "Microsoft's sign-in service sent an answer RATA could not read (status {status})."
+                "{who}'s sign-in service sent an answer RATA could not read (status {status})."
             ))
         });
     };
@@ -528,11 +556,11 @@ pub fn read_tokens(status: u16, body: &[u8]) -> Result<Tokens, TokenError> {
     if !(200..300).contains(&status) {
         return Err(if status >= 500 || status == 429 {
             TokenError::Net(format!(
-                "Microsoft's sign-in service is not answering properly right now (status {status}). RATA will try again."
+                "{who}'s sign-in service is not answering properly right now (status {status}). RATA will try again."
             ))
         } else {
             TokenError::Refused(format!(
-                "Microsoft's sign-in service refused the request (status {status})."
+                "{who}'s sign-in service refused the request (status {status})."
             ))
         });
     }
@@ -541,14 +569,14 @@ pub fn read_tokens(status: u16, body: &[u8]) -> Result<Tokens, TokenError> {
         .as_deref()
         .is_some_and(|t| !t.eq_ignore_ascii_case("bearer"))
     {
-        return Err(TokenError::Refused(
-            "Microsoft issued a kind of sign-in RATA does not use.".into(),
-        ));
+        return Err(TokenError::Refused(format!(
+            "{who} issued a kind of sign-in RATA does not use."
+        )));
     }
     let access = raw
         .access_token
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| TokenError::Refused("Microsoft's answer had no sign-in in it.".into()))?;
+        .ok_or_else(|| TokenError::Refused(format!("{who}'s answer had no sign-in in it.")))?;
     let expires_in = match raw.expires_in {
         Some(serde_json::Value::Number(n)) => n.as_u64(),
         Some(serde_json::Value::String(s)) => s.trim().parse().ok(),
@@ -609,12 +637,22 @@ async fn post(
     url: &str,
     form: &[(&str, &str)],
 ) -> Result<(u16, Vec<u8>), TokenError> {
+    post_to(http, url, form, "Microsoft").await
+}
+
+/// [`post`], to the provider named `who`.
+async fn post_to(
+    http: &reqwest::Client,
+    url: &str,
+    form: &[(&str, &str)],
+    who: &str,
+) -> Result<(u16, Vec<u8>), TokenError> {
     let body = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(form)
         .finish();
     let unreachable = |e: reqwest::Error| {
         TokenError::Net(format!(
-            "Microsoft's sign-in service could not be reached: {}",
+            "{who}'s sign-in service could not be reached: {}",
             e.without_url()
         ))
     };
@@ -631,12 +669,30 @@ async fn post(
     while let Some(chunk) = resp.chunk().await.map_err(unreachable)? {
         got.extend_from_slice(&chunk);
         if got.len() > BODY_MAX {
-            return Err(TokenError::Refused(
-                "Microsoft's sign-in service sent far more than a sign-in.".into(),
-            ));
+            return Err(TokenError::Refused(format!(
+                "{who}'s sign-in service sent far more than a sign-in."
+            )));
         }
     }
     Ok((status, got))
+}
+
+/// One request to the token endpoint of the provider named `who`, with
+/// `form` as it is (a provider whose form differs from Microsoft's: Google's
+/// carries the desktop client's secret), its answer read as
+/// [`read_tokens_from`] reads it, and every one of `secrets` taken out of
+/// any sentence that comes back.
+pub async fn token_request(
+    http: &reqwest::Client,
+    url: &str,
+    form: &[(&str, &str)],
+    who: &str,
+    secrets: &[&str],
+) -> Result<Tokens, TokenError> {
+    let (status, body) = post_to(http, url, form, who)
+        .await
+        .map_err(|e| hide_in(e, secrets))?;
+    read_tokens_from(status, &body, who).map_err(|e| hide_in(e, secrets))
 }
 
 /// Trade the code the browser brought back for tokens.

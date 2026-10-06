@@ -521,8 +521,9 @@ pub fn diagnostics(
 
 // Connected accounts (Workstream K). iCloud Drive and Creative Cloud Files,
 // as the folders their own apps keep on this computer (K5, `cloud`), and,
-// in a build with Slack's client id, Share to Slack (K3, `slack`), and in a
-// build with Microsoft's, OneDrive over Graph (K2, `onedrive`). The page
+// in a build with Slack's client id, Share to Slack (K3, `slack`), in a
+// build with Microsoft's, OneDrive over Graph (K2, `onedrive`), and in a
+// build with Google's id and secret, Google Drive (K4, `google`). The page
 // names a service and an id RATA gave out, never a path; every answer shows
 // paths relative to the folder or the drive. For Slack it names a target
 // from the list RATA gave it. It never sees a token.
@@ -551,9 +552,11 @@ pub fn connections_status(app: App<'_>) -> Vec<Status> {
 }
 
 /// Connect iCloud Drive or Creative Cloud Files: find the folder its app
-/// keeps on this computer and remember it. Or connect Slack or OneDrive:
-/// the provider's page in the browser, answered when the customer finishes,
-/// cancels (`cancelled`) or five minutes pass.
+/// keeps on this computer and remember it. Or connect Slack, OneDrive or
+/// Google Drive: the provider's page in the browser, answered when the
+/// customer finishes, cancels (`cancelled`) or five minutes pass. For a
+/// Google Drive already connected, that page is Google's file chooser
+/// again, to choose more files.
 #[tauri::command]
 pub async fn connect_service(
     handle: AppHandle,
@@ -568,6 +571,10 @@ pub async fn connect_service(
         app.service_of(&service)?;
         return app.connect_onedrive(crate::oauth::open_sign_in).await;
     }
+    if Service::parse(&service) == Some(Service::Google) {
+        app.service_of(&service)?;
+        return app.connect_google(crate::google::open_sign_in).await;
+    }
     let home = handle.path().home_dir().map_err(|_| Refusal {
         service: service.clone(),
         kind: "not-found",
@@ -580,8 +587,8 @@ pub async fn connect_service(
 }
 
 /// Forget a connected folder. The folder and its files are left as they are.
-/// For Slack, forget its sign-in on this computer and then ask Slack to end
-/// it too (best effort).
+/// For Slack and Google Drive, forget the sign-in on this computer and then
+/// ask the provider to end it too (best effort).
 #[tauri::command]
 pub async fn disconnect_service(app: App<'_>, service: String) -> Result<Status, Refusal> {
     if Service::parse(&service) == Some(Service::Slack) {
@@ -592,23 +599,33 @@ pub async fn disconnect_service(app: App<'_>, service: String) -> Result<Status,
         }
         return Ok(status);
     }
+    if Service::parse(&service) == Some(Service::Google) {
+        app.service_of(&service)?;
+        let (status, held) = app.disconnect_google()?;
+        if let Some(refresh) = held {
+            app.revoke_google(refresh).await;
+        }
+        return Ok(status);
+    }
     app.disconnect_service(&service)
 }
 
-/// Stop a Slack or OneDrive sign-in waiting for the browser. Connecting a
+/// Stop a Slack, OneDrive or Google sign-in waiting for the browser. Connecting a
 /// folder waits on nothing, so for the rest there is nothing to stop.
 #[tauri::command]
 pub fn cancel_connect(app: App<'_>, service: Option<String>) -> bool {
     match service.as_deref().and_then(Service::parse) {
         Some(Service::Slack) => app.cancel_slack(),
         Some(Service::Microsoft) => app.cancel_onedrive(),
+        Some(Service::Google) => app.cancel_google(),
         _ => false,
     }
 }
 
 /// One folder of a connected service: `folder` is an id from an earlier
 /// listing, or none for the top. OneDrive's come from Graph (`onedrive`),
-/// the rest from the folder on this computer.
+/// Google Drive's from the Drive API as one list (`google`), the rest from
+/// the folder on this computer.
 #[tauri::command]
 pub async fn cloud_list(
     app: App<'_>,
@@ -618,6 +635,10 @@ pub async fn cloud_list(
     if Service::parse(&service) == Some(Service::Microsoft) {
         app.service_of(&service)?;
         return app.onedrive_list(folder.as_deref()).await;
+    }
+    if Service::parse(&service) == Some(Service::Google) {
+        app.service_of(&service)?;
+        return app.google_list(folder.as_deref()).await;
     }
     let rata = app.inner().clone();
     on_disk(move || rata.cloud_list(&service, folder.as_deref())).await
@@ -629,6 +650,15 @@ pub async fn cloud_read(app: App<'_>, service: String, id: String) -> Result<Clo
     if Service::parse(&service) == Some(Service::Microsoft) {
         app.service_of(&service)?;
         let got = app.onedrive_read(&id).await?;
+        return Ok(CloudFile {
+            name: got.name,
+            mime: got.mime,
+            data: rata_mail::words::base64_encode(&got.data),
+        });
+    }
+    if Service::parse(&service) == Some(Service::Google) {
+        app.service_of(&service)?;
+        let got = app.google_read(&id).await?;
         return Ok(CloudFile {
             name: got.name,
             mime: got.mime,
@@ -679,6 +709,13 @@ pub async fn cloud_save(
         let bytes = rata_mail::words::base64(data.as_bytes());
         return app
             .onedrive_save(folder.as_deref(), &name, &bytes, confirmed == Some(true))
+            .await;
+    }
+    if Service::parse(&service) == Some(Service::Google) {
+        app.service_of(&service)?;
+        let bytes = rata_mail::words::base64(data.as_bytes());
+        return app
+            .google_save(folder.as_deref(), &name, &bytes, confirmed == Some(true))
             .await;
     }
     let rata = app.inner().clone();

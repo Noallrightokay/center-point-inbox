@@ -41,11 +41,19 @@ pub struct Build {
     pub microsoft: bool,
     /// Whether Share to Slack's client id was compiled in (K3).
     pub slack: bool,
+    /// Whether Google Drive's client id and secret were compiled in (K4).
+    pub google: bool,
 }
 
 impl Build {
     /// This build, but for the updater key, which lives in the Tauri config.
-    pub fn this(updater_key: bool, licence_key: bool, microsoft: bool, slack: bool) -> Self {
+    pub fn this(
+        updater_key: bool,
+        licence_key: bool,
+        microsoft: bool,
+        slack: bool,
+        google: bool,
+    ) -> Self {
         Build {
             version: env!("CARGO_PKG_VERSION"),
             os: std::env::consts::OS,
@@ -55,6 +63,7 @@ impl Build {
             updater_key,
             microsoft,
             slack,
+            google,
         }
     }
 }
@@ -213,11 +222,12 @@ pub fn render(f: &Facts) -> String {
         ),
         format!("System: {} {}", b.os, b.arch),
         format!(
-            "Build keys: licence key {}, updater key {}, Microsoft sign-in {}, Slack sharing {}",
+            "Build keys: licence key {}, updater key {}, Microsoft sign-in {}, Slack sharing {}, Google Drive {}",
             yes(b.licence_key),
             yes(b.updater_key),
             yes(b.microsoft),
-            yes(b.slack)
+            yes(b.slack),
+            yes(b.google)
         ),
     ];
     out.push(match &f.licence {

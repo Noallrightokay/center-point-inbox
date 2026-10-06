@@ -615,6 +615,11 @@ jobs:
           # Share to Slack's client id (K3, docs/CONNECTIONS-SETUP.md): public
           # too, a variable. Unset, the build offers no Slack at all.
           RATA_SLACK_CLIENT_ID: ${{ vars.RATA_SLACK_CLIENT_ID }}
+          # Google Drive's Desktop app client (K4, docs/CONNECTIONS-SETUP.md):
+          # Google treats a desktop client's secret as not secret (it ships
+          # in every copy), so both are variables. Both, or no Google Drive.
+          RATA_GOOGLE_CLIENT_ID: ${{ vars.RATA_GOOGLE_CLIENT_ID }}
+          RATA_GOOGLE_CLIENT_SECRET: ${{ vars.RATA_GOOGLE_CLIENT_SECRET }}
           # The Apple, update and Azure signing variables arrive from the
           # steps above, and only when they are real. Do not add them here.
         with:

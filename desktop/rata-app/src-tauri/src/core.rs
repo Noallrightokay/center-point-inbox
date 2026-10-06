@@ -67,6 +67,9 @@ pub struct Rata {
     /// OneDrive (K2): the same client id as Sign in with Microsoft, its own
     /// sign-in in progress and the tokens held in memory. See `onedrive`.
     pub(crate) onedrive: crate::onedrive::OneDrive,
+    /// Google Drive (K4): this build's client id and secret, its sign-in in
+    /// progress and the tokens held in memory. See `google`.
+    pub(crate) google: crate::google::GoogleDrive,
 }
 
 /// What linking a mailbox produced.
@@ -552,6 +555,7 @@ impl Rata {
             forgotten: std::sync::atomic::AtomicU64::new(0),
             slack: crate::slack::Slack::from_build(),
             onedrive: crate::onedrive::OneDrive::from_build(),
+            google: crate::google::GoogleDrive::from_build(),
         }
     }
 
@@ -1171,10 +1175,11 @@ impl Rata {
     /// `keep_linked` refuses it.
     pub fn forget_everything(&self) -> Result<Forgotten, String> {
         self.ms.cancel();
-        // A Slack or OneDrive sign-in waiting for the browser keeps nothing
-        // either.
+        // A Slack, OneDrive or Google Drive sign-in waiting for the browser
+        // keeps nothing either.
         self.slack.cancel();
         self.onedrive.cancel();
+        self.google.cancel();
         let boxes: Vec<String> = {
             let store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
             self.forgotten
@@ -1203,6 +1208,9 @@ impl Rata {
             // OneDrive's sign-in (K2), the same way.
             self.forget_onedrive_in(&mut store)
                 .map_err(|e| format!("OneDrive could not be disconnected: {e}"))?;
+            // Google Drive's (K4), the same way.
+            self.forget_google_in(&mut store)
+                .map_err(|e| format!("Google Drive could not be disconnected: {e}"))?;
             store.set_licence(None);
             // The iCloud Drive and Creative Cloud Files folders connected
             // here (K5): only their paths, which are RATA's to forget. The
@@ -2397,6 +2405,7 @@ impl Rata {
             self.public_key.is_some(),
             self.ms.configured(),
             self.slack.configured(),
+            self.google.configured(),
         );
         let standing = self.standing();
         let licence = match (&standing.plan, &standing.licence) {
@@ -3149,6 +3158,8 @@ mod tests {
         app.slack = crate::slack::Slack::off();
         // Nor OneDrive, which follows the Microsoft client id.
         app.onedrive = crate::onedrive::OneDrive::off();
+        // Nor Google Drive, whatever RATA_GOOGLE_CLIENT_ID says.
+        app.google = crate::google::GoogleDrive::off();
         app
     }
 
