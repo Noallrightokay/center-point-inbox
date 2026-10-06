@@ -26,7 +26,7 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2). 251 tests. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 840 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
 | `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (527 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
@@ -1732,7 +1732,39 @@ program, no empty file, `SAVE_MAX`. Ids: letters, digits and `!._-`,
 alphanumeric first, at most 256. Errors are the status and Graph's error
 `code` only; nothing goes to Copy diagnostics. Only `/me/drive`: no
 SharePoint sites or Shared with me. Not yet seen against a real
-Microsoft account. **Create file (K6, SEC-9)**: the page sends
+Microsoft account. **Google Drive (K4, `google.rs`)** exists only in a
+build with both `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`
+(repository Variables: Google treats a desktop client's secret as not
+secret; each checked for shape, half a pair is off; Copy diagnostics says
+"Google Drive yes/no"), Pro and licensed; otherwise `google` answers
+`available: false` and refuses with "Google Drive is not switched on in
+this copy of RATA yet." Sign-in: PKCE, a 127.0.0.1 listener on any port,
+scope `drive.file` alone, `access_type=offline`, `prompt=consent`,
+`trigger_onepick=true` and `allow_multiple=true`, so Google's own file
+chooser opens in the browser and the redirect brings `picked_file_ids`
+(letters, digits, `-`, `_`, 200 characters, 100 ids at most); the token
+request carries the id, secret, code, verifier and redirect. Connecting
+again while connected re-runs the chooser (the old sign-in is kept until
+the new one is saved). `cloud_list` is `files.list`, which under
+`drive.file` returns only files picked for RATA or made by it: one flat
+list, no folders (whether a picked folder grants its contents is not
+documented), just-picked ids fetched one by one until the list shows
+them; Docs, Sheets, Slides and Drawings listed as `.docx`, `.xlsx`,
+`.pptx`, `.pdf`, forms, shortcuts and binned files left out. `cloud_read`:
+size from metadata first, `alt=media` from the API itself with no
+redirect followed, `READ_MAX`; Google's own files through `files.export`
+(10 MB). `cloud_save`: always a new file in My Drive; multipart up to
+5 MB, else resumable in 8 MiB pieces following 308 `Range`, the session
+address required to match the upload address's scheme, host, port and
+path exactly (the token goes with the pieces, to that address only), a
+failed session deleted; `safe_file_name`, `confirmed`, 100 MB. Tokens,
+races and errors as K2: refresh token under `org.mailrata.desktop.google`,
+`invalid_grant` parks, Disconnect revokes at
+`oauth2.googleapis.com/revoke` best effort, the store keeps only the
+display name from `about.get`, when, and parked. `oauth.rs`'s listener
+can hand back extra redirect fields (`heard_with`, `wait_for_answer_from`;
+`heard_from` is gone). Not yet seen against a real Google account.
+**Create file (K6, SEC-9)**: the page sends
 only `{format, name, where}` (bridge.js drops anything else, and Rust has
 no parameter for `data`), and `created.rs` writes RATA's own blank docx,
 xlsx or pptx (`Format::blank`, compiled in from `src-tauri/templates/`,
