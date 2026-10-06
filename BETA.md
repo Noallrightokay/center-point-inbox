@@ -320,6 +320,20 @@ Don't spend time reporting these; they are known and planned:
     folder; a message waiting to send when RATA closed, with a file you made
     attached, comes back to the composer for you to check instead of going
     by itself.
+- **v0.1.51:**
+  - **Apps:** a new place in the side menu with big icons for Google Docs,
+    Sheets, Slides, Forms and Drive, Word, Excel, PowerPoint, OneNote and
+    OneDrive, Adobe Acrobat and Express, Pages, Numbers and Keynote, Slack,
+    DocuSign, Acrobat Sign and RabbitSign. Each opens in your browser; sign
+    in there once and the next click goes straight in. Pin your favourites,
+    see the last four you opened, search, and (under **Your accounts**) give
+    your Google and Microsoft addresses so the icons open on that account.
+    Tell us if an icon opens the wrong account.
+  - **PDFs in Safari and on a Mac:** Convert on a PDF could fail there with
+    "undefined is not a function". Tell us if it still does.
+  - **OneDrive and Google Drive (RATA Pro)** are built in, and show in
+    Settings → Connected accounts only once they are switched on for
+    everyone.
 
 - Older mail comes in **50 at a time**: a new mailbox arrives with its newest
   ~65, and **Load older mail** at the bottom of the list walks further back.

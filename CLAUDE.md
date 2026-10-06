@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3). 222 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 840 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (527 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (562 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox; no patient information. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -222,7 +222,11 @@ Creative Cloud Files (K1, K5; OneDrive, Google Drive and Slack report
 `available: false` and stay hidden until K2 to K4), and brings back the
 Start in your browser links; v0.1.50 adds Share to Slack (K3, live in a
 build with the owner's `RATA_SLACK_CLIENT_ID`) and fixes the review of
-K1 and K6's page (SEC-10). An
+K1 and K6's page (SEC-10); v0.1.51 adds the Apps view (pins, Recent,
+search, Your accounts), OneDrive and Google Drive (K2, K4, live in a
+build with the owner's registrations) and Choose files, and reads PDFs in
+WebKit (PDF.js's `for await` over a `ReadableStream`, which WebKit cannot
+iterate; `pdfLib` gives the stream an async iterator). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -1648,16 +1652,19 @@ when `connections_status` answers, and only entries with `available !==
 false`; the contract for the Rust side is the comment in `bridge.js`
 (`/api/connections`, `/api/cloud/*`, `/api/slack/*`; refusals
 `{service, kind, error}`). Every name, path and error is drawn with
-textContent. `lib/plan.js` and the website say nothing of it until the
-real connections ship (BUG-D). Settings' sentences are built from
+textContent. Since #145 the website sells Create file and the iCloud
+Drive and Creative Cloud Files folders on Pro (`PLANS.*.connect`, kept
+equal to TIERS by `app.test.mjs`); OneDrive, Google Drive and Share to
+Slack stay unsold, and `app.test.mjs` fails if a blurb or sales page names
+them (BUG-D). `help.test.mjs` also reads `cloud.rs` and `created.rs`, so
+rewording one of their errors means updating `help.html`. Settings' sentences are built from
 `CONN.list` (`andList`) and never name a service answering `available:
 false` (SEC-10). Add to Files refuses a disguised program from a cloud
 folder, and ⤓ File asks (`askDisguised`) for one already in Files:
 `nameDisguised` in the page mirrors `rata_mail::names::looks_disguised`,
 so keep the two lists in step. Once Share to Slack's Send is pressed the
 dialog stays (Cancel, ✕, Escape and the backdrop do nothing) until Slack
-answers, and the result is always said (SEC-10). **K5 (`cloud.rs`)** is the only real service
-so far: iCloud Drive and Creative Cloud Files as the folders their own apps
+answers, and the result is always said (SEC-10). **K5 (`cloud.rs`)**, the folders: iCloud Drive and Creative Cloud Files as the folders their own apps
 sync (macOS `~/Library/Mobile Documents/com~apple~CloudDocs`, Windows
 `%USERPROFILE%\iCloud Drive` or `iCloudDrive`, `~/Creative Cloud Files…`),
 since neither Apple nor Adobe has a public API for a person's files. Ids
@@ -1697,7 +1704,71 @@ characters, no disguised program, text with `& < >` escaped and control,
 bidi and invisible characters removed. A revoked token parks Slack
 ("Connect Slack again"); `token_expired` renews once; a rate limit of 10 s
 or less is waited out once. Nothing reads Slack. Not yet seen against a
-real Slack app (needs the owner's registration). **Create file (K6, SEC-9)**: the page sends
+real Slack app (needs the owner's registration). **OneDrive (K2,
+`onedrive.rs`)** exists only in a build with `RATA_MS_CLIENT_ID` (the
+mail sign-in's registration plus Graph `Files.ReadWrite`; no new
+variable), Pro and licensed; without it `microsoft` answers `available:
+false` as before. Its own sign-in through `oauth.rs` (`authorize_url_for`,
+`exchange_for`, `refresh_for` take the scopes) asks only for
+`https://graph.microsoft.com/Files.ReadWrite offline_access`, never with
+the mail scopes (one resource per token). The label is the drive owner's
+display name from `GET /me/drive` ("(work or school)" for a business
+drive), no address. Refresh token in the keychain under
+`org.mailrata.desktop.onedrive` (pieces as Slack's, one shared helper in
+`vault.rs`), access token in memory renewed 2 minutes early; a 401 renews
+once, `invalid_grant` parks ("Connect OneDrive again"), network errors
+never park; Disconnect and Delete account empty the keychain under the
+list's lock and bump a generation, as K3. Listing: `/children`, `$top=200`,
+`@odata.nextLink` followed only to Graph's own scheme, host, port and
+`/v1.0/` (else `truncated`), 10 pages and 2 000 items at most, folders
+and files only; the top's id is `""`. Reading: metadata first, refused
+over `READ_MAX` before downloading; the `/content` 302 is followed by
+RATA only to an https content host (`content_host_ok`: subdomains of
+`sharepoint.com`, `1drv.com`, `microsoftpersonalcontent.com`,
+`livefilestore.com`, `storage.live.com`, `onedrive.com`, no port or user
+name) **without** the Authorization header. Saving: always an upload
+session with `conflictBehavior: rename`, because Graph's simple PUT
+replaces an existing file and documents no conflict behaviour; one
+fragment, or 10 MiB fragments (multiples of 320 KiB) above that, to the
+session's own content-host address without the token, cancelled with
+DELETE on a failure; `safe_file_name`, `confirmed` for a disguised
+program, no empty file, `SAVE_MAX`. Ids: letters, digits and `!._-`,
+alphanumeric first, at most 256. Errors are the status and Graph's error
+`code` only; nothing goes to Copy diagnostics. Only `/me/drive`: no
+SharePoint sites or Shared with me. Not yet seen against a real
+Microsoft account. **Google Drive (K4, `google.rs`)** exists only in a
+build with both `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`
+(repository Variables: Google treats a desktop client's secret as not
+secret; each checked for shape, half a pair is off; Copy diagnostics says
+"Google Drive yes/no"), Pro and licensed; otherwise `google` answers
+`available: false` and refuses with "Google Drive is not switched on in
+this copy of RATA yet." Sign-in: PKCE, a 127.0.0.1 listener on any port,
+scope `drive.file` alone, `access_type=offline`, `prompt=consent`,
+`trigger_onepick=true` and `allow_multiple=true`, so Google's own file
+chooser opens in the browser and the redirect brings `picked_file_ids`
+(letters, digits, `-`, `_`, 200 characters, 100 ids at most); the token
+request carries the id, secret, code, verifier and redirect. Connecting
+again while connected re-runs the chooser (the old sign-in is kept until
+the new one is saved). `cloud_list` is `files.list`, which under
+`drive.file` returns only files picked for RATA or made by it: one flat
+list, no folders (whether a picked folder grants its contents is not
+documented), just-picked ids fetched one by one until the list shows
+them; Docs, Sheets, Slides and Drawings listed as `.docx`, `.xlsx`,
+`.pptx`, `.pdf`, forms, shortcuts and binned files left out. `cloud_read`:
+size from metadata first, `alt=media` from the API itself with no
+redirect followed, `READ_MAX`; Google's own files through `files.export`
+(10 MB). `cloud_save`: always a new file in My Drive; multipart up to
+5 MB, else resumable in 8 MiB pieces following 308 `Range`, the session
+address required to match the upload address's scheme, host, port and
+path exactly (the token goes with the pieces, to that address only), a
+failed session deleted; `safe_file_name`, `confirmed`, 100 MB. Tokens,
+races and errors as K2: refresh token under `org.mailrata.desktop.google`,
+`invalid_grant` parks, Disconnect revokes at
+`oauth2.googleapis.com/revoke` best effort, the store keeps only the
+display name from `about.get`, when, and parked. `oauth.rs`'s listener
+can hand back extra redirect fields (`heard_with`, `wait_for_answer_from`;
+`heard_from` is gone). Not yet seen against a real Google account.
+**Create file (K6, SEC-9)**: the page sends
 only `{format, name, where}` (bridge.js drops anything else, and Rust has
 no parameter for `data`), and `created.rs` writes RATA's own blank docx,
 xlsx or pptx (`Format::blank`, compiled in from `src-tauri/templates/`,
@@ -1728,15 +1799,25 @@ gated by `canConnect()`. Send with RATA attaches by reference (`{created:
 id}` in `CMP_FILES`), read through `/api/created/read` in `deliver()` at
 send time, never to fill the composer; the reference survives Undo send
 and the outbox (the record keeps the id, no bytes), and a failed read is
-"Not sent: …" with the draft kept. **Start in your browser** (`LAUNCH`,
-`BRAND`, `renderLaunch`, `#launch-sec`, localStorage `rata_launch_open`):
-0.1.5's launcher back inside Files, each tile a link to the service's own
-page (Google, Microsoft on `*.cloud.microsoft`, Adobe, Apple's iCloud
-pages, Slack, and DocuSign, Acrobat Sign and RabbitSign), through
-`open_link` in the app and a new tab on the website; addresses checked
-2026-10-05, sources in a comment above `LAUNCH`. Slack and RabbitSign show
-a letter, not a mark. `#docs-scroll` holds Created by you, the launcher
-and `#doc-grid`. SheetJS's .xlsx fails `check_body` (its content types
+"Not sent: …" with the draft kept. **Apps** (#149; was 0.1.49's "Start in your browser" section in Files):
+its own view (`#view-apps`, `renderApps`, `showApps`, `APP_LIST`,
+`appUrl`) in the rail and `#mnav` on every plan, app and website, tiles
+grouped Google, Microsoft, Adobe, Apple, Slack and Signing (DocuSign,
+Acrobat Sign, RabbitSign), each a link through `open_link` in the app and
+a new tab on the website, never loaded in a RATA window (Google refuses
+sign-in in embedded webviews, and the main webview holds the bridge).
+Pins, Recent (last 4), search, and **Your accounts**: an optional Google
+and Microsoft address, refused unless one plain address, kept only in
+localStorage `rata_apps` (with pins and recent), never in `S` or what
+syncs, removed by Delete account; it adds Google's `authuser` (tiles then
+use `docs.google.com/<kind>/create`, since `docs.new` drops a query) and,
+for Word, Excel and PowerPoint, `login_hint` through
+`m365.cloud.microsoft/launch/<app>`; sources in the comment above
+`BRAND`; whether each lands on the right account was not seen with real
+accounts. Files has `#files-apps` (Open Apps), Create file's "Start in
+your browser" goes to Apps; `#launch-sec` and `rata_launch_open` are gone.
+A connected Google Drive row has **Choose files** (`data-conn-more`),
+which re-runs `connect_service` and re-reads Files' Google listing. SheetJS's .xlsx fails `check_body` (its content types
 always declare a macro-enabled `.bin` default), so never hand its output
 to it. The demo (`desktop/rata-app/demo`) has sample accounts for
 every service. Found on the way: `needPlan` no longer has an em dash, and
