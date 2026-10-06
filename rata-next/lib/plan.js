@@ -11,7 +11,9 @@
      Base        up to two mailboxes, arriving in one Center Point inbox,
                  translation when asked, with the Format Bridge
      Pro         more than two mailboxes, and the option to put them side by
-                 side, with summaries and the briefing
+                 side, with summaries and the briefing; Create file, and the
+                 iCloud Drive and Creative Cloud Files folders on a Mac or PC
+                 (`connect`, K5 and K6)
      Enterprise  the CRM, texts and automations on top
 
    The Center Point inbox is not the limitation at the bottom of the ladder —
@@ -38,6 +40,7 @@ export const PLANS = {
     convert: true,
     ai: false,
     files: false,
+    connect: false,
     crm: false,
     sms: false,
     automations: false,
@@ -58,6 +61,13 @@ export const PLANS = {
     convert: true,
     ai: true,
     files: true,
+    /* Create file, Created by you and Send with RATA (K6), and the iCloud
+       Drive and Creative Cloud Files folders on the computer (K5). The same
+       flag as app.html's TIERS and the app's licence.rs (`Plan::connect`);
+       tests/app.test.mjs checks the three agree and that the blurb says it.
+       OneDrive, Google Drive and Share to Slack hang off it too but are not
+       switched on in any released build, so no sentence may sell them. */
+    connect: true,
     crm: false,
     sms: false,
     automations: false,
@@ -67,7 +77,7 @@ export const PLANS = {
     ratamail: UNLIMITED,
     domains: 0,
     sellable: true,
-    blurb: 'Everything in Base, with as many mailboxes as you have, the option to view them side by side, summaries, and a briefing of what needs you.',
+    blurb: 'Everything in Base, with as many mailboxes as you have, the option to view them side by side, summaries, a briefing of what needs you, new Word, Excel and PowerPoint files made and sent from RATA, and your iCloud Drive and Creative Cloud Files folders on a Mac or PC.',
   },
   enterprise: {
     label: 'RATA Enterprise',
@@ -79,6 +89,7 @@ export const PLANS = {
     convert: true,
     ai: true,
     files: true,
+    connect: true,
     crm: true,
     sms: true,
     automations: true,
@@ -105,7 +116,7 @@ export const NO_PLAN = {
   price: 0,
   mail: 0, chat: 0,
   split: false, translate: false, convert: false, ai: false,
-  files: false, crm: false, sms: false, automations: false,
+  files: false, connect: false, crm: false, sms: false, automations: false,
   ratamail: 0, domains: 0,
   blurb: 'Choose a plan to connect a mailbox. RATA Base is $12.99 a month.',
 };
