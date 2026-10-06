@@ -1,0 +1,116 @@
+# Working on the RATA demo
+
+The demo is the real RATA interface running in a browser, with sample mail
+instead of a real mailbox. Anyone can change it: you need a browser, Git,
+Python 3 and a Bash shell. You do not need Rust, Node or an account
+anywhere.
+
+## How it fits together
+
+RATA's desktop app has two halves:
+
+- **The interface**, `rata-next/public/app.html`: one HTML file with its CSS
+  and JavaScript, the same file the released app ships. `bridge.js`
+  (`desktop/rata-app/ui-src/bridge.js`) sits under it and turns each
+  request the page makes (`/api/mail/refresh`, `/api/created`…) into a
+  call to the app's Rust side, `window.__TAURI__.core.invoke(command, args)`.
+- **The Rust side** (`desktop/rata-app/src-tauri`), which reads mail over
+  IMAP, sends over SMTP, keeps passwords in the keychain and so on.
+
+The demo keeps the interface and `bridge.js` exactly as they ship and
+replaces only the Rust side with **`demo-backend.js`**: a plain JavaScript
+file that defines `window.__TAURI__.core.invoke` and answers each command
+with sample data. That file is the demo's whole "backend". It sends
+nothing, opens no mailbox and talks to no server.
+
+| File | What it is |
+|---|---|
+| `demo-backend.js` | The fake backend: mailboxes, mail, saved people, attachments, cloud folders, Slack, Create file, the Base/Pro switch, and one `switch (cmd)` answering every command |
+| `demo.css` | The "Demo" label in the corner |
+| `build.sh` | Assembles the demo into one folder of static files |
+| `out/` | Where `build.sh` writes by default (not committed) |
+
+## Run it
+
+From the repository root, on macOS, Linux, or Windows with WSL or Git Bash:
+
+```bash
+git clone https://github.com/Noallrightokay/center-point-inbox.git
+cd center-point-inbox
+desktop/rata-app/demo/build.sh                 # writes desktop/rata-app/demo/out
+python3 -m http.server 8000 --directory desktop/rata-app/demo/out
+```
+
+Open http://localhost:8000/rata-demo.html. Run `build.sh` again after every
+change, then reload the page. It must be served over http; opening the file
+directly does not work, because the page loads scripts and fonts beside it.
+
+What you click is kept in this browser between reloads. **Reset** in the
+demo's label starts again, and so does raising `DEMO_VERSION` at the top of
+`demo-backend.js`, which clears every visitor's saved copy the next time
+they open the demo. Raise it whenever you change the sample mail, or people
+who opened the demo before keep seeing the old mail.
+
+## Common changes
+
+All in `demo-backend.js`:
+
+- **Mailboxes**: `MAILBOXES`. On Base the demo shows the first two.
+- **Mail**: `MAIL`, built with `msg({...})`. `acct` is which mailbox it
+  arrived in, `from`/`fromName` the sender, `ago` how long ago in
+  milliseconds (`25 * MIN`, `3 * HOUR`, `2 * DAY`), `body` the text,
+  `unread`/`starred`, `folder` (`'sent'`, `'drafts'`, `'archive'`,
+  `'junk'` for Spam, or `{ named: 'Folder' }`; the inbox when left out), `atts` for attachments, and `mid`/`inReplyTo`
+  to thread replies into one conversation. Give each message its own `uid`.
+- **Mail that arrives while you watch**: the `setTimeout` after `MAIL`.
+- **Saved people**: `CONTACTS`.
+- **Attachments**: `FILES`. Documents are written by RATA's own Word,
+  Excel and PDF writers from blocks (`H`, `P`, `LI`, `TABLE`), so they are
+  real files that open in Word and Excel.
+- **Plans**: `PLANS`, and what each allows (`mail`, `split`, `ai`,
+  `connect`).
+- **Cloud folders and Slack**: `SERVICES`, `TREES`, `SLACK`.
+- **Create file**: `MADE` (the files it starts with) and the
+  `create_file` case.
+
+**A new command.** If you change `app.html` so the page asks for something
+new, it reaches `demo-backend.js` as a new `cmd`. Add a `case` for it.
+A command it does not know fails with "This demo does not do that
+(<command>).", which names the one that is missing. What each command takes and answers is written
+in comments in `bridge.js`, beside the route that calls it; match that
+shape, since the real Rust side answers the same way.
+
+## Rules for the demo
+
+- **Invent everything.** Every person, organisation, address and message
+  is made up. No real patient, customer or colleague information, ever,
+  even as a joke: the demo is shown to people outside the project.
+- **Nothing leaves the page.** The demo must not call any server. Links
+  open in a new tab, and that is all.
+- **Keep it honest.** The demo shows what RATA does. If you add a screen
+  to the demo that the real app does not have, say so in your pull request.
+
+## Changing the interface itself
+
+`rata-next/public/app.html` is the real product, not a copy. A change there
+ships in the next release of the desktop app, and the website's app page
+uses it too. Before opening a pull request that touches it, run the
+interface checks. They drive the page in Chromium against another fake
+backend, and include accessibility scans:
+
+```bash
+(cd rata-next && npm ci && npx playwright install chromium)   # once; needs Node
+(cd desktop/rata-app && ./sync-ui.sh)
+(cd desktop/rata-app/ui && python3 -m http.server 3181 --bind 127.0.0.1 &)
+node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+```
+
+Every check must pass. Read `DESIGN.md` for how RATA looks (colours, type,
+spacing, wording), and the root `README.md` and `CLAUDE.md` for everything
+else, including the Rust side.
+
+## Sending your change
+
+Fork the repository on GitHub, push a branch, and open a pull request
+against `main`. Say what you changed and how you checked it: a screenshot of
+the demo helps.
