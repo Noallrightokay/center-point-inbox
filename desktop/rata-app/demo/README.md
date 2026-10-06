@@ -27,7 +27,8 @@ nothing, opens no mailbox and talks to no server.
 |---|---|
 | `demo-backend.js` | The fake backend: mailboxes, mail, saved people, attachments, cloud folders, Slack, Create file, the Base/Pro switch, and one `switch (cmd)` answering every command |
 | `demo.css` | The "Demo" label in the corner |
-| `build.sh` | Assembles the demo into one folder of static files |
+| `build.sh` | Assembles the demo into one folder of static files, or with `--single` into one HTML file |
+| `single.py` | What `--single` runs: folds the folder into one file |
 | `out/` | Where `build.sh` writes by default (not committed) |
 
 ## Run it
@@ -44,12 +45,47 @@ python3 -m http.server 8000 --directory desktop/rata-app/demo/out
 Open http://localhost:8000/rata-demo.html. Run `build.sh` again after every
 change, then reload the page. It must be served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
+For one file that does open directly, see *Send it as one file* below.
 
 What you click is kept in this browser between reloads. **Reset** in the
 demo's label starts again, and so does raising `DEMO_VERSION` at the top of
 `demo-backend.js`, which clears every visitor's saved copy the next time
 they open the demo. Raise it whenever you change the sample mail, or people
 who opened the demo before keep seeing the old mail.
+
+## Send it as one file
+
+```bash
+desktop/rata-app/demo/build.sh --single        # writes desktop/rata-app/demo/out/RATA-demo.html
+desktop/rata-app/demo/build.sh --single ~/Desktop/RATA-demo.html
+```
+
+This writes the whole demo as one HTML file of about 6 MB, small enough
+to attach to an email or drop in a chat. Whoever gets it opens it by
+double-click, in Chrome, Edge, Firefox or Safari. It needs no server and
+no internet connection. Everything the folder build loads from files
+beside the page is inside it: scripts, styles, fonts, pictures, and the
+Word, Excel and PDF libraries. The libraries are loaded from `blob:`
+URLs the page makes when it starts, so reading a PDF, writing Word, Excel
+and PDF, and Convert all work as they do in the folder build. There is no
+service worker. It still sends nothing and calls no server.
+
+What is kept between reloads depends on the browser, because a page
+opened from a file gets different storage in each:
+
+- **Chrome and Edge** keep what you did, as the served demo does (in one
+  store shared by every file opened from that computer's disk).
+- **Firefox and Safari** may keep it, keep it only for that file, or keep
+  nothing. Where the browser refuses storage, the demo still runs but
+  starts fresh on every reload. The Base/Pro choice survives a reload
+  either way: it is kept in the address too (`#plan=base`), so a link or
+  bookmark ending in `#plan=base` opens the demo on Base.
+- Where a browser will not keep files in IndexedDB for the page, the
+  sample documents in Files show with **⇄ Bridge** but without **⤓ File**,
+  and Files cannot keep a converted file. Converting and downloading
+  still work.
+
+Rebuild the file after every change, as with the folder.
 
 ## Common changes
 
