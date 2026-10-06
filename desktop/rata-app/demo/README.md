@@ -77,8 +77,9 @@ opened from a file gets different storage in each:
   store shared by every file opened from that computer's disk).
 - **Firefox and Safari** may keep it, keep it only for that file, or keep
   nothing. Where the browser refuses storage, the demo still runs but
-  starts fresh on every reload. The Base/Pro choice survives a reload in
-  the same tab either way.
+  starts fresh on every reload. The Base/Pro choice survives a reload
+  either way: it is kept in the address too (`#plan=base`), so a link or
+  bookmark ending in `#plan=base` opens the demo on Base.
 - Where a browser will not keep files in IndexedDB for the page, the
   sample documents in Files show with **⇄ Bridge** but without **⤓ File**,
   and Files cannot keep a converted file. Converting and downloading

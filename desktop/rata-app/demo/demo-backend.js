@@ -46,9 +46,10 @@
   /* Which plan the demo shows, chosen in its label. Base holds two
      mailboxes (RATA refuses a third when linking), so Base shows the two
      hospital networks; Pro shows all five. The choice is also kept in
-     window.name, which lasts across the reload in this tab, for a browser
-     that keeps no storage for the page (some keep none for a file). */
-  const named = /^rata-demo-plan:(base|pro)$/.exec(window.name || '');
+     the address (#plan=base), which lasts across the reload, for a
+     browser that keeps no storage for the page (some keep none for a
+     file). */
+  const named = /^#plan=(base|pro)$/.exec(location.hash || '');
   let PLAN = named ? named[1] : 'pro';
   try { if (!named) PLAN = localStorage.getItem('rata_demo_plan') === 'base' ? 'base' : 'pro'; } catch (e) {}
   const PLANS = {
@@ -850,7 +851,7 @@ Marcus` }));
       indexedDB.deleteDatabase('rata-mail-' + UID);
       indexedDB.deleteDatabase('rata-files');
     } catch (e) {}
-    try { window.name = 'rata-demo-plan:' + plan; } catch (e) {}
+    try { history.replaceState(history.state, '', '#plan=' + plan); } catch (e) {}
     setTimeout(() => location.reload(), 300);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', badge); else badge();
