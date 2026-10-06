@@ -96,6 +96,21 @@ pub struct SlackLink {
     pub parked_at: Option<u64>,
 }
 
+/// The OneDrive connected as cloud files (K2): whose drive it is, as
+/// Microsoft names its owner (a display name, never an address), whether it
+/// is a work or school drive, when it was connected and, if Microsoft has
+/// ended the sign-in, since when. Never a token: the refresh token is in the
+/// keychain (`vault::ONEDRIVE_SERVICE`), the access token only in memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveLink {
+    pub owner: String,
+    #[serde(default)]
+    pub business: bool,
+    pub connected_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<u64>,
+}
+
 /// The most files Create file remembers; past it the oldest is forgotten
 /// (the file stays where it is).
 pub const CREATED_KEEP: usize = 500;
@@ -133,6 +148,11 @@ struct Contents {
     /// `connections`; `version` stays 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     slack: Option<SlackLink>,
+    /// The OneDrive connected (K2), without any token. Absent from a file
+    /// written before K2 and not written when none is, like `slack`;
+    /// `version` stays 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    onedrive: Option<DriveLink>,
 }
 
 #[derive(Debug)]
@@ -143,6 +163,7 @@ pub struct Store {
     connections: BTreeMap<String, PathBuf>,
     created: Vec<Created>,
     slack: Option<SlackLink>,
+    onedrive: Option<DriveLink>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -176,6 +197,7 @@ impl Store {
             connections: held.connections,
             created: held.created,
             slack: held.slack,
+            onedrive: held.onedrive,
             on_disk,
         }
     }
@@ -201,6 +223,7 @@ impl Store {
             connections: self.connections.clone(),
             created: self.created.clone(),
             slack: self.slack.clone(),
+            onedrive: self.onedrive.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         // Made afresh, so it is created with the mode below rather than
@@ -283,6 +306,24 @@ impl Store {
     /// customer connects again or disconnects.
     pub fn park_slack(&mut self, at: u64) {
         if let Some(l) = self.slack.as_mut() {
+            l.parked_at = Some(at);
+        }
+    }
+
+    /// The OneDrive connected, if any (K2).
+    pub fn onedrive(&self) -> Option<&DriveLink> {
+        self.onedrive.as_ref()
+    }
+
+    /// Remember the OneDrive connected, or forget it with `None`.
+    pub fn set_onedrive(&mut self, link: Option<DriveLink>) {
+        self.onedrive = link;
+    }
+
+    /// Microsoft ended the sign-in: keep the drive, marked, until the
+    /// customer connects again or disconnects.
+    pub fn park_onedrive(&mut self, at: u64) {
+        if let Some(l) = self.onedrive.as_mut() {
             l.parked_at = Some(at);
         }
     }
@@ -741,6 +782,42 @@ mod tests {
         s.save().unwrap();
         assert!(Store::open(&file).slack().is_none());
         assert!(!fs::read_to_string(&file).unwrap().contains("slack"));
+    }
+
+    #[test]
+    fn a_onedrive_is_kept_without_a_token_or_an_address_and_can_be_forgotten() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        // None connected: the file is as it was before K2.
+        assert!(!fs::read_to_string(&file).unwrap().contains("onedrive"));
+        let mut s = Store::open(&file);
+        s.set_onedrive(Some(DriveLink {
+            owner: "Ann Lee".into(),
+            business: true,
+            connected_at: 7,
+            parked_at: None,
+        }));
+        s.save().unwrap();
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"owner\": \"Ann Lee\""), "{raw}");
+        for word in ["token", "secret", "refresh", "parked"] {
+            assert!(!raw.to_lowercase().contains(word), "{word} in {raw}");
+        }
+        let mut s = Store::open(&file);
+        assert!(s.onedrive().unwrap().business);
+        s.park_onedrive(9);
+        s.save().unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.onedrive().unwrap().parked_at, Some(9));
+        s.set_onedrive(None);
+        s.save().unwrap();
+        assert!(Store::open(&file).onedrive().is_none());
+        assert!(!fs::read_to_string(&file).unwrap().contains("onedrive"));
     }
 
     #[cfg(unix)]

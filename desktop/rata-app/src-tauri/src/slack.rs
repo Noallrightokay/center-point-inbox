@@ -1780,6 +1780,7 @@ mod tests {
         slack.second = Duration::from_millis(1);
         slack.gap = Duration::ZERO;
         app.slack = slack;
+        app.onedrive = crate::onedrive::OneDrive::off();
         if let Some(l) = licence {
             app.set_licence(Some(l.into()), None).unwrap();
         }
