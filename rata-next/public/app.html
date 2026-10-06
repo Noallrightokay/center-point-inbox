@@ -7563,6 +7563,13 @@ const PDF_PAGES_MAX=500;
 let PDFJS=null;
 async function pdfLib(){
   if(PDFJS)return PDFJS;
+  /* PDF.js reads a PDF's text with `for await` over a ReadableStream, which
+     WebKit (Safari, and the macOS app's webview) cannot iterate: reading
+     failed there with "undefined is not a function". Give the stream the
+     iterator it lacks, once, before PDF.js runs. */
+  if(typeof ReadableStream==='function'&&!ReadableStream.prototype[Symbol.asyncIterator]){
+    ReadableStream.prototype[Symbol.asyncIterator]=async function*(){const r=this.getReader();try{for(;;){const {done,value}=await r.read();if(done)return;yield value}}finally{r.releaseLock()}};
+  }
   const m=await import(new URL(BR_LIBS.pdfjs,location.href).href);
   m.GlobalWorkerOptions.workerSrc=new URL(BR_LIBS.pdfjsWorker,location.href).href;
   return PDFJS=m;

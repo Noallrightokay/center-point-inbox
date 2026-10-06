@@ -222,7 +222,11 @@ Creative Cloud Files (K1, K5; OneDrive, Google Drive and Slack report
 `available: false` and stay hidden until K2 to K4), and brings back the
 Start in your browser links; v0.1.50 adds Share to Slack (K3, live in a
 build with the owner's `RATA_SLACK_CLIENT_ID`) and fixes the review of
-K1 and K6's page (SEC-10). An
+K1 and K6's page (SEC-10); v0.1.51 adds the Apps view (pins, Recent,
+search, Your accounts), OneDrive and Google Drive (K2, K4, live in a
+build with the owner's registrations) and Choose files, and reads PDFs in
+WebKit (PDF.js's `for await` over a `ReadableStream`, which WebKit cannot
+iterate; `pdfLib` gives the stream an async iterator). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
