@@ -42,6 +42,11 @@ pub const PIECE_SERVICE: &str = "org.mailrata.desktop.oauth-piece";
 /// entry.
 pub const SLACK_SERVICE: &str = "org.mailrata.desktop.slack";
 
+/// Where the OneDrive connection's sign-in is kept (K2): a service of its
+/// own as well. It is a separate sign-in from any Microsoft mailbox, with a
+/// token for Microsoft Graph alone, so it never shares an entry with one.
+pub const ONEDRIVE_SERVICE: &str = "org.mailrata.desktop.onedrive";
+
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;
     fn get(&self, email: &str) -> Result<String, Unreadable>;
@@ -54,6 +59,10 @@ pub trait Vault: Send + Sync {
     fn put_slack(&self, name: &str, secret: &str) -> Result<(), String>;
     fn get_slack(&self, name: &str) -> Result<String, Unreadable>;
     fn forget_slack(&self, name: &str) -> Result<(), String>;
+    /// The same three for OneDrive's sign-in, in `ONEDRIVE_SERVICE`.
+    fn put_onedrive(&self, name: &str, secret: &str) -> Result<(), String>;
+    fn get_onedrive(&self, name: &str) -> Result<String, Unreadable>;
+    fn forget_onedrive(&self, name: &str) -> Result<(), String>;
 }
 
 /// Tests share one vault between the app and the test itself.
@@ -85,6 +94,15 @@ impl<V: Vault> Vault for std::sync::Arc<V> {
     }
     fn forget_slack(&self, n: &str) -> Result<(), String> {
         (**self).forget_slack(n)
+    }
+    fn put_onedrive(&self, n: &str, s: &str) -> Result<(), String> {
+        (**self).put_onedrive(n, s)
+    }
+    fn get_onedrive(&self, n: &str) -> Result<String, Unreadable> {
+        (**self).get_onedrive(n)
+    }
+    fn forget_onedrive(&self, n: &str) -> Result<(), String> {
+        (**self).forget_onedrive(n)
     }
 }
 
@@ -177,6 +195,15 @@ impl Vault for Keychain {
     }
     fn forget_slack(&self, name: &str) -> Result<(), String> {
         Self::forget_in(SLACK_SERVICE, name)
+    }
+    fn put_onedrive(&self, name: &str, secret: &str) -> Result<(), String> {
+        Self::put_in(ONEDRIVE_SERVICE, name, secret)
+    }
+    fn get_onedrive(&self, name: &str) -> Result<String, Unreadable> {
+        Self::get_in(ONEDRIVE_SERVICE, name)
+    }
+    fn forget_onedrive(&self, name: &str) -> Result<(), String> {
+        Self::forget_in(ONEDRIVE_SERVICE, name)
     }
 }
 
@@ -323,7 +350,7 @@ pub fn forget_all(v: &dyn Vault, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ------------------------------------------------------ Slack's sign-in
+// ------------------------------------- Slack's and OneDrive's sign-ins
 
 /// The one entry Share to Slack's sign-in begins in (K3), under
 /// `SLACK_SERVICE`; longer ones go on in `workspace#2`, `workspace#3`… in
@@ -333,12 +360,91 @@ pub const SLACK_ENTRY: &str = "workspace";
 /// How the entry begins: the mark, how many pieces, then the first piece.
 pub const SLACK_MARK: &str = "rata-slack1:";
 
-/// Keep Slack's sign-in (`slack::Tokens` as text, never a password). The
-/// pieces before the entry that names them, as `put_refresh` does, and the
-/// pieces an earlier, longer one left are removed afterwards.
-pub fn put_slack_secret(v: &dyn Vault, secret: &str) -> Result<(), String> {
+/// The one entry OneDrive's refresh token begins in (K2), under
+/// `ONEDRIVE_SERVICE`, with `drive#2`, `drive#3`… after it, as Slack's.
+pub const ONEDRIVE_ENTRY: &str = "drive";
+
+/// How OneDrive's entry begins.
+pub const ONEDRIVE_MARK: &str = "rata-onedrive1:";
+
+/// A sign-in kept in a service of its own, in pieces: Slack's (K3) and
+/// OneDrive's (K2). The same rules for both; only the words differ.
+#[derive(Clone, Copy)]
+enum Own {
+    Slack,
+    OneDrive,
+}
+
+impl Own {
+    fn entry(self) -> &'static str {
+        match self {
+            Own::Slack => SLACK_ENTRY,
+            Own::OneDrive => ONEDRIVE_ENTRY,
+        }
+    }
+
+    fn mark(self) -> &'static str {
+        match self {
+            Own::Slack => SLACK_MARK,
+            Own::OneDrive => ONEDRIVE_MARK,
+        }
+    }
+
+    fn put(self, v: &dyn Vault, name: &str, secret: &str) -> Result<(), String> {
+        match self {
+            Own::Slack => v.put_slack(name, secret),
+            Own::OneDrive => v.put_onedrive(name, secret),
+        }
+    }
+
+    fn get(self, v: &dyn Vault, name: &str) -> Result<String, Unreadable> {
+        match self {
+            Own::Slack => v.get_slack(name),
+            Own::OneDrive => v.get_onedrive(name),
+        }
+    }
+
+    fn forget(self, v: &dyn Vault, name: &str) -> Result<(), String> {
+        match self {
+            Own::Slack => v.forget_slack(name),
+            Own::OneDrive => v.forget_onedrive(name),
+        }
+    }
+
+    fn cannot_keep(self) -> &'static str {
+        match self {
+            Own::Slack => "Slack sent a sign-in RATA cannot keep. Connect Slack again.",
+            Own::OneDrive => "Microsoft sent a sign-in RATA cannot keep. Connect OneDrive again.",
+        }
+    }
+
+    fn too_long(self) -> &'static str {
+        match self {
+            Own::Slack => "Slack's sign-in is too long for this computer's keychain.",
+            Own::OneDrive => {
+                "Microsoft's sign-in to OneDrive is too long for this computer's keychain."
+            }
+        }
+    }
+
+    fn broken(self) -> &'static str {
+        match self {
+            Own::Slack => {
+                "RATA's sign-in to Slack is no longer whole in this computer's keychain. Connect Slack again."
+            }
+            Own::OneDrive => {
+                "RATA's sign-in to OneDrive is no longer whole in this computer's keychain. Connect OneDrive again."
+            }
+        }
+    }
+}
+
+/// Keep a sign-in in its own service. The pieces before the entry that
+/// names them, as `put_refresh` does, and the pieces an earlier, longer one
+/// left are removed afterwards.
+fn put_own(v: &dyn Vault, own: Own, secret: &str) -> Result<(), String> {
     if secret.is_empty() || secret.chars().any(|c| c.is_control() || !c.is_ascii()) {
-        return Err("Slack sent a sign-in RATA cannot keep. Connect Slack again.".into());
+        return Err(own.cannot_keep().into());
     }
     let pieces: Vec<&str> = secret
         .as_bytes()
@@ -346,36 +452,34 @@ pub fn put_slack_secret(v: &dyn Vault, secret: &str) -> Result<(), String> {
         .map(|c| std::str::from_utf8(c).unwrap_or(""))
         .collect();
     if pieces.len() > PIECES_MAX {
-        return Err("Slack's sign-in is too long for this computer's keychain.".into());
+        return Err(own.too_long().into());
     }
+    let entry = own.entry();
     for (i, piece) in pieces.iter().enumerate().skip(1) {
-        v.put_slack(&format!("{SLACK_ENTRY}#{}", i + 1), piece)?;
+        own.put(v, &format!("{entry}#{}", i + 1), piece)?;
     }
-    v.put_slack(
-        SLACK_ENTRY,
-        &format!("{SLACK_MARK}{}:{}", pieces.len(), pieces[0]),
+    own.put(
+        v,
+        entry,
+        &format!("{}{}:{}", own.mark(), pieces.len(), pieces[0]),
     )?;
     for n in pieces.len() + 1..=PIECES_MAX {
-        let _ = v.forget_slack(&format!("{SLACK_ENTRY}#{n}"));
+        let _ = own.forget(v, &format!("{entry}#{n}"));
     }
     Ok(())
 }
 
-/// Read Slack's sign-in back whole. Anything else in the entry, or a piece
+/// Read a sign-in back whole. Anything else in the entry, or a piece
 /// missing, is a sign-in to repeat, never half of one.
-pub fn get_slack_secret(v: &dyn Vault) -> Result<String, Unreadable> {
-    let broken = || {
-        Unreadable::Missing(
-            "RATA's sign-in to Slack is no longer whole in this computer's keychain. Connect Slack again."
-                .into(),
-        )
-    };
-    let held = match v.get_slack(SLACK_ENTRY) {
+fn get_own(v: &dyn Vault, own: Own) -> Result<String, Unreadable> {
+    let broken = || Unreadable::Missing(own.broken().into());
+    let entry = own.entry();
+    let held = match own.get(v, entry) {
         Ok(h) => h,
         Err(Unreadable::Missing(_)) => return Err(broken()),
         Err(locked) => return Err(locked),
     };
-    let rest = held.strip_prefix(SLACK_MARK).ok_or_else(broken)?;
+    let rest = held.strip_prefix(own.mark()).ok_or_else(broken)?;
     let (count, first) = rest.split_once(':').ok_or_else(broken)?;
     let count: usize = count.parse().map_err(|_| broken())?;
     if count == 0 || count > PIECES_MAX {
@@ -383,7 +487,7 @@ pub fn get_slack_secret(v: &dyn Vault) -> Result<String, Unreadable> {
     }
     let mut secret = first.to_string();
     for n in 2..=count {
-        match v.get_slack(&format!("{SLACK_ENTRY}#{n}")) {
+        match own.get(v, &format!("{entry}#{n}")) {
             Ok(piece) => secret.push_str(&piece),
             Err(Unreadable::Missing(_)) => return Err(broken()),
             Err(locked) => return Err(locked),
@@ -395,24 +499,57 @@ pub fn get_slack_secret(v: &dyn Vault) -> Result<String, Unreadable> {
     Ok(secret)
 }
 
-/// Forget Slack's sign-in: the entry first, then every piece.
-pub fn forget_slack_secret(v: &dyn Vault) -> Result<(), String> {
-    v.forget_slack(SLACK_ENTRY)?;
+/// Forget a sign-in: the entry first, then every piece.
+fn forget_own(v: &dyn Vault, own: Own) -> Result<(), String> {
+    let entry = own.entry();
+    own.forget(v, entry)?;
     for n in 2..=PIECES_MAX {
-        v.forget_slack(&format!("{SLACK_ENTRY}#{n}"))?;
+        own.forget(v, &format!("{entry}#{n}"))?;
     }
     Ok(())
 }
 
+/// Keep Slack's sign-in (`slack::Tokens` as text, never a password).
+pub fn put_slack_secret(v: &dyn Vault, secret: &str) -> Result<(), String> {
+    put_own(v, Own::Slack, secret)
+}
+
+/// Read Slack's sign-in back whole.
+pub fn get_slack_secret(v: &dyn Vault) -> Result<String, Unreadable> {
+    get_own(v, Own::Slack)
+}
+
+/// Forget Slack's sign-in: the entry first, then every piece.
+pub fn forget_slack_secret(v: &dyn Vault) -> Result<(), String> {
+    forget_own(v, Own::Slack)
+}
+
+/// Keep OneDrive's refresh token (K2), in `ONEDRIVE_SERVICE`, never beside a
+/// mailbox's entry.
+pub fn put_onedrive_secret(v: &dyn Vault, secret: &str) -> Result<(), String> {
+    put_own(v, Own::OneDrive, secret)
+}
+
+/// Read OneDrive's refresh token back whole.
+pub fn get_onedrive_secret(v: &dyn Vault) -> Result<String, Unreadable> {
+    get_own(v, Own::OneDrive)
+}
+
+/// Forget OneDrive's refresh token: the entry first, then every piece.
+pub fn forget_onedrive_secret(v: &dyn Vault) -> Result<(), String> {
+    forget_own(v, Own::OneDrive)
+}
+
 /// For tests, and only for tests. Nothing persists, which is the point, and
 /// `cfg(test)` means there is no way to reach it from a shipped build. One
-/// map for each of the keychain's three services.
+/// map for each of the keychain's four services.
 #[cfg(test)]
 #[derive(Default)]
 pub struct Memory {
     entries: Mutex<HashMap<String, String>>,
     pieces: Mutex<HashMap<String, String>>,
     slack: Mutex<HashMap<String, String>>,
+    onedrive: Mutex<HashMap<String, String>>,
 }
 
 #[cfg(test)]
@@ -473,6 +610,15 @@ impl Vault for Memory {
     fn forget_slack(&self, name: &str) -> Result<(), String> {
         mem_forget(&self.slack, name)
     }
+    fn put_onedrive(&self, name: &str, secret: &str) -> Result<(), String> {
+        mem_put(&self.onedrive, name, secret)
+    }
+    fn get_onedrive(&self, name: &str) -> Result<String, Unreadable> {
+        mem_get(&self.onedrive, name)
+    }
+    fn forget_onedrive(&self, name: &str) -> Result<(), String> {
+        mem_forget(&self.onedrive, name)
+    }
 }
 
 /// A keychain that takes pieces but, once stuck, refuses a mailbox's own
@@ -529,6 +675,21 @@ impl Vault for Stuck {
         }
         self.mem.forget_slack(n)
     }
+    fn put_onedrive(&self, n: &str, s: &str) -> Result<(), String> {
+        if self.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("keychain locked".into());
+        }
+        self.mem.put_onedrive(n, s)
+    }
+    fn get_onedrive(&self, n: &str) -> Result<String, Unreadable> {
+        self.mem.get_onedrive(n)
+    }
+    fn forget_onedrive(&self, n: &str) -> Result<(), String> {
+        if self.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("keychain locked".into());
+        }
+        self.mem.forget_onedrive(n)
+    }
 }
 
 /// A keychain that will not open — the locked-at-login case. Test only.
@@ -564,6 +725,15 @@ impl Vault for Locked {
         self.get(n)
     }
     fn forget_slack(&self, n: &str) -> Result<(), String> {
+        self.forget(n)
+    }
+    fn put_onedrive(&self, n: &str, s: &str) -> Result<(), String> {
+        self.put(n, s)
+    }
+    fn get_onedrive(&self, n: &str) -> Result<String, Unreadable> {
+        self.get(n)
+    }
+    fn forget_onedrive(&self, n: &str) -> Result<(), String> {
         self.forget(n)
     }
 }
@@ -736,6 +906,51 @@ mod tests {
         // A locked keychain is said as locked, not as missing.
         assert!(matches!(
             get_slack_secret(&Locked),
+            Err(Unreadable::Locked(_))
+        ));
+    }
+
+    #[test]
+    fn onedrives_sign_in_is_kept_in_its_own_service_apart_from_mail_and_slack() {
+        let v = Memory::default();
+        // A mailbox, a Microsoft mail token's piece and Slack under the same
+        // names change nothing, and are changed by nothing.
+        v.put(ONEDRIVE_ENTRY, "a-mailbox-password").unwrap();
+        v.put_piece("drive#2", "a-piece").unwrap();
+        put_slack_secret(&v, "slack-secret").unwrap();
+        let long: String = (0..2_500)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        put_onedrive_secret(&v, &long).unwrap();
+        let first = v.get_onedrive(ONEDRIVE_ENTRY).unwrap();
+        assert!(first.len() <= 1_280 && first.starts_with(ONEDRIVE_MARK));
+        assert_eq!(get_onedrive_secret(&v).unwrap(), long);
+        // Shorter later: no stale piece.
+        put_onedrive_secret(&v, "short").unwrap();
+        assert!(v.get_onedrive("drive#2").is_err());
+        assert_eq!(get_onedrive_secret(&v).unwrap(), "short");
+        // A missing piece is a sign-in to repeat, said so.
+        put_onedrive_secret(&v, &long).unwrap();
+        v.forget_onedrive("drive#2").unwrap();
+        let e = get_onedrive_secret(&v).unwrap_err();
+        assert!(matches!(e, Unreadable::Missing(_)));
+        assert!(e.to_string().contains("Connect OneDrive again"), "{e}");
+        // Slack's mark is not OneDrive's.
+        v.put_onedrive(ONEDRIVE_ENTRY, &format!("{SLACK_MARK}1:x"))
+            .unwrap();
+        assert!(get_onedrive_secret(&v).is_err());
+        // Forgetting takes every piece, and only OneDrive's.
+        put_onedrive_secret(&v, &long).unwrap();
+        forget_onedrive_secret(&v).unwrap();
+        assert!(v.get_onedrive(ONEDRIVE_ENTRY).is_err());
+        assert!(v.get_onedrive("drive#2").is_err());
+        assert_eq!(v.get(ONEDRIVE_ENTRY).unwrap(), "a-mailbox-password");
+        assert_eq!(v.get_piece("drive#2").unwrap(), "a-piece");
+        assert_eq!(get_slack_secret(&v).unwrap(), "slack-secret");
+        assert!(put_onedrive_secret(&v, "").is_err());
+        assert!(put_onedrive_secret(&v, "a\nb").is_err());
+        assert!(matches!(
+            get_onedrive_secret(&Locked),
             Err(Unreadable::Locked(_))
         ));
     }

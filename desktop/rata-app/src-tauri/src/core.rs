@@ -64,6 +64,9 @@ pub struct Rata {
     /// Share to Slack (K3): this build's client id, the sign-in in
     /// progress and the tokens held in memory. See `slack`.
     pub(crate) slack: crate::slack::Slack,
+    /// OneDrive (K2): the same client id as Sign in with Microsoft, its own
+    /// sign-in in progress and the tokens held in memory. See `onedrive`.
+    pub(crate) onedrive: crate::onedrive::OneDrive,
 }
 
 /// What linking a mailbox produced.
@@ -548,6 +551,7 @@ impl Rata {
             last_refresh: Mutex::new(None),
             forgotten: std::sync::atomic::AtomicU64::new(0),
             slack: crate::slack::Slack::from_build(),
+            onedrive: crate::onedrive::OneDrive::from_build(),
         }
     }
 
@@ -1167,8 +1171,10 @@ impl Rata {
     /// `keep_linked` refuses it.
     pub fn forget_everything(&self) -> Result<Forgotten, String> {
         self.ms.cancel();
-        // A Slack sign-in waiting for the browser keeps nothing either.
+        // A Slack or OneDrive sign-in waiting for the browser keeps nothing
+        // either.
         self.slack.cancel();
+        self.onedrive.cancel();
         let boxes: Vec<String> = {
             let store = self.store.lock().map_err(|_| "the mailbox list is busy")?;
             self.forgotten
@@ -1194,6 +1200,9 @@ impl Rata {
             // the Slack generation moved and writes nothing.
             self.forget_slack_in(&mut store)
                 .map_err(|e| format!("Slack could not be disconnected: {e}"))?;
+            // OneDrive's sign-in (K2), the same way.
+            self.forget_onedrive_in(&mut store)
+                .map_err(|e| format!("OneDrive could not be disconnected: {e}"))?;
             store.set_licence(None);
             // The iCloud Drive and Creative Cloud Files folders connected
             // here (K5): only their paths, which are RATA's to forget. The
@@ -3138,6 +3147,8 @@ mod tests {
         app.ms = Microsoft::new(None, oauth::AUTHORIZE_URL, oauth::TOKEN_URL, false);
         // Nor Slack, whatever RATA_SLACK_CLIENT_ID says.
         app.slack = crate::slack::Slack::off();
+        // Nor OneDrive, which follows the Microsoft client id.
+        app.onedrive = crate::onedrive::OneDrive::off();
         app
     }
 

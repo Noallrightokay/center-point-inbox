@@ -193,26 +193,40 @@ impl Attempt {
     /// Microsoft's sign-in page for this attempt. `login_hint` fills in the
     /// address the customer typed, so the right account is picked.
     pub fn authorize_url(&self, authorize: &str, client_id: &str, email: &str) -> String {
-        url::Url::parse_with_params(
-            authorize,
-            &[
-                ("client_id", client_id),
-                ("response_type", "code"),
-                ("redirect_uri", &self.redirect_uri),
-                ("response_mode", "query"),
-                ("scope", SCOPES),
-                ("state", &self.state),
-                ("code_challenge", &challenge(&self.verifier)),
-                ("code_challenge_method", "S256"),
-                ("login_hint", email),
-                // Always a click in the browser: a browser already signed in
-                // to Microsoft, with RATA approved, would otherwise finish
-                // the round trip unseen (security review L2).
-                ("prompt", "select_account"),
-            ],
-        )
-        .map(String::from)
-        .unwrap_or_default()
+        self.authorize_url_for(authorize, client_id, SCOPES, Some(email))
+    }
+
+    /// Microsoft's sign-in page for this attempt, asking for `scopes`: the
+    /// mailbox's (`SCOPES`) or OneDrive's (`onedrive::SCOPES`), which are
+    /// for another resource and so a sign-in, and a token, of their own.
+    pub fn authorize_url_for(
+        &self,
+        authorize: &str,
+        client_id: &str,
+        scopes: &str,
+        login_hint: Option<&str>,
+    ) -> String {
+        let challenge = challenge(&self.verifier);
+        let mut params = vec![
+            ("client_id", client_id),
+            ("response_type", "code"),
+            ("redirect_uri", self.redirect_uri.as_str()),
+            ("response_mode", "query"),
+            ("scope", scopes),
+            ("state", self.state.as_str()),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ];
+        if let Some(hint) = login_hint {
+            params.push(("login_hint", hint));
+        }
+        // Always a click in the browser: a browser already signed in to
+        // Microsoft, with RATA approved, would otherwise finish the round
+        // trip unseen (security review L2).
+        params.push(("prompt", "select_account"));
+        url::Url::parse_with_params(authorize, &params)
+            .map(String::from)
+            .unwrap_or_default()
     }
 }
 
@@ -633,6 +647,19 @@ pub async fn exchange(
     code: &str,
     attempt: &Attempt,
 ) -> Result<Tokens, TokenError> {
+    exchange_for(http, token_url, client_id, code, attempt, SCOPES).await
+}
+
+/// [`exchange`], for `scopes`. Microsoft issues a token for one resource at
+/// a time, so the mailbox's and OneDrive's are never asked for together.
+pub async fn exchange_for(
+    http: &reqwest::Client,
+    token_url: &str,
+    client_id: &str,
+    code: &str,
+    attempt: &Attempt,
+    scopes: &str,
+) -> Result<Tokens, TokenError> {
     let (status, body) = post(
         http,
         token_url,
@@ -642,7 +669,7 @@ pub async fn exchange(
             ("code", code),
             ("redirect_uri", &attempt.redirect_uri),
             ("code_verifier", &attempt.verifier),
-            ("scope", SCOPES),
+            ("scope", scopes),
         ],
     )
     .await?;
@@ -656,6 +683,17 @@ pub async fn refresh(
     client_id: &str,
     refresh_token: &str,
 ) -> Result<Tokens, TokenError> {
+    refresh_for(http, token_url, client_id, refresh_token, SCOPES).await
+}
+
+/// [`refresh`], for `scopes`.
+pub async fn refresh_for(
+    http: &reqwest::Client,
+    token_url: &str,
+    client_id: &str,
+    refresh_token: &str,
+    scopes: &str,
+) -> Result<Tokens, TokenError> {
     let (status, body) = post(
         http,
         token_url,
@@ -663,7 +701,7 @@ pub async fn refresh(
             ("client_id", client_id),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-            ("scope", SCOPES),
+            ("scope", scopes),
         ],
     )
     .await?;

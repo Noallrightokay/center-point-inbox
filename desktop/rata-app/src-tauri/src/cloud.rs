@@ -20,7 +20,9 @@
 //!
 //! Microsoft, Google and Slack are listed so the page knows their shape,
 //! as not available: they need the owner's registrations (K2 to K4).
-//! Slack becomes available in a build carrying its client id (K3, `slack`).
+//! Slack becomes available in a build carrying its client id (K3, `slack`),
+//! and OneDrive in a build carrying the Microsoft client id (K2,
+//! `onedrive`), which serves its files over Graph rather than from here.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -611,7 +613,7 @@ pub fn list(service: Service, stored: &Path, folder: Option<&str>) -> Result<Lis
 }
 
 /// What a file is, by its extension, for the Format Bridge.
-fn mime_of(name: &str) -> &'static str {
+pub(crate) fn mime_of(name: &str) -> &'static str {
     let ext = name
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())
@@ -777,9 +779,11 @@ pub fn save(
 
 impl Rata {
     /// Whether this copy can connect `service`: the folders always, Slack
-    /// with its client id, the rest not yet.
+    /// with its client id, OneDrive with Microsoft's, Google not yet.
     pub(crate) fn offers(&self, service: Service) -> bool {
-        service.available() || (service == Service::Slack && self.slack.configured())
+        service.available()
+            || (service == Service::Slack && self.slack.configured())
+            || (service == Service::Microsoft && self.onedrive.configured())
     }
 
     pub(crate) fn service_of(&self, key: &str) -> Result<Service, Refusal> {
@@ -839,6 +843,9 @@ impl Rata {
         if service == Service::Slack {
             return self.slack_status(pro);
         }
+        if service == Service::Microsoft {
+            return self.onedrive_status(pro);
+        }
         let mut s = Status {
             service: service.key(),
             label: service.label(),
@@ -897,6 +904,9 @@ impl Rata {
         let service = self.service_of(key)?;
         if service == Service::Slack {
             return self.disconnect_slack().map(|(status, _)| status);
+        }
+        if service == Service::Microsoft {
+            return self.disconnect_onedrive();
         }
         self.keep_folder(service, None)?;
         let pro = self.standing().plan.is_some_and(|p| p.connect);
@@ -1021,6 +1031,8 @@ mod tests {
         );
         // A build without Slack's client id, whatever the machine has.
         app.slack = crate::slack::Slack::off();
+        // Nor Microsoft's, which OneDrive follows (K2).
+        app.onedrive = crate::onedrive::OneDrive::off();
         if let Some(l) = licence {
             app.set_licence(Some(l.into()), None).unwrap();
         }

@@ -16,23 +16,30 @@ customer's keychain. Put each id in GitHub → the repository → Settings →
 Secrets and variables → Actions → **Variables** (not Secrets).
 
 The Rust side of each connection is its own card (K2, K3, K4). K3
-(Slack) is built and reads `RATA_SLACK_CLIENT_ID`; K2 and K4 are not built
-yet, and the variable names below are the ones those cards will read.
-Registering first costs nothing and lets each card be tested the day it is
-built.
+(Slack) is built and reads `RATA_SLACK_CLIENT_ID`; K2 (OneDrive) is built
+and reads `RATA_MS_CLIENT_ID`; K4 is not built yet, and the variable names
+below are the ones that card will read. Registering first costs nothing and
+lets each card be tested the day it is built.
 
-## OneDrive and SharePoint (K2)
+## OneDrive (K2)
 
 Uses the Microsoft registration you make for mail sign-in (LAUNCH.md §10).
-Do that first.
+Do that first. OneDrive is in every build that has `RATA_MS_CLIENT_ID`,
+exactly as Sign in with Microsoft is; there is no separate switch.
 
 1. [entra.microsoft.com](https://entra.microsoft.com) → App registrations →
    your RATA registration → API permissions → Add a permission →
    **Microsoft Graph** → Delegated → `Files.ReadWrite`. Not
    `Files.ReadWrite.All`: the `.All` permissions need an organisation's
-   administrator.
-2. Nothing new to copy: K2 uses `RATA_MS_CLIENT_ID`.
-3. Strongly recommended: **publisher verification** (free). It needs a
+   administrator. `offline_access` is there already from §10. `User.Read`
+   is not needed: RATA names the drive's owner from `GET /me/drive`, which
+   `Files.ReadWrite` already allows, and never asks for the address.
+2. Nothing else to change in the registration. The redirect URI
+   `http://127.0.0.1` under **Mobile and desktop applications** (§10) is
+   the one OneDrive's sign-in comes back to too (any port), and **Allow
+   public client flows** stays on. No client secret.
+3. Nothing new to copy: K2 uses `RATA_MS_CLIENT_ID`.
+4. Strongly recommended: **publisher verification** (free). It needs a
    Microsoft AI Cloud Partner Program account, the registration made from a
    work account, and a verified publisher domain (mailrata.org).
    [Publisher verification](https://learn.microsoft.com/en-us/entra/identity-platform/publisher-verification-overview).
@@ -45,9 +52,17 @@ longer let their people approve mail access (`IMAP.AccessAsUser.All`) for
 an app like RATA; an administrator must. Personal Outlook.com accounts are
 not affected. `help.html` says so.
 
-**How to tell it worked:** once K2 ships, Settings → Connected accounts →
-Microsoft OneDrive → Connect opens Microsoft's page in the browser, and
-Files then lists the account's OneDrive.
+Connecting OneDrive is a sign-in of its own, apart from any Microsoft
+mailbox: Microsoft issues a token for one service at a time, so the
+customer approves "files" on Microsoft's page once more even when their
+Outlook mailbox is already linked, and Disconnect in Settings removes only
+OneDrive. RATA reaches the customer's own OneDrive (`/me/drive`), not other
+SharePoint sites or files shared with them.
+
+**How to tell it worked:** in a build made after the permission was added,
+Settings → Connected accounts → Microsoft OneDrive → Connect opens
+Microsoft's page in the browser, asking to let RATA open and change your
+files, and Files then lists the account's OneDrive.
 
 ## Slack: Share to Slack (K3)
 
