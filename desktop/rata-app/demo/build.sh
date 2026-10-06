@@ -4,15 +4,31 @@
 # (demo-backend.js). Nothing in it sends mail or opens a mailbox.
 #
 #   desktop/rata-app/demo/build.sh [out-dir]      (default: demo/out)
+#   desktop/rata-app/demo/build.sh --single [out-file]
+#                                     (default: demo/out/RATA-demo.html)
 #
-# The result is a folder of static files: serve it with any web server
-# (python3 -m http.server --directory <out-dir>) or publish rata-demo.html
-# with the rest of the folder as its files. demo-backend.js says what the
-# demo holds; demo.css styles its label.
+# The first form writes a folder of static files: serve it with any web
+# server (python3 -m http.server --directory <out-dir>) or publish
+# rata-demo.html with the rest of the folder as its files. The second
+# builds that folder in a temporary place and folds it into one HTML file
+# (single.py) that opens by double-click, offline, with no server.
+# demo-backend.js says what the demo holds; demo.css styles its label.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 app="$here/.."
+
+if [ "${1:-}" = "--single" ]; then
+  file="${2:-$here/out/RATA-demo.html}"
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  "$here/build.sh" "$tmp/demo" >/dev/null
+  mkdir -p "$(dirname "$file")"
+  python3 "$here/single.py" "$tmp/demo" "$file"
+  echo "demo built in $file ($(wc -c <"$file" | tr -d ' ') bytes)"
+  exit 0
+fi
+
 out="${1:-$here/out}"
 
 "$app/sync-ui.sh" >/dev/null

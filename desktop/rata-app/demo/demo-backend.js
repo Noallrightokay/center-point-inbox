@@ -7,6 +7,23 @@
    nothing leaves this page, and no mailbox is opened. Reloading keeps what
    you did (in this browser only); "Reset demo" starts again. */
 (function () {
+  /* PDF.js reads a PDF's text with `for await` over a ReadableStream,
+     which Safari (WebKit) cannot iterate, so reading a PDF failed there
+     with "undefined is not a function". The same gap is in app.html for
+     any WebKit page; this makes the demo read PDFs in Safari meanwhile. */
+  if (typeof ReadableStream === 'function' && !ReadableStream.prototype[Symbol.asyncIterator]) {
+    ReadableStream.prototype[Symbol.asyncIterator] = async function* () {
+      const reader = this.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return;
+          yield value;
+        }
+      } finally { reader.releaseLock(); }
+    };
+  }
+
   const DEMO_VERSION = '6';
   const UID = 'local_demo2';
   const ME = 'Riley Carter';
@@ -28,9 +45,12 @@
 
   /* Which plan the demo shows, chosen in its label. Base holds two
      mailboxes (RATA refuses a third when linking), so Base shows the two
-     hospital networks; Pro shows all five. */
-  let PLAN = 'pro';
-  try { PLAN = localStorage.getItem('rata_demo_plan') === 'base' ? 'base' : 'pro'; } catch (e) {}
+     hospital networks; Pro shows all five. The choice is also kept in
+     window.name, which lasts across the reload in this tab, for a browser
+     that keeps no storage for the page (some keep none for a file). */
+  const named = /^rata-demo-plan:(base|pro)$/.exec(window.name || '');
+  let PLAN = named ? named[1] : 'pro';
+  try { if (!named) PLAN = localStorage.getItem('rata_demo_plan') === 'base' ? 'base' : 'pro'; } catch (e) {}
   const PLANS = {
     base: { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: false },
     pro: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true, connect: true },
@@ -394,11 +414,23 @@ Marcus` }));
   const b64 = (blob) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
   const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-  /* Saving goes through the page's downloads permission: the viewer is
-     asked, and may say no. */
+  /* Saving goes through the page's downloads permission where the page
+     has one: the viewer is asked, and may say no. In a plain browser (the
+     demo served over http, or opened as one file) it is the browser's own
+     download. */
   async function hand(filename, data) {
     const dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null;
-    if (!dl) throw 'Saving files is not available in this view of the demo.';
+    if (!dl) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(data);
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      return { path: 'your browser’s downloads', name: filename, size: data.size || 0 };
+    }
     try { await dl.save({ filename, data }); }
     catch (e) {
       if (e && e.code === 'declined') throw 'Not saved: you chose not to keep ' + filename + '.';
@@ -425,10 +457,14 @@ Marcus` }));
       const got = await fileOf(uid, index).catch(() => null);
       if (!got || S.documents.some((d) => d.name === got.f.name)) continue;
       const id = 'demo-doc-' + uid;
-      try { await fvPut(id, got.blob); } catch (e) { continue; }
+      /* Where IndexedDB will not keep the file (some browsers refuse it
+         to a page opened from a file) the card still shows, with its text
+         for the Bridge but no file to save. */
+      let kept = true;
+      try { await fvPut(id, got.blob); } catch (e) { kept = false; }
       const content = got.f.blocks ? textOf(got.f.blocks) : Object.entries(got.f.rows).map(([n, rows]) => n + '\n' + rows.map((r) => r.join('\t')).join('\n')).join('\n\n');
       S.documents.push({ id, name: got.f.name, fmt: got.f.name.split('.').pop().toUpperCase(), origin: 'email', prov: 'email',
-        size: fmtSize(got.blob.size), bytes: got.blob.size, ts: now - (++k) * DAY, content, hasFile: true });
+        size: fmtSize(got.blob.size), bytes: got.blob.size, ts: now - (++k) * DAY, content, hasFile: kept });
     }
     save();
     if (typeof renderDocs === 'function') renderDocs();
@@ -814,6 +850,7 @@ Marcus` }));
       indexedDB.deleteDatabase('rata-mail-' + UID);
       indexedDB.deleteDatabase('rata-files');
     } catch (e) {}
+    try { window.name = 'rata-demo-plan:' + plan; } catch (e) {}
     setTimeout(() => location.reload(), 300);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', badge); else badge();
