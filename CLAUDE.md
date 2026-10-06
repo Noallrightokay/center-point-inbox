@@ -27,9 +27,9 @@ convenient.
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 840 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (527 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (562 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox; no patient information. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -1795,15 +1795,25 @@ gated by `canConnect()`. Send with RATA attaches by reference (`{created:
 id}` in `CMP_FILES`), read through `/api/created/read` in `deliver()` at
 send time, never to fill the composer; the reference survives Undo send
 and the outbox (the record keeps the id, no bytes), and a failed read is
-"Not sent: …" with the draft kept. **Start in your browser** (`LAUNCH`,
-`BRAND`, `renderLaunch`, `#launch-sec`, localStorage `rata_launch_open`):
-0.1.5's launcher back inside Files, each tile a link to the service's own
-page (Google, Microsoft on `*.cloud.microsoft`, Adobe, Apple's iCloud
-pages, Slack, and DocuSign, Acrobat Sign and RabbitSign), through
-`open_link` in the app and a new tab on the website; addresses checked
-2026-10-05, sources in a comment above `LAUNCH`. Slack and RabbitSign show
-a letter, not a mark. `#docs-scroll` holds Created by you, the launcher
-and `#doc-grid`. SheetJS's .xlsx fails `check_body` (its content types
+"Not sent: …" with the draft kept. **Apps** (#149; was 0.1.49's "Start in your browser" section in Files):
+its own view (`#view-apps`, `renderApps`, `showApps`, `APP_LIST`,
+`appUrl`) in the rail and `#mnav` on every plan, app and website, tiles
+grouped Google, Microsoft, Adobe, Apple, Slack and Signing (DocuSign,
+Acrobat Sign, RabbitSign), each a link through `open_link` in the app and
+a new tab on the website, never loaded in a RATA window (Google refuses
+sign-in in embedded webviews, and the main webview holds the bridge).
+Pins, Recent (last 4), search, and **Your accounts**: an optional Google
+and Microsoft address, refused unless one plain address, kept only in
+localStorage `rata_apps` (with pins and recent), never in `S` or what
+syncs, removed by Delete account; it adds Google's `authuser` (tiles then
+use `docs.google.com/<kind>/create`, since `docs.new` drops a query) and,
+for Word, Excel and PowerPoint, `login_hint` through
+`m365.cloud.microsoft/launch/<app>`; sources in the comment above
+`BRAND`; whether each lands on the right account was not seen with real
+accounts. Files has `#files-apps` (Open Apps), Create file's "Start in
+your browser" goes to Apps; `#launch-sec` and `rata_launch_open` are gone.
+A connected Google Drive row has **Choose files** (`data-conn-more`),
+which re-runs `connect_service` and re-reads Files' Google listing. SheetJS's .xlsx fails `check_body` (its content types
 always declare a macro-enabled `.bin` default), so never hand its output
 to it. The demo (`desktop/rata-app/demo`) has sample accounts for
 every service. Found on the way: `needPlan` no longer has an em dash, and
