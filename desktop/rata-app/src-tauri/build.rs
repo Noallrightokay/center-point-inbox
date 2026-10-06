@@ -8,5 +8,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RATA_MS_CLIENT_ID");
     // And Slack's (slack.rs).
     println!("cargo:rerun-if-env-changed=RATA_SLACK_CLIENT_ID");
+    // And Google Drive's id and secret (google.rs).
+    println!("cargo:rerun-if-env-changed=RATA_GOOGLE_CLIENT_ID");
+    println!("cargo:rerun-if-env-changed=RATA_GOOGLE_CLIENT_SECRET");
     tauri_build::build()
 }

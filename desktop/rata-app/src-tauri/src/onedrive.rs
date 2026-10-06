@@ -1804,6 +1804,7 @@ mod tests {
         od.chunk = 320 * 1024;
         app.onedrive = od;
         app.slack = crate::slack::Slack::off();
+        app.google = crate::google::GoogleDrive::off();
         if let Some(l) = licence {
             app.set_licence(Some(l.into()), None).unwrap();
         }

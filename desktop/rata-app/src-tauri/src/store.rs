@@ -111,6 +111,19 @@ pub struct DriveLink {
     pub parked_at: Option<u64>,
 }
 
+/// The Google Drive connected as cloud files (K4): the account's display
+/// name as Google gives it (never an address), when it was connected and,
+/// if Google has ended the sign-in, since when. Never a token and never a
+/// file id: the refresh token is in the keychain (`vault::GOOGLE_SERVICE`),
+/// the access token and the files just picked only in memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoogleLink {
+    pub owner: String,
+    pub connected_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<u64>,
+}
+
 /// The most files Create file remembers; past it the oldest is forgotten
 /// (the file stays where it is).
 pub const CREATED_KEEP: usize = 500;
@@ -153,6 +166,11 @@ struct Contents {
     /// `version` stays 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     onedrive: Option<DriveLink>,
+    /// The Google Drive connected (K4), without any token. Absent from a
+    /// file written before K4 and not written when none is; `version`
+    /// stays 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    google: Option<GoogleLink>,
 }
 
 #[derive(Debug)]
@@ -164,6 +182,7 @@ pub struct Store {
     created: Vec<Created>,
     slack: Option<SlackLink>,
     onedrive: Option<DriveLink>,
+    google: Option<GoogleLink>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -198,6 +217,7 @@ impl Store {
             created: held.created,
             slack: held.slack,
             onedrive: held.onedrive,
+            google: held.google,
             on_disk,
         }
     }
@@ -224,6 +244,7 @@ impl Store {
             created: self.created.clone(),
             slack: self.slack.clone(),
             onedrive: self.onedrive.clone(),
+            google: self.google.clone(),
         })?;
         let tmp = self.path.with_extension("json.tmp");
         // Made afresh, so it is created with the mode below rather than
@@ -324,6 +345,24 @@ impl Store {
     /// customer connects again or disconnects.
     pub fn park_onedrive(&mut self, at: u64) {
         if let Some(l) = self.onedrive.as_mut() {
+            l.parked_at = Some(at);
+        }
+    }
+
+    /// The Google Drive connected, if any (K4).
+    pub fn google(&self) -> Option<&GoogleLink> {
+        self.google.as_ref()
+    }
+
+    /// Remember the Google Drive connected, or forget it with `None`.
+    pub fn set_google(&mut self, link: Option<GoogleLink>) {
+        self.google = link;
+    }
+
+    /// Google ended the sign-in: keep the connection, marked, until the
+    /// customer connects again or disconnects.
+    pub fn park_google(&mut self, at: u64) {
+        if let Some(l) = self.google.as_mut() {
             l.parked_at = Some(at);
         }
     }
@@ -818,6 +857,41 @@ mod tests {
         s.save().unwrap();
         assert!(Store::open(&file).onedrive().is_none());
         assert!(!fs::read_to_string(&file).unwrap().contains("onedrive"));
+    }
+
+    #[test]
+    fn a_google_drive_is_kept_without_a_token_an_address_or_a_file_id() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        // None connected: the file is as it was before K4.
+        assert!(!fs::read_to_string(&file).unwrap().contains("google"));
+        let mut s = Store::open(&file);
+        s.set_google(Some(GoogleLink {
+            owner: "Ann Lee".into(),
+            connected_at: 7,
+            parked_at: None,
+        }));
+        s.save().unwrap();
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"owner\": \"Ann Lee\""), "{raw}");
+        for word in ["token", "secret", "refresh", "parked", "picked"] {
+            assert!(!raw.to_lowercase().contains(word), "{word} in {raw}");
+        }
+        let mut s = Store::open(&file);
+        assert_eq!(s.google().unwrap().connected_at, 7);
+        s.park_google(9);
+        s.save().unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.google().unwrap().parked_at, Some(9));
+        s.set_google(None);
+        s.save().unwrap();
+        assert!(Store::open(&file).google().is_none());
+        assert!(!fs::read_to_string(&file).unwrap().contains("google"));
     }
 
     #[cfg(unix)]

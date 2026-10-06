@@ -17,9 +17,9 @@ Secrets and variables → Actions → **Variables** (not Secrets).
 
 The Rust side of each connection is its own card (K2, K3, K4). K3
 (Slack) is built and reads `RATA_SLACK_CLIENT_ID`; K2 (OneDrive) is built
-and reads `RATA_MS_CLIENT_ID`; K4 is not built yet, and the variable names
-below are the ones that card will read. Registering first costs nothing and
-lets each card be tested the day it is built.
+and reads `RATA_MS_CLIENT_ID`; K4 (Google Drive) is built and reads
+`RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`. A service shows in
+the app only in a build made after its variables are set.
 
 ## OneDrive (K2)
 
@@ -117,35 +117,53 @@ channels.
 ## Google Drive (K4)
 
 RATA asks only for `drive.file`: it sees the files the customer picks in
-Google's own chooser (which opens in the browser) and the files RATA saves.
-That scope needs no security assessment.
+Google's own chooser (which opens in the browser, right after Google's
+consent page) and the files RATA saves. That scope is non-sensitive, so it
+needs Google's basic app verification and no security assessment.
 
 1. [console.cloud.google.com](https://console.cloud.google.com) → create a
-   project "RATA" → APIs & Services → enable the **Google Drive API** and
-   the **Google Picker API**.
-2. **OAuth consent screen** (Google Auth Platform → Branding): app name
-   RATA, support email, the logo, `mailrata.org` as the authorised domain,
-   links to `https://mailrata.org/privacy` and `/terms`. Audience:
-   External. Data access: add `https://www.googleapis.com/auth/drive.file`
-   only.
-3. Clients → Create client → **Desktop app**. Google treats a desktop
-   client's secret as not secret, so both values go in GitHub
-   **Variables**: `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`.
-4. Publish the app (Audience → Publish) and ask for **brand
-   verification**; it is often automatic, otherwise a few business days.
-   In Testing status only listed test users can sign in and their tokens
-   expire after 7 days.
+   project "RATA" → APIs & Services → Library: enable the **Google Drive
+   API** and the **Google Picker API** (the chooser needs both).
+2. **Google Auth Platform → Branding**: app name RATA, support email, the
+   logo, `mailrata.org` as the authorised domain, links to
+   `https://mailrata.org/privacy` and `/terms`. **Audience**: External.
+   **Data access**: add `https://www.googleapis.com/auth/drive.file` only.
+3. **Clients → Create client → Desktop app**, named "RATA desktop". There
+   is no redirect URI to enter: a Desktop app client accepts
+   `http://127.0.0.1` at any port, which is where RATA listens for the
+   browser coming back. Copy the client id and the client secret. Google
+   treats a desktop client's secret as not secret (it ships in every copy
+   of the app), so both go in GitHub **Variables**, not Secrets:
+   `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`. A build needs
+   both; with only one it has no Google Drive.
+4. While the app is in **Testing**, only the test users you list under
+   Audience can connect, and Google ends their sign-in after 7 days (RATA
+   then says "Connect Google Drive again"). For customers: Audience →
+   **Publish app**, and ask for **brand verification** (often automatic for
+   a non-sensitive scope, otherwise a few business days).
    [Desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app),
-   [Picker for desktop apps](https://developers.google.com/workspace/drive/picker/guides/overview-desktop).
+   [Picker for desktop apps](https://developers.google.com/workspace/drive/picker/guides/overview-desktop),
+   [Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
 
 Do not add `drive`, `drive.readonly` or Gmail's `https://mail.google.com/`:
 those are restricted scopes that need a yearly third-party security
 assessment (CASA), which outside sources price at roughly $500 to $4,500 a
-year. Gmail keeps working with app passwords.
+year. Google's chooser also takes `drive.file` alone. Gmail keeps working
+with app passwords.
 
-**How to tell it worked:** once K4 ships, Connect on the Google Drive row
-opens Google's chooser in the browser, and the files picked there show in
-Files.
+What the customer sees: Connect on the Google Drive row opens Google's
+page in the browser, asking to let RATA "see, edit, create and delete only
+the specific Google Drive files you use with this app", then Google's file
+chooser. Files then lists the files chosen and any RATA saved, as one list
+(Google Docs, Sheets and Slides as `.docx`, `.xlsx` and `.pptx`, which RATA
+asks Google to convert, up to Google's 10 MB). Save to puts a new file in
+My Drive; it never replaces one. Disconnect forgets the sign-in on the
+computer and asks Google to revoke it.
+
+**How to tell it worked:** in a build made after both variables are set,
+Settings → Connected accounts → Google Drive → Connect opens Google's page
+and then its chooser; pick a file, and Files lists it under Google Drive.
+Copy diagnostics says "Google Drive yes".
 
 ## Not planned, and why
 

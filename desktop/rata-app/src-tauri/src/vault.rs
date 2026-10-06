@@ -47,6 +47,11 @@ pub const SLACK_SERVICE: &str = "org.mailrata.desktop.slack";
 /// token for Microsoft Graph alone, so it never shares an entry with one.
 pub const ONEDRIVE_SERVICE: &str = "org.mailrata.desktop.onedrive";
 
+/// Where the Google Drive connection's sign-in is kept (K4): a service of
+/// its own too. RATA links no Google mailbox by OAuth, and Drive's token is
+/// for `drive.file` alone, so nothing else ever names an entry here.
+pub const GOOGLE_SERVICE: &str = "org.mailrata.desktop.google";
+
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;
     fn get(&self, email: &str) -> Result<String, Unreadable>;
@@ -63,6 +68,10 @@ pub trait Vault: Send + Sync {
     fn put_onedrive(&self, name: &str, secret: &str) -> Result<(), String>;
     fn get_onedrive(&self, name: &str) -> Result<String, Unreadable>;
     fn forget_onedrive(&self, name: &str) -> Result<(), String>;
+    /// The same three for Google Drive's sign-in, in `GOOGLE_SERVICE`.
+    fn put_google(&self, name: &str, secret: &str) -> Result<(), String>;
+    fn get_google(&self, name: &str) -> Result<String, Unreadable>;
+    fn forget_google(&self, name: &str) -> Result<(), String>;
 }
 
 /// Tests share one vault between the app and the test itself.
@@ -103,6 +112,15 @@ impl<V: Vault> Vault for std::sync::Arc<V> {
     }
     fn forget_onedrive(&self, n: &str) -> Result<(), String> {
         (**self).forget_onedrive(n)
+    }
+    fn put_google(&self, n: &str, s: &str) -> Result<(), String> {
+        (**self).put_google(n, s)
+    }
+    fn get_google(&self, n: &str) -> Result<String, Unreadable> {
+        (**self).get_google(n)
+    }
+    fn forget_google(&self, n: &str) -> Result<(), String> {
+        (**self).forget_google(n)
     }
 }
 
@@ -204,6 +222,15 @@ impl Vault for Keychain {
     }
     fn forget_onedrive(&self, name: &str) -> Result<(), String> {
         Self::forget_in(ONEDRIVE_SERVICE, name)
+    }
+    fn put_google(&self, name: &str, secret: &str) -> Result<(), String> {
+        Self::put_in(GOOGLE_SERVICE, name, secret)
+    }
+    fn get_google(&self, name: &str) -> Result<String, Unreadable> {
+        Self::get_in(GOOGLE_SERVICE, name)
+    }
+    fn forget_google(&self, name: &str) -> Result<(), String> {
+        Self::forget_in(GOOGLE_SERVICE, name)
     }
 }
 
@@ -350,7 +377,7 @@ pub fn forget_all(v: &dyn Vault, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ------------------------------------- Slack's and OneDrive's sign-ins
+// ----------------------------- Slack's, OneDrive's and Google's sign-ins
 
 /// The one entry Share to Slack's sign-in begins in (K3), under
 /// `SLACK_SERVICE`; longer ones go on in `workspace#2`, `workspace#3`… in
@@ -367,12 +394,21 @@ pub const ONEDRIVE_ENTRY: &str = "drive";
 /// How OneDrive's entry begins.
 pub const ONEDRIVE_MARK: &str = "rata-onedrive1:";
 
-/// A sign-in kept in a service of its own, in pieces: Slack's (K3) and
-/// OneDrive's (K2). The same rules for both; only the words differ.
+/// The one entry Google Drive's refresh token begins in (K4), under
+/// `GOOGLE_SERVICE`, with `drive#2`, `drive#3`… after it, as OneDrive's.
+pub const GOOGLE_ENTRY: &str = "drive";
+
+/// How Google Drive's entry begins.
+pub const GOOGLE_MARK: &str = "rata-google1:";
+
+/// A sign-in kept in a service of its own, in pieces: Slack's (K3),
+/// OneDrive's (K2) and Google Drive's (K4). The same rules for all; only
+/// the words differ.
 #[derive(Clone, Copy)]
 enum Own {
     Slack,
     OneDrive,
+    Google,
 }
 
 impl Own {
@@ -380,6 +416,7 @@ impl Own {
         match self {
             Own::Slack => SLACK_ENTRY,
             Own::OneDrive => ONEDRIVE_ENTRY,
+            Own::Google => GOOGLE_ENTRY,
         }
     }
 
@@ -387,6 +424,7 @@ impl Own {
         match self {
             Own::Slack => SLACK_MARK,
             Own::OneDrive => ONEDRIVE_MARK,
+            Own::Google => GOOGLE_MARK,
         }
     }
 
@@ -394,6 +432,7 @@ impl Own {
         match self {
             Own::Slack => v.put_slack(name, secret),
             Own::OneDrive => v.put_onedrive(name, secret),
+            Own::Google => v.put_google(name, secret),
         }
     }
 
@@ -401,6 +440,7 @@ impl Own {
         match self {
             Own::Slack => v.get_slack(name),
             Own::OneDrive => v.get_onedrive(name),
+            Own::Google => v.get_google(name),
         }
     }
 
@@ -408,6 +448,7 @@ impl Own {
         match self {
             Own::Slack => v.forget_slack(name),
             Own::OneDrive => v.forget_onedrive(name),
+            Own::Google => v.forget_google(name),
         }
     }
 
@@ -415,6 +456,7 @@ impl Own {
         match self {
             Own::Slack => "Slack sent a sign-in RATA cannot keep. Connect Slack again.",
             Own::OneDrive => "Microsoft sent a sign-in RATA cannot keep. Connect OneDrive again.",
+            Own::Google => "Google sent a sign-in RATA cannot keep. Connect Google Drive again.",
         }
     }
 
@@ -423,6 +465,9 @@ impl Own {
             Own::Slack => "Slack's sign-in is too long for this computer's keychain.",
             Own::OneDrive => {
                 "Microsoft's sign-in to OneDrive is too long for this computer's keychain."
+            }
+            Own::Google => {
+                "Google's sign-in to Google Drive is too long for this computer's keychain."
             }
         }
     }
@@ -434,6 +479,9 @@ impl Own {
             }
             Own::OneDrive => {
                 "RATA's sign-in to OneDrive is no longer whole in this computer's keychain. Connect OneDrive again."
+            }
+            Own::Google => {
+                "RATA's sign-in to Google Drive is no longer whole in this computer's keychain. Connect Google Drive again."
             }
         }
     }
@@ -540,9 +588,24 @@ pub fn forget_onedrive_secret(v: &dyn Vault) -> Result<(), String> {
     forget_own(v, Own::OneDrive)
 }
 
+/// Keep Google Drive's refresh token (K4), in `GOOGLE_SERVICE`.
+pub fn put_google_secret(v: &dyn Vault, secret: &str) -> Result<(), String> {
+    put_own(v, Own::Google, secret)
+}
+
+/// Read Google Drive's refresh token back whole.
+pub fn get_google_secret(v: &dyn Vault) -> Result<String, Unreadable> {
+    get_own(v, Own::Google)
+}
+
+/// Forget Google Drive's refresh token: the entry first, then every piece.
+pub fn forget_google_secret(v: &dyn Vault) -> Result<(), String> {
+    forget_own(v, Own::Google)
+}
+
 /// For tests, and only for tests. Nothing persists, which is the point, and
 /// `cfg(test)` means there is no way to reach it from a shipped build. One
-/// map for each of the keychain's four services.
+/// map for each of the keychain's five services.
 #[cfg(test)]
 #[derive(Default)]
 pub struct Memory {
@@ -550,6 +613,7 @@ pub struct Memory {
     pieces: Mutex<HashMap<String, String>>,
     slack: Mutex<HashMap<String, String>>,
     onedrive: Mutex<HashMap<String, String>>,
+    google: Mutex<HashMap<String, String>>,
 }
 
 #[cfg(test)]
@@ -618,6 +682,15 @@ impl Vault for Memory {
     }
     fn forget_onedrive(&self, name: &str) -> Result<(), String> {
         mem_forget(&self.onedrive, name)
+    }
+    fn put_google(&self, name: &str, secret: &str) -> Result<(), String> {
+        mem_put(&self.google, name, secret)
+    }
+    fn get_google(&self, name: &str) -> Result<String, Unreadable> {
+        mem_get(&self.google, name)
+    }
+    fn forget_google(&self, name: &str) -> Result<(), String> {
+        mem_forget(&self.google, name)
     }
 }
 
@@ -690,6 +763,21 @@ impl Vault for Stuck {
         }
         self.mem.forget_onedrive(n)
     }
+    fn put_google(&self, n: &str, s: &str) -> Result<(), String> {
+        if self.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("keychain locked".into());
+        }
+        self.mem.put_google(n, s)
+    }
+    fn get_google(&self, n: &str) -> Result<String, Unreadable> {
+        self.mem.get_google(n)
+    }
+    fn forget_google(&self, n: &str) -> Result<(), String> {
+        if self.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("keychain locked".into());
+        }
+        self.mem.forget_google(n)
+    }
 }
 
 /// A keychain that will not open — the locked-at-login case. Test only.
@@ -734,6 +822,15 @@ impl Vault for Locked {
         self.get(n)
     }
     fn forget_onedrive(&self, n: &str) -> Result<(), String> {
+        self.forget(n)
+    }
+    fn put_google(&self, n: &str, s: &str) -> Result<(), String> {
+        self.put(n, s)
+    }
+    fn get_google(&self, n: &str) -> Result<String, Unreadable> {
+        self.get(n)
+    }
+    fn forget_google(&self, n: &str) -> Result<(), String> {
         self.forget(n)
     }
 }
@@ -951,6 +1048,44 @@ mod tests {
         assert!(put_onedrive_secret(&v, "a\nb").is_err());
         assert!(matches!(
             get_onedrive_secret(&Locked),
+            Err(Unreadable::Locked(_))
+        ));
+    }
+
+    #[test]
+    fn googles_sign_in_is_kept_in_its_own_service_apart_from_the_rest() {
+        let v = Memory::default();
+        // OneDrive's entry has the same name; neither touches the other.
+        put_onedrive_secret(&v, "onedrive-secret").unwrap();
+        v.put(GOOGLE_ENTRY, "a-mailbox-password").unwrap();
+        let long: String = (0..2_500)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        put_google_secret(&v, &long).unwrap();
+        let first = v.get_google(GOOGLE_ENTRY).unwrap();
+        assert!(first.len() <= 1_280 && first.starts_with(GOOGLE_MARK));
+        assert_eq!(get_google_secret(&v).unwrap(), long);
+        put_google_secret(&v, "short").unwrap();
+        assert!(v.get_google("drive#2").is_err());
+        assert_eq!(get_google_secret(&v).unwrap(), "short");
+        put_google_secret(&v, &long).unwrap();
+        v.forget_google("drive#2").unwrap();
+        let e = get_google_secret(&v).unwrap_err();
+        assert!(e.to_string().contains("Connect Google Drive again"), "{e}");
+        // OneDrive's mark is not Google's.
+        v.put_google(GOOGLE_ENTRY, &format!("{ONEDRIVE_MARK}1:x"))
+            .unwrap();
+        assert!(get_google_secret(&v).is_err());
+        put_google_secret(&v, &long).unwrap();
+        forget_google_secret(&v).unwrap();
+        assert!(v.get_google(GOOGLE_ENTRY).is_err());
+        assert!(v.get_google("drive#2").is_err());
+        assert_eq!(get_onedrive_secret(&v).unwrap(), "onedrive-secret");
+        assert_eq!(v.get(GOOGLE_ENTRY).unwrap(), "a-mailbox-password");
+        assert!(put_google_secret(&v, "").is_err());
+        assert!(put_google_secret(&v, "a\nb").is_err());
+        assert!(matches!(
+            get_google_secret(&Locked),
             Err(Unreadable::Locked(_))
         ));
     }

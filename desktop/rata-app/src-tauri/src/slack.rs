@@ -1781,6 +1781,7 @@ mod tests {
         slack.gap = Duration::ZERO;
         app.slack = slack;
         app.onedrive = crate::onedrive::OneDrive::off();
+        app.google = crate::google::GoogleDrive::off();
         if let Some(l) = licence {
             app.set_licence(Some(l.into()), None).unwrap();
         }

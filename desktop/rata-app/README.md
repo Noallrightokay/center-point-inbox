@@ -54,6 +54,9 @@ export RATA_LICENCE_PUBLIC_KEY="$(cat /path/to/licence.pub)"
 # export RATA_MS_CLIENT_ID=...
 # Optional: the Slack app's public client id turns on Share to Slack (Pro).
 # export RATA_SLACK_CLIENT_ID=...
+# Optional: Google's Desktop app client id and secret (both) turn on Google
+# Drive (Pro). Google treats a desktop client's secret as not secret.
+# export RATA_GOOGLE_CLIENT_ID=... RATA_GOOGLE_CLIENT_SECRET=...
 
 # A packaged build, the one to test anything visible in. Without the
 # custom-protocol feature a release build looks for a dev server instead of
@@ -101,6 +104,7 @@ and running anywhere is the only reason to ship an AppImage.
 | `RATA_UPDATER_PUBKEY` and `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | The app registers no updater and never checks for a new version. Half the pair fails the build. |
 | `RATA_MS_CLIENT_ID` (a repository **variable**, not a secret) | The build has no Sign in with Microsoft; Microsoft mailboxes cannot be added. |
 | `RATA_SLACK_CLIENT_ID` (a repository **variable**, not a secret) | The build has no Share to Slack; Settings shows no Slack row and the page offers no Share to Slack. |
+| `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET` (both repository **variables**: Google treats a desktop client's secret as not secret) | The build has no Google Drive; Settings shows no Google Drive row. With only one of the two, the same. |
 
 The build works without the signing secrets and the installers install; they
 just arrive looking untrustworthy, which for a product whose pitch is "your mail

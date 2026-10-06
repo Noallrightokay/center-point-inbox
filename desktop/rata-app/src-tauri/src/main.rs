@@ -18,6 +18,7 @@ mod commands;
 mod core;
 mod created;
 mod diagnostics;
+mod google;
 mod licence;
 mod links;
 mod mark;
