@@ -43,7 +43,8 @@ const ERROR_TOPICS = {
 };
 
 /* Where the sentences the page quotes come from. discover.rs holds MS_HELP
-   and MS365_HELP, and app.html the form's own Microsoft sentences. */
+   and MS365_HELP, and app.html the form's own Microsoft sentences. cloud.rs
+   and created.rs hold the connected folders' and Create file's (K5, K6). */
 const SOURCES = [
   'desktop/rata-mail/src/imap.rs',
   'desktop/rata-mail/src/smtp.rs',
@@ -52,6 +53,8 @@ const SOURCES = [
   'desktop/rata-mail/src/discover.rs',
   'desktop/rata-mail/src/credential.rs',
   'desktop/rata-app/src-tauri/src/core.rs',
+  'desktop/rata-app/src-tauri/src/cloud.rs',
+  'desktop/rata-app/src-tauri/src/created.rs',
   'rata-next/public/app.html',
 ];
 
@@ -171,6 +174,24 @@ export default async function run(state) {
       const part = at < 0 ? '' : html.slice(at, next < 0 ? undefined : next);
       check(/class="said"/.test(part) && /What it means/.test(part), `${what}: quoted and explained`);
     }
+  }
+
+  console.log('\n— Files: what Pro makes and connects, and nothing a release cannot do —');
+  {
+    const at = html.indexOf('<section id="files"');
+    const part = at < 0 ? '' : html.slice(at, html.indexOf('</section>', at));
+    for (const id of ['create-file', 'created', 'cloud-folders', 'browser']) {
+      check(part.includes(`id="${id}"`) && html.includes(`<a href="#${id}">`), `#${id} is in the section and the contents`);
+    }
+    check(/RATA Pro/.test(part) && /every plan/.test(part), 'it says which parts are Pro and that the browser links are on every plan');
+    check(/never opens a file you downloaded/i.test(part), 'it says RATA never opens a downloaded file');
+    check(/mailrata\.org/.test(part) && /never signs in to Apple or Adobe/.test(part), 'the folders: nothing to mailrata.org, no sign-in');
+    /* OneDrive, Google Drive and Share to Slack are not switched on in any
+       released build (cloud.rs `available`, K2 to K4): the page may name them
+       only as browser links, never as something RATA connects to. */
+    const notBrowser = part.slice(0, part.indexOf('id="browser"'));
+    const early = notBrowser.match(/OneDrive|Google Drive|Share to Slack|\bSlack\b|SharePoint|Dropbox/g) || [];
+    check(early.length === 0, `no connection a release cannot make is offered: ${early.join(', ') || 'none'}`);
   }
 
   console.log('\n— install matches BETA.md §1, and reporting says what never to paste —');

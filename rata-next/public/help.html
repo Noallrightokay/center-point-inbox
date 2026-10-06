@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#0E1014" media="(prefers-color-scheme: dark)">
 <link rel="icon" type="image/png" href="icons/favicon-64.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<meta name="description" content="How to install RATA, link Gmail, iCloud, Yahoo, Fastmail, your own domain or a Microsoft mailbox, what each message RATA shows when linking fails means, and how to report a bug.">
+<meta name="description" content="How to install RATA, link Gmail, iCloud, Yahoo, Fastmail, your own domain or a Microsoft mailbox, what each message RATA shows when linking fails means, how Create file and the iCloud Drive and Creative Cloud Files folders work, and how to report a bug.">
 <title>RATA · Help</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <style>
@@ -145,7 +145,7 @@ footer a:hover{color:var(--ink)}
 <main id="main">
 <header class="head"><div class="wrap">
   <h1>Help</h1>
-  <p class="lede">Installing RATA, linking your mailbox, what RATA means when it cannot link one, and how to tell us when something breaks.</p>
+  <p class="lede">Installing RATA, linking your mailbox, what RATA means when it cannot link one, the files you make and the cloud folders you connect, and how to tell us when something breaks.</p>
 </div></header>
 
 <div class="wrap layout">
@@ -164,6 +164,14 @@ footer a:hover{color:var(--ink)}
       </ol>
     </li>
     <li><a href="#errors">When linking fails</a></li>
+    <li><a href="#files">Files and cloud folders</a>
+      <ol>
+        <li><a href="#create-file">Create file</a></li>
+        <li><a href="#created">Created by you</a></li>
+        <li><a href="#cloud-folders">iCloud Drive and Creative Cloud</a></li>
+        <li><a href="#browser">Start in your browser</a></li>
+      </ol>
+    </li>
     <li><a href="#report">Report a bug</a></li>
   </ol>
 </aside>
@@ -396,6 +404,66 @@ footer a:hover{color:var(--ink)}
     <dt>What to do</dt>
     <dd>For a forwarded address, link the mailbox the mail is forwarded to.</dd>
   </dl>
+</section>
+
+<section id="files" aria-labelledby="files-h">
+  <h2 id="files-h">Files you make, and your cloud folders</h2>
+  <p>All of this is in the desktop app, under <b>Files</b>. Create file, Created by you and the connected folders come with <b>RATA Pro</b>; Start in your browser is there on every plan. None of it sends a file to mailrata.org.</p>
+
+  <h3 id="create-file">Create file</h3>
+  <p>In <b>Files</b>, press <b>Create file</b>, choose a kind of file, give it a name and choose where to keep it, then press <b>Create</b>.</p>
+  <ul>
+    <li><b>What it makes:</b> a blank Word document (<code>.docx</code>), Excel spreadsheet (<code>.xlsx</code>) or PowerPoint presentation (<code>.pptx</code>), or an empty Markdown (<code>.md</code>), text (<code>.txt</code>) or CSV (<code>.csv</code>) file. The blanks are RATA&rsquo;s own, built into the app, so a new file carries nothing from anywhere else.</li>
+    <li><b>Where it goes:</b> a folder called <b>RATA</b> inside your Documents folder, or the top of your iCloud Drive or Creative Cloud Files folder once you have connected it (below). A name already taken there gets a number, such as <code>Plan (2).docx</code>; RATA never writes over a file.</li>
+    <li><b>Where it opens:</b> in the app your computer already uses for that kind of file, such as Word, Excel, PowerPoint, Pages, Numbers, Keynote, LibreOffice or a text editor. RATA does not edit the file itself.</li>
+  </ul>
+  <div class="note"><b>RATA never opens a file you downloaded.</b> An attachment comes from a stranger, so RATA only saves it, marked as a download, and leaves opening it to you. A file from Create file is the one exception, and only while it is still the file RATA made: in the same place, with the same name, and not marked as a download. If anything else is found there, RATA will not open it.</div>
+  <blockquote class="said">RATA will not open <var>Plan.docx</var>: it is not a file RATA made.</blockquote>
+  <blockquote class="said">RATA could not open <var>Plan.docx</var> (<var>the reason</var>). It is in <var>Documents / RATA</var>; open it from there.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The first: the file at that place is no longer the one RATA made, for example because a downloaded file was saved over it. The second: RATA made the file, but your computer had no app to open it, or the app would not start.</dd>
+    <dt>What to do</dt>
+    <dd>Open the file yourself from that folder, if you know where it came from. Or make a new one with Create file.</dd>
+  </dl>
+
+  <h3 id="created">Created by you, and Send with RATA</h3>
+  <p><b>Created by you</b>, at the top of Files, lists every file you made with Create file, with where it is, when it last changed and its size. Each one has:</p>
+  <ul>
+    <li><b>Open</b>, which opens it again in your computer&rsquo;s app.</li>
+    <li><b>Send with RATA</b>, which starts a new message with the file attached. RATA reads the file when the message is sent, not when you press the button, so it goes as it is at that moment, with every change you saved in the meantime. If RATA closes before such a message has gone, it puts the message back in the composer the next time it opens instead of sending it, since the file may have changed.</li>
+    <li><b>Forget</b>, which takes it off the list. The file itself stays where it is.</li>
+  </ul>
+  <p>A file you moved, renamed or deleted shows as <b>Moved or deleted from</b> its folder, and offers only Forget. RATA does not go looking for it.</p>
+
+  <h3 id="cloud-folders">iCloud Drive and Creative Cloud Files</h3>
+  <p>Apple and Adobe do not let other apps sign in to your files with them. What both do is keep a folder on your computer in step with your account: <b>iCloud Drive</b> on a Mac, or on Windows with iCloud for Windows, and <b>Creative Cloud Files</b> with the Adobe Creative Cloud desktop app. That folder is what RATA connects to. Neither has an app for Linux, so there RATA cannot reach them.</p>
+  <ol class="steps">
+    <li>Make sure the folder is there: iCloud Drive turned on in System Settings on a Mac or in iCloud for Windows, or file syncing turned on in the Creative Cloud app&rsquo;s preferences.</li>
+    <li>In RATA, open <b>Settings</b>, then <b>Connected accounts</b>, and press <b>Connect</b> next to the folder. RATA looks for it where Apple&rsquo;s or Adobe&rsquo;s app keeps it, and says <b>Using iCloud Drive on this computer</b> (or Creative Cloud Files) when it finds it.</li>
+    <li>In <b>Files</b>, choose the folder under <b>Files from</b> to look through it. <b>Open in Bridge</b> converts a file in the Format Bridge, and <b>Add to Files</b> keeps a copy in RATA&rsquo;s Files. <b>Save to</b>, on an attachment, a converted file or a document in Files, saves into the folder you are looking at, or the top of it.</li>
+  </ol>
+  <p>RATA reads and saves files only in that folder, on your computer. It never signs in to Apple or Adobe, never follows a link or shortcut in the folder, and sends nothing to mailrata.org. Apple&rsquo;s or Adobe&rsquo;s own app syncs what RATA saves there, as it does with anything you put in the folder. A program named to look like a document, such as <code>invoice.pdf.exe</code>, is never added to Files from the folder, and is saved into it only after the same question RATA asks before saving such an attachment. <b>Disconnect</b> in Settings makes RATA forget the folder; the folder and its files are not touched.</p>
+  <blockquote class="said">RATA could not find iCloud Drive on this computer. On Windows, install iCloud for Windows and turn on iCloud Drive; on a Mac, turn on iCloud Drive in System Settings.</blockquote>
+  <blockquote class="said">RATA could not find Creative Cloud Files on this computer. Install the Adobe Creative Cloud desktop app, sign in, and turn on file syncing in its preferences.</blockquote>
+  <blockquote class="said">RATA can no longer find the <var>iCloud Drive</var> folder on this computer. Connect it again in Settings.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>RATA looked where Apple&rsquo;s or Adobe&rsquo;s app keeps the folder and did not find it there, or the folder it was using has gone, for example because it was on a drive that is not plugged in.</dd>
+    <dt>What to do</dt>
+    <dd>Install or sign in to the provider&rsquo;s app and turn the folder on, then press <b>Connect</b> again.</dd>
+  </dl>
+  <blockquote class="said">That file is still in iCloud. Open it in Finder once to download it, then try again.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>iCloud keeps some files only online until they are needed, and the list shows them as <b>In iCloud</b>. RATA does not download them from Apple itself.</dd>
+    <dt>What to do</dt>
+    <dd>Open the file once in Finder (on Windows, in File Explorer), wait for it to download, then try again in RATA.</dd>
+  </dl>
+
+  <h3 id="browser">Start in your browser</h3>
+  <p>Under <b>Start in your browser</b>, in Files, are links to the web apps people already make things in: Google Docs, Sheets, Slides, Forms and Drive; Word, Excel, PowerPoint, OneNote and OneDrive on the web; Adobe Acrobat&rsquo;s online tools and Adobe Express; Pages, Numbers and Keynote on iCloud.com; Slack; and DocuSign, Acrobat Sign and RabbitSign for sending something out to be signed.</p>
+  <p>These are links, nothing more. Each opens that service&rsquo;s own site in your browser, signed in as whoever you are there, and what you make stays with that service until you download it. RATA does not sign in to them, reads nothing from them, and is not connected to your account with any of them. <b>Hide</b> folds the list away.</p>
 </section>
 
 <section id="report" aria-labelledby="report-h">
