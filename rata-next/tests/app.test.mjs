@@ -121,6 +121,16 @@ export default async function run(state) {
     check(fresh.linked === 0, `no accounts assumed: ${fresh.linked} linked`);
     check(fresh.sections.length === 0 && !fresh.views.some(v => ['create', 'plug', 'conn'].includes(v)),
       `no Extras, Connections or launcher screens to lead nowhere: ${[...new Set(fresh.views)].join(', ')}`);
+    /* Apps is the one launcher, and every tile on it leads somewhere: an
+       https link to that company's own site, in a new tab, never a switch. */
+    const apps = await page.evaluate(() => {
+      go('apps');
+      const tiles = [...document.querySelectorAll('#apps-groups .launch-tile')];
+      return { n: tiles.length, links: tiles.every(a => /^https:\/\/[a-z0-9.-]+\.[a-z]+(\/|$)/.test(a.getAttribute('href')) && a.target === '_blank'),
+        switches: document.querySelectorAll('#view-apps input[type=checkbox], #view-apps .switch').length };
+    });
+    check(apps.n >= 20 && apps.links && apps.switches === 0, `Apps opens real sites and holds no switch: ${apps.n} tiles`);
+    await page.evaluate(() => go('inbox'));
 
     /* ---- nothing leaves for another company's server ---- */
     const offMachine = await page.evaluate(() => ({
