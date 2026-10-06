@@ -183,6 +183,39 @@ export default async function run(state) {
       check(!/as they arrive|automatic/i.test(PLANS.base.blurb), 'and Base translates when asked, not as mail arrives');
       const offer = domainRefusal('pro', 0, 0, { STRIPE_PRICE_DOMAIN: 'price_x' });
       check(!/mailrata\.org/.test(offer), `the domain add-on's offer claims no mailrata.org addresses: "${offer}"`);
+
+      /* Pro's `connect` (K5, K6): Create file and the iCloud Drive and
+         Creative Cloud Files folders shipped in 0.1.49 and are sold. OneDrive,
+         Google Drive and Share to Slack hang off the same flag but are
+         switched on in no released build (cloud.rs `available`), so no plan
+         sentence or sales page may name them, nor anything else RATA does not
+         connect to, until they are. */
+      const app = readFileSync(join(HERE, '..', 'public', 'app.html'), 'utf8');
+      for (const p of ['base', 'pro', 'enterprise']) {
+        const tier = app.match(new RegExp(`\\b${p}:\\s*\\{label:[^}]*?\\bconnect:(true|false)`));
+        check(!!tier && (tier[1] === 'true') === !!PLANS[p].connect,
+          `${PLANS[p].label}: connect is ${!!PLANS[p].connect} in lib/plan.js and in app.html's TIERS`);
+      }
+      const sellsFiles = b => /Word, Excel and PowerPoint/.test(b) && /iCloud Drive/.test(b) && /Creative Cloud Files/.test(b);
+      for (const p of SELLABLE) {
+        check(sellsFiles(PLANS[p].blurb) === !!PLANS[p].connect,
+          `${PLANS[p].label}'s blurb names Create file and the folders exactly when the plan has them: "${PLANS[p].blurb}"`);
+        if (PLANS[p].connect) check(/Mac or PC/.test(PLANS[p].blurb), `and says the folders are on a Mac or PC (no app for Linux)`);
+      }
+      const notYet = /OneDrive|Google Drive|SharePoint|Dropbox|\bSlack\b|Discord/gi;
+      const page = f => readFileSync(join(HERE, '..', 'public', f), 'utf8')
+        .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>|<!--[\s\S]*?-->/gi, ' ').replace(/<[^>]+>/g, ' ');
+      const sales = [...SELLABLE.map(p => [`${PLANS[p].label}'s blurb`, PLANS[p].blurb]),
+        ...['index.html', 'account.html', 'terms.html', 'privacy.html'].map(f => [f, page(f)])];
+      for (const [where, text] of sales) {
+        const named = text.match(notYet) || [];
+        check(named.length === 0, `${where} sells no connection a release cannot make: ${named.join(', ') || 'none'}`);
+      }
+      const plans = index.slice(index.indexOf('id="pricing"'), index.indexOf('id="download"'));
+      const proList = plans.slice(plans.indexOf('<h3>RATA Pro</h3>'));
+      const baseList = plans.slice(0, plans.indexOf('<h3>RATA Pro</h3>'));
+      check(/Word, Excel and PowerPoint/.test(proList) && /iCloud Drive and Creative Cloud Files/.test(proList)
+        && !/iCloud Drive|PowerPoint/.test(baseList), 'the price list puts Create file and the folders under Pro only');
     }
 
     /* ---- one mail form, any provider ---- */
