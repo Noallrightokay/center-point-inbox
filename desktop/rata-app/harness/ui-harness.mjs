@@ -296,6 +296,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
              with __mock.conn.finish() or Cancel does. */
           case 'connect_service':
             if (!pro) throw no('plan', 'Connected accounts come with RATA Pro. Upgrade at mailrata.org.');
+            if (C.connectFails) throw no('refused', C.connectFails);
+            /* A connected entry (Google Drive's Choose files) answers the entry again. */
             return new Promise((r) => { C.finish = (ok = true) => { C.finish = null; if (ok) { C.on[args.service] = true; r(entry(C.services.find((s) => s.service === args.service))); } else r({ cancelled: true }); }; });
           case 'cancel_connect':
             if (C.finish) { C.finish(false); return true; }
@@ -3639,7 +3641,8 @@ console.log('\n— Delete account in the app removes what is on this computer, a
   check((await pg.evaluate(() => document.activeElement.id)) === 'btn-delete', 'and Keep my account gives the focus back to Delete account');
 
   /* Done for real: Rust first, then the page's store, then out to sign-up. */
-  await pg.evaluate(() => { __mock.listFails = null; __mock.forgetFails = null; localStorage.setItem(OB_KEY, '[{"id":"waiting"}]'); });
+  await pg.evaluate(() => { __mock.listFails = null; __mock.forgetFails = null; localStorage.setItem(OB_KEY, '[{"id":"waiting"}]');
+    localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], acct: { google: 'me@example.com' } })); });
   await pg.click('#btn-delete');
   await pg.waitForFunction(() => !document.querySelector('#del-go').disabled);
   await pg.fill('#del-email', 'Me@Example.com');
@@ -3651,12 +3654,12 @@ console.log('\n— Delete account in the app removes what is on this computer, a
   const after = await pg.evaluate(async () => ({
     url: location.pathname + location.search,
     forgot: JSON.parse(sessionStorage.getItem('rata_forgot') || 'null'),
-    keys: Object.keys(localStorage).filter((k) => /centra_session|centra_ws_local_t|rata_outbox_local_t/.test(k)),
+    keys: Object.keys(localStorage).filter((k) => /centra_session|centra_ws_local_t|rata_outbox_local_t|rata_apps/.test(k)),
     dbs: (await indexedDB.databases()).map((x) => x.name).filter((n) => /local_t|rata-files/.test(n)),
   }));
   check(/auth\.html\?mode=signup&deleted=1/.test(after.url) && after.forgot && after.forgot.mailboxes === 1 && after.forgot.pageStoreThen
     && !after.keys.length && !after.dbs.length,
-  `Delete permanently asks Rust to remove the mailboxes and licence first, then clears the store, the outbox and the sign-in: ${JSON.stringify(after)}`);
+  `Delete permanently asks Rust to remove the mailboxes and licence first, then clears the store, the outbox, Apps' pins and accounts, and the sign-in: ${JSON.stringify(after)}`);
   await pg.close();
 }
 
@@ -3857,6 +3860,55 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
   check((await calls(pg, 'disconnect_service')).map((a) => a.service).join() === 'apple', 'Disconnect asks the app to forget it');
   check(await pg.evaluate(() => !('connections' in S) && !JSON.stringify(S.settings).includes('microsoft')), 'nothing about connections is kept in the workspace');
 
+  /* Google Drive, connected, offers Choose files: connect_service again,
+     which reopens Google's chooser (google.rs) and answers the entry. Same
+     waiting and Cancel as Connect; then the row, and Files' Google listing
+     when Files shows it, are read again. Only Google has it. */
+  await pg.click('#conn-list [data-conn-on="google"]');
+  await pg.waitForSelector('#conn-list [data-conn="google"] .conn-wait');
+  await pg.evaluate(() => __mock.conn.finish(true));
+  await pg.waitForSelector('#conn-list [data-conn-off="google"]');
+  await toasts(pg);
+  let more = await pg.evaluate(() => ({
+    google: [...document.querySelectorAll('#conn-list [data-conn="google"] button')].map((b) => b.textContent + ':' + (b.getAttribute('aria-label') || '')),
+    others: document.querySelectorAll('#conn-list [data-conn-more]:not([data-conn-more="google"])').length }));
+  check(more.google.join() === 'Choose files:Choose more files in Google Drive,Disconnect:Disconnect Google Drive' && more.others === 0,
+    `connected Google Drive offers Choose files beside Disconnect, and no other service does: ${JSON.stringify(more)}`);
+  await pg.evaluate(async () => {
+    __mock.conn.tree.google = { root: { name: 'Google Drive', path: 'Google Drive', items: [{ id: 'g1', name: 'Rota.xlsx', kind: 'file', size: 10, modified: 1790000000 }] } };
+    go('docs'); await cloudOpen('google', [{ id: '', name: 'Google Drive' }]); go('set');
+  });
+  const lists = (await calls(pg, 'cloud_list')).filter((a) => a.service === 'google').length;
+  const asks = (await calls(pg, 'connect_service')).filter((a) => a.service === 'google').length;
+  await pg.click('#conn-list [data-conn-more="google"]');
+  await pg.waitForSelector('#conn-list [data-conn="google"] .conn-wait');
+  more = await pg.evaluate(() => ({ text: document.querySelector('#conn-list [data-conn="google"] .conn-wait').textContent, focus: document.activeElement.dataset.connCancel }));
+  check(more.text === 'Finish signing in in your browser' && more.focus === 'google', `Choose files waits for the browser like Connect, with Cancel focused: ${JSON.stringify(more)}`);
+  await pg.evaluate(() => __mock.conn.tree.google.root.items.push({ id: 'g2', name: 'Handover.docx', kind: 'file', size: 20, modified: 1790000000 }));
+  await pg.evaluate(() => __mock.conn.finish(true));
+  await pg.waitForSelector('#conn-list [data-conn-more="google"]');
+  await pg.waitForFunction(() => CLOUD.items.length === 2, null, { timeout: 3000 }).catch(() => {});
+  more = await pg.evaluate(() => ({ state: document.querySelector('#conn-list [data-conn="google"] .conn-state').textContent, focus: document.activeElement.dataset.connMore, items: CLOUD.items.map((i) => i.name) }));
+  check((await calls(pg, 'connect_service')).filter((a) => a.service === 'google').length === asks + 1 && more.state === 'Connected as riley@gmail.example' && more.focus === 'google'
+    && (await calls(pg, 'cloud_list')).filter((a) => a.service === 'google').length === lists + 1 && more.items.join() === 'Handover.docx,Rota.xlsx'
+    && (await toasts(pg)).includes('Google Drive now shows the files you chose'),
+  `it asks connect_service for google again, keeps the row connected with the focus on Choose files, and reads Files' Google listing again: ${JSON.stringify(more)}`);
+  await pg.click('#conn-list [data-conn-more="google"]');
+  await pg.waitForSelector('#conn-list [data-conn="google"] .conn-wait');
+  await pg.keyboard.press('Enter');
+  await pg.waitForSelector('#conn-list [data-conn-more="google"]');
+  check(/Stopped\. Google Drive is connected as before\./.test((await toasts(pg)).join('|')) && await pg.evaluate(() => !!document.querySelector('#conn-list [data-conn-off="google"]')),
+    'Cancel on Choose files leaves Google Drive connected as before');
+  await pg.evaluate(() => { __mock.conn.connectFails = 'Google did not give RATA access to Google Drive.'; });
+  await pg.click('#conn-list [data-conn-more="google"]');
+  await pg.waitForFunction(() => window.__toasts.some((t) => /^Could not choose files in/.test(t)));
+  check((await toasts(pg)).includes('Could not choose files in Google Drive: Google did not give RATA access to Google Drive.') && await pg.evaluate(() => !!document.querySelector('#conn-list [data-conn-more="google"]')),
+    "a refusal is said with the app's reason, and Google Drive stays connected");
+  await pg.evaluate(() => { __mock.conn.connectFails = null; CLOUD.src = 'local'; CLOUD.trail = []; });
+  await pg.click('#conn-list [data-conn-off="google"]');
+  await pg.waitForSelector('#conn-list [data-conn-on="google"]');
+  await toasts(pg);
+
   /* Files: browse a cloud folder. */
   await pg.evaluate(() => { window.__pwned = undefined; go('docs'); });
   await pg.waitForSelector('#cloud-src:not([hidden]) [data-cloud-src="microsoft"]');
@@ -4043,7 +4095,228 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
   await ctx.close();
 }
 
-console.log('\n— Create file: blank files the app makes and opens, Created by you, and Start in your browser (K6) —');
+console.log('\n— Apps: the web apps a click away, pinned, recent, searched, and on your own account —');
+{
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  const axe = async (pg, where) => {
+    const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  const LAUNCHED = ['https://docs.new', 'https://sheets.new', 'https://slides.new', 'https://forms.new', 'https://drive.google.com',
+    'https://word.cloud.microsoft/', 'https://excel.cloud.microsoft/', 'https://powerpoint.cloud.microsoft/', 'https://onenote.cloud.microsoft/', 'https://onedrive.live.com',
+    'https://acrobat.adobe.com/', 'https://www.adobe.com/acrobat/online/sign-pdf.html', 'https://www.adobe.com/acrobat/online/convert-pdf.html', 'https://new.express.adobe.com/',
+    'https://www.icloud.com/pages/', 'https://www.icloud.com/numbers/', 'https://www.icloud.com/keynote/',
+    'https://app.slack.com/client',
+    'https://app.docusign.com', 'https://www.adobe.com/sign.html', 'https://www.rabbitsign.com/dashboard'];
+  const G = 'ann.lee+work@example.org', MS = 'bo@contoso.example';
+  const g = encodeURIComponent(G), m = encodeURIComponent(MS);
+  const HINTED = ['https://docs.google.com/document/create?authuser=' + g, 'https://docs.google.com/spreadsheets/create?authuser=' + g,
+    'https://docs.google.com/presentation/create?authuser=' + g, 'https://docs.google.com/forms/create?authuser=' + g, 'https://drive.google.com/?authuser=' + g,
+    'https://m365.cloud.microsoft/launch/word?login_hint=' + m, 'https://m365.cloud.microsoft/launch/excel?login_hint=' + m,
+    'https://m365.cloud.microsoft/launch/powerpoint?login_hint=' + m, 'https://onenote.cloud.microsoft/', 'https://onedrive.live.com', ...LAUNCHED.slice(10)];
+  const navIn = (pg) => pg.evaluate(() => {
+    const r = document.querySelector('#rail [data-view="apps"]'), mb = document.querySelector('#mnav [data-view="apps"]');
+    r.click();
+    return { rail: r && r.textContent.trim(), mnav: mb && mb.textContent.trim(), active: document.querySelector('#view-apps').classList.contains('active'),
+      current: [r.getAttribute('aria-current'), mb.getAttribute('aria-current')].join(), title: document.querySelector('#tb-title').textContent,
+      tiles: document.querySelectorAll('#apps-groups .launch-tile').length,
+      others: document.querySelectorAll('#rail [aria-current], #mnav [aria-current]').length };
+  });
+  const navOk = (n) => n.rail === 'Apps' && n.mnav === 'Apps' && n.active && n.current === 'page,page' && n.title === 'Apps' && n.tiles === LAUNCHED.length && n.others === 2;
+
+  /* On every plan, and with no licence at all. */
+  for (const [what, licensed, plan] of [['Pro', true, null], ['Base', true, { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: false }], ['no licence', false, null]]) {
+    const pg = await open(licensed);
+    if (plan) await pg.evaluate(async (p) => { __mock.plan = p; takeStanding(await apiFetch('/api/licence')); }, plan);
+    const n = await navIn(pg);
+    check(navOk(n), `${what}: Apps is in the side rail and the phone's bar, and opens every app with the place marked: ${JSON.stringify(n)}`);
+    await pg.close();
+  }
+  /* On the website: the same, each tile a link to a new tab. */
+  {
+    const pg = await browser.newPage();
+    pg.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+    await pg.addInitScript(() => { localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_t', email: 'me@example.com', mode: 'local' })); });
+    await pg.goto(B + '/app.html');
+    await pg.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+    const n = await navIn(pg);
+    const web = await pg.evaluate(() => ({ native: !!window.__RATA_NATIVE__, hrefs: [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')),
+      safe: [...document.querySelectorAll('#apps-groups .launch-tile')].every((a) => a.target === '_blank' && a.rel === 'noopener noreferrer') }));
+    check(navOk(n) && !web.native && JSON.stringify(web.hrefs) === JSON.stringify(LAUNCHED) && web.safe, `the website: Apps is in both navs, each tile a link to its own address in a new tab: ${JSON.stringify(n)}`);
+    await pg.evaluate((a) => { localStorage.setItem('rata_apps', JSON.stringify({ acct: { google: a.G, microsoft: a.MS } })); go('inbox'); go('apps'); }, { G, MS });
+    const hinted = await pg.evaluate(() => [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')));
+    check(JSON.stringify(hinted) === JSON.stringify(HINTED), `and with Your accounts set, the website's links carry the hint too: ${hinted[0]}`);
+    await pg.close();
+  }
+
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  let pg = await open(true, { context: ctx });
+  /* Any page this context opens from here on, other than RATA started again below. */
+  const popups = [];
+  ctx.on('page', (p) => popups.push(p.url()));
+  await pg.evaluate(() => { localStorage.removeItem('rata_apps'); });
+  await pg.click('#rail [data-view="apps"]');
+  const view = await pg.evaluate(() => ({
+    groups: [...document.querySelectorAll('#apps-groups .launch-group h2')].map((h) => h.textContent),
+    hrefs: [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')),
+    names: [...document.querySelectorAll('#apps-groups .launch-name')].map((n) => n.textContent),
+    kinds: [...document.querySelectorAll('#apps-groups .apps-item')].every((li) => li.querySelector('.launch-badge') && li.querySelector('.launch-kind').textContent),
+    pins: [...document.querySelectorAll('#apps-groups .launch-pin')].map((b) => b.getAttribute('aria-label') + ':' + b.getAttribute('aria-pressed')),
+    pinnedRow: document.querySelector('#apps-pinned').hidden, recentRow: document.querySelector('#apps-recent').hidden, stored: localStorage.getItem('rata_apps'),
+  }));
+  check(view.groups.join() === 'Google,Microsoft,Adobe,Apple,Slack,Signing' && JSON.stringify(view.hrefs) === JSON.stringify(LAUNCHED) && view.kinds,
+    `Apps shows each group, every tile with its icon, name and kind, at its vendor's own address: ${view.hrefs.length} tiles`);
+  check(view.pins.length === LAUNCHED.length && view.pins[0] === 'Pin Docs, Google:false' && view.pins.includes('Pin Slack:false') && view.pins.includes('Pin RabbitSign:false')
+    && view.pinnedRow && view.recentRow && view.stored === null,
+  `every tile has a pin named for it, none pressed, and nothing is pinned or recent at first: ${view.pins.slice(0, 2).join(' | ')}`);
+
+  /* The keyboard: Tab from the account button to the first tile, Enter opens it, arrows move in a grid. */
+  await pg.focus('#apps-acct-btn');
+  await pg.keyboard.press('Tab');
+  const first = await pg.evaluate(() => document.activeElement.getAttribute('href'));
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => (__mock.opened || []).length === 1);
+  check(first === 'https://docs.new' && (await pg.evaluate(() => __mock.opened[0])) === 'https://docs.new', `the first tile is reached by Tab and Enter opens it through open_link: ${first}`);
+  await pg.waitForFunction(() => !document.querySelector('#apps-recent').hidden);
+  const after1 = await pg.evaluate(() => ({ recent: [...document.querySelectorAll('#apps-recent .launch-name')].map((n) => n.textContent), focus: document.activeElement.getAttribute('href'), where: document.activeElement.dataset.where }));
+  check(after1.recent.join() === 'Docs' && after1.focus === 'https://docs.new' && after1.where === 'g0', `Recent shows it at once, and the keyboard stays on the tile pressed: ${JSON.stringify(after1)}`);
+  const keys = [];
+  for (const k of ['ArrowRight', 'ArrowRight', 'ArrowLeft', 'End', 'Home', 'ArrowUp']) { await pg.keyboard.press(k); keys.push(await pg.evaluate(() => document.activeElement.getAttribute('href'))); }
+  check(keys.join() === 'https://sheets.new,https://slides.new,https://sheets.new,https://drive.google.com,https://docs.new,https://docs.new',
+    `arrow keys, Home and End move through a grid and stop at its edge: ${keys.join(' ')}`);
+
+  /* Every tile through open_link with exactly its address, no window of the app's own. */
+  await pg.evaluate(() => { __mock.opened = []; document.querySelectorAll('#apps-groups .launch-tile').forEach((a) => a.click()); });
+  await pg.waitForFunction((n) => (__mock.opened || []).length === n, LAUNCHED.length);
+  await pg.waitForTimeout(200);
+  let opened = await pg.evaluate(() => __mock.opened);
+  check(JSON.stringify(opened) === JSON.stringify(LAUNCHED) && popups.length === 0, `every tile goes to open_link with exactly its address, and no window opens in the app (${popups.length})`);
+  const recent = await pg.evaluate(() => ({ shown: [...document.querySelectorAll('#apps-recent .launch-name')].map((n) => n.textContent), kept: JSON.parse(localStorage.getItem('rata_apps')).recent }));
+  check(recent.shown.join() === 'RabbitSign,Acrobat Sign,DocuSign,Slack' && recent.kept.length === 4, `Recent keeps the last four opened, newest first: ${JSON.stringify(recent)}`);
+
+  /* Pins: pressed, shown first, kept across a restart. */
+  await pg.click('#apps-groups [data-pin="Microsoft · Word"]');
+  let pin = await pg.evaluate(() => ({ pinned: [...document.querySelectorAll('#apps-pinned .launch-name')].map((n) => n.textContent), row: !document.querySelector('#apps-pinned').hidden,
+    pressed: [...document.querySelectorAll('[data-pin="Microsoft · Word"]')].map((b) => b.getAttribute('aria-pressed')).join(),
+    focus: document.activeElement.dataset.pin + '@' + document.activeElement.dataset.where, firstRow: document.querySelector('#view-apps .apps-row:not([hidden]) h2').textContent }));
+  check(pin.row && pin.pinned.join() === 'Word' && pin.pressed === 'true,true' && pin.focus === 'Microsoft · Word@g1' && pin.firstRow === 'Pinned',
+    `a pin puts the app in Pinned, first on the page, pressed wherever it shows, and the keyboard stays on the pin: ${JSON.stringify(pin)}`);
+  await pg.click('#apps-groups [data-pin="Google · Docs"]');
+  await pg.close();
+  pg = await open(true, { context: ctx });
+  popups.length = 0;
+  await pg.click('#rail [data-view="apps"]');
+  pin = await pg.evaluate(() => ({ pinned: [...document.querySelectorAll('#apps-pinned .launch-name')].map((n) => n.textContent), recent: [...document.querySelectorAll('#apps-recent .launch-name')].length }));
+  check(pin.pinned.join() === 'Word,Docs' && pin.recent === 4, `pins and Recent are there after RATA starts again: ${JSON.stringify(pin)}`);
+  await pg.click('#apps-pinned [data-pin="Microsoft · Word"]');
+  pin = await pg.evaluate(() => ({ pinned: [...document.querySelectorAll('#apps-pinned .launch-name')].map((n) => n.textContent), word: document.querySelector('#apps-groups [data-pin="Microsoft · Word"]').getAttribute('aria-pressed') }));
+  check(pin.pinned.join() === 'Docs' && pin.word === 'false', `unpinning from Pinned takes it out everywhere: ${JSON.stringify(pin)}`);
+
+  /* The search. */
+  await pg.fill('#apps-q', 'sheet');
+  let found = await pg.evaluate(() => ({ apps: [...document.querySelectorAll('#view-apps .apps-item:not([hidden])')].filter((li) => li.offsetParent).map((li) => li.dataset.app),
+    groups: [...document.querySelectorAll('#apps-groups .launch-group:not([hidden]) h2')].map((h) => h.textContent), none: document.querySelector('#apps-none').hidden }));
+  check(found.apps.join() === 'Google · Sheets,Microsoft · Excel,Apple · Numbers' && found.groups.join() === 'Google,Microsoft,Apple' && found.none,
+    `Find an app filters by name and kind, hiding rows and groups with nothing left: ${JSON.stringify(found)}`);
+  await pg.fill('#apps-q', 'acrobat');
+  found = await pg.evaluate(() => [...document.querySelectorAll('#apps-groups .apps-item:not([hidden])')].map((li) => li.dataset.app));
+  check(found.join() === 'Adobe · Acrobat,Signing · Acrobat Sign', `and by name across groups: ${found.join()}`);
+  await pg.fill('#apps-q', 'zzz');
+  found = await pg.evaluate(() => ({ n: document.querySelectorAll('#view-apps .apps-item:not([hidden])').length, none: document.querySelector('#apps-none').hidden ? '' : document.querySelector('#apps-none').textContent }));
+  check(found.n === 0 && found.none === 'No app matches "zzz".', `nothing found says so: ${JSON.stringify(found)}`);
+  await pg.fill('#apps-q', '');
+  check(await pg.evaluate(() => document.querySelectorAll('#apps-groups .apps-item:not([hidden])').length) === LAUNCHED.length, 'an empty search shows every app again');
+
+  /* Your accounts: refuses what is not one address, keeps it here only, and the tiles carry the hint. */
+  const rule = await pg.evaluate(() => ({
+    no: ['', 'ann', 'a@b', 'a@b.', '@b.co', 'a@.co', 'ann lee@example.org', '"a"@b.co', 'a,b@c.co', 'a@b@c.co', 'a<b>@c.co', 'a@b.co‮', 'a@b.co\n', 'x'.repeat(250) + '@b.co'].filter(appAddrOk),
+    yes: ['ann.lee@example.org', 'x+y@sub.example.co.uk', 'Bo@Contoso.Example'].filter((v) => !appAddrOk(v)),
+  }));
+  check(!rule.no.length && !rule.yes.length, `an address is one plain address, nothing else: ${JSON.stringify(rule)}`);
+  await pg.click('#apps-acct-btn');
+  let acct = await pg.evaluate(() => ({ shown: !document.querySelector('#apps-acct').hidden, exp: document.querySelector('#apps-acct-btn').getAttribute('aria-expanded'), focus: document.activeElement.id }));
+  check(acct.shown && acct.exp === 'true' && acct.focus === 'apps-google', `Your accounts opens with the Google field focused: ${JSON.stringify(acct)}`);
+  await pg.fill('#apps-google', 'ann lee@example.org');
+  await pg.fill('#apps-microsoft', 'bo@contoso');
+  await pg.click('#apps-acct-save');
+  acct = await pg.evaluate(() => ({ gErr: document.querySelector('#apps-google-err').textContent, mErr: document.querySelector('#apps-microsoft-err').textContent,
+    inv: [document.querySelector('#apps-google').getAttribute('aria-invalid'), document.querySelector('#apps-microsoft').getAttribute('aria-invalid')].join(),
+    desc: document.querySelector('#apps-google').getAttribute('aria-describedby'), focus: document.activeElement.id, open: !document.querySelector('#apps-acct').hidden,
+    kept: (JSON.parse(localStorage.getItem('rata_apps')) || {}).acct, href: document.querySelector('#apps-groups .launch-tile').getAttribute('href') }));
+  check(/^That is not an address\./.test(acct.gErr) && /^That is not an address\./.test(acct.mErr) && acct.inv === 'true,true' && /apps-google-err/.test(acct.desc)
+    && acct.focus === 'apps-google' && acct.open && acct.kept === undefined && acct.href === 'https://docs.new',
+  `the fields refuse what is not an address, say so beside each, and keep nothing: ${JSON.stringify(acct)}`);
+  await axe(pg, 'Apps, with Pinned, Recent and Your accounts refusing an address');
+  await pg.fill('#apps-google', ' ' + G + ' ');
+  await pg.fill('#apps-microsoft', MS);
+  await pg.click('#apps-acct-save');
+  acct = await pg.evaluate(() => ({ open: !document.querySelector('#apps-acct').hidden, focus: document.activeElement.id, kept: JSON.parse(localStorage.getItem('rata_apps')).acct,
+    sum: document.querySelector('#apps-acct-sum').textContent, note: document.querySelectorAll('#apps-groups .launch-note')[0].textContent,
+    msNote: document.querySelectorAll('#apps-groups .launch-note')[1].textContent, said: document.querySelector('#apps-groups .launch-tile .vh').textContent }));
+  check(!acct.open && acct.focus === 'apps-acct-btn' && acct.kept.google === G && acct.kept.microsoft === MS && acct.sum === 'Google: ' + G + ' · Microsoft: ' + MS
+    && acct.note === 'Opens as ' + G + '.' && acct.msNote === 'Word, Excel and PowerPoint open as ' + MS + '.' && /opens in your browser as ann\.lee\+work@example\.org$/.test(acct.said),
+  `saved, trimmed, kept in this browser, and Apps says which account each group opens as: ${JSON.stringify(acct)}`);
+  check((await toasts(pg)).some((t) => t === 'Kept on this computer only. Google apps open as ' + G + '; Word, Excel and PowerPoint as ' + MS + '.'), 'the toast says it stays on this computer');
+  /* axe finishes its run in a blank page of its own, so count only what these clicks open. */
+  const popped = popups.length;
+  await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; document.querySelectorAll('#apps-groups .launch-tile').forEach((a) => a.click()); });
+  await pg.waitForFunction((n) => (__mock.opened || []).length === n, LAUNCHED.length);
+  opened = await pg.evaluate(() => __mock.opened);
+  const back = opened.slice(0, 8).map((u) => { const x = new URL(u); return x.searchParams.get('authuser') || x.searchParams.get('login_hint'); });
+  check(JSON.stringify(opened) === JSON.stringify(HINTED) && back.slice(0, 5).every((v) => v === G) && back.slice(5).every((v) => v === MS) && popups.length === popped,
+    `with an account, Google's tiles add authuser and Word, Excel and PowerPoint login_hint, built so the address reads back whole, and the rest are unchanged: ${opened[0]} ${opened[5]}`);
+  /* The address goes nowhere else: not into the workspace, not into what syncs to the website, not to any other command. */
+  const leak = await pg.evaluate(async () => {
+    save(); await new Promise((r) => setTimeout(r, 300));
+    const has = (x) => /contoso\.example|ann\.lee/i.test(x);
+    return { sync: has(JSON.stringify(forCloud(S))), ws: has(JSON.stringify(S)),
+      stores: Object.keys(localStorage).filter((k) => k !== 'rata_apps' && has(localStorage.getItem(k) || '')),
+      calls: [...new Set(__mock.calls.filter(([, a]) => has(JSON.stringify(a || {}))).map(([c]) => c))] };
+  });
+  check(!leak.sync && !leak.ws && !leak.stores.length && leak.calls.join() === 'open_link',
+    `the addresses are not in the workspace or what syncs to the website, no other store holds them, and only open_link was given them: ${JSON.stringify(leak)}`);
+  /* Escape closes the form; Clear both forgets them. */
+  await pg.click('#apps-acct-btn');
+  await pg.keyboard.press('Escape');
+  acct = await pg.evaluate(() => ({ open: !document.querySelector('#apps-acct').hidden, focus: document.activeElement.id, view: currentView }));
+  check(!acct.open && acct.focus === 'apps-acct-btn' && acct.view === 'apps', `Escape closes Your accounts and gives the focus back: ${JSON.stringify(acct)}`);
+  await pg.emulateMedia({ colorScheme: 'dark' });
+  await axe(pg, 'Apps in dark, with accounts set');
+  await pg.emulateMedia({ colorScheme: 'light' });
+  await pg.click('#apps-acct-btn');
+  await pg.click('#apps-acct-clear');
+  acct = await pg.evaluate(() => ({ kept: JSON.parse(localStorage.getItem('rata_apps')).acct, sum: document.querySelector('#apps-acct-sum').textContent,
+    hrefs: [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')) }));
+  check(acct.kept === undefined && acct.sum === '' && JSON.stringify(acct.hrefs) === JSON.stringify(LAUNCHED), `Clear both forgets them, and every tile is its own address again: ${JSON.stringify({ kept: acct.kept, sum: acct.sum })}`);
+  check(await pg.evaluate(() => !/[–—]/.test(document.querySelector('#view-apps').textContent + document.querySelector('#apps-acct').textContent)), 'no em or en dash in Apps');
+
+  /* Readable on a laptop and a phone, with no sideways scroll. */
+  for (const [w, h] of [[1366, 768], [390, 844]]) {
+    await pg.setViewportSize({ width: w, height: h });
+    await pg.evaluate(() => go('apps'));
+    const fit = await pg.evaluate(() => {
+      const t = document.querySelector('#apps-groups .launch-tile').getBoundingClientRect(), v = document.querySelector('#view-apps');
+      const nav = [...document.querySelectorAll('#rail [data-view="apps"], #mnav [data-view="apps"]')].filter((b) => b.getClientRects().length && getComputedStyle(b.closest('nav')).display !== 'none').length;
+      return { page: document.documentElement.scrollWidth, view: v.scrollWidth - v.clientWidth, tileW: Math.round(t.width), inView: t.right <= innerWidth && t.left >= 0, nav,
+        clipped: [...document.querySelectorAll('#apps-groups .launch-name, #apps-groups .launch-kind')].filter((e) => e.scrollWidth > e.clientWidth + 1).length };
+    });
+    check(fit.page <= w && fit.view <= 0 && fit.inView && fit.tileW >= 120 && fit.nav === 1 && !fit.clipped, `${w}×${h}: Apps fits with no sideways scroll, tiles ${fit.tileW} px, no name cut, Apps in the nav: ${JSON.stringify(fit)}`);
+  }
+  await pg.setViewportSize({ width: 390, height: 844 });
+  await axe(pg, 'Apps on a phone');
+  await pg.close();
+  await ctx.close();
+}
+
+console.log('\n— Create file: blank files the app makes and opens, Created by you, and the way to Apps (K6) —');
 {
   const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
   const axe = async (pg, where) => {
@@ -4078,22 +4351,16 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
     ],
     tree: {}, files: {}, targets: [{ id: 'C1', name: 'ed-staff', kind: 'channel' }], saved: [], shared: [], finish: null,
   });
-  const LAUNCHED = ['https://docs.new', 'https://sheets.new', 'https://slides.new', 'https://forms.new', 'https://drive.google.com',
-    'https://word.cloud.microsoft/', 'https://excel.cloud.microsoft/', 'https://powerpoint.cloud.microsoft/', 'https://onenote.cloud.microsoft/', 'https://onedrive.live.com',
-    'https://acrobat.adobe.com/', 'https://www.adobe.com/acrobat/online/sign-pdf.html', 'https://www.adobe.com/acrobat/online/convert-pdf.html', 'https://new.express.adobe.com/',
-    'https://www.icloud.com/pages/', 'https://www.icloud.com/numbers/', 'https://www.icloud.com/keynote/',
-    'https://app.slack.com/client',
-    'https://app.docusign.com', 'https://www.adobe.com/sign.html', 'https://www.rabbitsign.com/dashboard'];
 
-  /* A build without created_list: no Create file, no Created by you. Start
-     in your browser is there whatever the build. */
+  /* A build without created_list: no Create file, no Created by you. The
+     way to Apps is there whatever the build. */
   {
     const pg = await open(true);
     await pg.evaluate(async () => { go('docs'); await loadCreated(); });
     const b = await pg.evaluate(() => ({ btn: !document.querySelector('#create-btn').hidden, sec: !document.querySelector('#created-sec').hidden,
-      tiles: document.querySelectorAll('#launch-groups .launch-tile').length }));
+      apps: document.querySelector('#files-apps-go').getClientRects().length > 0 }));
     const asked = (await calls(pg, 'created_list')).length;
-    check(asked > 0 && !b.btn && !b.sec && b.tiles === LAUNCHED.length, `a build without created_list shows no Create file, though it was asked (${asked}x), and still the browser apps: ${JSON.stringify(b)}`);
+    check(asked > 0 && !b.btn && !b.sec && b.apps, `a build without created_list shows no Create file, though it was asked (${asked}x), and still the way to Apps: ${JSON.stringify(b)}`);
     await pg.close();
   }
 
@@ -4107,33 +4374,15 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
     go('docs'); await loadConnections(); await loadCreated();
   }, { made: MADE(), conn: CONN() });
 
-  /* Start in your browser: every group, every tile through open_link with
-     exactly its address, nothing opened in a window of the app's own. */
-  const launch = await pg.evaluate(() => ({
-    groups: [...document.querySelectorAll('#launch-groups .launch-group h3')].map((h) => h.textContent),
-    hrefs: [...document.querySelectorAll('#launch-groups .launch-tile')].map((a) => a.getAttribute('href')),
-    safe: [...document.querySelectorAll('#launch-groups .launch-tile')].every((a) => a.target === '_blank' && a.rel === 'noopener noreferrer'),
-    names: [...document.querySelectorAll('#launch-groups .launch-name')].map((n) => n.textContent),
-    expanded: document.querySelector('#launch-toggle').getAttribute('aria-expanded'),
-  }));
-  check(launch.groups.join() === 'Google,Microsoft,Adobe,Apple,Slack,Signing', `Start in your browser has each group: ${launch.groups.join()}`);
-  check(JSON.stringify(launch.hrefs) === JSON.stringify(LAUNCHED) && launch.safe, `each tile is a link to its vendor's own address, to a new tab on the website: ${launch.hrefs.length} tiles`);
-  check(launch.names.includes('RabbitSign') && launch.names.includes('Slack') && launch.expanded === 'true', `Slack and RabbitSign are among them, and the section is open: ${launch.names.filter((n) => /Slack|Rabbit/.test(n)).join(' | ')}`);
-  await pg.focus('#launch-toggle');
-  await pg.keyboard.press('Tab');
-  const first = await pg.evaluate(() => document.activeElement.getAttribute('href'));
-  await pg.keyboard.press('Enter');
-  await pg.waitForFunction(() => (__mock.opened || []).length === 1);
-  check(first === 'https://docs.new' && (await pg.evaluate(() => __mock.opened[0])) === 'https://docs.new', `the first tile is reached by Tab and Enter opens it through open_link: ${first}`);
-  await pg.evaluate(() => { __mock.opened = []; document.querySelectorAll('#launch-groups .launch-tile').forEach((a) => a.click()); });
-  await pg.waitForFunction((n) => (__mock.opened || []).length === n, LAUNCHED.length);
-  await pg.waitForTimeout(200);
-  const opened = await pg.evaluate(() => __mock.opened);
-  check(JSON.stringify(opened) === JSON.stringify(LAUNCHED) && popups.length === 0, `every tile goes to open_link with exactly its address, and no window opens in the app (${popups.length})`);
-  await pg.click('#launch-toggle');
-  const shut = await pg.evaluate(() => ({ exp: document.querySelector('#launch-toggle').getAttribute('aria-expanded'), hidden: document.querySelector('#launch-groups').hidden, kept: localStorage.getItem('rata_launch_open') }));
-  await pg.click('#launch-toggle');
-  check(shut.exp === 'false' && shut.hidden && shut.kept === '0' && await pg.evaluate(() => !document.querySelector('#launch-groups').hidden), `Hide folds the apps away and Show brings them back, remembered here: ${JSON.stringify(shut)}`);
+  /* Files keeps a short way to Apps where the launcher was, and no tiles of its own. */
+  const fa = await pg.evaluate(() => ({ lead: document.querySelector('#files-apps-lead').textContent, btn: document.querySelector('#files-apps-go').textContent,
+    tiles: document.querySelectorAll('#view-docs .launch-tile').length }));
+  await pg.click('#files-apps-go');
+  const fgo = await pg.evaluate(() => ({ view: currentView, focus: document.activeElement.getAttribute('href'), current: document.querySelector('#rail [data-view="apps"]').getAttribute('aria-current') }));
+  check(/open in your browser from Apps/.test(fa.lead) && fa.btn === 'Open Apps' && fa.tiles === 0 && fgo.view === 'apps' && fgo.focus === 'https://docs.new' && fgo.current === 'page',
+    `Files says where the web apps are now, and Open Apps goes there with the keyboard on the first app: ${JSON.stringify({ ...fa, ...fgo })}`);
+  check(popups.length === 0, 'and nothing opened a window');
+  await pg.evaluate(() => go('docs'));
 
   /* Created by you. */
   let list = await pg.evaluate(() => [...document.querySelectorAll('#created-list .created-item')].map((li) => ({
@@ -4212,13 +4461,14 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
   const refused = await pg.evaluate(() => ({ err: document.querySelector('#create-err').textContent, open: document.querySelector('#create-ov').classList.contains('open') }));
   check(refused.open && refused.err === 'Not created: That folder is not connected.', `the app's refusal is shown in the dialog, which stays open: ${JSON.stringify(refused)}`);
   await pg.evaluate(() => { __mock.conn.on = { apple: true, slack: true }; });
-  /* Start in your browser from the dialog. */
+  /* Start in your browser, from the dialog, goes to Apps. */
   await pg.click('#create-web');
-  dlg = await pg.evaluate(() => ({ open: document.querySelector('#create-ov').classList.contains('open'), focus: document.activeElement.getAttribute('href') }));
-  check(!dlg.open && dlg.focus === 'https://docs.new', `Start in your browser closes the dialog and puts the keyboard on the first app: ${JSON.stringify(dlg)}`);
-  check(await pg.evaluate(() => !/[–—]/.test(document.querySelector('#create-ov').textContent + document.querySelector('#created-sec').textContent + document.querySelector('#launch-sec').textContent)),
-    'no em or en dash in the dialog, Created by you or Start in your browser');
-  await axe(pg, 'Files with Created by you and Start in your browser');
+  dlg = await pg.evaluate(() => ({ open: document.querySelector('#create-ov').classList.contains('open'), focus: document.activeElement.getAttribute('href'), view: currentView }));
+  check(!dlg.open && dlg.focus === 'https://docs.new' && dlg.view === 'apps', `Start in your browser closes the dialog, opens Apps and puts the keyboard on the first app: ${JSON.stringify(dlg)}`);
+  await pg.evaluate(() => go('docs'));
+  check(await pg.evaluate(() => !/[–—]/.test(document.querySelector('#create-ov').textContent + document.querySelector('#created-sec').textContent + document.querySelector('#files-apps').textContent)),
+    'no em or en dash in the dialog, Created by you or the way to Apps');
+  await axe(pg, 'Files with Created by you and the way to Apps');
 
   /* Send with RATA: attached by reference, read when it goes, through Undo. */
   await pg.evaluate(() => { S.settings.undoSend = 5; window.__RATA_SEND_SECOND = 400; });
