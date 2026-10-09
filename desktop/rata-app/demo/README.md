@@ -21,7 +21,12 @@ The demo keeps the interface and `bridge.js` exactly as they ship and
 replaces only the Rust side with **`demo-backend.js`**: a plain JavaScript
 file that defines `window.__TAURI__.core.invoke` and answers each command
 with sample data. That file is the demo's whole "backend". It sends
-nothing, opens no mailbox and talks to no server.
+nothing, opens no mailbox and talks to no server. The two things
+`bridge.js` asks of mailrata.org itself, the AI relay (Summarize,
+Translate, Run briefing) and licence renewal, are answered in the page
+too, with words written for the demo and marked as its own ("Demo
+summary: …"); any other request off the page fails at once. Sign out and
+Delete account start the demo again.
 
 | File | What it is |
 |---|---|
@@ -29,6 +34,7 @@ nothing, opens no mailbox and talks to no server.
 | `demo.css` | The "Demo" label in the corner |
 | `build.sh` | Assembles the demo into one folder of static files, or with `--single` into one HTML file |
 | `single.py` | What `--single` runs: folds the folder into one file |
+| `check.mjs` | Builds both forms and drives them in Chromium to check the rules below (*Check it*) |
 | `out/` | Where `build.sh` writes by default (not committed) |
 
 ## Run it
@@ -43,7 +49,15 @@ python3 -m http.server 8000 --directory desktop/rata-app/demo/out
 ```
 
 Open http://localhost:8000/rata-demo.html. Run `build.sh` again after every
-change, then reload the page. It must be served over http; opening the file
+change, then reload the page. `build.sh <folder>` builds somewhere else.
+It empties that folder first, so it builds only into a new or empty
+folder, or one whose every entry is a name it writes there itself
+(`rata-demo.html`, `demo-backend.js`, `bridge.js`, `bridge.css`,
+`config.js`, `fonts`, `icons`, `vendor`, plus `RATA-demo.html` in its own
+`out/`, and a Mac's `.DS_Store`), and refuses any other, naming what is in
+the way. So once you copy a build into a folder of other pages, it will
+not build there again: build somewhere new and copy it over. It must be
+served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
 For one file that does open directly, see *Send it as one file* below.
 
@@ -78,7 +92,10 @@ What is kept between reloads depends on the browser, because a page
 opened from a file gets different storage in each:
 
 - **Chrome and Edge** keep what you did, as the served demo does (in one
-  store shared by every file opened from that computer's disk).
+  store shared by every file opened from that computer's disk). Reset,
+  the Base/Pro switch and a new `DEMO_VERSION` remove only the demo's own
+  entries there (those starting `centra_` or `rata_`), never another
+  file's.
 - **Firefox and Safari** may keep it, keep it only for that file, or keep
   nothing. Where the browser refuses storage, the demo still runs but
   starts fresh on every reload. The Base/Pro choice survives a reload
@@ -109,6 +126,8 @@ All in `demo-backend.js`:
   real files that open in Word and Excel.
 - **Plans**: `PLANS`, and what each allows (`mail`, `split`, `ai`,
   `connect`).
+- **AI answers**: `SUMMARIES` and `TASKS`, by subject. A message with
+  neither gets a summary built from its sender and subject, and no flag.
 - **Cloud folders and Slack**: `SERVICES`, `TREES`, `SLACK`.
 - **Create file**: `MADE` (the files it starts with) and the
   `create_file` case.
@@ -125,10 +144,33 @@ shape, since the real Rust side answers the same way.
 - **Invent everything.** Every person, organisation, address and message
   is made up. No real patient, customer or colleague information, ever,
   even as a joke: the demo is shown to people outside the project.
+  Addresses, domains and mail servers use names reserved for examples
+  (RFC 2606: `riley.carter@mail.example`, `imap.tidepoolcpr.example`),
+  so none can be anybody's; `check.mjs` fails on any other.
 - **Nothing leaves the page.** The demo must not call any server. Links
   open in a new tab, and that is all.
+- **Leave other pages alone.** Clear only the demo's own storage, never
+  `localStorage.clear()`: a page opened from disk shares its store with
+  every other.
 - **Keep it honest.** The demo shows what RATA does. If you add a screen
   to the demo that the real app does not have, say so in your pull request.
+
+## Check it
+
+```bash
+(cd rata-next && npm ci && npx playwright install chromium)   # once; needs Node
+node desktop/rata-app/demo/check.mjs
+```
+
+This builds the folder and the one file in a temporary place and drives
+both in Chromium: no request leaves the page (AI and renewal included),
+another page's storage survives opening, Reset, the Base/Pro switch and
+Delete account, Sign out and Delete account come back to the demo, every
+address is a reserved one, and `build.sh` refuses a folder that is not a
+demo build. Every check must pass: CI runs it on every pull request that
+touches the demo or the interface (*The demo's rules*, in the job
+*Desktop interface, driven*), so a change to `app.html` that breaks the
+demo's build or brings back a request off the page fails there.
 
 ## Changing the interface itself
 

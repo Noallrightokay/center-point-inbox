@@ -31,6 +31,41 @@ fi
 
 out="${1:-$here/out}"
 
+# The folder is emptied before the build, so it must be new, empty, or hold
+# nothing but what a build writes: never a folder of someone's files
+# (~/Desktop given without --single, or "."), and never a build copied into
+# a folder of other pages, which holding rata-demo.html does not make a
+# demo build. Every name at its top must be one this script writes, of the
+# kind it writes, plus RATA-demo.html in the demo's own out/ (what --single
+# writes there by default) and the .DS_Store a Mac's Finder leaves in any
+# folder it shows. Names are read by glob, never parsed from ls.
+strangers() (
+  shopt -s nullglob dotglob
+  own=0
+  [ "$(cd "$1" && pwd -P)" = "$(cd "$here" && pwd -P)/out" ] && own=1
+  for e in "$1"/*; do
+    n="${e##*/}"
+    case "$n" in
+      fonts|icons|vendor) [ -d "$e" ] && [ ! -L "$e" ] && continue ;;
+      rata-demo.html|demo-backend.js|bridge.js|bridge.css|config.js|.DS_Store) [ -f "$e" ] && [ ! -L "$e" ] && continue ;;
+      RATA-demo.html) [ "$own" = 1 ] && [ -f "$e" ] && [ ! -L "$e" ] && continue ;;
+    esac
+    printf '%s\n' "$n"
+  done
+)
+if [ -e "$out" ] || [ -L "$out" ]; then
+  if [ ! -d "$out" ]; then
+    echo "$out is not a demo build (it is not a folder); give a new or empty folder" >&2
+    exit 1
+  fi
+  them="$(strangers "$out")"
+  if [ -n "$them" ]; then
+    named="$(printf '%s\n' "$them" | awk 'NR<=5{printf "%s%s", (NR>1?", ":""), $0} END{if(NR>5) printf " and %d more", NR-5}')"
+    echo "$out is not a demo build (it holds $named); give a new or empty folder" >&2
+    exit 1
+  fi
+fi
+
 "$app/sync-ui.sh" >/dev/null
 rm -rf "$out"
 mkdir -p "$out"
@@ -56,6 +91,19 @@ import re
 s, n = re.subn(r"if\('serviceWorker' in navigator\)\{[^\n]*?register\('sw\.js'\)[^\n]*\}\n", '', s)
 if n != 1 or 'sw.js' in s:
     sys.exit('app.html changed: cannot find its one service worker registration')
+# The demo ships no auth.html, so Sign out and Delete account start the demo
+# again instead of leaving for a page that is not there: demo-backend.js
+# signs in afresh, with the sample workspace, when either is gone.
+swap("localStorage.removeItem('centra_session');\n  location.replace('auth.html');", "localStorage.removeItem('centra_session');\n  location.reload();")
+swap("location.replace('auth.html?mode=signup&deleted=1');", 'location.reload();')
+# Two more name it and neither runs here: the redirect for a page opened
+# with no sign-in (demo-backend.js signs in before app.html runs) and an
+# online account's lapsed sign-in (the demo's is local). Anything else
+# naming it would send a viewer to a file-not-found page.
+left = s.replace("if(!SESSION){location.replace('auth.html')}", '', 1).replace(
+    "if(!session){localStorage.removeItem('centra_session');location.replace('auth.html');return}", '', 1)
+if re.search(r'(?<![\w\s])auth\.html', left):
+    sys.exit('app.html changed: it sends the page to auth.html somewhere new, and the demo has no auth.html')
 # The fake backend must be in place before bridge.js looks for Tauri.
 anchor = '<script src="config.js"></script>'
 swap(anchor, '<style>\n' + open(css, encoding='utf-8').read() + '</style>\n'
