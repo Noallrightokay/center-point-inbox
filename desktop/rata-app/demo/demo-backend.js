@@ -832,15 +832,28 @@ Marcus` }));
     const b = document.createElement('div');
     b.id = 'demo-badge';
     b.setAttribute('role', 'note');
-    b.innerHTML = '<b>Demo</b><span class="demo-words">Sample mail, nothing is sent</span>'
+    b.innerHTML = '<button type="button" class="demo-tag" aria-expanded="true" aria-controls="demo-more" title="Hide or show the demo controls"><b>Demo</b></button>'
+      + '<span id="demo-more"><span class="demo-words">Sample mail, nothing is sent</span>'
       + '<span class="demo-plan" role="group" aria-label="Plan"><button type="button" data-plan="base">Base</button><button type="button" data-plan="pro">Pro</button></span>'
-      + '<button type="button" id="demo-reset">Reset</button>';
+      + '<button type="button" id="demo-reset">Reset</button></span>';
     document.body.appendChild(b);
     b.querySelectorAll('[data-plan]').forEach((x) => {
       x.setAttribute('aria-pressed', String(x.dataset.plan === PLAN));
       x.onclick = () => { if (x.dataset.plan !== PLAN) restart(x.dataset.plan); };
     });
     document.getElementById('demo-reset').onclick = () => restart(PLAN);
+    /* The label sits over the page, so it folds to a small "Demo" tag when
+       it is in the way; the choice lasts for this tab. */
+    const tag = b.querySelector('.demo-tag');
+    const fold = (small) => {
+      b.classList.toggle('demo-small', small);
+      tag.setAttribute('aria-expanded', String(!small));
+      try { sessionStorage.setItem('rata_demo_small', small ? '1' : '0'); } catch (e) {}
+    };
+    let small = false;
+    try { small = sessionStorage.getItem('rata_demo_small') === '1'; } catch (e) {}
+    fold(small);
+    tag.onclick = () => fold(!b.classList.contains('demo-small'));
   }
   /* Start the demo again on a plan: a Base customer never had five
      mailboxes, so the workspace starts fresh rather than keeping theirs. */
