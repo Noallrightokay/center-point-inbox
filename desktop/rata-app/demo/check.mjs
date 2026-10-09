@@ -58,10 +58,30 @@ console.log('\n— build.sh deletes only an earlier demo build —');
   fs.mkdirSync(empty);
   r = build(empty);
   check(r.status === 0 && fs.existsSync(path.join(empty, 'rata-demo.html')), `an empty folder is built into: status ${r.status} ${r.stderr.trim()}`);
-  fs.writeFileSync(path.join(empty, 'stale.txt'), 'old');
+  /* A file an older build wrote (a library since upgraded) and the one a
+     Mac's Finder leaves: the build is still only the demo's. */
+  fs.writeFileSync(path.join(empty, 'vendor', 'old-library-1.0.js'), 'old');
+  fs.writeFileSync(path.join(empty, '.DS_Store'), '');
   r = build(empty);
-  check(r.status === 0 && fs.existsSync(path.join(empty, 'rata-demo.html')) && !fs.existsSync(path.join(empty, 'stale.txt')),
+  check(r.status === 0 && fs.existsSync(path.join(empty, 'rata-demo.html')) && !fs.existsSync(path.join(empty, 'vendor', 'old-library-1.0.js')),
     `an earlier build is built again, afresh: status ${r.status} ${r.stderr.trim()}`);
+  /* A build copied into a folder of other pages, as the README says to
+     publish it: holding rata-demo.html does not make that folder the demo's. */
+  fs.writeFileSync(path.join(empty, 'index.html'), 'my site');
+  fs.mkdirSync(path.join(empty, 'blog'));
+  fs.writeFileSync(path.join(empty, 'blog', 'post.html'), 'my post');
+  r = build(empty);
+  check(r.status !== 0 && /not a demo build \(it holds blog, index\.html\)/.test(r.stderr) && fs.readFileSync(path.join(empty, 'index.html'), 'utf8') === 'my site'
+    && fs.readFileSync(path.join(empty, 'blog', 'post.html'), 'utf8') === 'my post' && fs.existsSync(path.join(empty, 'rata-demo.html')),
+    `a demo build that also holds other pages is refused, and all of it kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
+  /* A demo name of the wrong kind is not the demo's either. */
+  const odd = path.join(scratch, 'odd');
+  fs.mkdirSync(path.join(odd, 'rata-demo.html'), { recursive: true });
+  fs.writeFileSync(path.join(odd, 'rata-demo.html', 'notes.txt'), 'mine');
+  fs.writeFileSync(path.join(odd, 'RATA-demo.html'), 'the one file someone was sent');
+  r = build(odd);
+  check(r.status !== 0 && fs.existsSync(path.join(odd, 'rata-demo.html', 'notes.txt')) && fs.existsSync(path.join(odd, 'RATA-demo.html')) && /RATA-demo\.html, rata-demo\.html|rata-demo\.html, RATA-demo\.html/.test(r.stderr),
+    `a folder named rata-demo.html, or RATA-demo.html outside the demo’s own out/, is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
   const fresh = path.join(scratch, 'new', 'demo');
   r = build(fresh);
   check(r.status === 0 && fs.existsSync(path.join(fresh, 'rata-demo.html')), `a folder that is not there yet is made: status ${r.status} ${r.stderr.trim()}`);
@@ -75,6 +95,10 @@ console.log('\n— build.sh deletes only an earlier demo build —');
     r = build();
     check(one.status === 0 && r.status === 0 && fs.existsSync(path.join(own, 'rata-demo.html')),
       `its own out/ is built into after --single wrote there: status ${one.status}, ${r.status} ${r.stderr.trim()}`);
+    fs.writeFileSync(path.join(own, 'notes.txt'), 'mine');
+    r = build();
+    check(r.status !== 0 && fs.readFileSync(path.join(own, 'notes.txt'), 'utf8') === 'mine',
+      `and refused, keeping it, once it holds something else: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
     fs.rmSync(own, { recursive: true, force: true });
   }
 }

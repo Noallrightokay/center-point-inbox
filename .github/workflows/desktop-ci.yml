@@ -288,3 +288,13 @@ jobs:
       # missing from a release keeps its own feed, nothing moves backwards.
       - name: The update feed's rules
         run: node --test desktop/rata-app/harness/feed.test.cjs
+
+      # The clickable demo, which people outside the project are sent as one
+      # file (desktop/rata-app/demo). check.mjs builds it both ways from this
+      # app.html and drives each in this Chromium: no request leaves the page
+      # (AI and renewal are answered in it), another local page's storage
+      # survives it, every address is a reserved one, Sign out and Delete
+      # account come back to the demo, and build.sh empties no folder but a
+      # demo build. A change to app.html that breaks the demo fails here.
+      - name: The demo's rules
+        run: node desktop/rata-app/demo/check.mjs

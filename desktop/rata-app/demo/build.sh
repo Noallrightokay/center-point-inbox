@@ -31,14 +31,39 @@ fi
 
 out="${1:-$here/out}"
 
-# The folder is emptied before the build, so it must be new, empty, or an
-# earlier demo build: never a folder of someone's files (~/Desktop given
-# without --single, or "."). The demo's own out/ (git-ignored) always is,
-# even when it holds only what --single wrote there.
-if [ -e "$out" ] && [ "$(cd "$out" 2>/dev/null && pwd -P)" != "$(cd "$here" && pwd -P)/out" ] \
-  && { [ ! -d "$out" ] || { [ -n "$(ls -A "$out")" ] && ! { [ -f "$out/rata-demo.html" ] && [ -f "$out/demo-backend.js" ]; }; }; }; then
-  echo "$out exists and is not a demo build; give a new or empty folder" >&2
-  exit 1
+# The folder is emptied before the build, so it must be new, empty, or hold
+# nothing but what a build writes: never a folder of someone's files
+# (~/Desktop given without --single, or "."), and never a build copied into
+# a folder of other pages, which holding rata-demo.html does not make a
+# demo build. Every name at its top must be one this script writes, of the
+# kind it writes, plus RATA-demo.html in the demo's own out/ (what --single
+# writes there by default) and the .DS_Store a Mac's Finder leaves in any
+# folder it shows. Names are read by glob, never parsed from ls.
+strangers() (
+  shopt -s nullglob dotglob
+  own=0
+  [ "$(cd "$1" && pwd -P)" = "$(cd "$here" && pwd -P)/out" ] && own=1
+  for e in "$1"/*; do
+    n="${e##*/}"
+    case "$n" in
+      fonts|icons|vendor) [ -d "$e" ] && [ ! -L "$e" ] && continue ;;
+      rata-demo.html|demo-backend.js|bridge.js|bridge.css|config.js|.DS_Store) [ -f "$e" ] && [ ! -L "$e" ] && continue ;;
+      RATA-demo.html) [ "$own" = 1 ] && [ -f "$e" ] && [ ! -L "$e" ] && continue ;;
+    esac
+    printf '%s\n' "$n"
+  done
+)
+if [ -e "$out" ] || [ -L "$out" ]; then
+  if [ ! -d "$out" ]; then
+    echo "$out is not a demo build (it is not a folder); give a new or empty folder" >&2
+    exit 1
+  fi
+  them="$(strangers "$out")"
+  if [ -n "$them" ]; then
+    named="$(printf '%s\n' "$them" | awk 'NR<=5{printf "%s%s", (NR>1?", ":""), $0} END{if(NR>5) printf " and %d more", NR-5}')"
+    echo "$out is not a demo build (it holds $named); give a new or empty folder" >&2
+    exit 1
+  fi
 fi
 
 "$app/sync-ui.sh" >/dev/null

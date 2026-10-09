@@ -49,9 +49,15 @@ python3 -m http.server 8000 --directory desktop/rata-app/demo/out
 ```
 
 Open http://localhost:8000/rata-demo.html. Run `build.sh` again after every
-change, then reload the page. `build.sh <folder>` builds somewhere else; it
-empties that folder first, so it refuses one that holds anything but an
-earlier demo build. It must be served over http; opening the file
+change, then reload the page. `build.sh <folder>` builds somewhere else.
+It empties that folder first, so it builds only into a new or empty
+folder, or one whose every entry is a name it writes there itself
+(`rata-demo.html`, `demo-backend.js`, `bridge.js`, `bridge.css`,
+`config.js`, `fonts`, `icons`, `vendor`, plus `RATA-demo.html` in its own
+`out/`, and a Mac's `.DS_Store`), and refuses any other, naming what is in
+the way. So once you copy a build into a folder of other pages, it will
+not build there again: build somewhere new and copy it over. It must be
+served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
 For one file that does open directly, see *Send it as one file* below.
 
@@ -161,7 +167,10 @@ both in Chromium: no request leaves the page (AI and renewal included),
 another page's storage survives opening, Reset, the Base/Pro switch and
 Delete account, Sign out and Delete account come back to the demo, every
 address is a reserved one, and `build.sh` refuses a folder that is not a
-demo build. Every check must pass.
+demo build. Every check must pass: CI runs it on every pull request that
+touches the demo or the interface (*The demo's rules*, in the job
+*Desktop interface, driven*), so a change to `app.html` that breaks the
+demo's build or brings back a request off the page fails there.
 
 ## Changing the interface itself
 
