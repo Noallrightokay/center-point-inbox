@@ -138,6 +138,26 @@ column at a time.
 | X6 | Saved twice, one copy (if time) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | X7 | Gmail's All Mail after two saves (if time) | ☐ | | | | | |
 
+### Files, Apps and connected accounts (once per computer, Pro)
+
+None of these depends on a mailbox, so do them once on each computer. Rows
+F6 to F8 need the matching registration in `docs/OWNER-CHECKLIST.md` first
+and a release built after it; until then write "not switched on".
+
+| # | Row | Windows | Mac | Linux |
+|---|---|---|---|---|
+| F1 | Create file opens cleanly | ☐ | ☐ | ☐ |
+| F2 | Send with RATA sends the file as it is now | ☐ | ☐ | ☐ |
+| F3 | Convert a PDF | ☐ | ☐ | ☐ |
+| F4 | Apps open signed in, on the right account | ☐ | ☐ | ☐ |
+| F5 | iCloud Drive or Creative Cloud Files | ☐ | ☐ | |
+| F6 | OneDrive (after the Microsoft registration) | ☐ | ☐ | ☐ |
+| F7 | Google Drive (after the Google registration) | ☐ | ☐ | ☐ |
+| F8 | Share to Slack (after the Slack registration) | ☐ | ☐ | ☐ |
+| F9 | Delete account forgets every connection | ☐ | ☐ | ☐ |
+
+The steps are under *Files, Apps and connected accounts* in section 3.
+
 Where a step says **refresh**, press **⟳ Sync linked inboxes** above the
 mail list, or **Sync now** on the mailbox's row in Settings, Linked
 accounts.
@@ -453,6 +473,84 @@ of the draft must not be there. Screenshot either way; this decides how
 RATA saves drafts on Gmail. From v0.1.42 RATA moves its older copy to
 Gmail's **Trash** (review P3-2), so an older copy in Trash is expected;
 All Mail must still show one.
+
+---
+
+### Files, Apps and connected accounts
+
+**F1. Create file opens cleanly** (v0.1.49). **Files**, **Create file**:
+make a Word document, an Excel spreadsheet and a PowerPoint presentation
+in Documents. **Pass:** each opens in the computer's own app (Word, Excel,
+PowerPoint; on a Mac also try Pages, Numbers and Keynote by opening the
+same files there) with no "repair", "unreadable content" or "protected
+view" message, and each can be typed into and saved. Screenshot any
+message word for word: it decides whether RATA's blank files need
+changing. **Also:** the file is *not* marked as downloaded (macOS:
+`xattr -p com.apple.quarantine <file>` says no such attribute; Windows
+PowerShell: `Get-Content <file> -Stream Zone.Identifier` finds no stream).
+
+**F2. Send with RATA sends the file as it is now** (v0.1.49). In **Created
+by you**, press **Send with RATA** on the Word file from F1, address it to
+yourself, and before pressing Send, type a new line into the file in Word
+and save it. Send. **Pass:** the message that arrives carries the file
+with the new line in it.
+
+**F3. Convert a PDF** (v0.1.19, v0.1.51). Send yourself a PDF with some
+text, open it in RATA and press **⇄ Convert** beside it, then **Convert &
+download** to Word. **Pass:** the Format Bridge shows the text, and the
+Word file in Downloads opens. On a Mac this is the check for v0.1.51's
+fix: before it, a PDF failed there with "undefined is not a function".
+
+**F4. Apps open signed in, on the right account** (v0.1.51). Press **Apps**
+in the side menu, then **Docs**. **Pass:** Google Docs opens in your
+browser, not inside RATA. Sign in there, go back to RATA and press
+**Docs** again: it opens straight in. **If you have two Google accounts
+signed in to the browser:** under **Your accounts** type the second one's
+address, then press **Docs**: it opens as that account. Do the same for
+**Word** with a Microsoft address. Write down which tiles landed on the
+wrong account; that is what RATA cannot test without real accounts.
+
+**F5. iCloud Drive or Creative Cloud Files** (v0.1.49, Mac and Windows).
+With iCloud Drive (or Adobe's Creative Cloud app) set up on the computer,
+**Settings**, **Connected accounts**, **Connect** on its row. **Pass:** the
+row says connected; **Files** lists the folder's files. Open one in the
+Format Bridge; save an attachment to it with **Save to**. **Also:** the
+saved attachment *is* marked as downloaded (the opposite of F1).
+
+**F6. OneDrive** (v0.1.51, needs `RATA_MS_CLIENT_ID` and the Graph
+permission). **Connect** on the Microsoft OneDrive row signs in to Microsoft
+in the browser. **Pass:** Files lists your OneDrive's top folder; open a
+folder; open a file in the Bridge. Save the same attachment to OneDrive
+twice: **Pass:** OneDrive (the website) shows two files, the second with
+a "1" added to its name; nothing was replaced. Try a work or school
+account too if you have one, and note any "needs admin approval" page
+word for word.
+
+**F7. Google Drive** (v0.1.51, needs the two Google variables). **Connect**
+opens Google's sign-in and then Google's file chooser in the browser:
+pick a Word file and a Google Doc. **Pass:** Files lists the two (the
+Google Doc as `.docx`) and nothing else from your Drive; open each in the
+Bridge. Save the same attachment twice: two files in Drive. Press
+**Choose files** and pick one more: it joins the list. **Disconnect**:
+https://myaccount.google.com/permissions no longer lists RATA within a
+minute.
+
+**F8. Share to Slack** (v0.1.50, needs `RATA_SLACK_CLIENT_ID`). **Connect**
+on the Slack row opens Slack in the browser; allow it. Open a message in
+RATA and press **Share to Slack**. **Pass:** the list holds your channels
+and people; send the text to yourself with `<b>&</b>` typed into it, and
+a file. **In Slack:** the text shows exactly `<b>&</b>` (not bold), and
+the file arrives. **Disconnect**: Slack's *Manage apps* page no longer
+shows RATA's access for you.
+
+**F9. Delete account forgets every connection.** With at least one
+connection made, **Settings**, **Delete account** (the computer part).
+**Pass:** Connected accounts shows nothing connected afterwards, and the
+keychain holds no entry for `org.mailrata.desktop.slack`,
+`org.mailrata.desktop.onedrive` or `org.mailrata.desktop.google` (macOS:
+Keychain Access, search "mailrata"; Windows: Credential Manager; Linux:
+`secret-tool search service org.mailrata.desktop.google`). Files you made
+with Create file are still in Documents.
 
 ---
 
