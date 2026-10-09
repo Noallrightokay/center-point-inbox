@@ -51,6 +51,11 @@ def swap(a, b):
 
 swap('<title>RATA — Your mail, on your machine.</title>', '<title>RATA Demo</title>')
 swap('<link rel="manifest" href="manifest.json">\n', '')
+# The demo ships no sw.js, so registering one only logged a 404.
+import re
+s, n = re.subn(r"if\('serviceWorker' in navigator\)\{[^\n]*?register\('sw\.js'\)[^\n]*\}\n", '', s)
+if n != 1 or 'sw.js' in s:
+    sys.exit('app.html changed: cannot find its one service worker registration')
 # The fake backend must be in place before bridge.js looks for Tauri.
 anchor = '<script src="config.js"></script>'
 swap(anchor, '<style>\n' + open(css, encoding='utf-8').read() + '</style>\n'

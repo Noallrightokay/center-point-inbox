@@ -94,10 +94,9 @@ if not n or 'url(' in re.sub(r'url\(data:', '', css):
 swap('<link rel="stylesheet" href="fonts/fonts.css">', '<style>\n' + css + '</style>')
 swap('<link rel="stylesheet" href="bridge.css">', '<style>\n' + read('bridge.css') + '</style>')
 
-# The service worker: nothing to register, and a file cannot have one.
-s, n = re.subn(r"if\('serviceWorker' in navigator\)\{[^\n]*?register\('sw\.js'\)[^\n]*\}\n", '', s)
-if n != 1 or 'sw.js' in s:
-    sys.exit('single.py: the page changed: cannot find its one service worker registration')
+# The service worker: build.sh already took its registration out.
+if 'sw.js' in s:
+    sys.exit('single.py: the page still registers a service worker')
 
 # The vendored libraries.
 refs = sorted(set(re.findall(r"'(vendor/[\w.-]+\.js)'", s)))

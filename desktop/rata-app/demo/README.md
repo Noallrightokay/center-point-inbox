@@ -47,6 +47,10 @@ change, then reload the page. It must be served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
 For one file that does open directly, see *Send it as one file* below.
 
+The label at the bottom (**Demo**, the Base/Pro switch and **Reset**) folds
+to a small **Demo** tag when you click the word Demo, for when it covers
+something; it stays folded in that tab.
+
 What you click is kept in this browser between reloads. **Reset** in the
 demo's label starts again, and so does raising `DEMO_VERSION` at the top of
 `demo-backend.js`, which clears every visitor's saved copy the next time
