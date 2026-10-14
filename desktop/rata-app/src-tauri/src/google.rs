@@ -50,7 +50,11 @@
 //! `.xlsx`, `.pptx` and `.pdf`, and read through `files.export`, which
 //! Google limits to 10 MB. A save is always a new file (`files.create`;
 //! Drive allows two files of one name), in My Drive, never overwriting:
-//! one multipart request up to 5 MB, a resumable upload above.
+//! one multipart request up to 5 MB, a resumable upload above. A piece
+//! that fails part way (a dropped connection, a 5xx, a short Retry-After)
+//! is gone on with from what Google says it holds, a few times a save, and
+//! the session address's 401, 404 and 410 say the upload ended, never that
+//! the sign-in did (SEC-11).
 //!
 //! **Disconnect and Delete account win** (SEC-7, SEC-8, as Slack's and
 //! OneDrive's): both empty the keychain under the list's lock and bump a
@@ -112,6 +116,18 @@ const FILE_FIELDS: &str = "id,name,mimeType,size,modifiedTime,trashed";
 /// The most an API answer that is not a file may be.
 const BODY_MAX: usize = 4 * 1024 * 1024;
 
+/// The most of an answer that is not a success RATA reads (SEC-11): far
+/// more than any error Google writes, and nothing like what a stranger
+/// could send. The rest is left unread.
+const ERROR_MAX: usize = 64 * 1024;
+
+/// How many times one save goes on after a piece fails part way (a dropped
+/// connection, Google having a bad moment, a short Retry-After), and how
+/// many times each asks the session what it holds, waiting 1, 2, 4 and 8
+/// seconds (or what Retry-After says). Counted apart from the pieces.
+const RESUMES: usize = 3;
+const ASKS: u32 = 4;
+
 /// The most `files.export` hands over (Google's own limit).
 pub const EXPORT_MAX: usize = 10 * 1024 * 1024;
 
@@ -149,6 +165,13 @@ const NOT_FOUND: &str =
     "RATA could not find that in Google Drive. It may have been moved or deleted.";
 
 const NOT_CHOSEN: &str = "Google lets RATA open only the files you chose for it in Google's file chooser and the files it saved.";
+
+/// Said when a resumable upload's session ended part way: its address
+/// answered 401, 404 or 410. Never the sign-in's matter, so nothing is
+/// renewed, begun again or parked over it.
+const UPLOAD_ENDED: &str = "Google Drive ended the upload part way. Try again.";
+
+const TOO_MUCH: &str = "Google Drive sent far more than RATA asked for.";
 
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const NATIVE_PREFIX: &str = "application/vnd.google-apps.";
@@ -471,9 +494,28 @@ fn hide(f: Fail, secrets: &[&str]) -> Fail {
     }
 }
 
+/// Whether an upload that failed this way part way may go on: the
+/// connection, Google having a bad moment, or a wait short enough to wait
+/// out.
+fn resumable(f: &Fail) -> bool {
+    match f {
+        Fail::Net(_) => true,
+        Fail::Limited(s) => *s <= WAIT_MOST,
+        _ => false,
+    }
+}
+
+/// Where to go on from when Google holds the bytes before `next` and the
+/// piece sent last ended at `end`: never past what was sent, and never the
+/// whole file, which Google answers with the file itself.
+fn go_on_from(next: usize, end: usize, total: usize) -> Option<usize> {
+    (next < total && next <= end).then_some(next)
+}
+
 // --------------------------------------------------------------- the wire
 
-/// One answer, read whole up to a cap.
+/// One answer, read whole up to a cap; one that is not a success, only as
+/// far as `ERROR_MAX`.
 struct Answer {
     status: u16,
     location: Option<String>,
@@ -482,16 +524,53 @@ struct Answer {
     body: Vec<u8>,
 }
 
+/// A Drive API error as RATA reads it: the first reason and the status.
+/// The `message` and anything else are skipped without being kept.
+#[derive(serde::Deserialize)]
+struct ApiError {
+    error: ApiProblem,
+}
+
+#[derive(serde::Deserialize)]
+struct ApiProblem {
+    #[serde(default)]
+    errors: Vec<ApiReason>,
+    status: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ApiReason {
+    reason: Option<String>,
+}
+
+/// Where a resumable upload stands, by Google's own answer.
+enum Stands {
+    /// Google holds the bytes before this one.
+    From(usize),
+    /// Google holds the whole file: this is it.
+    Done(Value),
+}
+
 impl Answer {
+    /// From the error's first `errors[].reason`, else its `status`.
     fn fail(&self) -> Fail {
-        let v = serde_json::from_slice::<Value>(&self.body).ok();
-        let reason = v.as_ref().and_then(|v| {
-            v.pointer("/error/errors/0/reason")
-                .or_else(|| v.pointer("/error/status"))
-                .and_then(Value::as_str)
-                .map(String::from)
-        });
+        let reason = serde_json::from_slice::<ApiError>(&self.body)
+            .ok()
+            .and_then(|e| {
+                let ApiProblem { errors, status } = e.error;
+                errors.into_iter().next().and_then(|r| r.reason).or(status)
+            });
         classify(self.status, reason.as_deref(), self.wait)
+    }
+
+    /// A refusal from a resumable upload's session address: its 401, 404
+    /// and 410 mean the session ended, never that the sign-in did, so
+    /// `with_google` neither renews and begins again nor parks over it.
+    fn upload_fail(&self) -> Fail {
+        match self.status {
+            401 | 404 | 410 => Fail::Refused("refused", UPLOAD_ENDED.into()),
+            _ => self.fail(),
+        }
     }
 
     fn json(&self, what: &str) -> Result<Value, Fail> {
@@ -841,8 +920,10 @@ impl GoogleDrive {
     }
 
     /// Send one request and read its answer whole, up to `cap` bytes, past
-    /// which it is refused as `too_much`. A transport error never carries
-    /// the address, which for an upload session is its permission.
+    /// which it is refused as `too_much`. An answer that is not a success
+    /// is read only as far as `ERROR_MAX`, enough for any error, and the
+    /// rest is left unread (SEC-11). A transport error never carries the
+    /// address, which for an upload session is its permission.
     async fn answer(
         &self,
         req: reqwest::RequestBuilder,
@@ -866,8 +947,15 @@ impl GoogleDrive {
         let location = header("location");
         let range = header("range");
         let wait = header("retry-after").and_then(|v| v.parse::<u64>().ok());
+        let keep = (!(200..300).contains(&status)).then_some(ERROR_MAX.min(cap));
         let mut body = Vec::new();
         while let Some(chunk) = resp.chunk().await.map_err(unreachable)? {
+            if let Some(keep) = keep
+                && body.len() + chunk.len() > keep
+            {
+                body.extend_from_slice(&chunk[..keep - body.len()]);
+                break;
+            }
             body.extend_from_slice(&chunk);
             if body.len() > cap {
                 return Err(Fail::Refused("too-large", too_much.to_string()));
@@ -889,13 +977,7 @@ impl GoogleDrive {
             .request(method, url)
             .bearer_auth(token)
             .header("Accept", "application/json");
-        let a = self
-            .answer(
-                req,
-                BODY_MAX,
-                "Google Drive sent far more than RATA asked for.",
-            )
-            .await?;
+        let a = self.answer(req, BODY_MAX, TOO_MUCH).await?;
         if !(200..300).contains(&a.status) {
             return Err(a.fail());
         }
@@ -959,13 +1041,7 @@ impl GoogleDrive {
             )
             .timeout(Duration::from_secs(60 + (bytes.len() / (64 * 1024)) as u64))
             .body(multipart(&boundary, meta, mime, bytes));
-        let a = self
-            .answer(
-                req,
-                BODY_MAX,
-                "Google Drive sent far more than RATA asked for.",
-            )
-            .await?;
+        let a = self.answer(req, BODY_MAX, TOO_MUCH).await?;
         if !(200..300).contains(&a.status) {
             return Err(a.fail());
         }
@@ -990,13 +1066,7 @@ impl GoogleDrive {
             .header("X-Upload-Content-Type", mime)
             .header("X-Upload-Content-Length", bytes.len().to_string())
             .body(meta.to_string());
-        let a = self
-            .answer(
-                req,
-                BODY_MAX,
-                "Google Drive sent far more than RATA asked for.",
-            )
-            .await?;
+        let a = self.answer(req, BODY_MAX, TOO_MUCH).await?;
         if !(200..300).contains(&a.status) {
             return Err(a.fail());
         }
@@ -1020,11 +1090,23 @@ impl GoogleDrive {
         got
     }
 
+    /// The bytes of a resumable upload, in pieces of `chunk`. A piece that
+    /// fails part way is gone on with from what Google says it holds, at
+    /// most `RESUMES` times a save; a refusal from the session address is
+    /// never the sign-in's (`Answer::upload_fail`).
     async fn pieces(&self, at: &url::Url, token: &str, bytes: &[u8]) -> Result<Value, Fail> {
         let http = self.http().map_err(Fail::Net)?;
         let total = bytes.len();
+        let out_of_turn = || {
+            Fail::Refused(
+                "refused",
+                "Google Drive answered the upload out of turn.".into(),
+            )
+        };
         let mut start = 0;
-        // Each piece once, and a few resumes; never a loop with no end.
+        let mut resumes = 0;
+        // Each piece once, and a few resumes; never a loop with no end. The
+        // questions after a failure are counted apart (`upload_stands`).
         let most = total / self.chunk.max(1) + 6;
         for _ in 0..most {
             let end = (start + self.chunk).min(total);
@@ -1039,49 +1121,85 @@ impl GoogleDrive {
                 )
                 .timeout(wait)
                 .body(part);
-            let a = self
-                .answer(
-                    req,
-                    BODY_MAX,
-                    "Google Drive sent far more than RATA asked for.",
-                )
-                .await?;
-            match a.status {
-                308 => {
-                    // Go on from the byte after what Google says it holds,
-                    // which is normally `end`.
-                    let next = received(a.range.as_deref()).unwrap_or(0);
-                    if next >= total || next > end {
+            let failed = match self.answer(req, BODY_MAX, TOO_MUCH).await {
+                Ok(a) => match a.status {
+                    308 => {
+                        // Go on from the byte after what Google says it
+                        // holds, which is normally `end`.
+                        let next = received(a.range.as_deref()).unwrap_or(0);
+                        start = go_on_from(next, end, total).ok_or_else(out_of_turn)?;
+                        continue;
+                    }
+                    200 | 201 if end == total => return a.json("an answer to the upload"),
+                    200..=299 => {
                         return Err(Fail::Refused(
                             "refused",
-                            "Google Drive answered the upload out of turn.".into(),
+                            format!(
+                                "Google Drive answered the upload out of turn (status {}).",
+                                a.status
+                            ),
                         ));
                     }
-                    start = next;
+                    _ => a.upload_fail(),
+                },
+                Err(f) => f,
+            };
+            if !resumable(&failed) || resumes == RESUMES {
+                return Err(failed);
+            }
+            resumes += 1;
+            match self.upload_stands(http, at, token, total, failed).await? {
+                Stands::Done(file) => return Ok(file),
+                Stands::From(next) => {
+                    start = go_on_from(next, end, total).ok_or_else(out_of_turn)?;
                 }
-                200 | 201 if end == total => return a.json("an answer to the upload"),
-                200..=299 => {
-                    return Err(Fail::Refused(
-                        "refused",
-                        format!(
-                            "Google Drive answered the upload out of turn (status {}).",
-                            a.status
-                        ),
-                    ));
-                }
-                404 | 410 => {
-                    return Err(Fail::Refused(
-                        "refused",
-                        "Google Drive ended the upload part way. Try again.".into(),
-                    ));
-                }
-                _ => return Err(a.fail()),
             }
         }
         Err(Fail::Refused(
             "refused",
             "Google Drive did not take the whole file. Try again.".into(),
         ))
+    }
+
+    /// What a resumable upload's session holds after a piece failed with
+    /// `why`: an empty PUT with `Content-Range: bytes */total`, with the
+    /// token as every piece goes, asked at most `ASKS` times, waiting
+    /// longer each time (or as long as Retry-After says).
+    async fn upload_stands(
+        &self,
+        http: &reqwest::Client,
+        at: &url::Url,
+        token: &str,
+        total: usize,
+        mut why: Fail,
+    ) -> Result<Stands, Fail> {
+        for n in 0..ASKS {
+            let secs = match &why {
+                Fail::Limited(s) => (*s).max(1),
+                _ => 1u64 << n,
+            };
+            tokio::time::sleep(self.second * secs as u32).await;
+            let req = http
+                .put(at.clone())
+                .bearer_auth(token)
+                .header("Content-Range", format!("bytes */{total}"))
+                // As Google's guide asks; an empty body alone sends none.
+                .header("Content-Length", "0")
+                .timeout(Duration::from_secs(60))
+                .body(Vec::new());
+            match self.answer(req, BODY_MAX, TOO_MUCH).await {
+                Ok(a) => match a.status {
+                    308 => return Ok(Stands::From(received(a.range.as_deref()).unwrap_or(0))),
+                    200 | 201 => return a.json("an answer to the upload").map(Stands::Done),
+                    _ => why = a.upload_fail(),
+                },
+                Err(f) => why = f,
+            }
+            if !resumable(&why) {
+                return Err(why);
+            }
+        }
+        Err(why)
     }
 
     /// Ask Google to end a sign-in everywhere (Disconnect). Best effort:
@@ -1460,9 +1578,13 @@ impl Rata {
                     ));
                 }
                 // A new refresh token the keychain will not take is still
-                // held for this session.
-                if refresh != kept.refresh {
-                    let _ = vault::put_google_secret(self.vault(), &refresh);
+                // held for this session. One it takes only half of (the
+                // pieces but not the entry naming them) gets the old one
+                // written back whole, as OneDrive's and a mailbox's are.
+                if refresh != kept.refresh
+                    && vault::put_google_secret(self.vault(), &refresh).is_err()
+                {
+                    let _ = vault::put_google_secret(self.vault(), &kept.refresh);
                 }
                 self.google.hold(
                     generation,
@@ -1824,6 +1946,9 @@ mod tests {
         body: Vec<u8>,
         asked: Option<oneshot::Sender<()>>,
         hold: Option<oneshot::Receiver<()>>,
+        /// Close the connection without answering: a connection that
+        /// drops once the request is in.
+        cut: bool,
     }
 
     fn ok(body: &str) -> Reply {
@@ -1837,6 +1962,14 @@ mod tests {
             body: body.as_bytes().to_vec(),
             asked: None,
             hold: None,
+            cut: false,
+        }
+    }
+
+    fn cut() -> Reply {
+        Reply {
+            cut: true,
+            ..with(200, "")
         }
     }
 
@@ -2001,6 +2134,9 @@ mod tests {
         }
         if let Some(h) = reply.hold {
             let _ = h.await;
+        }
+        if reply.cut {
+            return;
         }
         let mut out = format!(
             "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -2338,6 +2474,82 @@ mod tests {
             panic!()
         };
         assert!(w.contains("PERMISSION_DENIED"), "{w}");
+        // Only the first reason and the status are read; the rest of an
+        // error is skipped, whatever shape it has.
+        let answer = |status: u16, body: &str| Answer {
+            status,
+            location: None,
+            range: None,
+            wait: None,
+            body: body.as_bytes().to_vec(),
+        };
+        let a = answer(
+            403,
+            r#"{"error":{"message":[[[1,{"a":[2]}]]],"details":[{"x":{}}],"errors":[{"domain":"global","reason":"storageQuotaExceeded","message":"m"},{"reason":"notFound"}],"code":403}}"#,
+        );
+        assert!(matches!(a.fail(), Fail::Refused("disk", _)));
+        let a = answer(
+            403,
+            r#"{"error":{"errors":[{"domain":"global"}],"status":"PERMISSION_DENIED"}}"#,
+        );
+        let Fail::Refused(_, w) = a.fail() else {
+            panic!()
+        };
+        assert!(w.contains("PERMISSION_DENIED"), "{w}");
+    }
+
+    /// SEC-11 (R18): an answer that is not a success is read no further
+    /// than 64 KiB, however much a stranger sends: enough for any error
+    /// Google writes. Cut short, it is read by its status.
+    #[test]
+    fn an_error_answer_is_read_no_further_than_64_kib() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let huge = format!(
+                r#"{{"error":{{"message":"{}","errors":[{{"reason":"storageQuotaExceeded"}}]}}}}"#,
+                "x".repeat(1024 * 1024)
+            );
+            srv.on("GET /drive/v3/huge", with(500, &huge));
+            srv.on("GET /drive/v3/huge", with(200, &huge));
+            let g = drive_at(&srv.base);
+            let http = g.http().unwrap();
+            let url = format!("{}/drive/v3/huge", srv.base);
+            let a = g
+                .answer(http.get(&url), READ_MAX, "too much")
+                .await
+                .unwrap();
+            assert_eq!(a.status, 500);
+            assert!(a.body.len() <= 64 * 1024, "{} bytes kept", a.body.len());
+            let Fail::Net(w) = a.fail() else {
+                panic!("{:?}", a.fail())
+            };
+            assert!(w.contains("status 500"), "{w}");
+            // A success is still read to the cap asked for.
+            let a = g
+                .answer(http.get(&url), READ_MAX, "too much")
+                .await
+                .unwrap();
+            assert_eq!(a.body.len(), huge.len());
+
+            // Past what an API answer may be: said by its status, not as
+            // Google sending too much.
+            srv.on(
+                "GET /drive/v3/files",
+                with(
+                    503,
+                    &format!(
+                        r#"{{"error":{{"status":"UNAVAILABLE","message":"{}"}}}}"#,
+                        "x".repeat(BODY_MAX + 1)
+                    ),
+                ),
+            );
+            let dir = Scratch::new();
+            let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let e = app.google_list(None).await.unwrap_err();
+            assert_eq!(e.kind, "offline", "{}", e.error);
+            assert!(e.error.contains("status 503"), "{}", e.error);
+        });
     }
 
     #[test]
@@ -3213,6 +3425,213 @@ mod tests {
         });
     }
 
+    /// SEC-11 (R20): a piece that fails part way (Google having a bad
+    /// moment, a dropped connection, a short Retry-After) is not the end of
+    /// the save. RATA asks the session what it holds (an empty PUT with
+    /// `Content-Range: bytes */total`) and goes on from there.
+    #[test]
+    fn a_piece_that_fails_part_way_is_resumed_from_where_google_says() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let session = format!("{}{UPLOAD}?uploadType=resumable&upload_id=r1", srv.base);
+            srv.on(
+                &format!("POST {UPLOAD}"),
+                headed(200, "", vec![("Location", session)]),
+            );
+            let holds = |to: &str| headed(308, "", vec![("Range", format!("bytes=0-{to}"))]);
+            let put = format!("PUT {UPLOAD}");
+            // The first piece goes.
+            srv.on(&put, holds("262143"));
+            // The second meets a bad moment; asked, Google holds the first.
+            srv.on(&put, error(503, "backendError"));
+            srv.on(&put, holds("262143"));
+            // Sent again, the connection drops; the first question meets
+            // another bad moment, the second finds the piece arrived.
+            srv.on(&put, cut());
+            srv.on(&put, error(500, "backendError"));
+            srv.on(&put, holds("524287"));
+            // The last is asked to wait a moment.
+            srv.on(
+                &put,
+                Reply {
+                    headers: vec![("Retry-After", "1".into())],
+                    ..error(429, "rateLimitExceeded")
+                },
+            );
+            srv.on(&put, holds("524287"));
+            srv.on(
+                &put,
+                with(200, r#"{"id":"FBIG","name":"scan.pdf","size":"600000"}"#),
+            );
+            let dir = Scratch::new();
+            let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let data: Vec<u8> = (0..600_000u32).map(|i| (i % 251) as u8).collect();
+            let placed = app
+                .google_save(None, "scan.pdf", &data, false)
+                .await
+                .unwrap();
+            assert_eq!((placed.id.as_str(), placed.size), ("FBIG", 600_000));
+            let puts = srv.asked_for("PUT", UPLOAD);
+            let ranges: Vec<String> = puts
+                .iter()
+                .map(|p| p.header("content-range").unwrap())
+                .collect();
+            assert_eq!(
+                ranges,
+                [
+                    "bytes 0-262143/600000",
+                    "bytes 262144-524287/600000",
+                    "bytes */600000",
+                    "bytes 262144-524287/600000",
+                    "bytes */600000",
+                    "bytes */600000",
+                    "bytes 524288-599999/600000",
+                    "bytes */600000",
+                    "bytes 524288-599999/600000",
+                ]
+            );
+            for p in &puts {
+                let r = p.header("content-range").unwrap();
+                if r.starts_with("bytes */") {
+                    assert!(p.body.is_empty(), "a question carries no bytes");
+                    let lengths: Vec<&str> = p
+                        .headers
+                        .iter()
+                        .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                        .map(|(_, v)| v.as_str())
+                        .collect();
+                    assert_eq!(lengths, ["0"]);
+                } else {
+                    let span = &r["bytes ".len()..r.find('/').unwrap()];
+                    let (from, to) = span.split_once('-').unwrap();
+                    let (from, to): (usize, usize) = (from.parse().unwrap(), to.parse().unwrap());
+                    assert_eq!(p.body, data[from..=to], "{r}");
+                }
+            }
+            assert!(puts.iter().all(|p| p.params()["upload_id"] == "r1"));
+            assert!(puts.iter().all(|p| p.auth() == bearer(ACCESS)));
+            assert!(srv.asked_for("DELETE", UPLOAD).is_empty());
+            assert_eq!(srv.asked_for("POST", UPLOAD).len(), 1, "one session");
+
+            // The last piece's answer lost, and Google has the whole file:
+            // that is the file, and nothing is sent again.
+            let session = format!("{}{UPLOAD}?uploadType=resumable&upload_id=r2", srv.base);
+            srv.on(
+                &format!("POST {UPLOAD}"),
+                headed(200, "", vec![("Location", session)]),
+            );
+            srv.on(&put, holds("262143"));
+            srv.on(&put, cut());
+            srv.on(
+                &put,
+                with(201, r#"{"id":"FDONE","name":"scan.pdf","size":"400000"}"#),
+            );
+            let placed = app
+                .google_save(None, "scan.pdf", &data[..400_000], false)
+                .await
+                .unwrap();
+            assert_eq!(placed.id, "FDONE");
+            let puts: Vec<String> = srv
+                .asked_for("PUT", UPLOAD)
+                .iter()
+                .filter(|p| p.params()["upload_id"] == "r2")
+                .map(|p| p.header("content-range").unwrap())
+                .collect();
+            assert_eq!(
+                puts,
+                [
+                    "bytes 0-262143/400000",
+                    "bytes 262144-399999/400000",
+                    "bytes */400000",
+                ]
+            );
+            assert!(srv.asked_for("DELETE", UPLOAD).is_empty());
+
+            // Google failing every time: given up after RESUMES, said, and
+            // the session ended.
+            let session = format!("{}{UPLOAD}?uploadType=resumable&upload_id=r3", srv.base);
+            srv.on(
+                &format!("POST {UPLOAD}"),
+                headed(200, "", vec![("Location", session)]),
+            );
+            srv.on(&put, error(503, "backendError"));
+            for _ in 0..RESUMES {
+                // Holds nothing yet (no Range), then fails again.
+                srv.on(&put, with(308, ""));
+                srv.on(&put, error(503, "backendError"));
+            }
+            srv.on(&format!("DELETE {UPLOAD}"), with(204, ""));
+            let e = app
+                .google_save(None, "scan.pdf", &data[..400_000], false)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "offline");
+            assert!(e.error.contains("backendError"), "{}", e.error);
+            let r3: Vec<String> = srv
+                .asked_for("PUT", UPLOAD)
+                .iter()
+                .filter(|p| p.params()["upload_id"] == "r3")
+                .map(|p| p.header("content-range").unwrap())
+                .collect();
+            assert_eq!(r3.len(), 2 * RESUMES + 1);
+            assert!(
+                r3.iter().step_by(2).all(|r| r == "bytes 0-262143/400000"),
+                "{r3:?}"
+            );
+            assert_eq!(srv.asked_for("DELETE", UPLOAD).len(), 1);
+        });
+    }
+
+    /// SEC-11 (R20): a 401 from the upload session (a piece or a question
+    /// about it) means the session ended, not the sign-in: nothing is
+    /// renewed, restarted from byte 0 or parked over it.
+    #[test]
+    fn a_401_from_the_upload_session_ends_the_upload_and_never_renews_or_parks() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let dir = Scratch::new();
+            let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let put = format!("PUT {UPLOAD}");
+            let data = vec![5u8; 400_000];
+            for asked_about in [false, true] {
+                let session = format!("{}{UPLOAD}?uploadType=resumable&upload_id=x", srv.base);
+                srv.on(
+                    &format!("POST {UPLOAD}"),
+                    headed(200, "", vec![("Location", session)]),
+                );
+                if asked_about {
+                    srv.on(&put, error(503, "backendError"));
+                }
+                srv.on(&put, error(401, "authError"));
+                srv.on(&format!("DELETE {UPLOAD}"), with(401, ""));
+                let e = app
+                    .google_save(None, "big.bin", &data, false)
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    (e.kind, e.error.as_str()),
+                    (
+                        "refused",
+                        "Google Drive ended the upload part way. Try again."
+                    ),
+                    "{asked_about}"
+                );
+                assert!(entry(&app).connected, "nothing parked");
+            }
+            assert!(
+                srv.asked_for("POST", "/token").is_empty(),
+                "nothing renewed"
+            );
+            assert_eq!(
+                srv.asked_for("POST", UPLOAD).len(),
+                2,
+                "never begun again from byte 0"
+            );
+        });
+    }
+
     #[test]
     fn a_program_named_as_a_document_needs_confirmation_and_nothing_empty_or_huge_goes() {
         rt().block_on(async {
@@ -3472,6 +3891,109 @@ mod tests {
             let kept = app.google.held(app.google.generation()).unwrap();
             assert_eq!(kept.refresh, "1//drive-refresh-secret-0002");
             vault.stick(false);
+        });
+    }
+
+    /// A keychain that, once stuck, takes Google Drive's pieces (`drive#2`…)
+    /// and refuses the entry that names them (`drive`): a rotation written
+    /// half way.
+    #[derive(Default)]
+    struct HalfWay {
+        mem: Memory,
+        stuck: std::sync::atomic::AtomicBool,
+    }
+
+    impl HalfWay {
+        fn stick(&self, on: bool) {
+            self.stuck.store(on, Ordering::SeqCst);
+        }
+    }
+
+    impl Vault for HalfWay {
+        fn put(&self, e: &str, p: &str) -> Result<(), String> {
+            self.mem.put(e, p)
+        }
+        fn get(&self, e: &str) -> Result<String, Unreadable> {
+            self.mem.get(e)
+        }
+        fn forget(&self, e: &str) -> Result<(), String> {
+            self.mem.forget(e)
+        }
+        fn put_piece(&self, n: &str, p: &str) -> Result<(), String> {
+            self.mem.put_piece(n, p)
+        }
+        fn get_piece(&self, n: &str) -> Result<String, Unreadable> {
+            self.mem.get_piece(n)
+        }
+        fn forget_piece(&self, n: &str) -> Result<(), String> {
+            self.mem.forget_piece(n)
+        }
+        fn put_slack(&self, n: &str, s: &str) -> Result<(), String> {
+            self.mem.put_slack(n, s)
+        }
+        fn get_slack(&self, n: &str) -> Result<String, Unreadable> {
+            self.mem.get_slack(n)
+        }
+        fn forget_slack(&self, n: &str) -> Result<(), String> {
+            self.mem.forget_slack(n)
+        }
+        fn put_onedrive(&self, n: &str, s: &str) -> Result<(), String> {
+            self.mem.put_onedrive(n, s)
+        }
+        fn get_onedrive(&self, n: &str) -> Result<String, Unreadable> {
+            self.mem.get_onedrive(n)
+        }
+        fn forget_onedrive(&self, n: &str) -> Result<(), String> {
+            self.mem.forget_onedrive(n)
+        }
+        fn put_google(&self, n: &str, s: &str) -> Result<(), String> {
+            if n == vault::GOOGLE_ENTRY && self.stuck.load(Ordering::SeqCst) {
+                return Err("keychain locked".into());
+            }
+            self.mem.put_google(n, s)
+        }
+        fn get_google(&self, n: &str) -> Result<String, Unreadable> {
+            self.mem.get_google(n)
+        }
+        fn forget_google(&self, n: &str) -> Result<(), String> {
+            self.mem.forget_google(n)
+        }
+    }
+
+    /// SEC-11 (R19): Google seldom sends a new refresh token, but one the
+    /// keychain takes only half of (its second piece, not the entry naming
+    /// the pieces) would leave half of each, which Google refuses at the
+    /// next launch. The old one is written back whole instead.
+    #[test]
+    fn a_new_refresh_token_the_keychain_takes_half_of_puts_the_old_one_back_whole() {
+        rt().block_on(async {
+            let old = format!("1//drive-refresh-old-{}", "a".repeat(1200));
+            let new = format!("1//drive-refresh-new-{}", "b".repeat(1200));
+            let srv = Scripted::start().await;
+            srv.on(
+                TOKEN,
+                ok(&format!(
+                    r#"{{"access_token":"ya29.drive-access-secret-0002","expires_in":3599,"refresh_token":"{new}","token_type":"Bearer"}}"#
+                )),
+            );
+            srv.on("GET /drive/v3/files", ok(r#"{"files":[]}"#));
+            let dir = Scratch::new();
+            let vault = Arc::new(HalfWay::default());
+            let app = g_app(&dir, &srv.base, Some(PRO), vault.clone());
+            vault::put_google_secret(vault.as_ref(), &old).unwrap();
+            {
+                let mut s = app.store().lock().unwrap();
+                s.set_google(Some(link()));
+                s.save().unwrap();
+            }
+            vault.stick(true);
+            app.google_list(None).await.unwrap();
+            assert!(
+                app.google.held(app.google.generation()).unwrap().refresh == new,
+                "this session goes on with the new one"
+            );
+            let stored = vault::get_google_secret(vault.as_ref()).unwrap();
+            assert!(stored == old, "the keychain holds the old one whole");
         });
     }
 
