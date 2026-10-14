@@ -64,10 +64,13 @@ struct OneRata(std::fs::File);
 /// it. Only a list that accounts for the keychain (`Store::accounts`: read,
 /// and of this build's schema or an older one) says what is linked; with
 /// any other, nothing is forgotten. Run once, before `Rata` exists and with
-/// the list's lock held, so nothing can be keeping a sign-in meanwhile.
-fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault) -> Store {
+/// the list's lock held (`guarded`), so nothing can be keeping a sign-in
+/// meanwhile. Without the lock (`store::Hold::Unguarded`: a folder whose
+/// file system refuses locks) another copy of RATA may be running and
+/// halfway through keeping one, so nothing is forgotten then either.
+fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault, guarded: bool) -> Store {
     let store = Store::open(store::moved(roaming, local));
-    if store.accounts() {
+    if guarded && store.accounts() {
         vault::forget_unlinked(
             vault,
             vault::Linked {
@@ -83,13 +86,11 @@ fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault) -> Store {
 /// The addresses on the list, for the Windows start-up pass
 /// (`vault::settle_windows`), which deletes a mailbox's keychain entry
 /// whose address is not among them. Only from a list that accounts for the
-/// keychain, as `open_store` counts one; `None` otherwise, and then nothing
-/// is deleted.
+/// keychain, as `open_store` counts one, and read with the list's lock
+/// held (`guarded`); `None` otherwise, and then nothing is deleted.
 #[cfg(any(windows, test))]
-fn listed(store: &Store) -> Option<Vec<&str>> {
-    store
-        .accounts()
-        .then(|| store.list().iter().map(|m| m.email.as_str()).collect())
+fn listed(store: &Store, guarded: bool) -> Option<Vec<&str>> {
+    (guarded && store.accounts()).then(|| store.list().iter().map(|m| m.email.as_str()).collect())
 }
 
 /// Whether single instance's plugin can be set up here. On Linux its guard
@@ -235,23 +236,25 @@ fn main() {
             let roaming = app.path().app_data_dir()?.join("mailboxes.json");
             // One RATA per list (review R5; see `main`), before the list or
             // the keychain is read.
-            match store::hold(&local, HOLD_WAIT) {
+            let guarded = match store::hold(&local, HOLD_WAIT) {
                 store::Hold::Mine(lock) => {
                     app.manage(OneRata(lock));
+                    true
                 }
                 store::Hold::Taken => {
                     app.handle().cleanup_before_exit();
                     std::process::exit(0);
                 }
-                store::Hold::Unguarded => {}
-            }
-            let store = open_store(&roaming, &local, &Keychain);
+                store::Hold::Unguarded => false,
+            };
+            let store = open_store(&roaming, &local, &Keychain, guarded);
             // Windows only: keychain entries an earlier build wrote to roam
             // stay on this computer from now on, and a mailbox's that Unlink
             // or Delete account left in a roamed copy goes (review R6). The
-            // list counts only as `open_store` counts it.
+            // list counts only as `open_store` counts it, and only with the
+            // list's lock held.
             #[cfg(windows)]
-            vault::settle_windows(listed(&store).as_deref());
+            vault::settle_windows(listed(&store, guarded).as_deref());
 
             // Built once and shared: each resolver carries its own cache, and
             // making a fresh one per refresh would throw that away.
@@ -407,11 +410,11 @@ mod tests {
         vault::put_slack_secret(&v, "slack-sign-in").unwrap();
         vault::put_onedrive_secret(&v, "onedrive-sign-in").unwrap();
 
-        let store = open_store(&roaming, &local, &v);
+        let store = open_store(&roaming, &local, &v, true);
         assert_eq!(store.path_for_test(), local);
         assert!(!roaming.exists());
         assert!(store.slack().is_some());
-        assert_eq!(listed(&store), Some(vec!["owner@example.com"]));
+        assert_eq!(listed(&store, true), Some(vec!["owner@example.com"]));
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
         assert!(
             vault::get_onedrive_secret(&v).is_err(),
@@ -422,9 +425,9 @@ mod tests {
         // nothing is forgotten, and the Windows pass deletes nothing.
         vault::put_onedrive_secret(&v, "onedrive-sign-in").unwrap();
         std::fs::write(&local, "{ this is not json").unwrap();
-        let store = open_store(&roaming, &local, &v);
+        let store = open_store(&roaming, &local, &v, true);
         assert!(store.slack().is_none());
-        assert_eq!(listed(&store), None);
+        assert_eq!(listed(&store, true), None);
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
         assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
 
@@ -440,9 +443,9 @@ mod tests {
             }));
             s.save().unwrap();
         }
-        let store = open_store(&roaming, &local, &v);
+        let store = open_store(&roaming, &local, &v, true);
         assert!(store.onedrive().is_some());
-        assert_eq!(listed(&store), Some(vec![]));
+        assert_eq!(listed(&store, true), Some(vec![]));
         assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
         assert!(vault::get_slack_secret(&v).is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -468,15 +471,15 @@ mod tests {
         vault::put_slack_secret(&v, "slack-sign-in").unwrap();
         vault::put_google_secret(&v, "google-sign-in").unwrap();
 
-        let store = open_store(&roaming, &local, &v);
-        assert_eq!(listed(&store), None);
+        let store = open_store(&roaming, &local, &v, true);
+        assert_eq!(listed(&store, true), None);
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
 
         // Saved here (a licence renewal, say), then started again.
         store.save().unwrap();
-        let store = open_store(&roaming, &local, &v);
+        let store = open_store(&roaming, &local, &v, true);
         assert_eq!(store.on_disk(), Some(2));
-        assert_eq!(listed(&store), None);
+        assert_eq!(listed(&store, true), None);
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
         assert_eq!(vault::get_google_secret(&v).unwrap(), "google-sign-in");
         let raw = std::fs::read_to_string(&local).unwrap();
@@ -484,6 +487,35 @@ mod tests {
             raw.contains("\"accounts\"") && raw.contains("\"links\""),
             "{raw}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review R5, round b: without the list's lock (a file system that
+    /// refuses locks) another RATA may be running and halfway through
+    /// keeping a sign-in, so start forgets nothing and the Windows pass
+    /// deletes nothing, though the list reads and accounts for the keychain.
+    #[test]
+    fn at_start_without_the_lists_lock_nothing_is_forgotten() {
+        let dir = tmpdir("unguarded");
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        {
+            let mut s = Store::open(&local);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        let v = Memory::default();
+        vault::put_slack_secret(&v, "slack-sign-in").unwrap();
+
+        let store = open_store(&roaming, &local, &v, false);
+        assert!(store.accounts());
+        assert_eq!(listed(&store, false), None);
+        assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
+
+        // The same list with the lock held: Slack, not linked, goes.
+        let store = open_store(&roaming, &local, &v, true);
+        assert_eq!(listed(&store, true), Some(vec!["owner@example.com"]));
+        assert!(vault::get_slack_secret(&v).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

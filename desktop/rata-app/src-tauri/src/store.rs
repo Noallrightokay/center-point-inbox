@@ -143,6 +143,12 @@ pub const CREATED_KEEP: usize = 500;
 /// as linking nothing and deletes its passwords and sign-ins. A file of a
 /// newer schema keeps its number when this build saves it ([`Store::save`]
 /// never lowers it), so an older build never forgets a newer one's.
+/// That holds only while the older build can still read the file: one
+/// that cannot parse it starts empty, and its first save writes a list of
+/// its own schema, naming only its own links, over the newer one, which
+/// the newer build then reads as linking nothing. So a new shape must stay
+/// readable by every older build that may share the file: add a field
+/// beside the old one rather than changing the old one's shape.
 ///
 /// Any other new top-level field leaves it alone: an older build keeps
 /// what it does not know (`Contents::rest`). A new field inside a mailbox
