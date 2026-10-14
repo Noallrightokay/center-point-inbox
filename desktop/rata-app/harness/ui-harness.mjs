@@ -4077,7 +4077,7 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
   await pg.evaluate(() => {
     __mock.conn.truncated = true;
     __mock.conn.targets = [
-      { id: 'U0ME', name: 'Ann Smith (you)', kind: 'person', me: true, handle: 'asmith', real_name: 'Ann Smith' },
+      { id: 'U0ME', name: 'Ann Smith (you)', kind: 'person', me: true, handle: 'asmith', real_name: 'Ann Smith', standing: 'guest' },
       { id: 'C1', name: 'ed-staff', kind: 'channel', me: false },
       { id: 'C5', name: 'all-saltmarsh', kind: 'channel', me: false, shared: 'org' },
       { id: 'C6', name: 'imaging-vendor', kind: 'channel', me: false, shared: 'external' },
@@ -4120,6 +4120,11 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
     && guestLead.outside && guestLead.text === 'Bob Jones is a guest in Saltmarsh ED, not a member. People outside Saltmarsh ED will see what you send, and keep it.'
     && !insideLead.outside && insideLead.text === 'Choose where it goes and what it says. Nothing is sent until you press Send.',
     `the lead says when people outside the workspace will see it: ${JSON.stringify({ extLead, guestLead, insideLead })}`);
+  /* The customer's own row carries their standing too (U0ME is a guest
+     here): sending to themselves warns of nobody outside. */
+  const selfLead = await leadFor('U0ME');
+  check(!selfLead.outside && selfLead.text === 'Choose where it goes and what it says. Nothing is sent until you press Send.',
+    `a customer who is a guest is not warned about their own direct message: ${JSON.stringify(selfLead)}`);
   await leadFor('C6');
   await axe(pg, 'the Share to Slack dialog, saying who each target is and who will see it');
 

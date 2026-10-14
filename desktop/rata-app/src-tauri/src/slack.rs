@@ -89,10 +89,13 @@ pub const LOGIN_HOST: &str = "slack.com";
 
 /// What RATA asks Slack for, as the signed-in person: to post, to upload
 /// files, to open a direct message, and to list the channels (public and
-/// private), direct messages and people to choose from. Nothing that reads
-/// a message.
+/// private) and people to choose from. Nothing that reads a message, and
+/// not `im:read`: no direct message is listed (a person is reached through
+/// `conversations.open`, which needs `im:write`), so a token that leaked
+/// does not say whom the customer writes to (SEC-11). A request may ask
+/// for fewer scopes than the app has registered.
 pub const USER_SCOPES: &str =
-    "chat:write,files:write,im:write,channels:read,groups:read,im:read,users:read";
+    "chat:write,files:write,im:write,channels:read,groups:read,users:read";
 
 /// The loopback ports Slack sends the browser back to, each registered by
 /// the owner as `http://localhost:<port>`. Fixed, because Slack matches a
@@ -2303,7 +2306,7 @@ mod tests {
             .unwrap()
     }
 
-    const GRANTED: &str = r#"{"ok":true,"app_id":"A1","authed_user":{"id":"U0ME","scope":"chat:write,files:write,im:write,channels:read,groups:read,im:read,users:read","access_token":"xoxe.xoxp-1-access-secret-0001","token_type":"user","refresh_token":"xoxe-1-refresh-secret-0001","expires_in":43200},"team":{"id":"T0ACME","name":"Acme \u202eCorp"},"enterprise":null,"is_enterprise_install":false}"#;
+    const GRANTED: &str = r#"{"ok":true,"app_id":"A1","authed_user":{"id":"U0ME","scope":"chat:write,files:write,im:write,channels:read,groups:read,users:read","access_token":"xoxe.xoxp-1-access-secret-0001","token_type":"user","refresh_token":"xoxe-1-refresh-secret-0001","expires_in":43200},"team":{"id":"T0ACME","name":"Acme \u202eCorp"},"enterprise":null,"is_enterprise_install":false}"#;
 
     const ROTATED: &str = r#"{"ok":true,"app_id":"A1","access_token":"xoxe.xoxp-1-access-secret-0002","refresh_token":"xoxe-1-refresh-secret-0002","token_type":"user","expires_in":43200,"team":{"id":"T0ACME","name":"Acme"}}"#;
 
@@ -2546,12 +2549,13 @@ mod tests {
                 "im:write",
                 "channels:read",
                 "groups:read",
-                "im:read",
                 "users:read"
             ]
         );
-        // Nothing that reads a message.
+        // Nothing that reads a message, and no listing of direct messages:
+        // a person is reached through conversations.open (`im:write`).
         assert!(!q["user_scope"].contains("history") && !q["user_scope"].contains(":read,chat"));
+        assert!(!asked.contains(&"im:read"));
         assert_eq!(q["redirect_uri"], "http://localhost:28417");
         assert_eq!(q["code_challenge_method"], "S256");
         assert_eq!(q["code_challenge"], oauth::challenge(a.verifier()));

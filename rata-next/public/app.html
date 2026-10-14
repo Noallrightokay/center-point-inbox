@@ -4601,8 +4601,10 @@ function slackWho(t){
   return t.name+(about.length?' ('+about.join(', ')+')':'');
 }
 /* What is sent to a guest or to a channel shared with another organization
-   is seen, and kept, outside the workspace: the lead says so. */
-const slackOutside=t=>!!t&&(t.shared==='external'||t.standing==='guest'||t.standing==='single-channel guest');
+   is seen, and kept, outside the workspace: the lead says so. Never for the
+   customer's own row: Rust gives it a standing too, and a customer who is a
+   guest themselves sends to nobody else there. */
+const slackOutside=t=>!!t&&!t.me&&(t.shared==='external'||t.standing==='guest'||t.standing==='single-channel guest');
 function slackLead(){
   const t=SLACK&&(SLACK.targets||[]).find(x=>x.id===SLACK.chosen);
   if(!slackOutside(t))return SLACK_LEAD;
