@@ -24,23 +24,23 @@
     };
   }
 
-  const DEMO_VERSION = '6';
+  const DEMO_VERSION = '7';
   const UID = 'local_demo2';
   const ME = 'Riley Carter';
   const DAY = 86400000, HOUR = 3600000, MIN = 60000;
   const now = Date.now();
 
-  const LARK = 'riley.carter@larkspurvalleyhealth.org';
-  const SALT = 'rcarter@saltmarshregional.org';
-  const HOME = 'riley.carter@gmail.com';
-  const CPR = 'bookings@tidepoolcpr.com';
-  const WRITE = 'riley@clearchartwriting.com';
+  const LARK = 'riley.carter@larkspurvalleyhealth.example';
+  const SALT = 'rcarter@saltmarshregional.example';
+  const HOME = 'riley.carter@mail.example';
+  const CPR = 'bookings@tidepoolcpr.example';
+  const WRITE = 'riley@clearchartwriting.example';
   const MAILBOXES = [
     { email: LARK, host: 'outlook.office365.com', port: 993, label: 'Larkspur Valley Health' },
-    { email: SALT, host: 'imap.saltmarshregional.org', port: 993, label: 'Saltmarsh Regional' },
-    { email: HOME, host: 'imap.gmail.com', port: 993, label: 'Personal' },
-    { email: CPR, host: 'imap.tidepoolcpr.com', port: 993, label: 'Tidepool CPR Training' },
-    { email: WRITE, host: 'imap.clearchartwriting.com', port: 993, label: 'Clearchart Writing' },
+    { email: SALT, host: 'imap.saltmarshregional.example', port: 993, label: 'Saltmarsh Regional' },
+    { email: HOME, host: 'imap.mail.example', port: 993, label: 'Personal' },
+    { email: CPR, host: 'imap.tidepoolcpr.example', port: 993, label: 'Tidepool CPR Training' },
+    { email: WRITE, host: 'imap.clearchartwriting.example', port: 993, label: 'Clearchart Writing' },
   ];
 
   /* Which plan the demo shows, chosen in its label. Base holds two
@@ -61,20 +61,34 @@
 
   /* People saved in People, so their mail threads under one name. */
   const CONTACTS = [
-    { id: 'cd1', name: 'Dr. Anita Shah', nick: 'Anita', addr: 'anita.shah@larkspurvalleyhealth.org' },
-    { id: 'cd2', name: 'Marcus Bell', nick: 'Marcus', addr: 'mbell@saltmarshregional.org' },
-    { id: 'cd3', name: 'Medical Staff Office', nick: '', addr: 'medstaff@larkspurvalleyhealth.org' },
-    { id: 'cd4', name: 'Elena Carter', nick: 'Mom', addr: 'elena.carter52@gmail.com' },
-    { id: 'cd5', name: 'Jess Morgan', nick: 'Jess', addr: 'jess.morgan@gmail.com' },
-    { id: 'cd6', name: 'Dana Whitfield', nick: 'Dana', addr: 'dana@littleoaksdaycare.com' },
-    { id: 'cd7', name: 'Tom Becker', nick: 'Tom', addr: 'tom.becker@wellnessquarterly.com' },
-    { id: 'cd9', name: 'Lena Ortiz', nick: 'Lena', addr: 'lena@ortizbookkeeping.com' },
-    { id: 'cd10', name: 'Dr. Omar Haddad', nick: '', addr: 'ohaddad@saltmarshregional.org' },
+    { id: 'cd1', name: 'Dr. Anita Shah', nick: 'Anita', addr: 'anita.shah@larkspurvalleyhealth.example' },
+    { id: 'cd2', name: 'Marcus Bell', nick: 'Marcus', addr: 'mbell@saltmarshregional.example' },
+    { id: 'cd3', name: 'Medical Staff Office', nick: '', addr: 'medstaff@larkspurvalleyhealth.example' },
+    { id: 'cd4', name: 'Elena Carter', nick: 'Mom', addr: 'elena.carter@mail.example' },
+    { id: 'cd5', name: 'Jess Morgan', nick: 'Jess', addr: 'jess.morgan@mail.example' },
+    { id: 'cd6', name: 'Dana Whitfield', nick: 'Dana', addr: 'dana@littleoaksdaycare.example' },
+    { id: 'cd7', name: 'Tom Becker', nick: 'Tom', addr: 'tom.becker@wellnessquarterly.example' },
+    { id: 'cd9', name: 'Lena Ortiz', nick: 'Lena', addr: 'lena@ortizbookkeeping.example' },
+    { id: 'cd10', name: 'Dr. Omar Haddad', nick: '', addr: 'ohaddad@saltmarshregional.example' },
   ];
+
+  /* The demo's own keys, and only those. Chromium gives every page opened
+     from disk one localStorage, and the served demo shares its port's, so
+     clear() emptied every other local HTML file's storage too. Every key
+     the demo, bridge.js and app.html write starts with centra_ or rata_;
+     they are collected first, since removing one renumbers the rest. */
+  const wipeOwn = () => {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^(centra_|rata_)/.test(k)) ks.push(k);
+    }
+    ks.forEach((k) => localStorage.removeItem(k));
+  };
 
   try {
     if (localStorage.getItem('rata_demo_v') !== DEMO_VERSION) {
-      localStorage.clear();
+      wipeOwn();
       if (PLAN === 'base') localStorage.setItem('rata_demo_plan', 'base');
       try { indexedDB.deleteDatabase('rata-mail-local_demo'); indexedDB.deleteDatabase('rata-mail-' + UID); indexedDB.deleteDatabase('rata-files'); } catch (e) {}
       localStorage.setItem('rata_demo_v', DEMO_VERSION);
@@ -82,7 +96,12 @@
     if (!localStorage.getItem('centra_session')) {
       localStorage.setItem('centra_session', JSON.stringify({ uid: UID, email: HOME, mode: 'local' }));
     }
+    /* No workspace (the first visit, or after Delete account, which the
+       demo build turns into a reload): it starts as the sample one, with
+       the sample documents in Files and the sample connections. */
     if (!localStorage.getItem('centra_ws_' + UID)) {
+      localStorage.removeItem('rata_demo_files');
+      localStorage.removeItem('rata_demo_conn');
       localStorage.setItem('centra_ws_' + UID, JSON.stringify({
         v: 6, settings: { name: ME, profile: 'HIPAA', plan: null }, linked: [], rules: [],
         contacts: CONTACTS, messages: [], documents: [], folders: [],
@@ -123,7 +142,7 @@
   const PIC_UID = 301;
   const MAIL = [
     /* Larkspur Valley Health */
-    msg({ uid: 101, acct: LARK, from: 'anita.shah@larkspurvalleyhealth.org', fromName: 'Dr. Anita Shah', subject: 'November ED schedule is posted', ago: 25 * MIN, unread: true, starred: true,
+    msg({ uid: 101, acct: LARK, from: 'anita.shah@larkspurvalleyhealth.example', fromName: 'Dr. Anita Shah', subject: 'November ED schedule is posted', ago: 25 * MIN, unread: true, starred: true,
       body: `
 Hi all,
 
@@ -138,7 +157,7 @@ Anita
 Anita Shah, MD
 Medical Director, Emergency Department
 Larkspur Valley Health` }),
-    msg({ uid: 102, acct: LARK, from: 'medstaff@larkspurvalleyhealth.org', fromName: 'Medical Staff Office', subject: 'Action needed: reappointment packet due 31 October', ago: 3 * HOUR, unread: true,
+    msg({ uid: 102, acct: LARK, from: 'medstaff@larkspurvalleyhealth.example', fromName: 'Medical Staff Office', subject: 'Action needed: reappointment packet due 31 October', ago: 3 * HOUR, unread: true,
       body: `
 Dear Dr. Carter,
 
@@ -153,13 +172,13 @@ Questions? Reply to this message or call extension 4410.
 
 Medical Staff Office
 Larkspur Valley Health`, atts: [{ index: 1, name: 'Reappointment packet 2026.pdf', mime: 'application/pdf', size: 6100 }] }),
-    msg({ uid: 103, acct: LARK, from: 'it-security@larkspurvalleyhealth.org', fromName: 'LVH IT Security', subject: 'Reminder: new sign-in prompt from Monday', ago: 1 * DAY + 2 * HOUR,
+    msg({ uid: 103, acct: LARK, from: 'it-security@larkspurvalleyhealth.example', fromName: 'LVH IT Security', subject: 'Reminder: new sign-in prompt from Monday', ago: 1 * DAY + 2 * HOUR,
       body: `
 From Monday, signing in to the clinical workstations will ask for your
 badge tap and a code from the authenticator app.
 
 IT will never ask for your password by email or phone.` }),
-    msg({ uid: 104, acct: LARK, from: 'education@larkspurvalleyhealth.org', fromName: 'LVH Clinical Education', subject: 'Grand Rounds Thursday: sepsis bundle update', ago: 2 * DAY, html: true,
+    msg({ uid: 104, acct: LARK, from: 'education@larkspurvalleyhealth.example', fromName: 'LVH Clinical Education', subject: 'Grand Rounds Thursday: sepsis bundle update', ago: 2 * DAY, html: true,
       body: `
 Grand Rounds
 Thursday 16 October, 12:00 to 13:00, Auditorium B and online
@@ -171,21 +190,21 @@ Register: https://education.larkspurvalleyhealth.example/rounds`,
       unsub: { https: 'https://education.larkspurvalleyhealth.example/preferences' } }),
 
     /* Saltmarsh Regional */
-    msg({ uid: 201, acct: SALT, from: 'mbell@saltmarshregional.org', fromName: 'Marcus Bell', subject: 'Shift swap on the 14th?', ago: 50 * MIN, unread: true,
-      mid: 'swap1@saltmarshregional.org', body: `
+    msg({ uid: 201, acct: SALT, from: 'mbell@saltmarshregional.example', fromName: 'Marcus Bell', subject: 'Shift swap on the 14th?', ago: 50 * MIN, unread: true,
+      mid: 'swap1@saltmarshregional.example', body: `
 Hey Riley,
 
 Any chance you could take my day shift on Tuesday the 14th? I'd take your
 night on the 20th in return. Staffing already said yes if we both agree.
 
 Marcus` }),
-    msg({ uid: 202, acct: SALT, folder: 'sent', to: 'mbell@saltmarshregional.org', toName: 'Marcus Bell', subject: 'Re: Shift swap on the 14th?', ago: 35 * MIN,
-      inReplyTo: 'swap1@saltmarshregional.org', mid: 'swap2@saltmarshregional.org', body: `
+    msg({ uid: 202, acct: SALT, folder: 'sent', to: 'mbell@saltmarshregional.example', toName: 'Marcus Bell', subject: 'Re: Shift swap on the 14th?', ago: 35 * MIN,
+      inReplyTo: 'swap1@saltmarshregional.example', mid: 'swap2@saltmarshregional.example', body: `
 Works for me. I'll take the 14th, you take the 20th. Can you put it in
 the system so I can approve it?
 
 Riley` }),
-    msg({ uid: 203, acct: SALT, from: 'ohaddad@saltmarshregional.org', fromName: 'Dr. Omar Haddad', subject: 'Quality committee: minutes and next agenda', ago: 6 * HOUR,
+    msg({ uid: 203, acct: SALT, from: 'ohaddad@saltmarshregional.example', fromName: 'Dr. Omar Haddad', subject: 'Quality committee: minutes and next agenda', ago: 6 * HOUR,
       body: `
 Minutes from Tuesday are attached. For next month I've put down:
 
@@ -194,13 +213,13 @@ Minutes from Tuesday are attached. For next month I've put down:
 3. Your proposal on discharge instructions in plain language
 
 Omar`, atts: [{ index: 1, name: 'Quality committee minutes Oct.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 4800 }] }),
-    msg({ uid: 204, acct: SALT, from: 'payroll@saltmarshregional.org', fromName: 'Saltmarsh Payroll', subject: 'Your pay statement is ready', ago: 3 * DAY,
+    msg({ uid: 204, acct: SALT, from: 'payroll@saltmarshregional.example', fromName: 'Saltmarsh Payroll', subject: 'Your pay statement is ready', ago: 3 * DAY,
       body: `
 Your pay statement for the period ending 30 September is ready in the
 employee portal. This email holds no pay details.` }),
 
     /* Personal */
-    msg({ uid: PIC_UID, acct: HOME, from: 'jess.morgan@gmail.com', fromName: 'Jess Morgan', subject: 'Photos from Sunday', ago: 2 * HOUR, unread: true,
+    msg({ uid: PIC_UID, acct: HOME, from: 'jess.morgan@mail.example', fromName: 'Jess Morgan', subject: 'Photos from Sunday', ago: 2 * HOUR, unread: true,
       body: `
 Here are the best ones from the hike! The light at the lake was unreal.
 The last one is for your wall.
@@ -208,7 +227,7 @@ The last one is for your wall.
 Jess`, atts: [{ index: 1, name: 'lake-morning.jpg', mime: 'image/jpeg', size: 182000 },
         { index: 2, name: 'ridge.png', mime: 'image/png', size: 96000 },
         { index: 3, name: 'sunset.jpg', mime: 'image/jpeg', size: 154000 }] }),
-    msg({ uid: 302, acct: HOME, from: 'elena.carter52@gmail.com', fromName: 'Elena Carter', subject: 'Sunday dinner', ago: 9 * HOUR, unread: true,
+    msg({ uid: 302, acct: HOME, from: 'elena.carter@mail.example', fromName: 'Elena Carter', subject: 'Sunday dinner', ago: 9 * HOUR, unread: true,
       body: `
 Hi sweetheart,
 
@@ -230,7 +249,7 @@ Read online: https://trailhead-weekly.example/autumn`,
 Your statement for the account ending 2291 is ready. Sign in to view it.` }),
 
     /* Tidepool CPR Training (side business) */
-    msg({ uid: 401, acct: CPR, from: 'dana@littleoaksdaycare.com', fromName: 'Dana Whitfield', subject: 'Infant CPR class for 12 staff', ago: 4 * HOUR, unread: true,
+    msg({ uid: 401, acct: CPR, from: 'dana@littleoaksdaycare.example', fromName: 'Dana Whitfield', subject: 'Infant CPR class for 12 staff', ago: 4 * HOUR, unread: true,
       body: `
 Hi Riley,
 
@@ -249,7 +268,7 @@ Payably
 You received $540.00 from Harbourside Gym.
 Invoice TP-0187: BLS for fitness staff, 9 participants.
 Paid out to your account ending 0934 on 7 October.` }),
-    msg({ uid: 403, acct: CPR, folder: 'drafts', to: 'dana@littleoaksdaycare.com', toName: 'Dana Whitfield', subject: 'Re: Infant CPR class for 12 staff', ago: 2 * HOUR,
+    msg({ uid: 403, acct: CPR, folder: 'drafts', to: 'dana@littleoaksdaycare.example', toName: 'Dana Whitfield', subject: 'Re: Infant CPR class for 12 staff', ago: 2 * HOUR,
       body: `
 Hi Dana,
 
@@ -257,7 +276,7 @@ Thanks for reaching out. For 12 staff at your centre, the infant and
 child CPR class would be`, atts: [{ index: 1, name: 'Tidepool CPR quote, Little Oaks.pdf', mime: 'application/pdf', size: 5200 }] }),
 
     /* Clearchart Medical Writing (side business) */
-    msg({ uid: 501, acct: WRITE, from: 'tom.becker@wellnessquarterly.com', fromName: 'Tom Becker', subject: 'Winter issue: 1,200 words on sleep and shift work?', ago: 7 * HOUR, unread: true,
+    msg({ uid: 501, acct: WRITE, from: 'tom.becker@wellnessquarterly.example', fromName: 'Tom Becker', subject: 'Winter issue: 1,200 words on sleep and shift work?', ago: 7 * HOUR, unread: true,
       body: `
 Hi Riley,
 
@@ -267,7 +286,7 @@ same rate as last time.
 
 Tom Becker
 Editor, Wellness Quarterly` }),
-    msg({ uid: 502, acct: WRITE, from: 'lena@ortizbookkeeping.com', fromName: 'Lena Ortiz', subject: 'Q3 numbers for both businesses', ago: 2 * DAY,
+    msg({ uid: 502, acct: WRITE, from: 'lena@ortizbookkeeping.example', fromName: 'Lena Ortiz', subject: 'Q3 numbers for both businesses', ago: 2 * DAY,
       body: `
 Hi Riley,
 
@@ -276,14 +295,14 @@ black. Please send me the mileage log by the 20th for the estimated tax
 payment.
 
 Lena`, atts: [{ index: 1, name: 'Q3 summary.xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 16000 }] }),
-    msg({ uid: 503, acct: WRITE, folder: 'sent', to: 'tom.becker@wellnessquarterly.com', toName: 'Tom Becker', subject: 'Hydration piece, final', ago: 12 * DAY,
+    msg({ uid: 503, acct: WRITE, folder: 'sent', to: 'tom.becker@wellnessquarterly.example', toName: 'Tom Becker', subject: 'Hydration piece, final', ago: 12 * DAY,
       body: `
 Hi Tom, final draft attached, with the two sources you asked for.
 
 Riley` }),
 
     /* Archive and spam */
-    msg({ uid: 601, acct: LARK, folder: 'archive', from: 'medstaff@larkspurvalleyhealth.org', fromName: 'Medical Staff Office', subject: 'ACLS renewal recorded', ago: 40 * DAY,
+    msg({ uid: 601, acct: LARK, folder: 'archive', from: 'medstaff@larkspurvalleyhealth.example', fromName: 'Medical Staff Office', subject: 'ACLS renewal recorded', ago: 40 * DAY,
       body: `
 Thank you, Dr. Carter. Your ACLS renewal is recorded through 2028.` }),
     msg({ uid: 602, acct: HOME, folder: 'junk', from: 'winner@prize-centre.example', fromName: 'Prize Centre', subject: 'You have been selected!!!', ago: 1 * DAY,
@@ -299,17 +318,17 @@ Claim your reward today. Click here.` }),
     [WRITE]: [{ name: 'Contracts', label: 'Contracts' }],
   };
   const IN_FOLDER = {
-    CME: [msg({ uid: 701, acct: LARK, folder: { named: 'CME' }, from: 'education@larkspurvalleyhealth.org', fromName: 'LVH Clinical Education', subject: 'Your CME transcript', ago: 20 * DAY,
+    CME: [msg({ uid: 701, acct: LARK, folder: { named: 'CME' }, from: 'education@larkspurvalleyhealth.example', fromName: 'LVH Clinical Education', subject: 'Your CME transcript', ago: 20 * DAY,
       body: 'Your transcript shows 31.5 of 50 credits for this cycle.' })],
-    Credentialing: [msg({ uid: 702, acct: LARK, folder: { named: 'Credentialing' }, from: 'medstaff@larkspurvalleyhealth.org', fromName: 'Medical Staff Office', subject: 'Privileges approved', ago: 700 * DAY,
+    Credentialing: [msg({ uid: 702, acct: LARK, folder: { named: 'Credentialing' }, from: 'medstaff@larkspurvalleyhealth.example', fromName: 'Medical Staff Office', subject: 'Privileges approved', ago: 700 * DAY,
       body: 'Your emergency medicine privileges were approved by the board.' })],
-    Committees: [msg({ uid: 703, acct: SALT, folder: { named: 'Committees' }, from: 'ohaddad@saltmarshregional.org', fromName: 'Dr. Omar Haddad', subject: 'Quality committee: September minutes', ago: 30 * DAY,
+    Committees: [msg({ uid: 703, acct: SALT, folder: { named: 'Committees' }, from: 'ohaddad@saltmarshregional.example', fromName: 'Dr. Omar Haddad', subject: 'Quality committee: September minutes', ago: 30 * DAY,
       body: 'September minutes attached. Next meeting in October.' })],
     Travel: [msg({ uid: 704, acct: HOME, folder: { named: 'Travel' }, from: 'trips@railway.example', fromName: 'Railway', subject: 'Your tickets to the coast', ago: 15 * DAY,
       body: 'Coach 6, seat 42. Departs 08:14 on 18 October.' })],
     Invoices: [msg({ uid: 705, acct: CPR, folder: { named: 'Invoices' }, from: 'receipts@payably.example', fromName: 'Payably', subject: 'Payment received: $360.00', ago: 25 * DAY,
       body: 'Invoice TP-0179: Heartsaver class, 6 participants.' })],
-    Contracts: [msg({ uid: 706, acct: WRITE, folder: { named: 'Contracts' }, from: 'tom.becker@wellnessquarterly.com', fromName: 'Tom Becker', subject: 'Contributor agreement, signed', ago: 90 * DAY,
+    Contracts: [msg({ uid: 706, acct: WRITE, folder: { named: 'Contracts' }, from: 'tom.becker@wellnessquarterly.example', fromName: 'Tom Becker', subject: 'Contributor agreement, signed', ago: 90 * DAY,
       body: 'Signed contributor agreement attached for your records.' })],
   };
 
@@ -317,8 +336,8 @@ Claim your reward today. Click here.` }),
   let arrived = false;
   setTimeout(() => {
     arrived = true;
-    MAIL.push(msg({ uid: 205, acct: SALT, from: 'mbell@saltmarshregional.org', fromName: 'Marcus Bell', subject: 'Re: Shift swap on the 14th?', ago: 0, unread: true,
-      inReplyTo: 'swap2@saltmarshregional.org', mid: 'swap3@saltmarshregional.org', body: `
+    MAIL.push(msg({ uid: 205, acct: SALT, from: 'mbell@saltmarshregional.example', fromName: 'Marcus Bell', subject: 'Re: Shift swap on the 14th?', ago: 0, unread: true,
+      inReplyTo: 'swap2@saltmarshregional.example', mid: 'swap3@saltmarshregional.example', body: `
 Done, it's in the system. You owe me nothing, I owe you a coffee.
 
 Marcus` }));
@@ -663,6 +682,72 @@ Marcus` }));
   const find = (uid) => MAIL.concat(...Object.values(IN_FOLDER)).find((m) => m.uid === uid);
   let SENT = 0;
 
+  /* mailrata.org, answered in the page. bridge.js sends Summarize,
+     Translate and Run briefing to RATA's AI relay, and a licence renewal to
+     mailrata.org, with fetch, which it looks up each time it asks; so both
+     are answered here, in the shapes the relay and the renewal answer with
+     (rata-next/app/api/ai/route.js, app/api/licence/renew/route.js), with
+     words written for the demo and labelled as its own. Anything else off
+     this page fails at once, as if offline: the demo asks no server for
+     anything. */
+  const SUMMARIES = {
+    'November ED schedule is posted': 'Dr. Anita Shah has posted the November emergency department schedule; you work 7p to 7a on the 8th, 9th and 22nd. Swap requests go to her by Friday.',
+    'Action needed: reappointment packet due 31 October': 'The Medical Staff Office needs your reappointment packet back by 31 October, with a current CV, proof of BLS and ACLS certification and your updated DEA registration.',
+    'Shift swap on the 14th?': 'Marcus Bell asks you to take his day shift on Tuesday the 14th in return for your night on the 20th. Staffing has agreed if you both do.',
+    'Photos from Sunday': 'Jess Morgan sent three photos from Sunday’s hike, and the last one is for your wall. Nothing is asked of you.',
+    'Sunday dinner': 'Your mom asks you to Sunday dinner at 6; your brother is bringing the kids, and if you are post-call you can come whenever you wake up.',
+    'Infant CPR class for 12 staff': 'Dana Whitfield of Little Oaks Daycare wants the infant and child CPR class for 12 staff, at the centre, on a Saturday morning in November, and asks what it costs with the certification cards.',
+    'Winter issue: 1,200 words on sleep and shift work?': 'Tom Becker of Wellness Quarterly asks for 1,200 words on sleep for shift workers for the winter issue, due 15 November, at the same rate as last time.',
+    'Q3 numbers for both businesses': 'Lena Ortiz sent the Q3 summary for Tidepool CPR and Clearchart, both in the black. She needs your mileage log by the 20th for the estimated tax payment.',
+  };
+  const TASKS = {
+    'Action needed: reappointment packet due 31 October': { task: 'Return the reappointment packet: CV, BLS and ACLS proof, DEA registration', due: '2026-10-31', important: true },
+    'Shift swap on the 14th?': { task: 'Approve the swap of the 14th for the 20th once Marcus enters it', due: null, important: true },
+    'November ED schedule is posted': { task: 'Send any November swap requests to Dr. Shah by Friday', due: null, important: false },
+    'Sunday dinner': { task: 'Tell Mom whether you will make Sunday dinner at 6', due: null, important: false },
+    'Infant CPR class for 12 staff': { task: 'Send Little Oaks a price for 12 staff, cards included', due: null, important: false },
+    'Winter issue: 1,200 words on sleep and shift work?': { task: 'Tell Tom whether you will write the winter piece', due: '2026-11-15', important: false },
+    'Q3 numbers for both businesses': { task: 'Send Lena the mileage log', due: '2026-10-20', important: false },
+  };
+  const langOf = (code) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) || code; } catch (e) { return code; } };
+  /* As the relay answers: [body, status]. Base has translation, Pro the rest
+     (lib/ai.js TASKS, lib/plan.js). `used` is the share of the month's
+     allowance spent, which the page mentions only from a half. */
+  function relay(b) {
+    const task = String((b && b.task) || '');
+    const needs = { summarize: 'ai', tasks: 'ai', translate: 'translate' }[task];
+    if (!needs) return [{ error: 'Unknown AI task' }, 400];
+    if (needs === 'ai' && !PLANS[PLAN].ai) return [{ error: 'Summaries and task flags are part of RATA Pro.', reason: 'plan' }, 403];
+    if (task === 'tasks') {
+      const sent = (Array.isArray(b.messages) ? b.messages : []).filter((m) => m && typeof m.id === 'string');
+      if (!sent.length) return [{ error: 'No messages to look through' }, 400];
+      const tasks = sent.filter((m) => TASKS[m.subject]).map((m) => ({ id: m.id, ...TASKS[m.subject], task: 'Demo: ' + TASKS[m.subject].task }));
+      return [{ tasks, used: 0.03 }];
+    }
+    const text = String(b.text || '');
+    if (!text.trim()) return [{ error: 'There is no text to work with' }, 400];
+    if (task === 'translate') {
+      return [{ text: 'Demo translation into ' + langOf(String(b.to || 'en')) + '. The demo sends nothing anywhere, so here is the message as it was written.\n\n' + text, cut: false, used: 0.03 }];
+    }
+    const who = String(b.from || '').replace(/\s*<[^>]*>\s*$/, '').trim() || 'The sender';
+    const said = SUMMARIES[b.subject] || who + ' writes about “' + String(b.subject || 'this') + '”. In RATA, AI says in three short sentences what a message is about and what it asks of you, by when.';
+    return [{ text: 'Demo summary: ' + said + ' (The demo sends nothing anywhere, so this was written for it in advance.)', cut: false, used: 0.03 }];
+  }
+  const ownFetch = window.fetch;
+  window.fetch = async function (input, init) {
+    const url = new URL(typeof input === 'string' ? input : (input && input.url) || String(input), location.href);
+    if (!/^https?:$/.test(url.protocol) || url.origin === location.origin) return ownFetch.apply(window, arguments);
+    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    const asked = url.origin === 'https://mailrata.org' && method === 'POST' ? url.pathname : '';
+    if (asked !== '/api/ai' && asked !== '/api/licence/renew') throw new TypeError('Failed to fetch: the demo asks no server for anything.');
+    let b = {};
+    try { b = JSON.parse(String((init && init.body) || '{}')); } catch (e) { b = {}; }
+    await new Promise((r) => setTimeout(r, 500 + Math.random() * 500));
+    const [body, status] = asked === '/api/ai' ? relay(b)
+      : [{ licensed: true, licence: 'demo', plan: PLAN, planLabel: PLANS[PLAN].label, email: HOME, renewWithinDays: 30, message: 'Renewed for ' + PLANS[PLAN].label + '. Good for another 30 days offline.' }];
+    return new Response(JSON.stringify(body), { status: status || 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
   window.__TAURI__ = { core: { invoke: async (cmd, args) => {
     await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
     switch (cmd) {
@@ -707,7 +792,7 @@ Marcus` }));
       case 'change_messages': return { ok: true, done: args.uids, gone: [] };
       case 'send_mail':
         SENT++;
-        return { via: 'nowhere (this is a demo, nothing was sent)', messageId: 'demo-sent-' + SENT + '@rata.demo' };
+        return { via: 'nowhere (this is a demo, nothing was sent)', messageId: 'demo-sent-' + SENT + '@rata-demo.example' };
       case 'save_draft': return { outcome: 'no-place', error: 'This is a demo, so the draft stays in this browser.' };
       case 'search_mail': return { messages: [], matched: 0 };
       case 'watching': return arrived ? [] : ACTIVE.map((m) => m.email);
@@ -859,7 +944,7 @@ Marcus` }));
      mailboxes, so the workspace starts fresh rather than keeping theirs. */
   function restart(plan) {
     try {
-      localStorage.clear();
+      wipeOwn();
       if (plan === 'base') localStorage.setItem('rata_demo_plan', 'base');
       indexedDB.deleteDatabase('rata-mail-' + UID);
       indexedDB.deleteDatabase('rata-files');

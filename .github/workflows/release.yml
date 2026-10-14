@@ -183,6 +183,12 @@ jobs:
       - name: The update feed's rules
         run: node --test desktop/rata-app/harness/feed.test.cjs
 
+      # The clickable demo built from this app.html (desktop/rata-app/demo):
+      # no request leaves the page, other local pages' storage survives it,
+      # and build.sh empties no folder but a demo build.
+      - name: The demo's rules
+        run: node desktop/rata-app/demo/check.mjs
+
   # One release, made before the builds rather than by them: four builds each
   # finding no release and creating one is a race that leaves duplicates. Made
   # as a draft so nobody sees an empty release while the installers build, and
