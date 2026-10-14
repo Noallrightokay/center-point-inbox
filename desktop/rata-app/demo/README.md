@@ -51,14 +51,16 @@ python3 -m http.server 8000 --directory desktop/rata-app/demo/out
 Open http://localhost:8000/rata-demo.html. Run `build.sh` again after every
 change, then reload the page. `build.sh <folder>` builds somewhere else.
 It empties that folder first, so it builds only into a new or empty
-folder, or one whose every entry is a name it writes there itself
-(`rata-demo.html`, `demo-backend.js`, `bridge.js`, `bridge.css`,
-`config.js`, `fonts`, `icons`, `vendor`, plus `RATA-demo.html` in its own
-`out/`, and a Mac's `.DS_Store`) and that holds `demo-backend.js`, which
-only a build writes. It refuses any other, naming what is in the way.
-Everything inside an earlier build's `fonts`, `icons` and `vendor` goes,
-so keep nothing of your own there. So once you copy a build into a folder of other pages, it will
-not build there again: build somewhere new and copy it over. It must be
+folder (a Mac's `.DS_Store` alone counts as empty), the demo's own
+`out/`, or an earlier build: a folder whose every entry is a name a build
+writes (`rata-demo.html`, `demo-backend.js`, `bridge.js`, `bridge.css`,
+`config.js`, `fonts`, `icons`, `vendor`, and `.DS_Store`; in `out/`,
+`RATA-demo.html` too) and which holds `demo-backend.js`, which only a
+build writes. It refuses any other folder and says why: what is in the
+way, or that `demo-backend.js` is missing. Everything inside an earlier
+build's `fonts`, `icons` and `vendor` goes, so keep nothing of your own
+there. Once you copy a build into a folder of other pages, it will not
+build there again: build somewhere new and copy it over. It must be
 served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
 For one file that does open directly, see *Send it as one file* below.

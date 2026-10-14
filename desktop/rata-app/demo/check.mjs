@@ -120,6 +120,13 @@ console.log('\n— build.sh deletes only an earlier demo build —');
     r = build();
     check(one.status === 0 && r.status === 0 && fs.existsSync(path.join(own, 'rata-demo.html')),
       `its own out/ is built into after --single wrote there: status ${one.status}, ${r.status} ${r.stderr.trim()}`);
+    /* A build stopped half-way leaves out/ without demo-backend.js; out/
+       is the demo's own, so the next build still goes ahead. */
+    fs.rmSync(path.join(own, 'demo-backend.js'));
+    fs.rmSync(path.join(own, 'rata-demo.html'));
+    r = build();
+    check(r.status === 0 && fs.existsSync(path.join(own, 'demo-backend.js')),
+      `and after a build stopped half-way there: status ${r.status} ${r.stderr.trim()}`);
     fs.writeFileSync(path.join(own, 'notes.txt'), 'mine');
     r = build();
     check(r.status !== 0 && fs.readFileSync(path.join(own, 'notes.txt'), 'utf8') === 'mine',

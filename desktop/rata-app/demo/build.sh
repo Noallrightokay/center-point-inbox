@@ -54,16 +54,18 @@ strangers() (
   done
 )
 # Names alone could still be someone's own fonts/ and icons/, or a lone
-# config.js, so a folder holding anything must also hold demo-backend.js,
-# which only a build writes (it is copied before the page is made, so a
-# build cut short still counts). The one exception is the demo's own out/
-# holding only what --single leaves there.
+# config.js, so a folder holding anything but a .DS_Store must also hold
+# demo-backend.js, which only a build writes (first, straight after the
+# folder is made, so a build cut short still counts). The demo's own out/
+# is exempt: it is the demo's, and its names were checked above, so a
+# build or an emptying stopped half-way there never needs a hand to clear.
 unmarked() (
   shopt -s nullglob dotglob
+  [ "$(cd "$1" && pwd -P)" = "$(cd "$here" && pwd -P)/out" ] && exit 1
   rest=0
   for e in "$1"/*; do
     case "${e##*/}" in
-      .DS_Store|RATA-demo.html) ;;
+      .DS_Store) ;;
       *) rest=1 ;;
     esac
   done
@@ -91,9 +93,9 @@ fi
 "$app/sync-ui.sh" >/dev/null
 rm -rf "$out"
 mkdir -p "$out"
+cp "$here/demo-backend.js" "$out/"
 cp -r "$app/ui/fonts" "$app/ui/icons" "$app/ui/vendor" "$out/"
 cp "$app/ui/bridge.js" "$app/ui/bridge.css" "$app/ui/config.js" "$out/"
-cp "$here/demo-backend.js" "$out/"
 
 python3 - "$app/ui/app.html" "$here/demo.css" "$out" <<'PY'
 import glob, sys
