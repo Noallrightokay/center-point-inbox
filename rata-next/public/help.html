@@ -172,6 +172,14 @@ footer a:hover{color:var(--ink)}
         <li><a href="#browser">Apps: start in your browser</a></li>
       </ol>
     </li>
+    <li><a href="#ai">AI in RATA</a>
+      <ol>
+        <li><a href="#ai-mailboxes">Which mailboxes AI may read</a></li>
+        <li><a href="#ai-sends">What each one sends</a></li>
+        <li><a href="#ai-allowance">The monthly allowance</a></li>
+        <li><a href="#ai-errors">When AI cannot answer</a></li>
+      </ol>
+    </li>
     <li><a href="#report">Report a bug</a></li>
   </ol>
 </aside>
@@ -469,6 +477,71 @@ footer a:hover{color:var(--ink)}
     <li><b>Your accounts:</b> if your browser is signed in to more than one Google or Microsoft account, type the address you use there and those apps open on that account. Google&rsquo;s apps and Word, Excel and PowerPoint take it; the others open as they are. The addresses stay on this computer and go nowhere but in the link to Google or Microsoft.</li>
   </ul>
   <p>In <b>Files</b>, <b>Open Apps</b> goes there, and so does <b>Start in your browser</b> in Create file.</p>
+</section>
+
+<section id="ai" aria-labelledby="ai-h">
+  <h2 id="ai-h">AI in RATA</h2>
+  <p>RATA&rsquo;s AI is in the desktop app. It sends mail to RATA&rsquo;s AI service, run by Anthropic, only when you press <b>Summarize</b>, <b>Ask</b>, <b>Draft a reply</b>, <b>Translate</b> or <b>Run briefing</b>, and only from a mailbox you let it read. Nothing is sent on its own: not when RATA starts, not when mail arrives, and not on a timer. Translate comes with <b>RATA Base</b> and <b>RATA Pro</b>; the rest comes with <b>RATA Pro</b>. RATA keeps none of what is sent, and neither the text nor the answer is written to any log.</p>
+
+  <h3 id="ai-mailboxes">Which mailboxes AI may read</h3>
+  <p>The first time you use AI on a message from a mailbox, RATA asks, naming the mailbox: <b>Send this time</b>, <b>Always for this mailbox</b>, or <b>Not from this mailbox</b>. Run briefing asks about every mailbox it has not asked about yet, with a box to tick for each, and leaves out the ones you do not tick.</p>
+  <ul>
+    <li>Change your answers in <b>Settings</b>, under <b>AI</b>. <b>Use RATA&rsquo;s AI</b> turns all of it off at once, and <b>Forget my answers</b> makes RATA ask again.</li>
+    <li>Mail from a mailbox you keep from AI is never sent. Work mailboxes can hold patient details, and RATA&rsquo;s AI is not for patient information: keep a mailbox that holds it switched off for AI.</li>
+    <li><b>Check for sensitive details before sending</b>, on unless you turn it off, looks in the text about to go for numbers such as card, social security or medical record numbers, using your privacy-check profile. When it finds one, RATA asks first: leave them out, send as it is, or cancel; a briefing leaves that message out. It finds patterns, not everything: it does not find a name in a sentence.</li>
+  </ul>
+
+  <h3 id="ai-sends">What each one sends</h3>
+  <ul>
+    <li><b>Translate</b>: the message&rsquo;s subject and its text, up to the first 12,000 characters.</li>
+    <li><b>Summarize</b>: the sender&rsquo;s name (never the address), the subject, the day the message was sent, today&rsquo;s date, and the text, up to the first 12,000 characters.</li>
+    <li><b>Ask</b>: what Summarize sends, your question of up to 300 characters, and up to 3 earlier questions and answers about that message, since RATA keeps nothing between questions.</li>
+    <li><b>Draft a reply</b>: the sender&rsquo;s name, the subject, the message&rsquo;s own words without the earlier mail quoted under them, and the note you type. Never your signature or anyone&rsquo;s address. The draft lands in the composer for you to read and change, and nothing is sent until you press Send.</li>
+    <li><b>Run briefing</b>: the start of up to 25 recent messages in your inbox from the last 14 days, each with its sender&rsquo;s name, subject and the day it arrived.</li>
+  </ul>
+  <p>The <a href="privacy.html#ai">privacy policy</a> says the same in full.</p>
+
+  <h3 id="ai-allowance">The monthly allowance</h3>
+  <p>RATA pays for its AI service, so each account has a monthly allowance. <b>Settings</b>, under <b>AI</b>, shows about how much of this month&rsquo;s you have used. When it runs out, the AI features stop until the 1st of the next month, and RATA shows the quick version it makes on your computer instead, where there is one.</p>
+  <blockquote class="said">This month’s AI allowance is used up. It starts again on the 1st.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>This month&rsquo;s allowance is spent. Nothing more is sent until the 1st; the quick summary and the briefing made on your computer still work.</dd>
+  </dl>
+
+  <h3 id="ai-errors">When AI cannot answer</h3>
+  <p>Each of these shows where the answer would have been, or in a short message at the bottom of the window. Where RATA has a quick version made on your computer, it shows that below.</p>
+  <blockquote class="said">AI is off for this mailbox. Turn it on in Settings, under AI.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>You chose to keep this mailbox&rsquo;s mail from RATA&rsquo;s AI, so nothing was sent. Change it in <b>Settings</b>, under <b>AI</b>, if you want AI for this mailbox.</dd>
+  </dl>
+  <blockquote class="said">AI is not switched on for RATA yet.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>mailrata.org is not yet set up to answer AI requests. There is nothing to change on your computer; it starts working once RATA switches it on.</dd>
+  </dl>
+  <blockquote class="said">RATA’s AI gave no answer it could use. Try again.</blockquote>
+  <blockquote class="said">The briefing could not be read. Try again.</blockquote>
+  <blockquote class="said">The briefing was cut short. Try again.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The AI answered, but not in a form RATA could check and show, so RATA showed nothing from it. A briefing that fails keeps every flag from earlier briefings. Trying again usually works.</dd>
+  </dl>
+  <blockquote class="said">Too many AI requests at once — try again in a minute.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>More than 20 AI requests from your account in one minute. Wait a minute.</dd>
+  </dl>
+  <blockquote class="said">RATA could not reach its AI service. Check the connection and try again.</blockquote>
+  <blockquote class="said">RATA’s AI service took too long to answer. Try again.</blockquote>
+  <blockquote class="said">The AI service could not be reached. Try again shortly.</blockquote>
+  <dl class="means">
+    <dt>What it means</dt>
+    <dd>The first: your computer could not reach mailrata.org. The second: mailrata.org did not answer within 50 seconds. The third: mailrata.org could not reach Anthropic&rsquo;s service, and nothing was taken from your allowance.</dd>
+    <dt>What to do</dt>
+    <dd>Check your connection and try again in a few minutes.</dd>
+  </dl>
 </section>
 
 <section id="report" aria-labelledby="report-h">

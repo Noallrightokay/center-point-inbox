@@ -390,22 +390,32 @@
       }
     },
 
-    /* Summaries, translation and task flags, from RATA's AI relay. The
-       licence is the credential: the relay only answers a genuine one, and
-       only for what its plan includes. The page sends the text it was asked
-       about; nothing else goes. */
+    /* Summaries, questions about a message, reply drafts, translation and
+       task flags, from RATA's AI relay. The licence is the credential: the
+       relay only answers a genuine one, and only for what its plan includes.
+       The page sends the text it was asked about; nothing else goes, and
+       the body passes through as the page wrote it. Each request gives up
+       after AI_WAIT, a little over the relay's own wait for the model, so
+       a request that hangs says so instead of leaving the page waiting. */
     async '/api/ai'(opts) {
       const b = body(opts);
       let standing = null;
       try { standing = await invoke('licence_status'); } catch { standing = null; }
       if (!standing || !standing.token) return { error: 'This copy of RATA has no licence to use AI with.' };
       const ask = async (token) => {
-        const r = await fetch(AI, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(Object.assign({}, b, { licence: token })),
-        });
-        return { r, d: await r.json().catch(() => ({})) };
+        const stop = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = stop ? setTimeout(() => stop.abort(), AI_WAIT) : null;
+        try {
+          const r = await fetch(AI, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, b, { licence: token })),
+            ...(stop ? { signal: stop.signal } : {}),
+          });
+          return { r, d: await r.json().catch(() => ({})) };
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
       };
       try {
         let { r, d } = await ask(standing.token);
@@ -418,7 +428,8 @@
         }
         if (!r.ok && !d.error) return { error: 'RATA\u2019s AI service could not answer (' + r.status + ').' };
         return d;
-      } catch {
+      } catch (e) {
+        if (e && e.name === 'AbortError') return { error: 'RATA\u2019s AI service took too long to answer. Try again.', reason: 'slow' };
         return { error: 'RATA could not reach its AI service. Check the connection and try again.', reason: 'offline' };
       }
     },
@@ -975,6 +986,10 @@
   const RENEW_EVERY = Number(window.__RATA_RENEW_EVERY) > 0 ? Number(window.__RATA_RENEW_EVERY) : 6 * 3600e3;
   /* How long a renewal may take before it counts as unreachable. */
   const RENEW_WAIT = 20e3;
+  /* How long one AI request may take: above the relay's own 45 s wait for
+     the model, so the relay's answer, even its "could not be reached", gets
+     here first. The harness shortens it with window.__RATA_AI_WAIT. */
+  const AI_WAIT = Number(window.__RATA_AI_WAIT) > 0 ? Number(window.__RATA_AI_WAIT) : 50e3;
 
   /* Ask mailrata.org for a fresh licence. Answers the standing after a
      renewal that worked, `{ licensed: false, reason, message }` when

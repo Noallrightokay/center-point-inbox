@@ -44,8 +44,13 @@ const ERROR_TOPICS = {
 
 /* Where the sentences the page quotes come from. discover.rs holds MS_HELP
    and MS365_HELP, and app.html the form's own Microsoft sentences. cloud.rs
-   and created.rs hold the connected folders' and Create file's (K5, K6). */
+   and created.rs hold the connected folders' and Create file's (K5, K6).
+   The AI relay's sentences are in lib/ai.js and its route, and the app's
+   own in bridge.js (could not reach it, too slow) and app.html. */
 const SOURCES = [
+  'rata-next/lib/ai.js',
+  'rata-next/app/api/ai/route.js',
+  'desktop/rata-app/ui-src/bridge.js',
   'desktop/rata-mail/src/imap.rs',
   'desktop/rata-mail/src/smtp.rs',
   'desktop/rata-mail/src/resolve.rs',
@@ -192,6 +197,22 @@ export default async function run(state) {
     const notBrowser = part.slice(0, part.indexOf('id="browser"'));
     const early = notBrowser.match(/OneDrive|Google Drive|Share to Slack|\bSlack\b|SharePoint|Dropbox/g) || [];
     check(early.length === 0, `no connection a release cannot make is offered: ${early.join(', ') || 'none'}`);
+  }
+
+  console.log('\n— AI in RATA: mailboxes, what each sends, the allowance, every sentence —');
+  {
+    const at = html.indexOf('<section id="ai"');
+    const part = at < 0 ? '' : html.slice(at, html.indexOf('</section>', at));
+    const said = (part.match(/<blockquote class="said">/g) || []).length;
+    check(at >= 0 && html.includes('<a href="#ai">') && said >= 8, `section#ai is there, in the contents, quoting ${said} of RATA's sentences`);
+    for (const id of ['ai-mailboxes', 'ai-sends', 'ai-allowance', 'ai-errors']) {
+      check(part.includes(`id="${id}"`) && html.includes(`<a href="#${id}">`), `#${id} is in the section and the contents`);
+    }
+    check(/Settings<\/b>, under <b>AI/.test(part) && /Not from this mailbox/.test(part) && /not for patient information/.test(part),
+      'it says where mailboxes are switched on and off, and that the AI is not for patient information');
+    check(/What it means/.test(part) && /starts again on the 1st/.test(part), 'each sentence says what it means, the allowance included');
+    const app = read('rata-next/public/app.html');
+    check(app.includes("'https://mailrata.org/help#ai'"), 'and Settings, under AI, links to it');
   }
 
   console.log('\n— install matches BETA.md §1, and reporting says what never to paste —');

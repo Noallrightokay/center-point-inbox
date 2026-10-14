@@ -111,7 +111,7 @@ footer a:hover{color:var(--ink)}
     <ol>
       <li><a href="#never">What we never see</a></li>
       <li><a href="#keep">What mailrata.org keeps</a></li>
-      <li><a href="#ai">AI summaries and translation</a></li>
+      <li><a href="#ai">AI features</a></li>
       <li><a href="#payment">Payment</a></li>
       <li><a href="#app">What the app connects to</a></li>
       <li><a href="#others">Who else handles it</a></li>
@@ -152,15 +152,18 @@ footer a:hover{color:var(--ink)}
     </section>
 
     <section id="ai" aria-labelledby="ai-h">
-      <h2 id="ai-h">AI summaries and translation</h2>
-      <p>This is the one time any of your mail reaches a RATA server, and only when you press the button. RATA asks before the first time, and never sends anything on its own.</p>
+      <h2 id="ai-h">AI features</h2>
+      <p>This is the one time any of your mail reaches a RATA server, and only when you press one of these buttons or type a question. RATA asks the first time for each mailbox, and never sends anything on its own.</p>
       <ul>
         <li><b>Translate</b> (Base and Pro) sends the message&rsquo;s subject and its text, up to the first 12,000 characters.</li>
-        <li><b>Summarize</b> (Pro) sends the sender&rsquo;s name and address, the subject, and the text, up to the first 12,000 characters.</li>
-        <li><b>Run briefing</b> (Pro) sends, for each of up to 25 of the most recent messages in your inbox from the last 14 days, the sender&rsquo;s name, the subject, the first 1,500 characters of the text, and a number standing for the message, which RATA matches back to it on this computer. The answer says which of them need you to do something.</li>
+        <li><b>Summarize</b> (Pro) sends the sender&rsquo;s name, the subject, the day the message was sent, today&rsquo;s date, and the text, up to the first 12,000 characters.</li>
+        <li><b>Ask</b> (Pro), a question about a message after its summary, sends what Summarize sends, your question of up to 300 characters, and up to 3 earlier questions and answers about that message, since RATA keeps nothing between questions.</li>
+        <li><b>Draft a reply</b> (Pro) sends the sender&rsquo;s name, the subject, the message&rsquo;s own words without the earlier mail quoted under them, up to the first 12,000 characters, and the note you type, up to 500 characters. It never sends your signature or anyone&rsquo;s address.</li>
+        <li><b>Run briefing</b> (Pro) sends, for each of up to 25 recent messages in your inbox from the last 14 days, leaving out mailings, mail you have already answered and any mailbox you keep from AI, the sender&rsquo;s name, the subject, the day it arrived, the first 1,500 characters of its own text, and a number standing for the message, which RATA matches back to it on this computer. The answer says which of them need you to do something.</li>
       </ul>
+      <p>You choose in Settings, under AI, which mailboxes RATA&rsquo;s AI may read; RATA asks the first time for each mailbox, and mail from a mailbox you keep from AI is never sent. Before anything goes, RATA can check the text for numbers such as card, social security or medical record numbers and leave them out; that check finds patterns, not everything, and does not find a name in a sentence. RATA&rsquo;s AI is not for patient information: keep a mailbox that holds it switched off for AI.</p>
       <p>With each request the app sends your licence, which is how the relay knows you are a customer and what your plan includes. The relay at mailrata.org passes the text to Anthropic, whose model writes the answer, and sends the answer back to your app. RATA does not store the text or the answer and does not write either to any log. What it records is the usage count above. Anthropic handles the text under its own terms and privacy policy for businesses that use its service, at <a href="https://www.anthropic.com/legal">anthropic.com/legal</a>.</p>
-      <p>If you never press Summarize, Translate or Run briefing, none of your mail leaves your computer except to your own provider.</p>
+      <p>If you never press Summarize, Ask, Draft a reply, Translate or Run briefing, none of your mail leaves your computer except to your own provider.</p>
     </section>
 
     <section id="payment" aria-labelledby="pay-h">

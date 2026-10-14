@@ -24,7 +24,7 @@
     };
   }
 
-  const DEMO_VERSION = '7';
+  const DEMO_VERSION = '8';
   const UID = 'local_demo2';
   const ME = 'Riley Carter';
   const DAY = 86400000, HOUR = 3600000, MIN = 60000;
@@ -102,8 +102,11 @@
     if (!localStorage.getItem('centra_ws_' + UID)) {
       localStorage.removeItem('rata_demo_files');
       localStorage.removeItem('rata_demo_conn');
+      /* AI may read the personal mailbox and the two side businesses'; the
+         two hospital networks are left undecided, so the first AI press
+         from one of them asks (Assistant v1). */
       localStorage.setItem('centra_ws_' + UID, JSON.stringify({
-        v: 6, settings: { name: ME, profile: 'HIPAA', plan: null }, linked: [], rules: [],
+        v: 6, settings: { name: ME, profile: 'HIPAA', plan: null, aiBoxes: { [HOME]: 'on', [CPR]: 'on', [WRITE]: 'on' } }, linked: [], rules: [],
         contacts: CONTACTS, messages: [], documents: [], folders: [],
         counters: { scans: 0, warned: 0, blocked: 0, conversions: 0 }, audit: [],
       }));
@@ -701,21 +704,49 @@ Marcus` }));
     'Q3 numbers for both businesses': 'Lena Ortiz sent the Q3 summary for Tidepool CPR and Clearchart, both in the black. She needs your mileage log by the 20th for the estimated tax payment.',
   };
   const TASKS = {
-    'Action needed: reappointment packet due 31 October': { task: 'Return the reappointment packet: CV, BLS and ACLS proof, DEA registration', due: '2026-10-31', important: true },
-    'Shift swap on the 14th?': { task: 'Approve the swap of the 14th for the 20th once Marcus enters it', due: null, important: true },
-    'November ED schedule is posted': { task: 'Send any November swap requests to Dr. Shah by Friday', due: null, important: false },
-    'Sunday dinner': { task: 'Tell Mom whether you will make Sunday dinner at 6', due: null, important: false },
-    'Infant CPR class for 12 staff': { task: 'Send Little Oaks a price for 12 staff, cards included', due: null, important: false },
-    'Winter issue: 1,200 words on sleep and shift work?': { task: 'Tell Tom whether you will write the winter piece', due: '2026-11-15', important: false },
-    'Q3 numbers for both businesses': { task: 'Send Lena the mileage log', due: '2026-10-20', important: false },
+    'Action needed: reappointment packet due 31 October': { task: 'Return the reappointment packet: CV, BLS and ACLS proof, DEA registration', due: '2026-10-31', important: true, next: 'do' },
+    'Shift swap on the 14th?': { task: 'Approve the swap of the 14th for the 20th once Marcus enters it', due: null, important: true, next: 'reply' },
+    'November ED schedule is posted': { task: 'Send any November swap requests to Dr. Shah by Friday', due: null, important: false, next: 'reply' },
+    'Sunday dinner': { task: 'Tell Mom whether you will make Sunday dinner at 6', due: null, important: false, next: 'reply' },
+    'Infant CPR class for 12 staff': { task: 'Send Little Oaks a price for 12 staff, cards included', due: null, important: false, next: 'reply' },
+    'Winter issue: 1,200 words on sleep and shift work?': { task: 'Tell Tom whether you will write the winter piece', due: '2026-11-15', important: false, next: 'reply' },
+    'Q3 numbers for both businesses': { task: 'Send Lena the mileage log', due: '2026-10-20', important: false, next: 'do' },
+  };
+  /* A question about a message, by preset (lib/ai.js PRESETS); a typed one
+     gets DEMO_TYPED. Reply drafts by subject and intent, else by intent
+     alone (lib/ai.js INTENTS). Each says it is the demo's own. */
+  const DEMO_TYPED = 'Demo answer: RATA’s AI answers from this message alone and says when it does not say. The demo has no model, so this was written in advance.';
+  const DEMO_ASKED = {
+    dates: 'Demo answer: the dates in this message are the ones it names, each with what it is for. The demo has no model, so this was written in advance.',
+    simple: 'Demo answer: in plain words, the message says what the summary says, without the terms of the field. The demo has no model, so this was written in advance.',
+  };
+  const DRAFTS = {
+    'Infant CPR class for 12 staff': {
+      yes: { body: 'Demo draft: Hi Dana, yes, we can run the infant and child CPR class for your 12 staff at Little Oaks on a Saturday morning in November. With certification cards it comes to [[the price for 12 with cards]]. Which Saturday suits you?', gaps: ['the price for 12 with cards'] },
+    },
+  };
+  const DRAFT_BY_INTENT = {
+    yes: 'Demo draft: Thank you, yes, that works for me. I will confirm the details shortly.',
+    no: 'Demo draft: Thank you for thinking of me. I am sorry, but I cannot this time.',
+    time: 'Demo draft: Thank you for this. I need a little more time and will answer properly in a few days.',
+    ask: 'Demo draft: Thank you. Before I answer, could you tell me [[what you need to know first]]?',
+    '': 'Demo draft: Thank you for your message. [[what you want to say]]',
   };
   const langOf = (code) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) || code; } catch (e) { return code; } };
+  /* The first line of the text over 20 characters, as it stands: a quote
+     the page finds in the message, as a real one must be. */
+  const firstLine = (text) => String(text || '').split('\n').map((l) => l.trim()).find((l) => l.length > 20) || '';
+  const actionsOf = (subject) => (TASKS[subject] ? [{ task: TASKS[subject].task, due: TASKS[subject].due }] : []);
   /* As the relay answers: [body, status]. Base has translation, Pro the rest
      (lib/ai.js TASKS, lib/plan.js). `used` is the share of the month's
-     allowance spent, which the page mentions only from a half. */
+     allowance spent, which the page mentions only from a half. Every
+     request is kept in window.__RATA_DEMO_AI, as the page sent it, so the
+     demo's checks can see what would have gone. */
+  window.__RATA_DEMO_AI = [];
   function relay(b) {
+    try { window.__RATA_DEMO_AI.push(JSON.parse(JSON.stringify(b))); } catch (e) {}
     const task = String((b && b.task) || '');
-    const needs = { summarize: 'ai', tasks: 'ai', translate: 'translate' }[task];
+    const needs = { summarize: 'ai', ask: 'ai', draft: 'ai', tasks: 'ai', translate: 'translate' }[task];
     if (!needs) return [{ error: 'Unknown AI task' }, 400];
     if (needs === 'ai' && !PLANS[PLAN].ai) return [{ error: 'Summaries and task flags are part of RATA Pro.', reason: 'plan' }, 403];
     if (task === 'tasks') {
@@ -731,7 +762,22 @@ Marcus` }));
     }
     const who = String(b.from || '').replace(/\s*<[^>]*>\s*$/, '').trim() || 'The sender';
     const said = SUMMARIES[b.subject] || who + ' writes about “' + String(b.subject || 'this') + '”. In RATA, AI says in three short sentences what a message is about and what it asks of you, by when.';
-    return [{ text: 'Demo summary: ' + said + ' (The demo sends nothing anywhere, so this was written for it in advance.)', cut: false, used: 0.03 }];
+    const quote = firstLine(text);
+    if (task === 'ask') {
+      const preset = String(b.preset || '');
+      if (!preset && !String(b.question || '').trim()) return [{ error: 'Ask a question about the message' }, 400];
+      const answer = preset === 'actions' ? 'Demo answer: ' + (TASKS[b.subject] ? TASKS[b.subject].task : 'nothing is asked of you.')
+        : preset === 'shorter' ? (said.match(/^.*?[.!?](?=\s|$)/) || [said])[0]
+          : DEMO_ASKED[preset] || DEMO_TYPED;
+      return [{ answer, said: true, quotes: quote ? [quote] : [], actions: preset === 'actions' ? actionsOf(b.subject) : [], cut: false, used: 0.03 }];
+    }
+    if (task === 'draft') {
+      const intent = String(b.intent || '');
+      const d = (DRAFTS[b.subject] || {})[intent] || { body: DRAFT_BY_INTENT[intent] || DRAFT_BY_INTENT[''], gaps: [] };
+      const gaps = d.gaps.length ? d.gaps : [...d.body.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1]);
+      return [{ body: d.body, gaps, cut: false, used: 0.03 }];
+    }
+    return [{ text: 'Demo summary: ' + said + ' (The demo sends nothing anywhere, so this was written for it in advance.)', quotes: quote ? [quote] : [], actions: actionsOf(b.subject), cut: false, used: 0.03 }];
   }
   const ownFetch = window.fetch;
   window.fetch = async function (input, init) {

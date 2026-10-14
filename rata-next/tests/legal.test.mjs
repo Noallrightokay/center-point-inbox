@@ -164,10 +164,19 @@ export default async function run(state) {
     check(WORDS[PLANS.base.mail] && T.includes(`Up to ${WORDS[PLANS.base.mail]} mailboxes`), `Base: up to ${PLANS.base.mail} mailboxes`);
     check(PLANS.pro.mail === UNLIMITED && T.includes('as many mailboxes as you have'), 'Pro: no mailbox limit');
     check(PLANS.pro.split && !PLANS.base.split && T.includes('mailboxes side by side'), 'side by side is Pro');
-    check(!!validate({ task: 'translate', text: 'x', to: 'fr' }, PLANS.base).task && validate({ task: 'summarize', text: 'x' }, PLANS.base).status === 403
-      && !!validate({ task: 'summarize', text: 'x' }, PLANS.pro).task && !!validate({ task: 'tasks', messages: [{ id: 'a', text: 'x' }] }, PLANS.pro).task,
-      'the relay allows translation on Base and summaries and the briefing only on Pro');
-    check(T.includes('Translation is on Base and Pro; summaries and the briefing are on Pro'), 'and the terms say the same');
+    /* Every AI task the relay knows, as the app asks for it. */
+    const asks = {
+      summarize: { task: 'summarize', text: 'x' },
+      ask: { task: 'ask', text: 'x', question: 'When?' },
+      draft: { task: 'draft', text: 'x', intent: 'yes' },
+      tasks: { task: 'tasks', messages: [{ id: 'a', text: 'x' }] },
+    };
+    const proOnly = Object.entries(asks).filter(([, b]) => validate(b, PLANS.base).status === 403 && !!validate(b, PLANS.pro).task).map(([t]) => t);
+    check(!!validate({ task: 'translate', text: 'x', to: 'fr' }, PLANS.base).task && proOnly.length === 4,
+      `the relay allows translation on Base, and summaries, questions, drafts and the briefing only on Pro: ${proOnly.join(', ')}`);
+    check(T.includes('Translation is on Base and Pro; summaries, questions about a message, reply drafts and the briefing are on Pro. They run only when you press Translate, Summarize, Ask, Draft a reply or Run briefing, and RATA asks before the first time for each mailbox.'),
+      'and the terms say the same, and that RATA asks first for each mailbox');
+    check(T.includes('A reply draft is yours to read and change; RATA never sends it until you press Send.'), 'the terms say a reply draft is never sent until you press Send');
   }
 
   console.log('\n— what the AI relay is sent, as lib/ai.js and app.html send it —');
@@ -175,11 +184,32 @@ export default async function run(state) {
     const app = readFileSync(join(SITE, 'public', 'app.html'), 'utf8');
     const brief = app.match(/const BRIEF_MAX=(\d+),BRIEF_DAYS=(\d+);/);
     const max = brief && Number(brief[1]), days = brief && Number(brief[2]);
-    check(max === LIMITS.briefing && P.includes(`up to ${max} of the most recent messages in your inbox from the last ${days} days`),
-      `the briefing: up to ${max} messages (relay takes ${LIMITS.briefing}) from the last ${days} days`);
+    check(max === LIMITS.briefing && P.includes(`up to ${max} recent messages in your inbox from the last ${days} days, leaving out mailings, mail you have already answered and any mailbox you keep from AI`)
+      && P.includes('the day it arrived'),
+      `the briefing: up to ${max} messages (relay takes ${LIMITS.briefing}) from the last ${days} days, what it leaves out, and the day each arrived`);
     check((app.includes(`.slice(0,${LIMITS.briefingEach})`) || app.includes(`AI_BRIEF_EACH=${LIMITS.briefingEach}`)) && P.includes(`the first ${thousands(LIMITS.briefingEach)} characters`),
       `the start of each: ${thousands(LIMITS.briefingEach)} characters`);
     check(app.includes(`AI_TEXT=${LIMITS.text},`) && P.includes(`up to the first ${thousands(LIMITS.text)} characters`), `a summary or translation: up to ${thousands(LIMITS.text)} characters, and the page cuts to exactly that`);
+    /* A question, the earlier turns sent back with it, and a reply note:
+       the page's limits are the relay's, and the page says them. */
+    const qa = app.match(/const AI_Q=(\d+),AI_TURNS=(\d+),AI_ANSWER=(\d+),AI_NOTE=(\d+);/);
+    check(!!qa && Number(qa[1]) === LIMITS.question && Number(qa[2]) === LIMITS.turns && Number(qa[3]) === LIMITS.answer && Number(qa[4]) === LIMITS.note,
+      `the page asks within the relay's limits: a question of ${LIMITS.question}, ${LIMITS.turns} earlier turns, an answer of ${LIMITS.answer}, a note of ${LIMITS.note} (${qa && qa.slice(1).join(', ')})`);
+    check(P.includes(`your question of up to ${LIMITS.question} characters`) && P.includes(`up to ${LIMITS.turns} earlier questions and answers`)
+      && P.includes(`the note you type, up to ${thousands(LIMITS.note)} characters`),
+      `and the privacy page says them: up to ${LIMITS.question} characters, up to ${LIMITS.turns} earlier questions, up to ${LIMITS.note} characters`);
+    const sumLine = (P.match(/Summarize \(Pro\) sends[^.]*\./) || [''])[0];
+    check(!!sumLine && !/address/.test(sumLine) && sumLine.includes("the sender's name, the subject, the day the message was sent, today's date, and the text"),
+      `Summarize sends the sender's name, never the address: "${sumLine}"`);
+    check(P.includes('not for patient information') && T.includes('not for patient information'), 'both pages say RATA’s AI is not for patient information');
+    check(P.includes('mail from a mailbox you keep from AI is never sent') && P.includes('If you never press Summarize, Ask, Draft a reply, Translate or Run briefing'),
+      'the privacy page says a mailbox kept from AI is never sent, and names every AI button');
+    /* Settings, under AI, says what each one sends in the privacy page's own
+       words (AI_SENDS in app.html), so the two cannot drift apart. */
+    const sends = app.match(/const AI_SENDS=\[([\s\S]*?)\];/);
+    const lines = sends ? [...sends[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(m => plain(m[1].replace(/\\u2019/g, '’'))) : [];
+    const strays = lines.filter(l => !P.includes(l));
+    check(lines.length === 5 && strays.length === 0, `Settings says what each of the five sends in the privacy page's words: ${strays.length ? 'not on the page: ' + JSON.stringify(strays) : lines.length + ' lines'}`);
     /* The home page's privacy column says the same, in fewer words (BUG-D:
        it once said only one message ever reached the relay, and that the
        site kept only an email, a plan and a key). */

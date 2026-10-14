@@ -3,15 +3,16 @@ import { admin } from '../../../lib/server';
 import { check } from '../../../lib/licence';
 import { planDef } from '../../../lib/plan';
 import { corsHeaders, preflight } from '../../../lib/cors';
-import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
+import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, readAnswer, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
 
 export const dynamic = 'force-dynamic';
 
-/* Summaries, translation and task flags for the desktop app. See lib/ai.js
-   for the rules; in short: the licence is the credential, the plan decides
-   what is allowed, every request holds its worst-case cost against the
-   customer's monthly allowance before it is sent and is settled to the real
-   cost after, and no text is ever written anywhere. */
+/* Summaries, questions about a message, reply drafts, translation and task
+   flags for the desktop app. See lib/ai.js for the rules; in short: the
+   licence is the credential, the plan decides what is allowed, every request
+   holds its worst-case cost against the customer's monthly allowance before
+   it is sent and is settled to the real cost after, every answer is read
+   strictly before it goes back, and no text is ever written anywhere. */
 /* PostgREST's "no such function" (PGRST202) and Postgres's own (42883): a
    deploy whose database has not had section 5 of database.sql run since the
    reservation functions were added. */
@@ -99,7 +100,9 @@ export async function POST(req) {
     r = await fetch(API_URL(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: MODEL(), max_tokens: p.max_tokens, system: p.system, messages: [{ role: 'user', content: p.user }] }),
+      /* Structured outputs are generally available: output_config needs no
+         beta header. Translation has no shape, so it sends none. */
+      body: JSON.stringify({ model: MODEL(), max_tokens: p.max_tokens, system: p.system, messages: [{ role: 'user', content: p.user }], ...(p.format ? { output_config: { format: p.format } } : {}) }),
       signal: AbortSignal.timeout(45_000),
     });
     d = await r.json();
@@ -119,17 +122,33 @@ export async function POST(req) {
   const used = Math.min(1, Number(total ?? held) / cap);
 
   const text = (Array.isArray(d.content) ? d.content : []).filter(c => c && c.type === 'text').map(c => c.text).join('').trim();
+  /* An answer that could not be used: the model declined, or what it said
+     is not the shape asked for. Logged by task and stop reason only, never
+     the text, and answered as an error, never as an empty answer. */
+  const unreadable = () => {
+    console.warn('ai: an answer could not be read', asked.task, d.stop_reason);
+    return reply({
+      error: asked.task === 'tasks' ? 'The briefing could not be read. Try again.' : 'RATA’s AI gave no answer it could use. Try again.',
+      reason: 'unreadable', used,
+    }, 502);
+  };
+  if (d.stop_reason === 'refusal') return unreadable();
   /* An answer that ran into max_tokens stopped mid-sentence. A translation
      is still worth showing, as the start of it; a briefing is not, because
      its JSON is cut off and reads as "nothing needs doing", which the app
-     would take as leave to clear every flag. */
+     would take as leave to clear every flag. Cut-off JSON from the other
+     tasks does not parse, and is unreadable. */
   const stopped = d.stop_reason === 'max_tokens';
   if (asked.task === 'tasks') {
     if (stopped) {
       console.warn('ai: a briefing ran into max_tokens');
       return reply({ error: 'The briefing was cut short. Try again.', reason: 'cut', used }, 502);
     }
-    return reply({ tasks: parseTasks(text, asked.input.messages.map(m => m.id)), used });
+    const list = parseTasks(text, asked.input.messages.map(m => m.id), asked.input.today);
+    if (!list) return unreadable();
+    return reply({ tasks: list, used });
   }
-  return reply({ text, cut: !!asked.input.cut || stopped, used });
+  const out = readAnswer(asked.task, text, asked.input);
+  if (!out) return unreadable();
+  return reply({ ...out, cut: !!asked.input.cut || stopped, used });
 }

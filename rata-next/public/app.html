@@ -620,6 +620,24 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 #warn-ov.open{display:flex}
 #warn-card{width:min(480px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
 #warn-card h2{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35}
+/* Sending to RATA's AI (Assistant v1): which mailboxes it may read, and what
+   the privacy check found. Above Assist and the composer, as the warning is. */
+#aiok-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:61;align-items:center;justify-content:center;padding:20px}
+#aiok-ov.open{display:flex}
+#aiok{width:min(500px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
+#aiok h3{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35}
+#aiok .link-lead{font-size:13.5px;line-height:1.5;color:var(--ink)}
+#aiok-boxes{display:flex;flex-direction:column;gap:8px;margin:14px 0 4px}
+.aiok-box{display:flex;align-items:center;gap:10px;font-size:13.5px;overflow-wrap:anywhere;cursor:pointer}
+.aiok-box input{flex-shrink:0;width:16px;height:16px}
+.aiok-dlp{margin-top:12px;padding:10px 12px;border-radius:var(--r-sm);background:var(--fill-2);border-left:3px solid var(--amber);font-size:13.5px;line-height:1.5;color:var(--ink)}
+#aiok .link-btns{flex-wrap:wrap}
+#aiok [hidden]{display:none}
+/* Settings, under AI. */
+#ai-sec[hidden]{display:none}
+.ai-sends{margin:8px 0 0 18px;font-size:12.5px;line-height:1.5;color:var(--slate)}
+.ai-sends li{margin-top:4px}
+.set-row a.ai-help{font-size:13.5px;font-weight:500;color:var(--tint);text-decoration:underline}
 /* Keyboard shortcuts (H4): the sheet (?), and where the keyboard is in the
    list, outlined as focus is (DESIGN.md), and only once a key has moved it. */
 #keys-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:62;align-items:center;justify-content:center;padding:20px}
@@ -1158,6 +1176,7 @@ body.send-counting #toast{bottom:76px}
           <div id="sig-list"></div>
           <div class="set-row"><div class="grow"><b>In replies and forwards too</b><span>Otherwise only new messages get a signature</span></div><input type="checkbox" id="set-sigreplies" aria-label="Signature in replies and forwards too"></div>
         </div>
+        <div class="comp-sec" id="ai-sec" role="region" aria-labelledby="ai-head" hidden><div class="sec-label" id="ai-head">AI</div><div id="ai-list"></div></div>
         <div class="comp-sec">
           <div class="sec-label">Data</div>
           <div class="set-row"><div class="grow"><b>Export workspace</b><span>Messages, people, documents, audit chain, and settings as one JSON file</span></div><button class="btn" id="btn-export">Export JSON</button></div>
@@ -1258,6 +1277,27 @@ body.send-counting #toast{bottom:76px}
     <div class="link-url" id="warn-name"></div>
     <p class="link-lead" id="warn-lead"></p>
     <div class="link-btns"><button class="btn" id="warn-cancel">Cancel</button><button class="btn danger" id="warn-go"></button></div>
+  </div>
+</div>
+
+<!-- Sending to RATA's AI (Assistant v1): whether this mailbox's mail may go
+     (one message, or a tick per mailbox for the briefing), and what the
+     privacy check found in the text about to go. aiDecide and aiScreen fill it. -->
+<div id="aiok-ov">
+  <div id="aiok" role="alertdialog" aria-modal="true" aria-labelledby="aiok-h" aria-describedby="aiok-p">
+    <h3 id="aiok-h">Send to RATA’s AI?</h3>
+    <p class="link-lead" id="aiok-p"></p>
+    <div id="aiok-boxes" role="group" aria-label="Mailboxes" hidden></div>
+    <p class="aiok-dlp" id="aiok-dlp" hidden></p>
+    <div class="link-btns">
+      <button class="btn" id="aiok-no" hidden>Not from this mailbox</button>
+      <button class="btn" id="aiok-always" hidden>Always for this mailbox</button>
+      <button class="btn primary" id="aiok-once" hidden>Send this time</button>
+      <button class="btn" id="aiok-cancel" hidden>Cancel</button>
+      <button class="btn" id="aiok-asis" hidden>Send as it is</button>
+      <button class="btn primary" id="aiok-redact" hidden>Leave them out and send</button>
+      <button class="btn primary" id="aiok-save" hidden>Save and run</button>
+    </div>
   </div>
 </div>
 
@@ -1463,6 +1503,10 @@ function tidyV6(st){
   st.linked=(st.linked||[]).filter(l=>l&&l.type==='mail');
   delete st.plugins;delete st.connections;delete st.jobs;
   if(st.settings)delete st.settings.api;
+  /* The one yes to AI for everything (0.1.17 to 0.1.51) does not carry
+     over: AI now asks per mailbox (Assistant v1), and never reached
+     testers before it did. */
+  if(st.settings)delete st.settings.aiOk;
   if(st.counters)delete st.counters.autopilot;
 }
 function migrate(old){
@@ -2402,7 +2446,7 @@ const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'s
    Undo toast, say). The disguised-program question's own keys (Escape and
    Enter cancel) are unchanged; the picture and the shortcut sheet keep
    their own return. Topmost first, as their z-index stacks them. */
-const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#aiok-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
 const DLG_FROM=new Map();
 function topDialog(){
   for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
@@ -4070,10 +4114,10 @@ function keyTyping(el){
   return [el,document.activeElement].some(x=>x&&x.nodeType===1&&(x.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName)));
 }
 /* A question on screen has the keyboard to itself: opening a link, saving
-   a disguised program, deleting the account, the licence box, the welcome,
-   a picture shown large. */
+   a disguised program, sending to RATA's AI, deleting the account, the
+   licence box, the welcome, a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||AIOK_DONE||SAVETO||['#link-ov','#warn-ov','#aiok-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
@@ -5430,6 +5474,7 @@ function renderSettings(){
   if($('#undo-row')){$('#undo-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-undo').value=String(sendDelay())}
   $('#set-keys').checked=keysOn();
   renderSigs();
+  renderAISettings();
   renderPlan();
   renderLinked();
   renderUpdateRow();if($('#upd-check'))$('#upd-check').onclick=()=>checkUpdate(true);
@@ -7976,10 +8021,18 @@ async function summarizeMessage(id){
   const stored=await bodyOf(m);
   if(!box.isConnected)return;
   const quick=why=>{title.textContent='Quick summary';text.textContent=localSummary(m,stored);note.textContent=why||''};
-  if(!window.__RATA_NATIVE__||!aiOk()){quick(window.__RATA_NATIVE__?'Made on this computer, without AI.':'');await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
-  title.textContent='Summary';text.textContent='Summarizing\u2026';
+  /* Nothing goes without the plan, the switch and this mailbox's yes
+     (aiGate), and then only what the privacy check lets through (aiScreen).
+     The website reads no mail, so it only ever makes the quick one. */
+  const gate=await aiGate('summarize',[m]);
+  if(!box.isConnected)return;
+  if(!gate.ok){quick(gate.reason);await audit('msg.summary',m.subj||m.prev.slice(0,40));return}
   const whole=OPENED.get(id);
-  const r=await askAI({task:'summarize',subject:aiCut(m.subj,AI_SUBJ),from:aiCut(msgFrom(m)+(m.fromAddr?' <'+m.fromAddr+'>':''),AI_FROM),text:aiCut((whole&&!whole.error&&whole.text)||stored||m.prev,AI_TEXT),lang:userLang()});
+  const goes=await aiScreen({subject:aiCut(m.subj,AI_SUBJ),text:aiCut((whole&&!whole.error&&whole.text)||stored||m.prev,AI_TEXT)});
+  if(!box.isConnected)return;
+  if(!goes){quick(AI_KEPT);return}
+  title.textContent='Summary';text.textContent='Summarizing\u2026';
+  const r=await askAI({task:'summarize',subject:goes.subject,from:aiName(m),text:goes.text,day:isoDay(m.ts),today:isoDay(Date.now()),lang:userLang()});
   if(!box.isConnected)return;
   if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
   title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
@@ -7988,18 +8041,250 @@ async function summarizeMessage(id){
 /* ---------------- AI: SUMMARIES, TRANSLATION, TASK FLAGS ----------------
    Done by RATA's AI relay (mailrata.org/api/ai, Anthropic's Haiku), paid for
    by RATA within a monthly allowance per customer. It is the one feature that
-   sends mail text off this computer — only the message the customer asks
-   about, or for the briefing the start of their recent mail — so the
-   customer is told once, before the first time, and it never happens on its
-   own. Desktop app only: the relay takes the app's licence as its credential.
-   Where AI cannot be used (not in the plan, offline, allowance used up) the
+   sends mail text off this computer (only the message the customer asks
+   about, or for the briefing the start of their recent mail) and it never
+   happens on its own: only on a press or a typed question. Desktop app only:
+   the relay takes the app's licence as its credential. Where AI cannot be
+   used (not in the plan, switched off, offline, allowance used up) the
    reason is shown, and the version made on this computer stands in where
-   there is one. */
-const AI_NOTICE='Summaries, translation and task flags are done by RATA\u2019s AI service, run by Anthropic. The text of the message \u2014 or, for the briefing, the start of your recent mail \u2014 is sent to it to be answered, and RATA does not keep it. Carry on?';
-function aiOk(){
-  if(S.settings.aiOk)return true;
-  if(!confirm(AI_NOTICE))return false;
-  S.settings.aiOk=true;save();return true;
+   there is one.
+
+   AI you can see and steer (Assistant v1, P1). Before anything goes, in this
+   order (aiGate): the plan has it (can('ai'); Translate needs only a
+   licence), the master switch is on, and this mailbox may be read. A
+   mailbox nobody has decided about yet is asked about once (#aiok-ov):
+   one message gets Not from this mailbox, Send this time or Always for this
+   mailbox; the briefing gets a box to tick per mailbox. Then the privacy
+   check (aiScreen) runs the DLP profile over the exact text about to go,
+   and a block-level finding asks first. Every choice is kept on this
+   computer only, in S.settings (the desktop app uploads no settings):
+     aiOff   true when Use RATA's AI is off (absent is on)
+     aiBoxes {address: 'on'|'off'}, by mailEmailOf (absent is undecided)
+     aiCheck false when the privacy check is off (absent is on)
+     aiUsed  {month, used, at}: the allowance used, from the last answer
+   Turning AI or a mailbox off moves AI_GEN, and an answer that arrives after
+   that is not shown. */
+const AI_Q=300,AI_TURNS=3,AI_ANSWER=600,AI_NOTE=500;
+let AI_GEN=0,AIOK_DONE=null,AIOK_ESC='cancel';
+const AI_OFF='AI is off. Turn it on in Settings, under AI.';
+const AI_BOX_OFF='AI is off for this mailbox. Turn it on in Settings, under AI.';
+const AI_BOXES_OFF='AI is off for these mailboxes. Turn it on in Settings, under AI.';
+const AI_KEPT='Nothing was sent. This one was made on this computer, without AI.';
+/* What each AI task is called where the plan does not have it. */
+const AI_WHAT={summarize:'Summarizing with AI',ask:'Asking about a message with AI',draft:'Drafting a reply with AI',tasks:'The AI briefing'};
+/* What each sends, in the privacy page's own words (legal.test checks that
+   each line is on the page). Shown in Settings, under AI. */
+const AI_SENDS=[
+  'Translate (Base and Pro) sends the message’s subject and its text, up to the first 12,000 characters.',
+  'Summarize (Pro) sends the sender’s name, the subject, the day the message was sent, today’s date, and the text, up to the first 12,000 characters.',
+  'Ask (Pro), a question about a message after its summary, sends what Summarize sends, your question of up to 300 characters, and up to 3 earlier questions and answers about that message, since RATA keeps nothing between questions.',
+  'Draft a reply (Pro) sends the sender’s name, the subject, the message’s own words without the earlier mail quoted under them, up to the first 12,000 characters, and the note you type, up to 500 characters. It never sends your signature or anyone’s address.',
+  'Run briefing (Pro) sends, for each of up to 25 recent messages in your inbox from the last 14 days, leaving out mailings, mail you have already answered and any mailbox you keep from AI, the sender’s name, the subject, the day it arrived, the first 1,500 characters of its own text, and a number standing for the message, which RATA matches back to it on this computer.',
+];
+/* What one message's question says goes, by task. */
+const AI_GOES={
+  summarize:'It sends the sender’s name, the subject and the text.',
+  translate:'It sends the subject and the text.',
+  ask:'It sends the sender’s name, the subject, the text and your question.',
+  draft:'It sends the sender’s name, the subject, the message’s own words and your note.',
+};
+const aiOn=()=>S.settings.aiOff!==true;
+function aiBox(addr){
+  const b=S.settings.aiBoxes,v=b&&typeof b==='object'?b[String(addr||'').toLowerCase()]:'';
+  return v==='on'||v==='off'?v:'';
+}
+function setAIBox(addr,v){
+  const k=String(addr||'').toLowerCase();if(!k)return;
+  const b=Object.assign({},S.settings.aiBoxes&&typeof S.settings.aiBoxes==='object'?S.settings.aiBoxes:{});
+  if(v==='on'||v==='off')b[k]=v;else delete b[k];
+  S.settings.aiBoxes=b;
+  if(v==='off')AI_GEN++;
+  save();
+}
+/* A linked mailbox's name, which is its address. */
+function boxName(addr){
+  const a=String(addr||'').toLowerCase(),l=S.linked.find(x=>x.type==='mail'&&String(x.label).toLowerCase()===a);
+  return l?String(l.label):a;
+}
+/* This computer's day, as YYYY-MM-DD. */
+const isoDay=ts=>{const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+/* A message's own words: what is left once quoted mail and the signature
+   are taken out, as the Text view folds them (readingParts). */
+const newWords=text=>readingParts(text).filter(p=>p.kind==='text').map(p=>p.text).join('\n\n');
+/* A due date in words: due today, due tomorrow, due Fri 31 Oct, in 17
+   days, overdue by 2 days. */
+function dueWords(due){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(due||'')))return '';
+  const [y,mo,d]=String(due).split('-').map(Number),t=new Date(y,mo-1,d),n=new Date();n.setHours(0,0,0,0);
+  const days=Math.round((t-n)/864e5);
+  if(days<0)return 'overdue by '+(days===-1?'1 day':-days+' days');
+  if(days===0)return 'due today';
+  if(days===1)return 'due tomorrow';
+  return 'due '+t.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'})+', in '+days+' days';
+}
+/* The sender's name for the relay, never an address: the relay strips one
+   too, but none should leave this computer in the first place. */
+const aiName=m=>aiCut(String(msgFrom(m)).replace(/<[^>]*>?/g,' ').replace(/\S*@\S*/g,' ').replace(/\s+/g,' ').trim(),AI_FROM);
+
+/* May this go to RATA's AI? {ok, allowed: Set of addresses, reason}, with
+   `cancelled` when the briefing's question was cancelled. Asks about the
+   mailboxes nobody has decided about yet. Sends nothing. */
+async function aiGate(task,msgs){
+  const no=reason=>({ok:false,allowed:new Set(),reason:reason||''});
+  if(!window.__RATA_NATIVE__)return no('');
+  if(task!=='translate'&&!can('ai'))return no(needPlan('ai',AI_WHAT[task]||'AI'));
+  if(!aiOn())return no(AI_OFF);
+  const addrs=[...new Set((msgs||[]).map(mailEmailOf).filter(Boolean))];
+  if(!addrs.length)return no('RATA cannot tell which mailbox this came from, so it sent nothing.');
+  const brief=task==='tasks',open=addrs.filter(a=>!aiBox(a));
+  let once=false;
+  if(open.length){
+    const said=await aiDecide(open,brief?'tasks':task);
+    if(said.choice==='cancel')return {...no(''),cancelled:true};
+    if(said.choice==='once')once=true;
+    else if(said.choice==='no')setAIBox(open[0],'off');
+    else if(said.choice==='always')setAIBox(open[0],'on');
+    else if(said.choice==='save')for(const a of open)setAIBox(a,said.ticked.has(a)?'on':'off');
+  }
+  if(!aiOn())return no(AI_OFF);
+  const allowed=new Set(addrs.filter(a=>aiBox(a)==='on'||(once&&open.includes(a))));
+  if(!allowed.size)return no(addrs.length===1?AI_BOX_OFF:AI_BOXES_OFF);
+  return {ok:true,allowed,reason:''};
+}
+/* The question itself. `kind` is the task, or 'tasks' for the briefing's
+   form with a box per mailbox. Resolves {choice, ticked}: choice is no,
+   once or always for one message; save or cancel for the briefing. */
+function aiDecide(addrs,kind){
+  const brief=kind==='tasks',hipaa=S.settings.profile==='HIPAA';
+  const care=hipaa?' Work mailboxes can hold patient details. RATA’s AI is not for patient information.':'';
+  const lead=brief
+    ?'Run briefing sends the start of your recent mail to RATA’s AI service, run by Anthropic: for each message, the sender’s name, the subject, the day it arrived and its first 1,500 characters. RATA keeps none of it. Tick the mailboxes AI may read; the others are kept from AI.'+care
+    :'Send this message from '+boxName(addrs[0])+' to RATA’s AI service, run by Anthropic? '+(AI_GOES[kind]||AI_GOES.summarize)+' RATA keeps none of it.'+care;
+  return aiokShow({title:'Send to RATA’s AI?',lead,boxes:brief?addrs:[],
+    buttons:brief?['cancel','save']:['no','always','once'],esc:brief?'cancel':'no',focus:brief?null:(hipaa?'no':'once')});
+}
+/* Fills #aiok-ov for one of its three forms (one message, the briefing,
+   the privacy check) and opens it. Resolves when a button, Escape or the
+   backdrop closes it: Escape and the backdrop give the form's own answer
+   (`esc`: no for one message, cancel otherwise). */
+function aiokShow(o){
+  if(AIOK_DONE)aiokClose(AIOK_ESC);
+  $('#aiok-h').textContent=o.title;
+  $('#aiok-p').textContent=o.lead;
+  const boxes=$('#aiok-boxes');boxes.textContent='';boxes.hidden=!o.boxes.length;
+  for(const a of o.boxes){
+    const lab=document.createElement('label');lab.className='aiok-box';
+    const cb=document.createElement('input');cb.type='checkbox';cb.dataset.aiok=a;
+    lab.append(cb,document.createTextNode('Let AI read mail from '+boxName(a)));
+    boxes.append(lab);
+  }
+  const dlp=$('#aiok-dlp');dlp.textContent=o.dlp||'';dlp.hidden=!o.dlp;
+  $('#aiok').setAttribute('aria-describedby',o.dlp?'aiok-p aiok-dlp':'aiok-p');
+  for(const b of AIOK_BUTTONS)$('#aiok-'+b).hidden=!o.buttons.includes(b);
+  AIOK_ESC=o.esc;
+  dlgOpen($('#aiok-ov'));
+  $('#aiok-ov').classList.add('open');
+  const first=o.focus?$('#aiok-'+o.focus):boxes.querySelector('input');
+  (first||$('#aiok-'+o.buttons[0])).focus();
+  return new Promise(res=>{AIOK_DONE=res});
+}
+const AIOK_BUTTONS=['no','always','once','cancel','asis','redact','save'];
+function aiokClose(choice){
+  const done=AIOK_DONE;AIOK_DONE=null;
+  const ticked=new Set([...$$('#aiok-boxes input[data-aiok]')].filter(x=>x.checked).map(x=>x.dataset.aiok));
+  $('#aiok-ov').classList.remove('open');dlgClose($('#aiok-ov'));
+  if(done)done({choice,ticked});
+}
+for(const b of AIOK_BUTTONS)$('#aiok-'+b).onclick=()=>aiokClose(b);
+$('#aiok-ov').addEventListener('click',e=>{if(e.target.id==='aiok-ov')aiokClose(AIOK_ESC)});
+/* Escape gives the form's own answer, before anything behind it hears it. */
+window.addEventListener('keydown',e=>{
+  if(!AIOK_DONE||e.key!=='Escape')return;
+  e.preventDefault();e.stopPropagation();aiokClose(AIOK_ESC);
+},true);
+/* The privacy check, on the exact text about to go: `fields` is the
+   request's free text by name ({subject, text}). Answers the fields to send
+   (with every block-level finding replaced by [removed] when the customer
+   says Leave them out and send), or null when nothing should go.
+   Warn-level findings never stop a request. */
+async function aiScreen(fields){
+  if(S.settings.aiCheck===false)return fields;
+  const prof=PROFILES[S.settings.profile]?S.settings.profile:'General';
+  const found=runDLP(Object.values(fields).join('\n'),prof).filter(f=>f.sev==='block');
+  if(!found.length)return fields;
+  const names=[...new Set(found.map(f=>f.name))];
+  const said=await aiokShow({title:'Send to RATA’s AI?',
+    lead:'RATA checked what is about to go to RATA’s AI service, using your '+prof+' privacy-check profile.',
+    dlp:'This looks like it contains: '+names.join(', ')+'. RATA’s check finds patterns like these, not everything: it misses a name in a sentence.',
+    boxes:[],buttons:['cancel','asis','redact'],esc:'cancel',focus:'cancel'});
+  if(said.choice==='asis')return fields;
+  if(said.choice!=='redact')return null;
+  const out={};for(const [k,v] of Object.entries(fields))out[k]=dlpRedact(v,prof);
+  return out;
+}
+/* Every match of a block-level rule of the profile, as RULES finds it
+   (its validate too), becomes [removed]; white space after it stays. */
+function dlpRedact(text,profileName){
+  const prof=PROFILES[profileName]||PROFILES.General;
+  let out=String(text??'');
+  for(const id of prof.rules){
+    const r=RULES[id];if(!r||r.sev!=='block')continue;
+    const rx=new RegExp(r.rx.source,r.rx.flags.includes('g')?r.rx.flags:r.rx.flags+'g');
+    out=out.replace(rx,m=>r.validate&&!r.validate(m)?m:'[removed]'+m.match(/\s*$/)[0]);
+  }
+  return out;
+}
+
+/* Settings, under AI: app only, since only the app sends anything. Built
+   with DOM methods; every address goes in as text. */
+function aiUsedText(){
+  const u=S.settings.aiUsed,month=new Date().toISOString().slice(0,7);
+  if(!u||typeof u!=='object'||u.month!==month||!(Number(u.used)>0))return 'No AI used yet this month.';
+  const at=new Date(u.at).toLocaleDateString(undefined,{day:'numeric',month:'short'});
+  return 'About '+Math.max(1,Math.round(Number(u.used)*100))+'% of this month’s AI allowance used, as of '+at+'. It starts again on the 1st.';
+}
+function renderAISettings(){
+  const sec=$('#ai-sec'),el=$('#ai-list');if(!sec||!el)return;
+  sec.hidden=!window.__RATA_NATIVE__;
+  el.textContent='';
+  if(!window.__RATA_NATIVE__)return;
+  const row=(title,words,...end)=>{
+    const r=document.createElement('div');r.className='set-row';
+    const g=document.createElement('div');g.className='grow';
+    const b=document.createElement('b');b.textContent=title;
+    const s=document.createElement('span');s.textContent=words;
+    g.append(b,s);r.append(g,...end);el.append(r);return {r,g,s};
+  };
+  const box=(label,checked)=>{const c=document.createElement('input');c.type='checkbox';c.setAttribute('aria-label',label);c.checked=checked;return c};
+  const on=aiOn();
+  const master=box('Use RATA’s AI',on);master.id='set-ai';
+  row('Use RATA’s AI',on?'RATA’s AI service, run by Anthropic, reads mail only when you ask it to, and only from the mailboxes below that you let it read.':'Off. Nothing goes to RATA’s AI from any mailbox.',master);
+  master.onchange=()=>{
+    if(master.checked)delete S.settings.aiOff;else{S.settings.aiOff=true;AI_GEN++}
+    save();renderAISettings();toast(master.checked?'RATA’s AI is on':'RATA’s AI is off');
+  };
+  for(const l of S.linked.filter(x=>x.type==='mail')){
+    const addr=String(l.label).toLowerCase(),v=aiBox(addr);
+    const c=box('AI may read mail from '+l.label,v==='on');c.dataset.aibox=addr;
+    if(!v)c.indeterminate=true;
+    row(String(l.label),v==='on'?'AI may read mail from this mailbox when you ask.':v==='off'?'Kept from AI.':'Not decided yet. RATA asks the first time.',c);
+    c.onchange=()=>{setAIBox(addr,c.checked?'on':'off');renderAISettings();toast(c.checked?'AI may read mail from '+l.label:l.label+' is kept from AI')};
+  }
+  const prof=PROFILES[S.settings.profile]?S.settings.profile:'General';
+  const check=box('Check for sensitive details before sending',S.settings.aiCheck!==false);check.id='set-aicheck';
+  row('Check for sensitive details before sending','Uses your '+prof+' privacy-check profile, and asks before sending what it finds. It finds patterns such as card or medical record numbers, not everything: it misses a name in a sentence.',check);
+  check.onchange=()=>{S.settings.aiCheck=check.checked;save();toast(check.checked?'RATA checks for sensitive details before AI':'RATA no longer checks before AI')};
+  const used=row('This month',aiUsedText());used.s.id='ai-used';
+  const what=row('What each sends','');
+  const ul=document.createElement('ul');ul.className='ai-sends';
+  for(const line of AI_SENDS){const li=document.createElement('li');li.textContent=line;ul.append(li)}
+  what.s.remove();what.g.append(ul);
+  const forget=document.createElement('button');forget.className='btn';forget.id='ai-forget';forget.textContent='Forget my answers';
+  row('Forget my answers','RATA asks again, the next time, which mailboxes AI may read.',forget);
+  forget.onclick=()=>{delete S.settings.aiBoxes;AI_GEN++;save();renderAISettings();toast('RATA will ask again for each mailbox')};
+  const help=document.createElement('a');help.className='ai-help';help.href='https://mailrata.org/help#ai';help.target='_blank';help.rel='noopener';help.textContent='AI in RATA';
+  help.onclick=e=>{e.preventDefault();openLink(help.href)};
+  row('Help','What each one sends, the allowance, and what each message means.',help);
 }
 /* What goes to the relay is cut here first. The relay reads 12 000
    characters of one message (LIMITS.text in lib/ai.js) and refuses a request
@@ -8012,11 +8297,22 @@ const AI_TEXT=12000,AI_SUBJ=300,AI_FROM=200,AI_BRIEF_EACH=1500,AI_BRIEF_JSON=700
 const AI_DROP=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 function aiCut(s,max){return String(s??'').replace(AI_DROP,'').slice(0,max)}
 function aiLonger(s,max){return String(s??'').replace(AI_DROP,'').length>max}
+/* One request to the relay, as the page wrote it. Every answer that says
+   how much of the month is used updates the meter in Settings; an answer
+   that arrives after AI or a mailbox was turned off is not shown. */
 async function askAI(body){
+  const gen=AI_GEN;
   let r;
   try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
   catch(e){r={error:String(e&&e.message||e)}}
-  return r&&typeof r==='object'?r:{error:'RATA\u2019s AI service did not answer.'};
+  r=r&&typeof r==='object'?r:{error:'RATA\u2019s AI service did not answer.'};
+  if(typeof r.used==='number'&&Number.isFinite(r.used)){
+    S.settings.aiUsed={month:new Date().toISOString().slice(0,7),used:Math.max(0,Math.min(1,r.used)),at:Date.now()};
+    save();
+    if($('#ai-used'))$('#ai-used').textContent=aiUsedText();
+  }
+  if(gen!==AI_GEN)return {error:'Not shown: AI was turned off while it was answering.',reason:'off'};
+  return r;
 }
 /* The language RATA reads in, as a two-letter code the relay understands.
    Some Linux desktops report it as "en-US@posix" or "en_US.UTF-8", which
@@ -8032,11 +8328,17 @@ function allowanceNote(used){
 /* Translations fetched this session, by message id: {text, cut, to, hidden}. */
 const TRANSLATED=new Map();
 async function translateMessage(id){
-  const m=S.messages.find(x=>x.id===id);if(!m||!aiOk())return;
-  const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
+  const m=S.messages.find(x=>x.id===id);if(!m)return;
+  /* Translation needs only a licence, but the switch and this mailbox's
+     yes as everything else does. */
+  const gate=await aiGate('translate',[m]);
+  if(!gate.ok){if(gate.reason)toast(gate.reason);return}
   const whole=OPENED.get(id),to=userLang();
   const src=(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev;
-  const r=await askAI({task:'translate',subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT),to});
+  const goes=await aiScreen({subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT)});
+  if(!goes){toast('Nothing was sent.');return}
+  const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
+  const r=await askAI({task:'translate',subject:goes.subject,text:goes.text,to});
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
   TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut||aiLonger(src,AI_TEXT),to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
@@ -8103,25 +8405,52 @@ async function runLocalBrief(){
    computer; only pressing Run briefing sends anything. */
 const BRIEF_MAX=25,BRIEF_DAYS=14;
 async function runAIBrief(){
-  if(!window.__RATA_NATIVE__||!aiOk()){await runLocalBrief();return}
+  if(!window.__RATA_NATIVE__){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
+  /* Where AI cannot be used, the quick version made on this computer, and
+     why. Nothing is sent. */
+  const local=async why=>{await runLocalBrief();if(why)out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(why)} Below is the quick version, made on this computer.</p>`)};
+  if(!can('ai')){await local(needPlan('ai','The AI briefing'));return}
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
-  let pool=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts).slice(0,BRIEF_MAX);
-  if(!pool.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
+  const recent=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts);
+  if(!recent.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
+  /* Only mailboxes the customer lets AI read: those nobody has decided
+     about yet are asked about first, one box to tick each. Cancel sends
+     nothing and decides nothing. */
+  const gate=await aiGate('tasks',recent);
+  if(gate.cancelled)return;
+  if(!gate.ok){await local(gate.reason);return}
+  let pool=recent.filter(m=>gate.allowed.has(mailEmailOf(m)));
+  const keptFrom=[...new Set(recent.map(mailEmailOf).filter(a=>a&&!gate.allowed.has(a)))].map(boxName);
   btn.disabled=true;btn.textContent='Reading\u2026';
   const texts=await bodiesOf(pool);
+  /* Each message's own words (not the mail quoted under them), the start
+     of them, as the privacy page says. A message the privacy check finds
+     something in is left out rather than asked about one by one. */
+  const own=m=>aiCut(newWords(texts.get(m.id)||'')||m.prev,AI_BRIEF_EACH);
+  let screened=0;
+  if(S.settings.aiCheck!==false){
+    const n=pool.length;
+    pool=pool.filter(m=>!runDLP((m.subj||'')+'\n'+own(m),S.settings.profile).some(f=>f.sev==='block'));
+    screened=n-pool.length;
+  }
+  pool=pool.slice(0,BRIEF_MAX);
+  if(!pool.length){btn.disabled=false;btn.textContent='Run briefing';await local('There is no recent mail RATA\u2019s AI may read.');return}
   /* Each message goes by its place in this list ("1" to "25"), never by
      m.id: an id is built from the mailbox's key, which comes from its
      address, and what is sent here reaches Anthropic. The relay takes any
      id string and answers only with ids it was sent (lib/ai.js). */
-  const sent=pool.map((m,i)=>({id:String(i+1),from:aiCut(msgFrom(m),AI_FROM),subject:aiCut(m.subj,AI_SUBJ),text:aiCut(texts.get(m.id)||m.prev,AI_BRIEF_EACH)}));
+  const sent=pool.map((m,i)=>({id:String(i+1),day:isoDay(m.ts),from:aiName(m),subject:aiCut(m.subj,AI_SUBJ),text:own(m)}));
   /* Mail full of quotes or line breaks grows as JSON; the oldest go until
      the request is well under what the relay takes, and only what was sent
      is re-flagged below. */
   while(sent.length>1&&JSON.stringify(sent).length>AI_BRIEF_JSON)sent.pop();
   pool=pool.slice(0,sent.length);
-  const r=await askAI({task:'tasks',messages:sent});
+  const r=await askAI({task:'tasks',today:isoDay(Date.now()),messages:sent});
   btn.disabled=false;btn.textContent='Run briefing';
+  /* What was left out on this computer, said under the answer. */
+  const leftOut=(keptFrom.length?`<p class="as-sum">Kept from AI: ${esc(keptFrom.join(', '))}.</p>`:'')
+    +(screened?`<p class="as-sum">${screened} message${screened===1?' was':'s were'} left out because the privacy check found details in ${screened===1?'it':'them'}.</p>`:'');
   /* A briefing that failed, or was cut short, says nothing about what needs
      doing: every flag stays as it was. */
   if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}
@@ -8132,13 +8461,14 @@ async function runAIBrief(){
   pool.forEach((m,i)=>{const t=found.get(String(i+1));if(t)m.flag={task:t.task,due:t.due,important:t.important,at:Date.now()};else delete m.flag});
   save();renderMail();
   const items=pool.filter(m=>m.flag).sort((a,b)=>(b.flag.important-a.flag.important)||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
-  if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`;return}
+  if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`+leftOut;return}
   out.innerHTML=`<p class="as-sum"><b>${items.length}</b> of your ${pool.length} most recent messages need${items.length===1?'s':''} something from you${items.some(m=>m.flag.important)?' \u2014 the important ones first':''}.</p>`
     +items.map(m=>`<div class="as-item" data-mid="${esc(m.id)}" role="button" tabindex="0">
       <div class="as-line1">${m.flag.important?'<span class="badge flag hot">important</span>':''}<b>${esc(msgFrom(m))}</b><span class="as-t">${rel(m.ts)}</span></div>
       <div class="as-text">\u2691 ${esc(m.flag.task)}${m.flag.due?` <span class="as-chip deadline">by ${esc(m.flag.due)}</span>`:''}</div>
       <div class="as-why">${esc(m.subj||'')}</div>
     </div>`).join('')
+    +leftOut
     +(allowanceNote(r.used)?`<p class="as-sum">${esc(allowanceNote(r.used))}</p>`:'');
   out.querySelectorAll('.as-item').forEach(el=>{
     el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)};
