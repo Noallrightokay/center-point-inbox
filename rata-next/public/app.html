@@ -4498,6 +4498,16 @@ async function cloudSave(c,name,data,confirmed){
     if(!await askDisguised({n:name},true))return false;
     return cloudSave(c,name,data,true);
   }
+  /* The last of the file went and its answer was lost: the service may
+     have saved it (onedrive.rs, google.rs, kind unsure). Said as it is,
+     never as "Could not save", which invites the retry that makes a
+     second copy, and the folder on show is read again. */
+  if(r&&!r.ok&&r.kind==='unsure'){
+    toast(name+': '+failWhy(r));
+    audit('cloud.save.unsure',name+' → '+c.place);
+    if(CLOUD.src===c.service&&currentView==='docs')cloudOpen(c.service,CLOUD.trail);
+    return false;
+  }
   if(!r||!r.ok){toast('Could not save '+name+' to '+c.place+': '+failWhy(r));return false}
   audit('cloud.save',(r.name||name)+' → '+c.place);
   toast('Saved '+(r.name||name)+' to '+(r.where||c.place));

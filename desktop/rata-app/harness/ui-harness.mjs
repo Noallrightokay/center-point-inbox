@@ -318,6 +318,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
           }
           case 'cloud_save':
             C.saved.push(args);
+            /* SEC-11: the last part went and its answer was lost (onedrive.rs, google.rs). */
+            if (C.saveUnsure) throw no('unsure', 'The connection to OneDrive was lost as the last of the file went up, so OneDrive may have saved it. Check the folder before saving it again.');
             if (/\.(pdf|docx?|xlsx?|txt|jpe?g|png)\.(exe|scr|js|bat|cmd|com)$/i.test(args.name) && args.confirmed !== true)
               throw no('needs-confirmation', args.name + ' is a program named to look like a document. RATA saves it only after you say so.');
             return { name: args.name, id: 'Documents/' + args.name, where: 'OneDrive / Documents', size: atob(args.data).length };
@@ -4082,6 +4084,20 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
 
   /* The cloud folder, and Disconnect taking everything with it. */
   await pg.click('#cloud-src [data-cloud-src="microsoft"]');
+  await pg.waitForSelector('#cloud-body .cloud-item');
+
+  /* SEC-11: a save whose last part went and whose answer was lost (kind
+     unsure) may be there. Said as it is, never "Could not save", which
+     invites the retry that makes a second copy; the folder on show is
+     read again. */
+  await pg.evaluate(() => { window.__toasts = []; __mock.conn.saveUnsure = true; });
+  const lists0 = (await calls(pg, 'cloud_list')).length;
+  const unsure = await pg.evaluate(() => cloudSave(cloudTargets().find((c) => c.service === 'microsoft'), 'Rota.pdf', btoa('%PDF-1.4')));
+  await pg.waitForFunction((n) => __mock.calls.filter(([c]) => c === 'cloud_list').length > n && !CLOUD.loading, lists0);
+  const unsureT = (await toasts(pg)).join('|');
+  check(unsure === false && /^Rota\.pdf: The connection to OneDrive was lost as the last of the file went up, so OneDrive may have saved it\. Check the folder before saving it again\.$/.test(unsureT),
+    `a save that may have arrived says so, never "Could not save", and the folder is read again: "${unsureT}"`);
+  await pg.evaluate(() => { __mock.conn.saveUnsure = false; });
   await pg.waitForSelector('#cloud-body .cloud-item');
   await axe(pg, 'a cloud folder in Files');
   await pg.evaluate(async () => { go('set'); await loadConnections(); });

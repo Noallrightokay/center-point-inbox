@@ -140,8 +140,9 @@ const NOT_FOUND: &str = "RATA could not find that in OneDrive. It may have been 
 /// is the matter, so never NOT_CONNECTED or NOT_FOUND.
 const UPLOAD_STOPPED: &str = "The upload to OneDrive stopped part way. Try again.";
 
-/// Said when the last fragment went, no answer came back, and the session
-/// is gone or could not be asked: OneDrive may have made the file.
+/// Said when the last fragment may have arrived and the session is then
+/// gone or could not be asked: OneDrive may have made the file. Its own
+/// kind, `unsure`, so the page says it as it is and never as a failure.
 const MAY_HAVE_SAVED: &str = "The connection to OneDrive was lost as the last of the file went up, so OneDrive may have saved it. Check the folder before saving it again.";
 
 const TOO_MUCH: &str = "OneDrive sent far more than RATA asked for.";
@@ -554,10 +555,12 @@ struct NoAnswer {
 enum Unfinished {
     /// It failed: the session is cancelled, and this is said.
     Failed(Fail),
-    /// The last fragment went and its answer was lost on the way back
-    /// (`NoAnswer::lost`), and the session is then gone or could not be
-    /// asked: OneDrive may have made the file. Never after an answer
-    /// OneDrive gave, nor after a connection that was never made.
+    /// The last fragment may have arrived (sent and its answer lost on the
+    /// way back, `NoAnswer::lost`, or answered 416, OneDrive holding those
+    /// bytes), and nothing OneDrive said after showed the session still
+    /// waiting for bytes: OneDrive may have made the file. Never when no
+    /// attempt at the last fragment may have arrived: an answer OneDrive
+    /// gave, or a connection that was never made.
     Unsure,
 }
 
@@ -963,7 +966,7 @@ impl OneDrive {
         let http = self.http().map_err(Fail::Net)?;
         match self.fragments(http, at, bytes).await {
             Ok(item) => Ok(item),
-            Err(Unfinished::Unsure) => Err(Fail::Refused("offline", MAY_HAVE_SAVED.into())),
+            Err(Unfinished::Unsure) => Err(Fail::Refused("unsure", MAY_HAVE_SAVED.into())),
             Err(Unfinished::Failed(f)) => {
                 let _ = http.delete(at.clone()).send().await;
                 Err(f)
@@ -993,6 +996,16 @@ impl OneDrive {
         };
         let mut start = 0;
         let mut resumes = 0;
+        // Whether OneDrive may already have made the file: once any attempt
+        // at the last fragment may have arrived (sent and its answer lost,
+        // or a 416, OneDrive saying it holds those bytes). It stays set:
+        // asked straight after, OneDrive can still list the last range
+        // while it puts the file together, and the fragment sent again then
+        // meets a session that has finished. From then on only the session
+        // saying it still waits for bytes is a failure; anything else may
+        // be the file made, and a session cancelled and "Try again" would
+        // make `name 1.pdf` beside it.
+        let mut made = false;
         // Each fragment once, and a few resumes; never a loop with no end.
         let most = total / self.chunk.max(1) + 6;
         for _ in 0..most {
@@ -1009,7 +1022,7 @@ impl OneDrive {
                 .header("Content-Type", "application/octet-stream")
                 .timeout(wait)
                 .body(part);
-            let (failed, lost) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
+            let (failed, arrived, ended) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
                 Ok(a) => match a.status {
                     202 if !last => {
                         start = end;
@@ -1039,29 +1052,33 @@ impl OneDrive {
                             "OneDrive lost track of how much of the file it had (status 416). Try again."
                                 .into(),
                         ),
+                        true,
                         false,
                     ),
-                    _ => (a.upload_fail(), false),
+                    _ => (a.upload_fail(), false, a.session_ended()),
                 },
-                Err(n) => (n.why, n.lost),
+                Err(n) => (n.why, n.lost, false),
             };
-            // Only the last fragment, sent and its answer lost, may have
-            // made the file. An answer OneDrive gave (a 503, a 429) or a
-            // connection never made did not, and is said as it is.
-            let unsure = last && lost;
-            let spent = resumes == RESUMES;
-            if !resumable(&failed) || (spent && !unsure) {
+            // Only the last fragment may make the file. An answer OneDrive
+            // gave (a 503, a 429) or a connection never made did not, and
+            // is said as it is, unless an earlier attempt may have.
+            made |= last && arrived;
+            if made && ended {
+                return Err(Unsure);
+            }
+            let go_on = resumable(&failed) && resumes < RESUMES;
+            if !go_on && !made {
                 return Err(Failed(failed));
             }
             resumes += 1;
             match self.session_stands(http, at, failed.clone()).await {
-                // Resumes spent, and the session still waiting for bytes:
-                // the file was not made.
-                Ok(Stands::From(_)) if spent => return Err(Failed(failed)),
                 // Never past what was sent.
-                Ok(Stands::From(next)) if next < total && next <= end => start = next,
+                Ok(Stands::From(next)) if go_on && next < total && next <= end => start = next,
+                // Still waiting for bytes, and no going on: the file was not
+                // made.
+                Ok(Stands::From(next)) if !go_on && next < total => return Err(Failed(failed)),
+                _ if made => return Err(Unsure),
                 Ok(Stands::From(_)) => return Err(out_of_turn()),
-                Ok(Stands::Over) | Err(_) if unsure => return Err(Unsure),
                 Ok(Stands::Over) => {
                     return Err(Failed(Fail::Refused("refused", UPLOAD_STOPPED.into())));
                 }
@@ -1091,8 +1108,10 @@ impl OneDrive {
             )
         };
         for n in 0..ASKS {
+            // A long Retry-After is waited only this far: past it, the
+            // session is asked only to learn whether the file was made.
             let secs = match &why {
-                Fail::Limited(s) => (*s).max(1),
+                Fail::Limited(s) => (*s).clamp(1, WAIT_MOST),
                 _ => 1u64 << n,
             };
             tokio::time::sleep(self.second * secs as u32).await;
@@ -3376,7 +3395,7 @@ mod tests {
             srv.on("PUT /up/e.txt", cut());
             srv.on("GET /up/e.txt", with(404, ""));
             let e = save("e.txt").await.unwrap_err();
-            assert_eq!((e.kind, e.error.as_str()), ("offline", MAY_HAVE_SAVED));
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
             assert!(srv.asked_for("DELETE", "/up/e.txt").is_empty());
 
             // An upload host that cannot be reached at all: nothing was
@@ -3397,6 +3416,103 @@ mod tests {
                 "{}",
                 e.error
             );
+        });
+    }
+
+    /// SEC-11 (R20), second review: once the last fragment may have
+    /// arrived, it stays so. Asked straight after a lost answer, OneDrive
+    /// can still list the last range while it puts the file together; the
+    /// fragment sent again then meets a session that has finished (404
+    /// itemNotFound) or a range it already holds (416). Neither is a
+    /// failure to cancel and retry, which with `rename` would make
+    /// `name 1.txt`: OneDrive may have saved it. Only the session saying
+    /// it still waits for bytes is.
+    #[test]
+    fn once_the_last_fragment_may_have_arrived_only_a_waiting_session_is_a_failure() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let dir = Scratch::new();
+            let app = od_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let needs = |from: &str| ok(&format!(r#"{{"nextExpectedRanges":["{from}-"]}}"#));
+            let gone = || with(404, r#"{"error":{"code":"itemNotFound"}}"#);
+            let session = |name: &str| {
+                srv.on(
+                    &format!("POST /v1.0/me/drive/root:/{name}:/createUploadSession"),
+                    ok(&format!(r#"{{"uploadUrl":"{}/up/{name}"}}"#, srv.base)),
+                );
+                srv.on(&format!("DELETE /up/{name}"), with(204, ""));
+            };
+            let save = |name: &'static str| app.onedrive_save(None, name, b"hello", false);
+            let count =
+                |method: &str, name: &str| srv.asked_for(method, &format!("/up/{name}")).len();
+
+            // The answer lost, the session still listing the range, and the
+            // fragment sent again finding the session finished.
+            session("a.txt");
+            srv.on("PUT /up/a.txt", cut());
+            srv.on("GET /up/a.txt", needs("0"));
+            srv.on("PUT /up/a.txt", gone());
+            let e = save("a.txt").await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
+            assert_eq!((count("PUT", "a.txt"), count("GET", "a.txt")), (2, 1));
+            assert_eq!(count("DELETE", "a.txt"), 0, "nothing cancelled");
+
+            // The same, the fragment sent again answered 416, and the
+            // session then gone.
+            session("b.txt");
+            srv.on("PUT /up/b.txt", cut());
+            srv.on("GET /up/b.txt", needs("0"));
+            srv.on("PUT /up/b.txt", with(416, ""));
+            srv.on("GET /up/b.txt", gone());
+            let e = save("b.txt").await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
+            assert_eq!((count("PUT", "b.txt"), count("GET", "b.txt")), (2, 2));
+            assert_eq!(count("DELETE", "b.txt"), 0);
+
+            // A 416 to the last fragment is OneDrive holding those bytes:
+            // the session then gone may be the file made.
+            session("c.bin");
+            srv.on(
+                "PUT /up/c.bin",
+                with(202, r#"{"nextExpectedRanges":["327680-"]}"#),
+            );
+            srv.on("PUT /up/c.bin", with(416, ""));
+            srv.on("GET /up/c.bin", gone());
+            let e = app
+                .onedrive_save(None, "c.bin", &vec![3u8; 400 * 1024], false)
+                .await
+                .unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
+            assert_eq!(count("DELETE", "c.bin"), 0);
+
+            // Sent again and refused for another reason (locked): the
+            // session asked once more says whether it still waits.
+            let locked = || with(423, r#"{"error":{"code":"resourceLocked"}}"#);
+            session("d.txt");
+            srv.on("PUT /up/d.txt", cut());
+            srv.on("GET /up/d.txt", needs("0"));
+            srv.on("PUT /up/d.txt", locked());
+            srv.on("GET /up/d.txt", gone());
+            let e = save("d.txt").await.unwrap_err();
+            assert_eq!(e.kind, "unsure", "{}", e.error);
+            assert_eq!(count("DELETE", "d.txt"), 0);
+            session("e.txt");
+            srv.on("PUT /up/e.txt", cut());
+            srv.on("GET /up/e.txt", needs("0"));
+            srv.on("PUT /up/e.txt", locked());
+            srv.on("GET /up/e.txt", needs("0"));
+            let e = save("e.txt").await.unwrap_err();
+            assert!(e.error.contains("locked"), "{}", e.error);
+            assert_eq!(count("DELETE", "e.txt"), 1, "still waiting: not made");
+
+            // A 404 before any attempt at the last fragment may have
+            // arrived is still the session stopping, and cancelled.
+            session("f.txt");
+            srv.on("PUT /up/f.txt", gone());
+            let e = save("f.txt").await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("refused", UPLOAD_STOPPED));
+            assert_eq!(count("DELETE", "f.txt"), 1);
         });
     }
 

@@ -131,6 +131,12 @@ const ERROR_MAX: usize = 64 * 1024;
 const RESUMES: usize = 3;
 const ASKS: u32 = 4;
 
+/// How many times one save renews its access token when Google refuses it
+/// part way: a large save on a slow line can outlast the token it began
+/// with, which `google_token` hands out down to `oauth::EARLY` seconds
+/// before its end.
+const RENEWS: usize = 2;
+
 /// The most `files.export` hands over (Google's own limit).
 pub const EXPORT_MAX: usize = 10 * 1024 * 1024;
 
@@ -174,12 +180,18 @@ const NOT_CHOSEN: &str = "Google lets RATA open only the files you chose for it 
 /// renewed, begun again or parked over it.
 const UPLOAD_ENDED: &str = "Google Drive ended the upload part way. Try again.";
 
-/// Said when the last piece went, its answer was lost on the way back, and
-/// Google could not then be asked what it holds: it may have made the file,
-/// and Drive keeps two files of one name, so saving again could make two.
+/// Said when the last piece may have arrived and Google could not then be
+/// asked what it holds: it may have made the file, and Drive keeps two
+/// files of one name, so saving again could make two. Its own kind,
+/// `unsure`, so the page says it as it is and never as a failure.
 const MAY_HAVE_SAVED: &str = "The connection to Google Drive was lost as the last of the file went up, so Google Drive may have saved it. Check your Google Drive before saving it again.";
 
 const TOO_MUCH: &str = "Google Drive sent far more than RATA asked for.";
+
+/// Said when a save's token ran out part way and Google Drive had been
+/// disconnected meanwhile: no other connection's token goes to the upload.
+const DISCONNECTED_PART_WAY: &str =
+    "Google Drive was disconnected while RATA was saving the file, so nothing more was sent.";
 
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const NATIVE_PREFIX: &str = "application/vnd.google-apps.";
@@ -565,9 +577,10 @@ enum Unfinished {
     /// It failed: the session is ended, and this is said.
     Failed(Fail),
     /// The last piece went and its answer was lost on the way back
-    /// (`NoAnswer::lost`), and Google could not then say what it holds: it
-    /// may have made the file, so the session is left alone. Never after an
-    /// answer Google gave, nor after a connection that was never made.
+    /// (`NoAnswer::lost`), and nothing Google said after showed it still
+    /// waiting for bytes: it may have made the file, so the session is left
+    /// alone. Never when no attempt at the last piece may have arrived: an
+    /// answer Google gave, or a connection that was never made.
     Unsure,
 }
 
@@ -577,6 +590,72 @@ enum Stands {
     From(usize),
     /// Google holds the whole file: this is it.
     Done(Value),
+}
+
+/// The access token a resumable upload sends with its pieces and its
+/// questions, and where it gets another when Google refuses it part way (a
+/// large save on a slow line can outlast the token it began with): from
+/// the Google Drive connected when the save began (`began`, its
+/// generation), never from one connected since. A refusal of a token
+/// Google never took (`proven` false: one just renewed), or one past
+/// `RENEWS`, is the session's matter.
+struct Bearer<'a> {
+    token: String,
+    proven: bool,
+    renewed: usize,
+    rata: &'a Rata,
+    link: &'a GoogleLink,
+    began: u64,
+}
+
+impl<'a> Bearer<'a> {
+    /// The token a save began with, which opened its session.
+    fn new(rata: &'a Rata, link: &'a GoogleLink, began: u64, token: String) -> Bearer<'a> {
+        Bearer {
+            token,
+            proven: true,
+            renewed: 0,
+            rata,
+            link,
+            began,
+        }
+    }
+
+    /// Whether Google refusing this token (a 401) is the token running
+    /// out, to be renewed: Google took it before, and renewals are left.
+    fn may_renew(&self) -> bool {
+        self.proven && self.renewed < RENEWS
+    }
+
+    /// Google answered with something other than a refusal of the token.
+    fn took(&mut self) {
+        self.proven = true;
+    }
+
+    /// A new token for the connection the save began under, after Google
+    /// refused this one. Refused once that connection is gone
+    /// (Disconnect, Delete account, or another connected since).
+    async fn renew(&mut self) -> Result<(), Fail> {
+        let gone = || Fail::Refused("not-connected", DISCONNECTED_PART_WAY.into());
+        if self.rata.google.generation() != self.began {
+            return Err(gone());
+        }
+        let (token, _) = self
+            .rata
+            .google_token(self.link, Some(&self.token))
+            .await
+            .map_err(|r| Fail::Refused(r.kind, r.error))?;
+        // `google_token` reads the generation for itself, and generations
+        // only go up: still `began` afterwards, the token is this
+        // connection's.
+        if self.rata.google.generation() != self.began {
+            return Err(gone());
+        }
+        self.token = token;
+        self.proven = false;
+        self.renewed += 1;
+        Ok(())
+    }
 }
 
 impl Answer {
@@ -591,13 +670,21 @@ impl Answer {
         classify(self.status, reason.as_deref(), self.wait)
     }
 
+    /// Whether a resumable upload's session address says the session is
+    /// over: its 401 (once `Bearer` has no renewal for it), 404 or 410.
+    fn session_ended(&self) -> bool {
+        matches!(self.status, 401 | 404 | 410)
+    }
+
     /// A refusal from a resumable upload's session address: its 401, 404
     /// and 410 mean the session ended, never that the sign-in did, so
     /// `with_google` neither renews and begins again nor parks over it.
+    /// (A token that ran out part way is renewed by `Bearer` first.)
     fn upload_fail(&self) -> Fail {
-        match self.status {
-            401 | 404 | 410 => Fail::Refused("refused", UPLOAD_ENDED.into()),
-            _ => self.fail(),
+        if self.session_ended() {
+            Fail::Refused("refused", UPLOAD_ENDED.into())
+        } else {
+            self.fail()
         }
     }
 
@@ -1096,12 +1183,12 @@ impl GoogleDrive {
 
     /// One new file in My Drive as a resumable upload: a session from the
     /// upload address, checked to be that address's own, then the bytes in
-    /// pieces of `chunk`. A session that fails part way is ended, except
-    /// when the last piece may have made the file: then it is left alone,
-    /// and nothing is sent again.
+    /// pieces of `chunk`, sent with `bearer`'s token. A session that fails
+    /// part way is ended, except when the last piece may have made the
+    /// file: then it is left alone, and nothing is sent again.
     async fn create_large(
         &self,
-        token: &str,
+        bearer: &mut Bearer<'_>,
         meta: &Value,
         mime: &str,
         bytes: &[u8],
@@ -1109,7 +1196,7 @@ impl GoogleDrive {
         let http = self.http().map_err(Fail::Net)?;
         let req = http
             .post(self.upload_url("resumable"))
-            .bearer_auth(token)
+            .bearer_auth(&bearer.token)
             .header("Content-Type", "application/json; charset=UTF-8")
             .header("X-Upload-Content-Type", mime)
             .header("X-Upload-Content-Length", bytes.len().to_string())
@@ -1130,13 +1217,17 @@ impl GoogleDrive {
                         .into(),
                 )
             })?;
-        match self.pieces(&at, token, bytes).await {
+        match self.pieces(&at, bearer, bytes).await {
             Ok(file) => Ok(file),
-            Err(Unfinished::Unsure) => Err(Fail::Refused("offline", MAY_HAVE_SAVED.into())),
+            Err(Unfinished::Unsure) => Err(Fail::Refused("unsure", MAY_HAVE_SAVED.into())),
             Err(Unfinished::Failed(f)) => {
                 // Ended at once rather than left for Google's week. Best
-                // effort.
-                let _ = http.delete(at.clone()).bearer_auth(token).send().await;
+                // effort, with the newest token this connection gave.
+                let _ = http
+                    .delete(at.clone())
+                    .bearer_auth(&bearer.token)
+                    .send()
+                    .await;
                 Err(f)
             }
         }
@@ -1144,9 +1235,16 @@ impl GoogleDrive {
 
     /// The bytes of a resumable upload, in pieces of `chunk`. A piece that
     /// fails part way is gone on with from what Google says it holds, at
-    /// most `RESUMES` times a save; a refusal from the session address is
-    /// never the sign-in's (`Answer::upload_fail`).
-    async fn pieces(&self, at: &url::Url, token: &str, bytes: &[u8]) -> Result<Value, Unfinished> {
+    /// most `RESUMES` times a save; a token that runs out part way is
+    /// renewed (`Bearer`) and the session asked what it holds; any other
+    /// refusal from the session address is never the sign-in's
+    /// (`Answer::upload_fail`).
+    async fn pieces(
+        &self,
+        at: &url::Url,
+        bearer: &mut Bearer<'_>,
+        bytes: &[u8],
+    ) -> Result<Value, Unfinished> {
         use Unfinished::{Failed, Unsure};
         let http = self.http().map_err(|e| Failed(Fail::Net(e)))?;
         let total = bytes.len();
@@ -1158,9 +1256,15 @@ impl GoogleDrive {
         };
         let mut start = 0;
         let mut resumes = 0;
-        // Each piece once, and a few resumes; never a loop with no end. The
-        // questions after a failure are counted apart (`upload_stands`).
-        let most = total / self.chunk.max(1) + 6;
+        // Whether Google may already have made the file: once the last
+        // piece went and its answer was lost. It stays set, as OneDrive's
+        // does: from then on only Google saying it still waits for bytes is
+        // a failure, and a session that has ended may be the file made.
+        let mut made = false;
+        // Each piece once, a few resumes and renewals; never a loop with
+        // no end. The questions after a failure are counted apart
+        // (`upload_stands`).
+        let most = total / self.chunk.max(1) + 6 + RENEWS;
         for _ in 0..most {
             let end = (start + self.chunk).min(total);
             let last = end == total;
@@ -1168,61 +1272,83 @@ impl GoogleDrive {
             let wait = Duration::from_secs(60 + (part.len() / (64 * 1024)) as u64);
             let req = http
                 .put(at.clone())
-                .bearer_auth(token)
+                .bearer_auth(&bearer.token)
                 .header(
                     "Content-Range",
                     format!("bytes {start}-{}/{total}", end - 1),
                 )
                 .timeout(wait)
                 .body(part);
-            let (failed, lost) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
-                Ok(a) => match a.status {
-                    308 => {
-                        // Go on from the byte after what Google says it
-                        // holds, which is normally `end`.
-                        let next = received(a.range.as_deref()).unwrap_or(0);
-                        start = go_on_from(next, end, total).ok_or_else(out_of_turn)?;
-                        continue;
+            let (failed, lost, ended, renewed) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
+                // The token ran out part way, not the session: a new one
+                // for the same connection, then Google is asked what it
+                // holds. Not a resume.
+                Ok(a) if a.status == 401 && bearer.may_renew() => {
+                    if let Err(f) = bearer.renew().await {
+                        return Err(if made { Unsure } else { Failed(f) });
                     }
-                    200 | 201 if last => {
-                        return a.json("an answer to the upload").map_err(Failed);
+                    (a.upload_fail(), false, false, true)
+                }
+                Ok(a) => {
+                    if a.status != 401 {
+                        bearer.took();
                     }
-                    200..=299 => {
-                        return Err(Failed(Fail::Refused(
-                            "refused",
-                            format!(
-                                "Google Drive answered the upload out of turn (status {}).",
-                                a.status
-                            ),
-                        )));
+                    match a.status {
+                        308 => {
+                            // Go on from the byte after what Google says it
+                            // holds, which is normally `end`.
+                            let next = received(a.range.as_deref()).unwrap_or(0);
+                            start = go_on_from(next, end, total).ok_or_else(out_of_turn)?;
+                            continue;
+                        }
+                        200 | 201 if last => {
+                            return a.json("an answer to the upload").map_err(Failed);
+                        }
+                        200..=299 => {
+                            return Err(Failed(Fail::Refused(
+                                "refused",
+                                format!(
+                                    "Google Drive answered the upload out of turn (status {}).",
+                                    a.status
+                                ),
+                            )));
+                        }
+                        _ => (a.upload_fail(), false, a.session_ended(), false),
                     }
-                    _ => (a.upload_fail(), false),
-                },
-                Err(n) => (n.why, n.lost),
+                }
+                Err(n) => (n.why, n.lost, false, false),
             };
             // Only the last piece, sent and its answer lost, may have made
             // the file. An answer Google gave (a 503, a 429) or a connection
-            // never made did not, and is said as it is.
-            let unsure = last && lost;
-            let spent = resumes == RESUMES;
-            if !resumable(&failed) || (spent && !unsure) {
+            // never made did not, and is said as it is, unless an earlier
+            // attempt may have.
+            made |= last && lost;
+            if made && ended {
+                return Err(Unsure);
+            }
+            let go_on = renewed || (resumable(&failed) && resumes < RESUMES);
+            if !go_on && !made {
                 return Err(Failed(failed));
             }
-            resumes += 1;
+            if !renewed {
+                resumes += 1;
+            }
             match self
-                .upload_stands(http, at, token, total, failed.clone())
+                .upload_stands(http, at, bearer, total, failed.clone())
                 .await
             {
                 Ok(Stands::Done(file)) => return Ok(file),
-                // Resumes spent, and Google still waiting for bytes: the
-                // file was not made.
-                Ok(Stands::From(_)) if spent => return Err(Failed(failed)),
-                Ok(Stands::From(next)) => {
-                    start = go_on_from(next, end, total).ok_or_else(out_of_turn)?;
-                }
+                Ok(Stands::From(next)) if go_on => match go_on_from(next, end, total) {
+                    Some(next) => start = next,
+                    None if made => return Err(Unsure),
+                    None => return Err(out_of_turn()),
+                },
+                // Still waiting for bytes, and no going on: the file was not
+                // made.
+                Ok(Stands::From(_)) => return Err(Failed(failed)),
                 // Whatever kept Google from saying (the network, or the
                 // session's 401, 404 or 410), the file may be there.
-                Err(_) if unsure => return Err(Unsure),
+                Err(_) if made => return Err(Unsure),
                 Err(f) => return Err(Failed(f)),
             }
         }
@@ -1233,37 +1359,53 @@ impl GoogleDrive {
     }
 
     /// What a resumable upload's session holds after a piece failed with
-    /// `why`: an empty PUT with `Content-Range: bytes */total`, with the
-    /// token as every piece goes, asked at most `ASKS` times, waiting
-    /// longer each time (or as long as Retry-After says).
+    /// `why`: an empty PUT with `Content-Range: bytes */total`, with
+    /// `bearer`'s token as every piece goes (renewed and asked again at
+    /// once when it ran out), asked at most `ASKS` times, waiting longer
+    /// each time (or as long as Retry-After says, up to `WAIT_MOST`).
     async fn upload_stands(
         &self,
         http: &reqwest::Client,
         at: &url::Url,
-        token: &str,
+        bearer: &mut Bearer<'_>,
         total: usize,
         mut why: Fail,
     ) -> Result<Stands, Fail> {
-        for n in 0..ASKS {
-            let secs = match &why {
-                Fail::Limited(s) => (*s).max(1),
-                _ => 1u64 << n,
-            };
-            tokio::time::sleep(self.second * secs as u32).await;
-            let req = http
-                .put(at.clone())
+        let ask = |token: &str| {
+            http.put(at.clone())
                 .bearer_auth(token)
                 .header("Content-Range", format!("bytes */{total}"))
                 // As Google's guide asks; an empty body alone sends none.
                 .header("Content-Length", "0")
                 .timeout(Duration::from_secs(60))
-                .body(Vec::new());
-            match self.answer(req, BODY_MAX, TOO_MUCH).await {
-                Ok(a) => match a.status {
-                    308 => return Ok(Stands::From(received(a.range.as_deref()).unwrap_or(0))),
-                    200 | 201 => return a.json("an answer to the upload").map(Stands::Done),
-                    _ => why = a.upload_fail(),
-                },
+                .body(Vec::new())
+        };
+        for n in 0..ASKS {
+            // A long Retry-After is waited only this far: past it, Google
+            // is asked only to learn whether the file was made.
+            let secs = match &why {
+                Fail::Limited(s) => (*s).clamp(1, WAIT_MOST),
+                _ => 1u64 << n,
+            };
+            tokio::time::sleep(self.second * secs as u32).await;
+            let mut got = self.answer(ask(&bearer.token), BODY_MAX, TOO_MUCH).await;
+            if matches!(&got, Ok(a) if a.status == 401) && bearer.may_renew() {
+                bearer.renew().await?;
+                got = self.answer(ask(&bearer.token), BODY_MAX, TOO_MUCH).await;
+            }
+            match got {
+                Ok(a) => {
+                    if a.status != 401 {
+                        bearer.took();
+                    }
+                    match a.status {
+                        308 => {
+                            return Ok(Stands::From(received(a.range.as_deref()).unwrap_or(0)));
+                        }
+                        200 | 201 => return a.json("an answer to the upload").map(Stands::Done),
+                        _ => why = a.upload_fail(),
+                    }
+                }
                 Err(f) => why = f,
             }
             if !resumable(&why) {
@@ -1942,15 +2084,22 @@ impl Rata {
         let mime = mime_of(&clean);
         let meta = serde_json::json!({ "name": clean });
         let small = bytes.len() <= self.google.multipart_max;
+        // A large save renews its token part way only for this connection.
+        let began = self.google.generation();
+        let here = &link;
         let file = self
             .with_google(&link, |t| {
                 let meta = meta.clone();
                 async move {
                     if small {
-                        self.google.create_small(&t, &meta, mime, bytes).await
-                    } else {
-                        self.google.create_large(&t, &meta, mime, bytes).await
+                        return self.google.create_small(&t, &meta, mime, bytes).await;
                     }
+                    let mut bearer = Bearer::new(self, here, began, t);
+                    let made = self
+                        .google
+                        .create_large(&mut bearer, &meta, mime, bytes)
+                        .await;
+                    made.map_err(|e| hide(e, &[&bearer.token]))
                 }
             })
             .await?;
@@ -3663,52 +3812,222 @@ mod tests {
         });
     }
 
-    /// SEC-11 (R20): a 401 from the upload session (a piece or a question
-    /// about it) means the session ended, not the sign-in: nothing is
-    /// renewed, restarted from byte 0 or parked over it.
+    /// SEC-11 (R20), second review: a large save on a slow line can outlast
+    /// the token it began with (`google_token` hands one out down to two
+    /// minutes before its end). Google refusing that token part way (a 401
+    /// to a piece or to a question) gets a new one for the same connection
+    /// and the same session goes on from what Google holds: never begun
+    /// again from byte 0, never parked. A 401 to a token just renewed is
+    /// the session's, as before: ended, said, and nothing parked.
     #[test]
-    fn a_401_from_the_upload_session_ends_the_upload_and_never_renews_or_parks() {
+    fn a_token_that_runs_out_part_way_is_renewed_and_the_same_session_goes_on() {
         rt().block_on(async {
             let srv = Scripted::start().await;
             let dir = Scratch::new();
             let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
             signed_in(&app);
             let put = format!("PUT {UPLOAD}");
-            let data = vec![5u8; 400_000];
-            for asked_about in [false, true] {
-                let session = format!("{}{UPLOAD}?uploadType=resumable&upload_id=x", srv.base);
+            let data: Vec<u8> = (0..400_000u32).map(|i| (i % 241) as u8).collect();
+            let holds_first = || headed(308, "", vec![("Range", "bytes=0-262143".into())]);
+            let session = |id: &str| {
                 srv.on(
                     &format!("POST {UPLOAD}"),
-                    headed(200, "", vec![("Location", session)]),
-                );
-                if asked_about {
-                    srv.on(&put, error(503, "backendError"));
-                }
-                srv.on(&put, error(401, "authError"));
-                srv.on(&format!("DELETE {UPLOAD}"), with(401, ""));
-                let e = app
-                    .google_save(None, "big.bin", &data, false)
-                    .await
-                    .unwrap_err();
-                assert_eq!(
-                    (e.kind, e.error.as_str()),
-                    (
-                        "refused",
-                        "Google Drive ended the upload part way. Try again."
+                    headed(
+                        200,
+                        "",
+                        vec![(
+                            "Location",
+                            format!("{}{UPLOAD}?uploadType=resumable&upload_id={id}", srv.base),
+                        )],
                     ),
-                    "{asked_about}"
                 );
-                assert!(entry(&app).connected, "nothing parked");
-            }
-            assert!(
-                srv.asked_for("POST", "/token").is_empty(),
-                "nothing renewed"
-            );
+            };
+            let of = |id: &str, method: &str| -> Vec<Asked> {
+                srv.asked_for(method, UPLOAD)
+                    .into_iter()
+                    .filter(|p| p.params()["upload_id"] == id)
+                    .collect()
+            };
+            let save = || app.google_save(None, "scan.pdf", &data, false);
+            let renewed = |n: &str| RENEWED.replace("0002", n);
+            let token = |n: &str| format!("ya29.drive-access-secret-{n}");
+            let file = r#"{"id":"FLATE","name":"scan.pdf","size":"400000"}"#;
+
+            // The second piece's token refused: renewed, Google asked what
+            // it holds with the new one, and the piece sent again with it.
+            session("a");
+            srv.on(&put, holds_first());
+            srv.on(&put, error(401, "authError"));
+            srv.on(TOKEN, ok(&renewed("0002")));
+            srv.on(&put, holds_first());
+            srv.on(&put, with(200, file));
+            let placed = save().await.unwrap();
+            assert_eq!(placed.id, "FLATE");
+            let puts = of("a", "PUT");
+            let seen: Vec<(String, Option<String>)> = puts
+                .iter()
+                .map(|p| (p.header("content-range").unwrap(), p.auth()))
+                .collect();
             assert_eq!(
-                srv.asked_for("POST", UPLOAD).len(),
-                2,
-                "never begun again from byte 0"
+                seen,
+                [
+                    ("bytes 0-262143/400000".into(), bearer(ACCESS)),
+                    ("bytes 262144-399999/400000".into(), bearer(ACCESS)),
+                    ("bytes */400000".into(), bearer(&token("0002"))),
+                    ("bytes 262144-399999/400000".into(), bearer(&token("0002"))),
+                ]
             );
+            assert_eq!(puts[3].body, data[262_144..], "the same bytes again");
+            assert_eq!(srv.asked_for("POST", "/token").len(), 1);
+            assert_eq!(srv.asked_for("POST", UPLOAD).len(), 1, "one session");
+            assert!(of("a", "DELETE").is_empty());
+            assert!(entry(&app).connected, "nothing parked");
+
+            // A question after a bad moment meets the token's end: renewed,
+            // and asked again at once.
+            session("b");
+            srv.on(&put, holds_first());
+            srv.on(&put, error(503, "backendError"));
+            srv.on(&put, error(401, "authError"));
+            srv.on(TOKEN, ok(&renewed("0003")));
+            srv.on(&put, holds_first());
+            srv.on(&put, with(201, file));
+            assert_eq!(save().await.unwrap().id, "FLATE");
+            let auths: Vec<Option<String>> = of("b", "PUT").iter().map(Asked::auth).collect();
+            assert_eq!(
+                auths,
+                [
+                    bearer(&token("0002")),
+                    bearer(&token("0002")),
+                    bearer(&token("0002")),
+                    bearer(&token("0003")),
+                    bearer(&token("0003")),
+                ]
+            );
+            assert_eq!(srv.asked_for("POST", UPLOAD).len(), 2);
+
+            // A 401 to the token just renewed is the session's: ended (with
+            // the new token), said, nothing parked, nothing begun again.
+            session("c");
+            srv.on(&put, error(401, "authError"));
+            srv.on(TOKEN, ok(&renewed("0004")));
+            srv.on(&put, error(401, "authError"));
+            srv.on(&format!("DELETE {UPLOAD}"), with(204, ""));
+            let e = save().await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("refused", UPLOAD_ENDED));
+            assert_eq!(srv.asked_for("POST", "/token").len(), 3);
+            assert_eq!(of("c", "PUT").len(), 2);
+            assert_eq!(of("c", "DELETE")[0].auth(), bearer(&token("0004")));
+            assert!(entry(&app).connected, "nothing parked");
+            assert_eq!(srv.asked_for("POST", UPLOAD).len(), 3);
+
+            // Renewals run out: the session's, too.
+            session("d");
+            srv.on(&put, holds_first());
+            for n in ["0005", "0006"] {
+                srv.on(&put, error(401, "authError"));
+                srv.on(TOKEN, ok(&renewed(n)));
+                srv.on(&put, holds_first());
+            }
+            srv.on(&put, error(401, "authError"));
+            srv.on(&format!("DELETE {UPLOAD}"), with(204, ""));
+            let e = save().await.unwrap_err();
+            assert_eq!(e.error, UPLOAD_ENDED);
+            assert_eq!(srv.asked_for("POST", "/token").len(), 3 + RENEWS);
+            assert!(entry(&app).connected);
+
+            // Google ending the sign-in itself (the refresh token refused)
+            // parks it, as anywhere.
+            session("e");
+            srv.on(&put, error(401, "authError"));
+            srv.on(
+                TOKEN,
+                with(
+                    400,
+                    r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#,
+                ),
+            );
+            srv.on(&format!("DELETE {UPLOAD}"), with(401, ""));
+            let e = save().await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("not-connected", CONNECT_AGAIN));
+            assert!(!entry(&app).connected);
+        });
+    }
+
+    /// SEC-11 (R20 with R8): the renewal is for the Google Drive connected
+    /// when the save began. Disconnected and another connected while a
+    /// piece is on its way, the token's end stops the save: nothing goes
+    /// with the other connection's token, and nothing is renewed.
+    #[test]
+    fn a_token_renewed_part_way_is_never_another_connections() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let dir = Scratch::new();
+            let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let put = format!("PUT {UPLOAD}");
+            srv.on(
+                &format!("POST {UPLOAD}"),
+                headed(
+                    200,
+                    "",
+                    vec![(
+                        "Location",
+                        format!("{}{UPLOAD}?uploadType=resumable&upload_id=r8", srv.base),
+                    )],
+                ),
+            );
+            let (asked_tx, asked) = oneshot::channel();
+            let (release, released) = oneshot::channel::<()>();
+            srv.on(
+                &put,
+                Reply {
+                    asked: Some(asked_tx),
+                    hold: Some(released),
+                    ..error(401, "authError")
+                },
+            );
+            srv.on(TOKEN, ok(RENEWED));
+            srv.on(&format!("DELETE {UPLOAD}"), with(401, ""));
+            const OTHER: &str = "ya29.another-account-access-0001";
+            let data = vec![9u8; 400_000];
+            let (saved, ()) = tokio::join!(app.google_save(None, "big.bin", &data, false), async {
+                asked.await.unwrap();
+                app.disconnect_google().unwrap();
+                vault::put_google_secret(app.vault(), "1//another-account-refresh").unwrap();
+                {
+                    let mut s = app.store().lock().unwrap();
+                    s.set_google(Some(GoogleLink {
+                        owner: "Bo Ng".into(),
+                        connected_at: 200,
+                        parked_at: None,
+                    }));
+                    s.save().unwrap();
+                }
+                app.google.hold(
+                    app.google.generation(),
+                    Kept {
+                        refresh: "1//another-account-refresh".into(),
+                        stored: "1//another-account-refresh".into(),
+                        access: Some(Access {
+                            token: OTHER.into(),
+                            expires_at: now() + 3600,
+                        }),
+                    },
+                );
+                release.send(()).unwrap();
+            });
+            let e = saved.unwrap_err();
+            assert_eq!(
+                (e.kind, e.error.as_str()),
+                ("not-connected", DISCONNECTED_PART_WAY)
+            );
+            assert!(
+                srv.asked().iter().all(|a| a.auth() != bearer(OTHER)),
+                "nothing goes with the other connection's token"
+            );
+            assert!(srv.asked_for("POST", "/token").is_empty());
+            assert_eq!(srv.asked_for("PUT", UPLOAD).len(), 1);
         });
     }
 
@@ -3759,12 +4078,12 @@ mod tests {
                 srv.on(&put, cut());
             }
             let e = save().await.unwrap_err();
-            assert_eq!((e.kind, e.error.as_str()), ("offline", MAY_HAVE_SAVED));
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
             assert_eq!(asked("a", "PUT"), 2 + ASKS as usize);
             assert_eq!(asked("a", "DELETE"), 0, "the session is left alone");
 
             // Google busy each time, then the last resume's answer lost:
-            // asked once more, and the session ended (a 401 here) cannot
+            // asked once more, and the session ended (a 404 here) cannot
             // say, so it may be there.
             session("b");
             for _ in 0..RESUMES {
@@ -3772,7 +4091,7 @@ mod tests {
                 srv.on(&put, holds_first());
             }
             srv.on(&put, cut());
-            srv.on(&put, error(401, "authError"));
+            srv.on(&put, error(404, "notFound"));
             let e = save().await.unwrap_err();
             assert_eq!(e.error, MAY_HAVE_SAVED);
             assert_eq!(asked("b", "DELETE"), 0);
@@ -3824,6 +4143,28 @@ mod tests {
             assert!(e.error.contains("internalError"), "{}", e.error);
             assert!(!e.error.contains("may have saved"), "{}", e.error);
             assert_eq!(asked("e", "DELETE"), 1);
+
+            // Second review: once the last piece may have arrived, it stays
+            // so. Google says it still waits for it, but the piece sent
+            // again finds the session ended: the first may have made the
+            // file meanwhile, so nothing is ended and nothing said failed.
+            session("f");
+            srv.on(&put, cut());
+            srv.on(&put, holds_first());
+            srv.on(&put, error(404, "notFound"));
+            let e = save().await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
+            assert_eq!(asked("f", "PUT"), 4);
+            assert_eq!(asked("f", "DELETE"), 0);
+
+            // Before any attempt at the last piece may have arrived, a
+            // session that ended is still ended, and said.
+            session("g");
+            srv.on(&put, error(410, "gone"));
+            srv.on(&delete, with(204, ""));
+            let e = save().await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("refused", UPLOAD_ENDED));
+            assert_eq!(asked("g", "DELETE"), 1);
         });
     }
 
