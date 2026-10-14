@@ -5023,15 +5023,17 @@ function brandMark(key,size){
    entry for the whole browser, `rata_apps`, which moves here once and goes.
    The app is one person's computer, so all of it moves; on the website
    nobody can tell whose those addresses were, so only pins and Recent do,
-   and only to an account with none of its own. */
+   and only to an account with none of its own. The old entry goes before
+   the new one is written, so a full localStorage loses the move rather
+   than leaving the addresses where Delete account no longer looks. */
 const APPS_KEY='rata_apps_'+(SESSION?SESSION.uid:'anon');
 try{
   const old=SESSION?localStorage.getItem('rata_apps'):null;
   if(old!==null){
+    localStorage.removeItem('rata_apps');
     let v=null;try{v=JSON.parse(old)}catch(e){}
     if(v&&typeof v==='object'&&!Array.isArray(v)&&localStorage.getItem(APPS_KEY)===null)
       localStorage.setItem(APPS_KEY,JSON.stringify(window.__RATA_NATIVE__?v:{pins:v.pins,recent:v.recent}));
-    localStorage.removeItem('rata_apps');
   }
 }catch(e){}
 /* 0.1.50 kept whether Files' launcher was folded; Apps has nothing to fold. */

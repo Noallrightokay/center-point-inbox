@@ -4236,6 +4236,26 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
       `the app: the browser-wide entry of 0.1.51 moves whole, addresses too, and is removed: ${JSON.stringify(n)}`);
     await pn.close();
     await nctx.close();
+    /* A localStorage too full for the move (the app keeps mail there when
+       IndexedDB will not open) loses the move rather than keeping the old
+       entry, which Delete account no longer looks for. */
+    const qctx = await browser.newContext();
+    let pq = await open(true, { context: qctx });
+    await pq.evaluate((a) => localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], acct: { google: a.G, microsoft: a.MS } })), { G, MS });
+    await pq.close();
+    await qctx.addInitScript(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (k, v) { if (/^rata_apps_/.test(k)) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, k, v); };
+    });
+    pq = await open(true, { context: qctx });
+    await pq.evaluate(() => go('apps'));
+    const q = await seen(pq);
+    q.left = await pq.evaluate(() => ({ old: localStorage.getItem('rata_apps'), mine: localStorage.getItem(APPS_KEY),
+      holding: Object.keys(localStorage).filter((k) => /ann\.lee|contoso/i.test(localStorage.getItem(k) || '')) }));
+    check(q.left.old === null && q.left.mine === null && !q.left.holding.length && q.sum === '' && q.hinted === 0 && !q.leak,
+      `the app: a localStorage too full to take the move loses it, and the browser-wide entry is removed all the same: ${JSON.stringify(q)}`);
+    await pq.close();
+    await qctx.close();
   }
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
