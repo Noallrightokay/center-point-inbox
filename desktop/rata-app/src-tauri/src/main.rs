@@ -186,11 +186,14 @@ fn main() {
             );
             // Windows only: keychain entries an earlier build wrote to roam
             // stay on this computer from now on, and a mailbox's that Unlink
-            // or Delete account left in a roamed copy goes (review R6).
+            // or Delete account left in a roamed copy goes (review R6). The
+            // list counts only as `open_store` counts it: read, and of this
+            // schema or older.
             #[cfg(windows)]
             {
                 let listed: Option<Vec<&str>> = store
                     .on_disk()
+                    .filter(|v| *v <= store::SCHEMA)
                     .map(|_| store.list().iter().map(|m| m.email.as_str()).collect());
                 vault::settle_windows(listed.as_deref());
             }
