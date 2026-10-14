@@ -221,6 +221,40 @@ jobs:
         run: cargo test --all-targets
         working-directory: desktop/rata-app/src-tauri
 
+  # The keychain on Windows, on Windows. RATA writes its Windows keychain
+  # entries itself, CRED_PERSIST_LOCAL_MACHINE, because keyring writes every
+  # one to roam with the profile (vault.rs, review R6), and Credential
+  # Manager cannot be reached from Linux. So the vault's tests run here,
+  # among them one that writes a real entry, checks it stays on this
+  # computer and reads back, and moves one written the old way; with the
+  # list's (moved to Local AppData, R13) and start's. Only those: the rest
+  # have never run on Windows. release.yml's gate_windows runs the same,
+  # step for step; change them there and here together.
+  windows:
+    name: Desktop shell on Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        shell: bash
+        working-directory: desktop/rata-app
+
+      - name: Keychain, list and start tests
+        run: |
+          cargo test --bin rata-app -- vault:: store:: tests::at_start
+        working-directory: desktop/rata-app/src-tauri
+
   # The interface, driven. ui-harness.mjs opens ui/ exactly as sync-ui.sh
   # assembles it, under the app's own CSP from tauri.conf.json, with a fake
   # Tauri backend, and clicks through what the bridge promises. Until this job

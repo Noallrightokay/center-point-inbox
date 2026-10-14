@@ -189,6 +189,39 @@ jobs:
       - name: The demo's rules
         run: node desktop/rata-app/demo/check.mjs
 
+  # The gate's Windows half: desktop-ci.yml's "Desktop shell on Windows",
+  # step for step; change them there and here together. Windows keychain
+  # entries are written by RATA itself so they stay on the computer (vault.rs,
+  # review R6), and Credential Manager cannot be reached from Linux, so the
+  # vault's tests, the list's and start's run on Windows before a Windows
+  # installer is built from them.
+  gate_windows:
+    name: Tests before a release (Windows)
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        shell: bash
+        working-directory: desktop/rata-app
+
+      - name: Keychain, list and start tests
+        run: |
+          cargo test --bin rata-app -- vault:: store:: tests::at_start
+        working-directory: desktop/rata-app/src-tauri
+
   # One release, made before the builds rather than by them: four builds each
   # finding no release and creating one is a race that leaves duplicates. Made
   # as a draft so nobody sees an empty release while the installers build, and
@@ -197,7 +230,7 @@ jobs:
   # runs only when every need succeeded).
   create-release:
     name: Create release
-    needs: [plan, gate]
+    needs: [plan, gate, gate_windows]
     if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
@@ -240,13 +273,13 @@ jobs:
 
   installers:
     name: ${{ matrix.name }}
-    needs: [plan, gate, create-release]
+    needs: [plan, gate, gate_windows, create-release]
     # create-release is skipped for a build-only run, and a skipped need would
     # otherwise skip this job too. `always()` switches off the implicit
-    # "every need succeeded", so the gate is asked for by name.
+    # "every need succeeded", so both halves of the gate are asked for by name.
     if: >-
       always() && needs.plan.outputs.build == 'true' &&
-      needs.gate.result == 'success' &&
+      needs.gate.result == 'success' && needs.gate_windows.result == 'success' &&
       (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -721,6 +754,11 @@ jobs:
       # read another app's window title; then the title is not asserted, a
       # warning says so, and what is asserted is that the app stays up with
       # a clean log.
+      # Everywhere, each one is then launched a second time while the first
+      # is up, and single instance (main.rs, review R5) must hand over and
+      # exit 0 with the first still running. On Linux that guard is a D-Bus
+      # name, so the script runs inside a session bus of its own
+      # (dbus-run-session, from the dbus package installed below).
       - name: Install and launch the app
         id: smoke
         timeout-minutes: 10
@@ -732,14 +770,14 @@ jobs:
           EXPECT_TITLE: ${{ needs.plan.outputs.prerelease == 'true' && format('RATA {0} beta', needs.plan.outputs.version) || format('RATA {0}', needs.plan.outputs.version) }}
         run: |
           if [ "${RUNNER_OS}" = Linux ]; then
-            sudo apt-get install -y --no-install-recommends xvfb xdotool
+            sudo apt-get install -y --no-install-recommends xvfb xdotool dbus
           fi
           ./harness/smoke-installed.sh
 
       # Windows: the NSIS installer runs silently (/S, the per-user install
       # a customer gets), the installed rata-app.exe is found where the
       # installer registered it, started, and its main window title read
-      # with Get-Process.
+      # with Get-Process. Then it is started again, as above.
       - name: Install and launch the app (Windows)
         id: winsmoke
         timeout-minutes: 10

@@ -31,6 +31,7 @@ mod update;
 mod vault;
 mod watch;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -39,7 +40,45 @@ use tauri::webview::NewWindowResponse;
 use crate::core::Rata;
 use crate::links::{Link, Navigation};
 use crate::store::Store;
-use crate::vault::Keychain;
+use crate::vault::{Keychain, Vault};
+
+/// The mailbox list, from this computer's own folder, with the keychain
+/// made to agree with it before anything else reads either.
+///
+/// `local` is where the list lives (review R13); a list an older build kept
+/// at `roaming` moves there first (`store::moved`). Then any Slack,
+/// OneDrive or Google Drive sign-in the keychain holds without a link in
+/// the list is forgotten (review R5): another copy of RATA saved its list
+/// over this one's, or RATA stopped between keeping a sign-in and saving
+/// it. Only a list that was read, and written by this build's schema or an
+/// older one, says what is linked; with any other, nothing is forgotten.
+/// Run once, before `Rata` exists and after single instance has passed, so
+/// nothing can be keeping a sign-in meanwhile.
+fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault) -> Store {
+    let store = Store::open(store::moved(roaming, local));
+    if store.on_disk().is_some_and(|v| v <= store::SCHEMA) {
+        vault::forget_unlinked(
+            vault,
+            vault::Linked {
+                slack: store.slack().is_some(),
+                onedrive: store.onedrive().is_some(),
+                google: store.google().is_some(),
+            },
+        );
+    }
+    store
+}
+
+/// A second RATA was started (from the Start menu, the launcher, or a
+/// second kind of installation): it has already been stopped, so bring
+/// this one's window forward instead. Nothing else.
+fn show_main(handle: &tauri::AppHandle) {
+    if let Some(window) = handle.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 /// The window opens at 1280×860, taller than a 1366×768 laptop once its
 /// taskbar is counted — the most common screen there is — and the composer's
@@ -110,7 +149,18 @@ fn from_mail(handle: &tauri::AppHandle, url: &tauri::Url) {
 
 fn main() {
     let context = tauri::generate_context!();
-    let builder = tauri::Builder::default();
+    // One RATA at a time, before anything else is set up (review R5). Two
+    // processes each held the whole list and wrote it whole, so the last
+    // to save dropped the other's links, and Disconnect or Delete account
+    // in one never reached the other's held sign-ins. A second launch
+    // hands over to the first and exits before its setup runs. Copies of
+    // the same identifier exclude each other on all three systems (a named
+    // mutex on Windows, a socket on macOS, a D-Bus name on Linux, so a
+    // .deb and an AppImage too). On Linux without a session bus there is
+    // no guard, and RATA starts as before.
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
+        |handle, _args, _cwd| show_main(handle),
+    ));
     // Updates only where this build carries the key to check them against;
     // see `update`.
     let builder = if update::has_key(context.config()) {
@@ -121,11 +171,29 @@ fn main() {
     builder
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // The app's own directory, per the platform's conventions —
-            // Application Support on macOS, AppData on Windows, .local/share on
-            // Linux. Only the mailbox list goes here; see `vault`.
-            let dir = app.path().app_data_dir()?;
-            let store = Store::open(dir.join("mailboxes.json"));
+            // The app's own folder on this computer — Application Support
+            // on macOS, .local/share on Linux, and Local AppData on Windows,
+            // which a roaming profile never copies to its share (review
+            // R13; it held Roaming AppData until 0.1.52, and the list moves
+            // from there once). Only the mailbox list goes here; see
+            // `vault`.
+            let local = app.path().app_local_data_dir()?;
+            let roaming = app.path().app_data_dir()?;
+            let store = open_store(
+                &roaming.join("mailboxes.json"),
+                &local.join("mailboxes.json"),
+                &Keychain,
+            );
+            // Windows only: keychain entries an earlier build wrote to roam
+            // stay on this computer from now on, and a mailbox's that Unlink
+            // or Delete account left in a roamed copy goes (review R6).
+            #[cfg(windows)]
+            {
+                let listed: Option<Vec<&str>> = store
+                    .on_disk()
+                    .map(|_| store.list().iter().map(|m| m.email.as_str()).collect());
+                vault::settle_windows(listed.as_deref());
+            }
 
             // Built once and shared: each resolver carries its own cache, and
             // making a fresh one per refresh would throw that away.
@@ -221,7 +289,80 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::fitted;
+    use super::{fitted, open_store};
+    use crate::store::{DriveLink, SlackLink, Store};
+    use crate::vault::{self, Memory};
+
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("rata-main-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Reviews R5 and R13 together, as start runs them: the list moves to
+    /// this computer's own folder, and a sign-in the keychain holds without
+    /// a link in it (another copy of RATA saved its list over this one's)
+    /// is forgotten, while a linked one stays.
+    #[test]
+    fn at_start_the_list_moves_here_and_a_sign_in_it_has_no_link_for_goes() {
+        let dir = tmpdir("start");
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        {
+            let mut s = Store::open(&roaming);
+            s.set_slack(Some(SlackLink {
+                team_id: "T0123".into(),
+                team: "Acme".into(),
+                user_id: "U0456".into(),
+                connected_at: 7,
+                parked_at: None,
+            }));
+            s.save().unwrap();
+        }
+        let v = Memory::default();
+        vault::put_slack_secret(&v, "slack-sign-in").unwrap();
+        vault::put_onedrive_secret(&v, "onedrive-sign-in").unwrap();
+
+        let store = open_store(&roaming, &local, &v);
+        assert_eq!(store.path_for_test(), local);
+        assert!(!roaming.exists());
+        assert!(store.slack().is_some());
+        assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
+        assert!(
+            vault::get_onedrive_secret(&v).is_err(),
+            "no OneDrive in the list: its sign-in went"
+        );
+
+        // A list that does not read says nothing about what is linked, nor
+        // does one a newer schema wrote: nothing is forgotten.
+        vault::put_onedrive_secret(&v, "onedrive-sign-in").unwrap();
+        std::fs::write(&local, "{ this is not json").unwrap();
+        let store = open_store(&roaming, &local, &v);
+        assert!(store.slack().is_none());
+        std::fs::write(&local, r#"{"version":99,"mailboxes":[]}"#).unwrap();
+        let _ = open_store(&roaming, &local, &v);
+        assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
+        assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
+
+        // Saved again by this build: OneDrive linked keeps its sign-in, and
+        // Slack, unlinked, goes.
+        {
+            let mut s = Store::open(&local);
+            s.set_onedrive(Some(DriveLink {
+                owner: "Ann Lee".into(),
+                business: false,
+                connected_at: 7,
+                parked_at: None,
+            }));
+            s.save().unwrap();
+        }
+        let store = open_store(&roaming, &local, &v);
+        assert!(store.onedrive().is_some());
+        assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
+        assert!(vault::get_slack_secret(&v).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_window_too_tall_for_a_small_laptop_is_shrunk_to_fit() {

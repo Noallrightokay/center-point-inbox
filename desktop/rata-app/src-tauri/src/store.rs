@@ -129,6 +129,13 @@ pub struct GoogleLink {
 pub const CREATED_KEEP: usize = 500;
 
 /// The shape of `mailboxes.json` this build writes, as its `version` field.
+///
+/// A new field leaves it alone (an older build keeps what it does not know,
+/// `Contents::rest`). Raise it when a field that stands for a keychain
+/// sign-in (`slack`, `onedrive`, `google`) moves or changes shape: start
+/// (main.rs, `open_store`) forgets the sign-in of a service whose link it
+/// cannot find, and does that only in a file of this schema or older, so
+/// an older build never forgets a newer one's.
 pub const SCHEMA: u32 = 1;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -171,6 +178,16 @@ struct Contents {
     /// stays 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     google: Option<GoogleLink>,
+    /// Every field this build does not know, written by a newer RATA that
+    /// shares the file (a .deb and an AppImage of two versions use the same
+    /// one), kept as it was and written back. Without it the first save
+    /// here dropped a newer build's connection while its sign-in stayed in
+    /// the keychain with nothing left to remove it (review R14). Delete
+    /// account leaves these alone: a field this build cannot read is one
+    /// whose keychain entry it cannot empty either, and the newer build
+    /// still offers Disconnect while its field is there.
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -183,6 +200,8 @@ pub struct Store {
     slack: Option<SlackLink>,
     onedrive: Option<DriveLink>,
     google: Option<GoogleLink>,
+    /// What a newer build wrote that this one does not know (`Contents`).
+    rest: serde_json::Map<String, serde_json::Value>,
     /// The `version` the file on disk had when it was opened: `None` when
     /// there was no file, or none that could be read.
     on_disk: Option<u32>,
@@ -218,6 +237,7 @@ impl Store {
             slack: held.slack,
             onedrive: held.onedrive,
             google: held.google,
+            rest: held.rest,
             on_disk,
         }
     }
@@ -231,11 +251,11 @@ impl Store {
     /// It holds the licence token and every linked address, so on Unix the
     /// file is readable by this account only (0600), and so is the folder
     /// when RATA is the one making it (0700). Windows keeps the ACL of the
-    /// profile folder it is in, which is already the account's own.
+    /// folder it is in: Local AppData (main.rs, [`moved`]), the account's
+    /// own and never copied to a roaming profile's share. Where the whole
+    /// profile travels in a container (FSLogix, User Profile Disks), Local
+    /// AppData travels inside it, with the rest of that profile.
     pub fn save(&self) -> io::Result<()> {
-        if let Some(dir) = self.path.parent() {
-            make_dir(dir)?;
-        }
         let body = serde_json::to_string_pretty(&Contents {
             version: SCHEMA,
             mailboxes: self.boxes.clone(),
@@ -245,26 +265,9 @@ impl Store {
             slack: self.slack.clone(),
             onedrive: self.onedrive.clone(),
             google: self.google.clone(),
+            rest: self.rest.clone(),
         })?;
-        let tmp = self.path.with_extension("json.tmp");
-        // Made afresh, so it is created with the mode below rather than
-        // keeping one a leftover file had.
-        if let Err(e) = fs::remove_file(&tmp)
-            && e.kind() != io::ErrorKind::NotFound
-        {
-            return Err(e);
-        }
-        let mut open = fs::OpenOptions::new();
-        open.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            open.mode(0o600);
-        }
-        let mut file = open.open(&tmp)?;
-        io::Write::write_all(&mut file, body.as_bytes())?;
-        drop(file);
-        fs::rename(&tmp, &self.path)
+        write_whole(&self.path, body.as_bytes())
     }
 
     #[cfg(test)]
@@ -431,6 +434,78 @@ impl Store {
             m.auth_failed_at = failed_at;
         }
     }
+}
+
+/// `bytes` as the whole of the file at `path`: through a temporary file
+/// made afresh beside it (0600 on Unix, in a folder made 0700) and a rename,
+/// so the file is either as it was or wholly new. [`Store::save`] and
+/// [`moved`] both write this way.
+fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        make_dir(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    // Made afresh, so it is created with the mode below rather than
+    // keeping one a leftover file had.
+    if let Err(e) = fs::remove_file(&tmp)
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        return Err(e);
+    }
+    let mut open = fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.mode(0o600);
+    }
+    let written = open
+        .open(&tmp)
+        .and_then(|mut file| io::Write::write_all(&mut file, bytes))
+        .and_then(|()| fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Where the list is to be opened: `local`, after moving there a list an
+/// older build kept at `roaming` (review R13).
+///
+/// Until 0.1.52 the list was kept in Tauri's app data folder, which on
+/// Windows is Roaming AppData: with a roaming profile or folder redirection
+/// it was copied to a file share at every logoff, licence token, addresses
+/// and all, and each computer's copy overwrote the other's. Local AppData
+/// is never roamed or redirected, and holds the webview's data (the mail)
+/// already. On macOS and Linux the two folders are one and nothing moves.
+///
+/// Moved by its bytes, never through [`Store::open`], which reads a file it
+/// cannot parse as an empty list: only a list that reads is moved, and the
+/// roaming copy goes only once this computer's own is in place. One that
+/// does not read is left where it is and RATA starts empty, as it would
+/// with that file. A list already in `local` is never replaced, so one an
+/// older copy writes to the roaming folder later stays there. When the move
+/// fails the list is read where it was, as before, and moved next start.
+pub fn moved(roaming: &Path, local: &Path) -> PathBuf {
+    if roaming == local || local.exists() {
+        return local.to_path_buf();
+    }
+    let Ok(bytes) = fs::read(roaming) else {
+        return local.to_path_buf();
+    };
+    if serde_json::from_slice::<Contents>(&bytes).is_err() {
+        return local.to_path_buf();
+    }
+    if write_whole(local, &bytes).is_err() {
+        return roaming.to_path_buf();
+    }
+    let _ = fs::remove_file(roaming);
+    let _ = fs::remove_file(roaming.with_extension("json.tmp"));
+    if let Some(dir) = roaming.parent() {
+        // Only when empty: anything else there is not the list's.
+        let _ = fs::remove_dir(dir);
+    }
+    local.to_path_buf()
 }
 
 /// `dir` and its parents. The last one, the app's own folder, is made 0700
@@ -696,6 +771,40 @@ mod tests {
         assert!(s.connection("apple").is_some());
     }
 
+    /// Review R14: a newer RATA sharing this file (a .deb and an AppImage
+    /// of two versions) writes fields this build does not know. They are
+    /// kept through open and save, so this build never drops a newer
+    /// build's link and leaves its keychain entry with nothing to remove it.
+    #[test]
+    fn fields_a_newer_build_wrote_survive_this_builds_save() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"mailboxes":[],"licence":"v1.x.y","dropbox":{"owner":"Ann Lee","connected_at":7},"later":[1,2]}"#,
+        )
+        .unwrap();
+        let mut s = Store::open(&file);
+        assert_eq!(s.licence(), Some("v1.x.y"));
+        s.put(mailbox("owner@example.com"));
+        s.save().unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            raw["dropbox"],
+            serde_json::json!({"owner":"Ann Lee","connected_at":7}),
+            "{raw}"
+        );
+        assert_eq!(raw["later"], serde_json::json!([1, 2]), "{raw}");
+        assert_eq!(raw["mailboxes"][0]["email"], "owner@example.com");
+        // And again: this build's own fields are never written twice.
+        let s = Store::open(&file);
+        s.save().unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        assert_eq!(text.matches("\"licence\"").count(), 1, "{text}");
+        assert_eq!(text.matches("\"dropbox\"").count(), 1, "{text}");
+    }
+
     #[test]
     fn linking_the_same_address_again_replaces_it_rather_than_duplicating() {
         let mut s = Store::open(tmpdir().join("m.json"));
@@ -898,6 +1007,98 @@ mod tests {
     fn mode(p: &std::path::Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    /// Review R13: on Windows the list was kept in Roaming AppData, which a
+    /// roaming profile copies to a file share in clear, licence token and
+    /// all. It moves, byte for byte, to the folder that stays on this
+    /// computer, and only then is the roaming copy removed.
+    #[test]
+    fn a_list_kept_where_a_profile_roams_moves_to_this_computers_own_folder() {
+        let dir = tmpdir();
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        {
+            let mut s = Store::open(&roaming);
+            s.put(mailbox("owner@example.com"));
+            s.set_licence(Some("v1.aaa.bbb".into()));
+            s.save().unwrap();
+        }
+        let before = fs::read(&roaming).unwrap();
+        // A save an older build was halfway through.
+        fs::write(roaming.with_extension("json.tmp"), "{ half").unwrap();
+
+        assert_eq!(moved(&roaming, &local), local);
+        assert_eq!(fs::read(&local).unwrap(), before, "moved byte for byte");
+        assert!(!roaming.exists(), "the roaming copy is gone");
+        assert!(!roaming.with_extension("json.tmp").exists());
+        assert!(!local.with_extension("json.tmp").exists());
+        assert!(
+            !roaming.parent().unwrap().exists(),
+            "and its folder, now empty"
+        );
+        let s = Store::open(&local);
+        assert_eq!(s.licence(), Some("v1.aaa.bbb"));
+        assert_eq!(s.list().len(), 1);
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(&local), 0o600);
+            assert_eq!(mode(local.parent().unwrap()), 0o700);
+        }
+
+        // Moved once: a list an older copy of RATA writes to the roaming
+        // folder afterwards is left where it is, and never replaces this
+        // computer's own.
+        fs::create_dir_all(roaming.parent().unwrap()).unwrap();
+        fs::write(&roaming, r#"{"version":1,"mailboxes":[]}"#).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(roaming.exists());
+        assert_eq!(Store::open(&local).list().len(), 1);
+    }
+
+    #[test]
+    fn a_roaming_list_that_does_not_read_is_left_and_nothing_moves() {
+        let dir = tmpdir();
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        fs::create_dir_all(roaming.parent().unwrap()).unwrap();
+        fs::write(&roaming, "{ this is not json").unwrap();
+        assert_eq!(moved(&roaming, &local), local, "RATA starts empty");
+        assert_eq!(fs::read_to_string(&roaming).unwrap(), "{ this is not json");
+        assert!(!local.exists());
+        // Nothing to move at all is a first run.
+        let none = dir.join("Nowhere/mailboxes.json");
+        assert_eq!(moved(&none, &local), local);
+        assert!(!local.exists());
+    }
+
+    #[test]
+    fn where_the_two_folders_are_one_the_list_stays_put() {
+        // macOS and Linux: Tauri's local and roaming folders are the same.
+        let file = tmpdir().join("mailboxes.json");
+        {
+            let mut s = Store::open(&file);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        assert_eq!(moved(&file, &file), file);
+        assert_eq!(Store::open(&file).list().len(), 1);
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_moved_is_read_where_it_was() {
+        let dir = tmpdir();
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        {
+            let mut s = Store::open(&roaming);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        // A file where the local folder would be: it cannot be made.
+        fs::write(dir.join("Local"), "").unwrap();
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        assert_eq!(moved(&roaming, &local), roaming, "tried again next start");
+        assert_eq!(Store::open(&roaming).list().len(), 1);
     }
 
     #[cfg(unix)]

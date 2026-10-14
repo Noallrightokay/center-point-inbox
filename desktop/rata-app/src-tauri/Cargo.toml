@@ -27,12 +27,22 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
+# One RATA at a time (main.rs, review R5). Its Linux half uses zbus and its
+# Windows half windows-sys, both already in the tree.
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
 
 # Marking saved files as downloads on macOS (mark.rs). Already in the tree
 # through the updater's tar, so nothing new is built.
 [target.'cfg(target_os = "macos")'.dependencies]
 xattr = "1"
+
+# Writing Windows keychain entries that stay on this computer, and listing
+# them (vault.rs, review R6): keyring writes every one to roam and has no
+# setting for it. The version and features keyring itself uses, so nothing
+# new is built.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
 
 [dev-dependencies]
 # Create file's tests (created.rs): reading and writing deflated zip entries

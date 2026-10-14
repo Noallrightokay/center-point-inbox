@@ -52,6 +52,16 @@ pub const ONEDRIVE_SERVICE: &str = "org.mailrata.desktop.onedrive";
 /// for `drive.file` alone, so nothing else ever names an entry here.
 pub const GOOGLE_SERVICE: &str = "org.mailrata.desktop.google";
 
+/// Every service RATA keeps anything under.
+#[cfg(any(windows, test))]
+const SERVICES: [&str; 5] = [
+    SERVICE,
+    PIECE_SERVICE,
+    SLACK_SERVICE,
+    ONEDRIVE_SERVICE,
+    GOOGLE_SERVICE,
+];
+
 pub trait Vault: Send + Sync {
     fn put(&self, email: &str, password: &str) -> Result<(), String>;
     fn get(&self, email: &str) -> Result<String, Unreadable>;
@@ -162,10 +172,36 @@ impl Keychain {
         keyring::Entry::new(service, &name.trim().to_ascii_lowercase()).map_err(explain)
     }
 
+    #[cfg(not(windows))]
     fn put_in(service: &str, name: &str, secret: &str) -> Result<(), String> {
         Self::entry(service, name)?
             .set_password(secret)
             .map_err(explain)
+    }
+
+    /// On Windows RATA writes the entry itself: `keyring` files every one
+    /// `CRED_PERSIST_ENTERPRISE`, which a roaming profile copies to its
+    /// share and to every computer the customer signs in to, and has no
+    /// setting for it (review R6). `CRED_PERSIST_LOCAL_MACHINE` stays on
+    /// this computer. Everything else is as `keyring` writes it — the target
+    /// `<name>.<service>`, the name as the user name, the secret as UTF-16
+    /// with no NUL — so `keyring` still reads and deletes it, and reads what
+    /// earlier builds wrote. Refused is refused: never written the old way.
+    #[cfg(windows)]
+    fn put_in(service: &str, name: &str, secret: &str) -> Result<(), String> {
+        use windows_sys::Win32::Security::Credentials::CRED_MAX_CREDENTIAL_BLOB_SIZE;
+        let name = name.trim().to_ascii_lowercase();
+        let mut blob: Vec<u8> = secret.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let put = if blob.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
+            Err(keyring::Error::TooLong(
+                "password encoded as UTF-16".into(),
+                CRED_MAX_CREDENTIAL_BLOB_SIZE,
+            ))
+        } else {
+            windows::write_here(&format!("{name}.{service}"), &name, &blob)
+        };
+        blob.fill(0);
+        put.map_err(explain)
     }
 
     fn get_in(service: &str, name: &str) -> Result<String, Unreadable> {
@@ -412,6 +448,14 @@ enum Own {
 }
 
 impl Own {
+    fn service(self) -> &'static str {
+        match self {
+            Own::Slack => SLACK_SERVICE,
+            Own::OneDrive => ONEDRIVE_SERVICE,
+            Own::Google => GOOGLE_SERVICE,
+        }
+    }
+
     fn entry(self) -> &'static str {
         match self {
             Own::Slack => SLACK_ENTRY,
@@ -601,6 +645,237 @@ pub fn get_google_secret(v: &dyn Vault) -> Result<String, Unreadable> {
 /// Forget Google Drive's refresh token: the entry first, then every piece.
 pub fn forget_google_secret(v: &dyn Vault) -> Result<(), String> {
     forget_own(v, Own::Google)
+}
+
+// ------------------------------------------- what start finds left behind
+
+/// Which of the three sign-ins kept in a service of their own the list
+/// has a link for.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Linked {
+    pub slack: bool,
+    pub onedrive: bool,
+    pub google: bool,
+}
+
+/// Once at start, before anything else reads the keychain or the list:
+/// forget the Slack, OneDrive or Google Drive sign-in the keychain holds
+/// when the list has no link for it, and say which went (review R5).
+///
+/// Nothing could ever use such a sign-in, and Settings offers no
+/// Disconnect for a service it shows as not connected. It is left by
+/// another copy of RATA saving its whole list over this one's link (a
+/// second launch before single instance, or an older build sharing the
+/// file), by Disconnect or Delete account in that other copy, or by RATA
+/// stopping between keeping a sign-in and saving its link. Nothing goes to
+/// the network: the sign-in is forgotten here, not revoked. A keychain that
+/// will not answer holds nothing as far as this can tell, so nothing is
+/// forgotten and starting goes on. Never run while RATA is running: a
+/// sign-in being kept is in the keychain before its link is in the list.
+pub fn forget_unlinked(v: &dyn Vault, linked: Linked) -> Vec<&'static str> {
+    let mut forgot = Vec::new();
+    for (own, has) in [
+        (Own::Slack, linked.slack),
+        (Own::OneDrive, linked.onedrive),
+        (Own::Google, linked.google),
+    ] {
+        if !has && holds_any(v, own) && forget_own(v, own).is_ok() {
+            forgot.push(own.service());
+        }
+    }
+    forgot
+}
+
+/// Whether the keychain holds anything of a sign-in: its entry, or the
+/// piece a write or removal cut short leaves without one.
+fn holds_any(v: &dyn Vault, own: Own) -> bool {
+    let entry = own.entry();
+    own.get(v, entry).is_ok() || own.get(v, &format!("{entry}#2")).is_ok()
+}
+
+/// Which of `services` an entry Credential Manager lists is RATA's in,
+/// going by how `keyring` names one: `<name>.<service>` with the name as
+/// the user name. Anything else is another app's, or not written by RATA.
+#[cfg(any(windows, test))]
+fn rata_service(target: &str, user: &str, services: &[&'static str]) -> Option<&'static str> {
+    services
+        .iter()
+        .copied()
+        .find(|s| target.eq_ignore_ascii_case(&format!("{user}.{s}")))
+}
+
+/// Whether an entry is a mailbox's, or a piece of its Microsoft token,
+/// for an address no longer in `listed`: what Unlink or Delete account left
+/// in a copy that came back with a roaming profile (review R6). Slack's,
+/// OneDrive's and Google's go by their link instead (`forget_unlinked`).
+#[cfg(any(windows, test))]
+fn left_behind(service: &str, name: &str, listed: &[&str]) -> bool {
+    let address = if service == SERVICE {
+        Some(name)
+    } else if service == PIECE_SERVICE {
+        name.rsplit_once('#')
+            .filter(|(_, n)| {
+                n.parse::<usize>()
+                    .is_ok_and(|n| (2..=PIECES_MAX).contains(&n))
+            })
+            .map(|(address, _)| address)
+    } else {
+        None
+    };
+    address.is_some_and(|a| !listed.iter().any(|l| l.trim().eq_ignore_ascii_case(a)))
+}
+
+/// Once at start, on Windows (review R6): every entry RATA has in
+/// Credential Manager is moved to this computer
+/// (`CRED_PERSIST_LOCAL_MACHINE`) if an earlier build wrote it to roam, and
+/// a mailbox's entry whose address is not on the list is forgotten, so what
+/// Unlink or Delete account left in a roamed copy goes at the next start.
+/// `listed` is `None` when the list could not be read: then nothing is
+/// forgotten. Best effort throughout: nothing here stops RATA starting.
+#[cfg(windows)]
+pub fn settle_windows(listed: Option<&[&str]>) {
+    settle_windows_in(&SERVICES, listed)
+}
+
+#[cfg(windows)]
+fn settle_windows_in(services: &[&'static str], listed: Option<&[&str]>) {
+    use windows_sys::Win32::Security::Credentials::CRED_PERSIST_ENTERPRISE;
+    for mut found in windows::entries(services) {
+        if listed.is_some_and(|l| left_behind(found.service, &found.user, l)) {
+            // By its exact target, as listed.
+            let _ = keyring::Entry::new_with_target(&found.target, found.service, &found.user)
+                .and_then(|e| e.delete_credential());
+        } else if found.persist == CRED_PERSIST_ENTERPRISE {
+            let _ = windows::write_here(&found.target, &found.user, &found.blob);
+        }
+        found.blob.fill(0);
+    }
+}
+
+/// Credential Manager, called directly for the two things `keyring` will
+/// not do: write an entry that stays on this computer, and list entries
+/// (review R6). `windows-sys` 0.60, the version `keyring` itself uses.
+#[cfg(windows)]
+mod windows {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredEnumerateW, CredFree,
+        CredWriteW,
+    };
+
+    /// One of RATA's generic credentials, as Credential Manager lists it.
+    /// The secret is copied only for RATA's own entries, and only to be
+    /// written back.
+    pub struct Found {
+        pub service: &'static str,
+        pub target: String,
+        pub user: String,
+        pub persist: u32,
+        pub blob: Vec<u8>,
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// A NUL-terminated UTF-16 string from Credential Manager, or "".
+    ///
+    /// # Safety
+    /// `p` is null or points to a NUL-terminated UTF-16 string.
+    unsafe fn text(p: *const u16) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        let mut n = 0;
+        // SAFETY: NUL-terminated, per the caller.
+        while unsafe { *p.add(n) } != 0 {
+            n += 1;
+        }
+        // SAFETY: the `n` units before the NUL.
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, n) })
+    }
+
+    /// Write a generic credential that stays on this computer, replacing
+    /// one of the same target.
+    pub fn write_here(target: &str, user: &str, blob: &[u8]) -> Result<(), keyring::Error> {
+        let mut target = wide(target);
+        let mut user = wide(user);
+        let mut blob = blob.to_vec();
+        let credential = CREDENTIALW {
+            Flags: 0,
+            Type: CRED_TYPE_GENERIC,
+            TargetName: target.as_mut_ptr(),
+            Comment: std::ptr::null_mut(),
+            LastWritten: FILETIME {
+                dwLowDateTime: 0,
+                dwHighDateTime: 0,
+            },
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            AttributeCount: 0,
+            Attributes: std::ptr::null_mut(),
+            TargetAlias: std::ptr::null_mut(),
+            UserName: user.as_mut_ptr(),
+        };
+        // SAFETY: every pointer in `credential` is into a buffer above,
+        // alive until the call returns; CredWriteW copies what it keeps.
+        let written = unsafe { CredWriteW(&credential, 0) };
+        // Read at once, before anything else can set the last error.
+        let result = if written == 0 {
+            Err(keyring::windows::decode_error())
+        } else {
+            Ok(())
+        };
+        blob.fill(0);
+        result
+    }
+
+    /// Every generic credential in one of `services`, by `keyring`'s naming
+    /// (`super::rata_service`). None when Credential Manager will not list
+    /// them, or holds none.
+    pub fn entries(services: &[&'static str]) -> Vec<Found> {
+        let mut count: u32 = 0;
+        let mut list: *mut *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: no filter (every credential of this user), and two out
+        // pointers to locals; on success `list` is one allocation holding
+        // `count` credential pointers, freed below with CredFree.
+        if unsafe { CredEnumerateW(std::ptr::null(), 0, &mut count, &mut list) } == 0 {
+            return Vec::new();
+        }
+        let mut found = Vec::new();
+        for i in 0..count as usize {
+            // SAFETY: `i < count`, each a valid credential until CredFree.
+            let c = unsafe { &**list.add(i) };
+            if c.Type != CRED_TYPE_GENERIC {
+                continue;
+            }
+            // SAFETY: null or NUL-terminated, as Credential Manager gives them.
+            let (target, user) = unsafe { (text(c.TargetName), text(c.UserName)) };
+            let Some(service) = super::rata_service(&target, &user, services) else {
+                continue;
+            };
+            let blob = if c.CredentialBlob.is_null() {
+                Vec::new()
+            } else {
+                // SAFETY: `CredentialBlobSize` bytes at `CredentialBlob`.
+                unsafe {
+                    std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize)
+                }
+                .to_vec()
+            };
+            found.push(Found {
+                service,
+                target,
+                user,
+                persist: c.Persist,
+                blob,
+            });
+        }
+        // SAFETY: the one buffer CredEnumerateW allocated, freed once.
+        unsafe { CredFree(list as *const core::ffi::c_void) };
+        found
+    }
 }
 
 /// For tests, and only for tests. Nothing persists, which is the point, and
@@ -1088,6 +1363,156 @@ mod tests {
             get_google_secret(&Locked),
             Err(Unreadable::Locked(_))
         ));
+    }
+
+    /// Review R5: another copy of RATA saved its list over this one's link
+    /// (or Disconnect ran there, or RATA stopped between keeping a sign-in
+    /// and saving its link), so the keychain holds a sign-in nothing will
+    /// ever use or offer to disconnect. At start it is forgotten.
+    #[test]
+    fn a_sign_in_the_list_has_no_link_for_is_forgotten_at_start() {
+        let v = Memory::default();
+        let long: String = (0..2_500)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        put_slack_secret(&v, &long).unwrap();
+        put_onedrive_secret(&v, &long).unwrap();
+        // Google's entry gone and a piece left, as a removal cut short
+        // leaves it.
+        v.put_google("drive#2", "the-middle-of-a-token").unwrap();
+        v.put("owner@example.com", "an-app-password").unwrap();
+        v.put_piece("owner@example.com#2", "a-piece").unwrap();
+
+        let forgot = forget_unlinked(
+            &v,
+            Linked {
+                slack: true,
+                onedrive: false,
+                google: false,
+            },
+        );
+        assert_eq!(forgot, vec![ONEDRIVE_SERVICE, GOOGLE_SERVICE]);
+        assert_eq!(get_slack_secret(&v).unwrap(), long, "linked: kept");
+        assert!(v.get_onedrive(ONEDRIVE_ENTRY).is_err());
+        for n in 2..=PIECES_MAX {
+            assert!(v.get_onedrive(&format!("drive#{n}")).is_err(), "#{n}");
+        }
+        assert!(v.get_google("drive#2").is_err());
+        // A mailbox's entry is the list's business, not this.
+        assert_eq!(v.get("owner@example.com").unwrap(), "an-app-password");
+        assert_eq!(v.get_piece("owner@example.com#2").unwrap(), "a-piece");
+
+        // Slack's link gone too: Slack's goes. Then nothing is held, and
+        // there is nothing to do.
+        assert_eq!(forget_unlinked(&v, Linked::default()), vec![SLACK_SERVICE]);
+        assert!(v.get_slack("workspace#3").is_err());
+        assert!(forget_unlinked(&v, Linked::default()).is_empty());
+        // A keychain that will not answer holds nothing as far as RATA can
+        // tell: nothing is forgotten, and starting does not fail.
+        assert!(forget_unlinked(&Locked, Linked::default()).is_empty());
+    }
+
+    /// Review R6: what the Windows pass at start reads from Credential
+    /// Manager's list. Only RATA's entries, named the way `keyring` names
+    /// them (`<name>.<service>`), and only a mailbox's entry or a piece of
+    /// its token whose address the list no longer has is forgotten.
+    #[test]
+    fn only_a_mailbox_entry_the_list_no_longer_has_is_left_behind() {
+        let all = &SERVICES;
+        // Whose entry is it?
+        assert_eq!(
+            rata_service(
+                "owner@example.com.org.mailrata.desktop",
+                "owner@example.com",
+                all
+            ),
+            Some(SERVICE)
+        );
+        assert_eq!(
+            rata_service(
+                "owner@example.com#2.org.mailrata.desktop.oauth-piece",
+                "owner@example.com#2",
+                all
+            ),
+            Some(PIECE_SERVICE)
+        );
+        assert_eq!(
+            rata_service("workspace.org.mailrata.desktop.slack", "workspace", all),
+            Some(SLACK_SERVICE)
+        );
+        assert_eq!(
+            rata_service("drive.org.mailrata.desktop.google", "drive", all),
+            Some(GOOGLE_SERVICE)
+        );
+        // Another app's, and one not named the way RATA names its own.
+        assert_eq!(rata_service("git:https://github.com", "ann", all), None);
+        assert_eq!(
+            rata_service("owner@example.com.org.mailrata.desktop", "someone", all),
+            None
+        );
+        assert_eq!(
+            rata_service(
+                "owner@example.com.org.mailrata.desktop",
+                "owner@example.com",
+                &[]
+            ),
+            None
+        );
+
+        let listed = ["Owner@Example.com"];
+        assert!(!left_behind(SERVICE, "owner@example.com", &listed));
+        assert!(left_behind(SERVICE, "gone@example.com", &listed));
+        assert!(!left_behind(PIECE_SERVICE, "owner@example.com#2", &listed));
+        assert!(left_behind(PIECE_SERVICE, "gone@example.com#8", &listed));
+        // Not a piece RATA writes: left alone.
+        assert!(!left_behind(PIECE_SERVICE, "gone@example.com", &listed));
+        assert!(!left_behind(PIECE_SERVICE, "gone@example.com#9", &listed));
+        assert!(!left_behind(PIECE_SERVICE, "gone@example.com#x", &listed));
+        // Slack's, OneDrive's and Google's go by their link (R5), never here.
+        assert!(!left_behind(SLACK_SERVICE, "workspace", &listed));
+        assert!(!left_behind(ONEDRIVE_SERVICE, "drive", &[]));
+        // After Delete account the list is empty, and every mailbox's goes.
+        assert!(left_behind(SERVICE, "owner@example.com", &[]));
+    }
+
+    /// Review R6: `keyring` writes every Windows entry
+    /// CRED_PERSIST_ENTERPRISE, which travels with a roaming profile. RATA
+    /// writes its own CRED_PERSIST_LOCAL_MACHINE, in the form `keyring`
+    /// reads, and moves an older build's to this computer at start.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_an_entry_stays_on_this_computer() {
+        use windows_sys::Win32::Security::Credentials::{
+            CRED_PERSIST_ENTERPRISE, CRED_PERSIST_LOCAL_MACHINE,
+        };
+        const TEST: &str = "org.mailrata.desktop.test-persist";
+        let name = format!("persist-{}@example.com", std::process::id());
+        let mine = || -> Vec<windows::Found> {
+            windows::entries(&[TEST])
+                .into_iter()
+                .filter(|f| f.user == name)
+                .collect()
+        };
+        Keychain::put_in(TEST, &name, "hunter2").unwrap();
+        let found = mine();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].persist, CRED_PERSIST_LOCAL_MACHINE);
+        assert_eq!(Keychain::get_in(TEST, &name).unwrap(), "hunter2");
+
+        // What 0.1.51 and earlier wrote.
+        keyring::Entry::new(TEST, &name)
+            .unwrap()
+            .set_password("older")
+            .unwrap();
+        assert_eq!(mine()[0].persist, CRED_PERSIST_ENTERPRISE);
+        settle_windows_in(&[TEST], None);
+        let found = mine();
+        assert_eq!(found.len(), 1, "replaced, not a second entry");
+        assert_eq!(found[0].persist, CRED_PERSIST_LOCAL_MACHINE);
+        assert_eq!(Keychain::get_in(TEST, &name).unwrap(), "older");
+
+        Keychain::forget_in(TEST, &name).unwrap();
+        assert!(mine().is_empty());
     }
 
     #[test]
