@@ -321,12 +321,15 @@ const MOCK = ({ licensed, ms, old, lic }) => {
             if (/\.(pdf|docx?|xlsx?|txt|jpe?g|png)\.(exe|scr|js|bat|cmd|com)$/i.test(args.name) && args.confirmed !== true)
               throw no('needs-confirmation', args.name + ' is a program named to look like a document. RATA saves it only after you say so.');
             return { name: args.name, id: 'Documents/' + args.name, where: 'OneDrive / Documents', size: atob(args.data).length };
-          case 'slack_targets': return C.targets;
+          /* As slack.rs: the listing, and whether Slack had more (SEC-11 R17). */
+          case 'slack_targets': return { targets: C.targets, truncated: !!C.truncated };
           case 'slack_share':
             C.shared.push(args);
             /* SEC-10: a slow Slack, answered when the harness says. */
             if (C.shareWait) await C.shareWait;
             if (C.shareFails) throw no('net', 'slack.com could not be reached.');
+            /* SEC-11 R12: the message went, the files did not. */
+            if (C.sharePartial && args.files.length && args.text) throw no('partial', C.sharePartial);
             return { where: '#ed-staff in Saltmarsh ED' };
         }
         throw 'unmocked ' + cmd;
@@ -3691,7 +3694,7 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
       svc('google', 'Google Drive', 'files', 'riley@gmail.example', 'RATA sees only the files you choose and the ones it saves.'),
       svc('apple', 'iCloud Drive', 'folder', 'iCloud Drive on this computer'),
       svc('adobe', 'Creative Cloud Files', 'folder', 'Creative Cloud Files on this computer'),
-      svc('slack', 'Slack', 'share', 'Riley in Saltmarsh ED'),
+      svc('slack', 'Slack', 'share', 'Saltmarsh ED'),
     ],
     tree: { microsoft: {
       root: { name: 'OneDrive', path: 'OneDrive', items: [
@@ -4066,6 +4069,96 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
   check(shared.length === 1 && shared[0].target === 'C1' && shared[0].text === 'For Thursday.' && shared[0].files.length === 1 && shared[0].files[0].name === 'Q3 figures.pdf' && atob(shared[0].files[0].data) === '%PDF-1.4 figures',
     `Send shares the text and the ticked file to the one chosen: ${JSON.stringify(shared.map((s) => ({ ...s, files: s.files.map((f) => f.name) })))}`);
   check(/Shared to #ed-staff in Saltmarsh ED/.test((await toasts(pg)).join('|')), 'and the toast says where it went');
+
+  /* SEC-11 R7, R17: each target says what it is beside the name its owner
+     chose, the search reads handles and full names, and a listing Slack
+     cut short says so. */
+  const targets0 = await pg.evaluate(() => __mock.conn.targets);
+  await pg.evaluate(() => {
+    __mock.conn.truncated = true;
+    __mock.conn.targets = [
+      { id: 'U0ME', name: 'Ann Smith (you)', kind: 'person', me: true, handle: 'asmith', real_name: 'Ann Smith', standing: 'guest' },
+      { id: 'C1', name: 'ed-staff', kind: 'channel', me: false },
+      { id: 'C5', name: 'all-saltmarsh', kind: 'channel', me: false, shared: 'org' },
+      { id: 'C6', name: 'imaging-vendor', kind: 'channel', me: false, shared: 'external' },
+      { id: 'U9', name: 'Ann Smith (you)', kind: 'person', me: false, handle: 'annsmith2', real_name: 'Mallory' },
+      { id: 'U2', name: 'Bob Jones', kind: 'person', me: false, handle: 'vendor', standing: 'guest' },
+      { id: 'U3', name: 'Temp', kind: 'person', me: false, handle: 'temp', standing: 'single-channel guest' },
+      { id: 'U4', name: 'New', kind: 'person', me: false, handle: 'newbie', standing: 'invited' },
+      { id: 'U1', name: 'Marcus Bell', kind: 'person', me: false, handle: 'mbell' },
+    ];
+  });
+  await pg.click('#md-slack');
+  await pg.waitForSelector('#slack-ov.open #slack-targets .slack-opt');
+  const slackRows = () => pg.evaluate(() => [...document.querySelectorAll('#slack-targets .slack-opt')].map((l) => ({
+    id: l.querySelector('input').value, name: l.querySelector('.slack-name').textContent, also: (l.querySelector('.slack-handle') || {}).textContent || '', kind: l.querySelector('.slack-kind').textContent,
+  })));
+  let rows = await slackRows();
+  const kindOf = (id) => (rows.find((r) => r.id === id) || {}).kind;
+  check(kindOf('U0ME') === 'You' && kindOf('U9') === 'Person' && kindOf('U2') === 'Guest' && kindOf('U3') === 'Single-channel guest' && kindOf('U4') === 'Invited, has not joined'
+    && kindOf('C6') === 'Channel, shared with another organization' && kindOf('C5') === 'Channel, shared across your organization' && kindOf('C1') === 'Channel',
+    `each Slack target says what it is: ${JSON.stringify(rows.map((r) => r.id + ':' + r.kind))}`);
+  const mineRow = rows.find((r) => r.id === 'U0ME'), alikeRow = rows.find((r) => r.id === 'U9');
+  check(mineRow.name === alikeRow.name && mineRow.also === 'Ann Smith · @asmith' && alikeRow.also === 'Mallory · @annsmith2',
+    `a member named like the customer is told apart by handle and full name: ${JSON.stringify([mineRow, alikeRow])}`);
+  const partNote = await pg.evaluate(() => [...document.querySelectorAll('#slack-targets .slack-wait')].map((p) => p.textContent));
+  check(partNote.includes('Slack listed only part of your channels and people; one may be missing.'), `a listing Slack cut short says so: ${JSON.stringify(partNote)}`);
+  await pg.fill('#slack-q', '@annsmith2');
+  const byHandle = (await slackRows()).map((r) => r.id);
+  await pg.fill('#slack-q', 'mallory');
+  const byFull = (await slackRows()).map((r) => r.id);
+  await pg.fill('#slack-q', '');
+  check(byHandle.join() === 'U9' && byFull.join() === 'U9', `the search finds a person by handle and by full name: ${JSON.stringify({ byHandle, byFull })}`);
+  /* Choosing a guest, or a channel shared with another organization, says
+     who will see and keep what is sent. */
+  const leadFor = async (id) => {
+    await pg.click(`#slack-targets input[value="${id}"]`);
+    return pg.evaluate(() => ({ text: document.querySelector('#slack-lead').textContent, outside: document.querySelector('#slack-lead').classList.contains('outside') }));
+  };
+  const extLead = await leadFor('C6'), guestLead = await leadFor('U2'), insideLead = await leadFor('C1');
+  check(extLead.outside && extLead.text === '#imaging-vendor is shared with another organization. People outside Saltmarsh ED will see what you send, and keep it.'
+    && guestLead.outside && guestLead.text === 'Bob Jones is a guest in Saltmarsh ED, not a member. People outside Saltmarsh ED will see what you send, and keep it.'
+    && !insideLead.outside && insideLead.text === 'Choose where it goes and what it says. Nothing is sent until you press Send.',
+    `the lead says when people outside the workspace will see it: ${JSON.stringify({ extLead, guestLead, insideLead })}`);
+  /* The customer's own row carries their standing too (U0ME is a guest
+     here): sending to themselves warns of nobody outside. */
+  const selfLead = await leadFor('U0ME');
+  check(!selfLead.outside && selfLead.text === 'Choose where it goes and what it says. Nothing is sent until you press Send.',
+    `a customer who is a guest is not warned about their own direct message: ${JSON.stringify(selfLead)}`);
+  await leadFor('C6');
+  await axe(pg, 'the Share to Slack dialog, saying who each target is and who will see it');
+
+  /* SEC-11 R12: files that fail once the message has gone are said as
+     such, never "Shared", and Send again sends only the files. */
+  await pg.check('#slack-file-0');
+  await pg.fill('#slack-text', 'Referral attached.');
+  const PARTIAL = 'The message was posted to #imaging-vendor (shared with another organization) in Saltmarsh ED, but the files were not: Slack is not answering properly right now (internal_error). Try again in a minute.';
+  await pg.evaluate((p) => { window.__toasts = []; __mock.conn.sharePartial = p; }, PARTIAL);
+  const sent0 = (await calls(pg, 'slack_share')).length;
+  await pg.click('#slack-send');
+  await pg.waitForFunction((n) => __mock.calls.filter(([c]) => c === 'slack_share').length === n + 1 && !document.querySelector('#slack-send').disabled, sent0);
+  const partial = await pg.evaluate(() => ({
+    open: document.querySelector('#slack-ov').classList.contains('open'), err: document.querySelector('#slack-err').textContent,
+    text: document.querySelector('#slack-text').value, ticked: document.querySelector('#slack-file-0').checked, audit: S.audit.at(-1),
+  }));
+  const partialToasts = (await toasts(pg)).join('|');
+  check(partial.open && partial.err === PARTIAL + ' Send again to share only the files.' && partial.text === '' && partial.ticked && !/Shared/.test(partialToasts)
+    && partial.audit.action === 'slack.share' && partial.audit.detail === '#imaging-vendor (shared with another organization), the message only',
+    `files that failed after the message went say so, and nothing says "Shared": ${JSON.stringify({ ...partial, partialToasts })}`);
+  await pg.evaluate(() => { __mock.conn.sharePartial = null; });
+  await pg.click('#slack-send');
+  await pg.waitForFunction(() => !document.querySelector('#slack-ov').classList.contains('open'));
+  const filesOnly = (await calls(pg, 'slack_share')).at(-1);
+  check(filesOnly.target === 'C6' && filesOnly.text === '' && filesOnly.files.length === 1 && filesOnly.files[0].name === 'Q3 figures.pdf',
+    `Send again shares only the files: ${JSON.stringify({ ...filesOnly, files: filesOnly.files.map((f) => f.name) })}`);
+  await toasts(pg);
+  /* As before this block: the first fixture, and only the shares made
+     before it (the checks below count them). */
+  await pg.evaluate(({ t, n }) => {
+    __mock.conn.truncated = false; __mock.conn.targets = t;
+    let seen = 0;
+    __mock.calls = __mock.calls.filter(([c]) => c !== 'slack_share' || ++seen <= n);
+  }, { t: targets0, n: sent0 });
 
   /* Share to Slack on a Files document: its file, ticked. */
   await pg.evaluate(() => go('docs'));
