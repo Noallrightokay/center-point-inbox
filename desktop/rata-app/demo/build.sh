@@ -53,6 +53,24 @@ strangers() (
     printf '%s\n' "$n"
   done
 )
+# Names alone could still be someone's own fonts/ and icons/, or a lone
+# config.js, so a folder holding anything must also hold demo-backend.js,
+# which only a build writes (it is copied before the page is made, so a
+# build cut short still counts). The one exception is the demo's own out/
+# holding only what --single leaves there.
+unmarked() (
+  shopt -s nullglob dotglob
+  rest=0
+  for e in "$1"/*; do
+    case "${e##*/}" in
+      .DS_Store|RATA-demo.html) ;;
+      *) rest=1 ;;
+    esac
+  done
+  [ "$rest" = 1 ] || exit 1
+  [ -f "$1/demo-backend.js" ] && [ ! -L "$1/demo-backend.js" ] && exit 1
+  exit 0
+)
 if [ -e "$out" ] || [ -L "$out" ]; then
   if [ ! -d "$out" ]; then
     echo "$out is not a demo build (it is not a folder); give a new or empty folder" >&2
@@ -62,6 +80,10 @@ if [ -e "$out" ] || [ -L "$out" ]; then
   if [ -n "$them" ]; then
     named="$(printf '%s\n' "$them" | awk 'NR<=5{printf "%s%s", (NR>1?", ":""), $0} END{if(NR>5) printf " and %d more", NR-5}')"
     echo "$out is not a demo build (it holds $named); give a new or empty folder" >&2
+    exit 1
+  fi
+  if unmarked "$out"; then
+    echo "$out is not a demo build (it has no demo-backend.js); give a new or empty folder" >&2
     exit 1
   fi
 fi

@@ -74,14 +74,39 @@ console.log('\n— build.sh deletes only an earlier demo build —');
   check(r.status !== 0 && /not a demo build \(it holds blog, index\.html\)/.test(r.stderr) && fs.readFileSync(path.join(empty, 'index.html'), 'utf8') === 'my site'
     && fs.readFileSync(path.join(empty, 'blog', 'post.html'), 'utf8') === 'my post' && fs.existsSync(path.join(empty, 'rata-demo.html')),
     `a demo build that also holds other pages is refused, and all of it kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
-  /* A demo name of the wrong kind is not the demo's either. */
+  /* A demo name of the wrong kind is not the demo's either. Two folders,
+     since a Mac's or Windows' disk takes rata-demo.html and RATA-demo.html
+     for one name. */
   const odd = path.join(scratch, 'odd');
   fs.mkdirSync(path.join(odd, 'rata-demo.html'), { recursive: true });
   fs.writeFileSync(path.join(odd, 'rata-demo.html', 'notes.txt'), 'mine');
-  fs.writeFileSync(path.join(odd, 'RATA-demo.html'), 'the one file someone was sent');
   r = build(odd);
-  check(r.status !== 0 && fs.existsSync(path.join(odd, 'rata-demo.html', 'notes.txt')) && fs.existsSync(path.join(odd, 'RATA-demo.html')) && /RATA-demo\.html, rata-demo\.html|rata-demo\.html, RATA-demo\.html/.test(r.stderr),
-    `a folder named rata-demo.html, or RATA-demo.html outside the demo’s own out/, is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
+  check(r.status !== 0 && fs.existsSync(path.join(odd, 'rata-demo.html', 'notes.txt')) && /holds rata-demo\.html\)/i.test(r.stderr),
+    `a folder named rata-demo.html is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
+  const sent = path.join(scratch, 'sent');
+  fs.mkdirSync(sent);
+  fs.writeFileSync(path.join(sent, 'RATA-demo.html'), 'the one file someone was sent');
+  r = build(sent);
+  check(r.status !== 0 && fs.readFileSync(path.join(sent, 'RATA-demo.html'), 'utf8') === 'the one file someone was sent' && /holds RATA-demo\.html\)/.test(r.stderr),
+    `RATA-demo.html outside the demo’s own out/ is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
+  /* Only the names a build writes, but someone's own: a site's assets
+     folder holding just fonts/ and icons/, or a lone config.js. Without
+     demo-backend.js it is not a build, whatever its names. */
+  const assets = path.join(scratch, 'assets');
+  fs.mkdirSync(path.join(assets, 'fonts'), { recursive: true });
+  fs.mkdirSync(path.join(assets, 'icons'));
+  fs.writeFileSync(path.join(assets, 'fonts', 'MyBrand.woff2'), 'mine');
+  fs.writeFileSync(path.join(assets, 'icons', 'logo.svg'), 'mine');
+  r = build(assets);
+  check(r.status !== 0 && /no demo-backend\.js/.test(r.stderr) && fs.readFileSync(path.join(assets, 'fonts', 'MyBrand.woff2'), 'utf8') === 'mine'
+    && fs.readFileSync(path.join(assets, 'icons', 'logo.svg'), 'utf8') === 'mine',
+    `a folder of someone's own fonts/ and icons/ is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
+  const lone = path.join(scratch, 'lone');
+  fs.mkdirSync(lone);
+  fs.writeFileSync(path.join(lone, 'config.js'), 'my config');
+  r = build(lone);
+  check(r.status !== 0 && /no demo-backend\.js/.test(r.stderr) && fs.readFileSync(path.join(lone, 'config.js'), 'utf8') === 'my config',
+    `a folder holding only someone's config.js is refused and kept: status ${r.status}, ${JSON.stringify(r.stderr.trim())}`);
   const fresh = path.join(scratch, 'new', 'demo');
   r = build(fresh);
   check(r.status === 0 && fs.existsSync(path.join(fresh, 'rata-demo.html')), `a folder that is not there yet is made: status ${r.status} ${r.stderr.trim()}`);

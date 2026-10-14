@@ -54,8 +54,10 @@ It empties that folder first, so it builds only into a new or empty
 folder, or one whose every entry is a name it writes there itself
 (`rata-demo.html`, `demo-backend.js`, `bridge.js`, `bridge.css`,
 `config.js`, `fonts`, `icons`, `vendor`, plus `RATA-demo.html` in its own
-`out/`, and a Mac's `.DS_Store`), and refuses any other, naming what is in
-the way. So once you copy a build into a folder of other pages, it will
+`out/`, and a Mac's `.DS_Store`) and that holds `demo-backend.js`, which
+only a build writes. It refuses any other, naming what is in the way.
+Everything inside an earlier build's `fonts`, `icons` and `vendor` goes,
+so keep nothing of your own there. So once you copy a build into a folder of other pages, it will
 not build there again: build somewhere new and copy it over. It must be
 served over http; opening the file
 directly does not work, because the page loads scripts and fonts beside it.
