@@ -4890,9 +4890,9 @@ async function forgetCreated(f){
    it is an ordinary link to a new tab. Restored from 0.1.5 (removed in
    0.1.6 with the screens that led nowhere), inside Files until it became a
    view of its own, Apps, on every plan, with pins, the last four opened
-   and a search. Pins, Recent and Your accounts belong to this browser only
-   (localStorage `rata_apps`, never S, so never in what syncs), and Delete
-   account removes them.
+   and a search. Pins, Recent and Your accounts belong to this browser and
+   this RATA account only (localStorage `rata_apps_<uid>`, APPS_KEY, never
+   S, so never in what syncs), and Delete account removes them.
 
    Every address was checked on 5 October 2026 to answer from the vendor's
    own host (following redirects, signed out):
@@ -5017,7 +5017,25 @@ function brandMark(key,size){
   const p=document.createElementNS(SVG_NS,'path');p.setAttribute('d',b.d);svg.append(p);
   return svg;
 }
-const APPS_KEY='rata_apps';
+/* One entry per RATA account, like the workspace (LS_KEY): on the website
+   two people can share a browser, and neither may see the other's
+   addresses or open Google as the other (SEC-11). Up to 0.1.51 it was one
+   entry for the whole browser, `rata_apps`, which moves here once and goes.
+   The app is one person's computer, so all of it moves; on the website
+   nobody can tell whose those addresses were, so only pins and Recent do,
+   and only to an account with none of its own. The old entry goes before
+   the new one is written, so a full localStorage loses the move rather
+   than leaving the addresses where Delete account no longer looks. */
+const APPS_KEY='rata_apps_'+(SESSION?SESSION.uid:'anon');
+try{
+  const old=SESSION?localStorage.getItem('rata_apps'):null;
+  if(old!==null){
+    localStorage.removeItem('rata_apps');
+    let v=null;try{v=JSON.parse(old)}catch(e){}
+    if(v&&typeof v==='object'&&!Array.isArray(v)&&localStorage.getItem(APPS_KEY)===null)
+      localStorage.setItem(APPS_KEY,JSON.stringify(window.__RATA_NATIVE__?v:{pins:v.pins,recent:v.recent}));
+  }
+}catch(e){}
 /* 0.1.50 kept whether Files' launcher was folded; Apps has nothing to fold. */
 try{localStorage.removeItem('rata_launch_open')}catch(e){}
 function appsStore(){try{const v=JSON.parse(localStorage.getItem(APPS_KEY)||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:{}}catch(e){return {}}}
@@ -5941,7 +5959,8 @@ async function wipeThisDevice(){
   try{localStorage.removeItem(CFG_KEY)}catch(e){}
   /* A message waiting out Undo send is mail text too. */
   try{localStorage.removeItem(OB_KEY)}catch(e){}
-  /* Apps' pins and recent, and the Google and Microsoft addresses typed there. */
+  /* This account's Apps pins and recent, and the Google and Microsoft
+     addresses typed there; another account's in this browser stay. */
   try{localStorage.removeItem(APPS_KEY)}catch(e){}
   try{
     const accts=JSON.parse(localStorage.getItem('centra_accounts')||'{}');

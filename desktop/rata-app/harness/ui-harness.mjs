@@ -3642,7 +3642,7 @@ console.log('\n— Delete account in the app removes what is on this computer, a
 
   /* Done for real: Rust first, then the page's store, then out to sign-up. */
   await pg.evaluate(() => { __mock.listFails = null; __mock.forgetFails = null; localStorage.setItem(OB_KEY, '[{"id":"waiting"}]');
-    localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], acct: { google: 'me@example.com' } })); });
+    localStorage.setItem(APPS_KEY, JSON.stringify({ pins: ['Google · Docs'], acct: { google: 'me@example.com' } })); });
   await pg.click('#btn-delete');
   await pg.waitForFunction(() => !document.querySelector('#del-go').disabled);
   await pg.fill('#del-email', 'Me@Example.com');
@@ -4151,10 +4151,111 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
     const web = await pg.evaluate(() => ({ native: !!window.__RATA_NATIVE__, hrefs: [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')),
       safe: [...document.querySelectorAll('#apps-groups .launch-tile')].every((a) => a.target === '_blank' && a.rel === 'noopener noreferrer') }));
     check(navOk(n) && !web.native && JSON.stringify(web.hrefs) === JSON.stringify(LAUNCHED) && web.safe, `the website: Apps is in both navs, each tile a link to its own address in a new tab: ${JSON.stringify(n)}`);
-    await pg.evaluate((a) => { localStorage.setItem('rata_apps', JSON.stringify({ acct: { google: a.G, microsoft: a.MS } })); go('inbox'); go('apps'); }, { G, MS });
+    await pg.evaluate((a) => { localStorage.setItem(APPS_KEY, JSON.stringify({ acct: { google: a.G, microsoft: a.MS } })); go('inbox'); go('apps'); }, { G, MS });
     const hinted = await pg.evaluate(() => [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')));
     check(JSON.stringify(hinted) === JSON.stringify(HINTED), `and with Your accounts set, the website's links carry the hint too: ${hinted[0]}`);
     await pg.close();
+  }
+  /* Pins, Recent and Your accounts belong to the RATA account that set them
+     (SEC-11): two people signed in one after the other in one browser never
+     see each other's, no tile opens as the other, and one's Delete account
+     leaves the other's alone. */
+  {
+    const A = 'a.private@example.org', AM = 'a@contoso.example';
+    const as = async (uid, context) => {
+      const p = await context.newPage();
+      p.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+      /* Signed in, until this page signs out (auth.html would sign in again). */
+      await p.addInitScript((s) => { if (!sessionStorage.getItem('rata_harness_out')) localStorage.setItem('centra_session', JSON.stringify(s)); },
+        { uid, email: uid + '@example.com', mode: 'local' });
+      await p.goto(B + '/app.html');
+      await p.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+      await p.evaluate(() => go('apps'));
+      return p;
+    };
+    const seen = (p) => p.evaluate(() => ({ sum: document.querySelector('#apps-acct-sum').textContent,
+      hinted: [...document.querySelectorAll('#apps-groups .launch-tile')].filter((a) => /authuser|login_hint/.test(a.getAttribute('href'))).length,
+      pinned: [...document.querySelectorAll('#apps-pinned .launch-name')].map((n) => n.textContent),
+      recent: [...document.querySelectorAll('#apps-recent .launch-name')].map((n) => n.textContent),
+      leak: /a\.private|contoso/i.test(document.querySelector('#view-apps').textContent) }));
+    const wctx = await browser.newContext();
+    let pa = await as('local_harness_a', wctx);
+    await pa.click('#apps-acct-btn');
+    await pa.fill('#apps-google', A);
+    await pa.fill('#apps-microsoft', AM);
+    await pa.click('#apps-acct-save');
+    await pa.click('#apps-groups [data-pin="Google · Sheets"]');
+    const a1 = await seen(pa);
+    check(a1.sum === 'Google: ' + A + ' · Microsoft: ' + AM && a1.hinted === 8 && a1.pinned.join() === 'Sheets', `the website, as A: Your accounts and a pin are kept: ${JSON.stringify(a1)}`);
+    await pa.evaluate(() => sessionStorage.setItem('rata_harness_out', '1'));
+    await Promise.all([pa.waitForURL(/auth\.html/, { timeout: 10000 }), pa.evaluate(() => document.querySelector('#btn-signout').click())]);
+    check(await pa.evaluate(() => localStorage.getItem('centra_session') === null), 'A signs out');
+    await pa.close();
+    const pb = await as('local_harness_b', wctx);
+    const b = await seen(pb);
+    await pb.click('#apps-acct-btn');
+    b.fields = await pb.evaluate(() => [document.querySelector('#apps-google').value, document.querySelector('#apps-microsoft').value].join());
+    check(b.sum === '' && b.hinted === 0 && !b.leak && !b.pinned.length && b.fields === ',',
+      `then B, signed in to the same browser, sees none of A's addresses or pins, and no tile opens as A: ${JSON.stringify(b)}`);
+    await pb.keyboard.press('Escape');
+    await pb.click('#apps-groups [data-pin="Microsoft · Word"]');
+    await pb.evaluate(() => sessionStorage.setItem('rata_harness_out', '1'));
+    const bGone = await pb.evaluate(async () => { const had = localStorage.getItem(APPS_KEY) !== null; await wipeThisDevice(); return had && localStorage.getItem(APPS_KEY) === null; });
+    await pb.close();
+    pa = await as('local_harness_a', wctx);
+    const a2 = await seen(pa);
+    check(bGone && a2.sum === a1.sum && a2.hinted === 8 && a2.pinned.join() === 'Sheets',
+      `B's Delete account takes B's own and leaves A's, which A finds on signing in again: ${JSON.stringify({ bGone, ...a2 })}`);
+    await pa.close();
+    await wctx.close();
+
+    /* What 0.1.51 and earlier kept for the whole browser, `rata_apps`, moves
+       to the account that opens RATA next, and goes. On the website only
+       its pins and Recent: nobody can tell whose those addresses were. */
+    const mctx = await browser.newContext();
+    let pm = await as('local_harness_c', mctx);
+    await pm.evaluate((a) => localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], recent: ['Slack · Slack'], acct: { google: a.A, microsoft: a.AM } })), { A, AM });
+    await pm.close();
+    pm = await as('local_harness_c', mctx);
+    const m = await seen(pm);
+    m.left = await pm.evaluate(() => ({ old: localStorage.getItem('rata_apps'), holding: Object.keys(localStorage).filter((k) => /a\.private|contoso/i.test(localStorage.getItem(k) || '')) }));
+    check(m.pinned.join() === 'Docs' && m.recent.join() === 'Slack' && m.sum === '' && m.hinted === 0 && !m.leak && m.left.old === null && !m.left.holding.length,
+      `the website: the browser-wide entry of 0.1.51 brings its pins and Recent to the next account, never its addresses, and is removed: ${JSON.stringify(m)}`);
+    await pm.close();
+    await mctx.close();
+    /* In the app, one person's computer, all of it moves. */
+    const nctx = await browser.newContext();
+    let pn = await open(true, { context: nctx });
+    await pn.evaluate((a) => localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], acct: { google: a.G, microsoft: a.MS } })), { G, MS });
+    await pn.close();
+    pn = await open(true, { context: nctx });
+    await pn.evaluate(() => go('apps'));
+    const n = await seen(pn);
+    n.old = await pn.evaluate(() => localStorage.getItem('rata_apps'));
+    check(n.pinned.join() === 'Docs' && n.sum === 'Google: ' + G + ' · Microsoft: ' + MS && n.hinted === 8 && n.old === null,
+      `the app: the browser-wide entry of 0.1.51 moves whole, addresses too, and is removed: ${JSON.stringify(n)}`);
+    await pn.close();
+    await nctx.close();
+    /* A localStorage too full for the move (the app keeps mail there when
+       IndexedDB will not open) loses the move rather than keeping the old
+       entry, which Delete account no longer looks for. */
+    const qctx = await browser.newContext();
+    let pq = await open(true, { context: qctx });
+    await pq.evaluate((a) => localStorage.setItem('rata_apps', JSON.stringify({ pins: ['Google · Docs'], acct: { google: a.G, microsoft: a.MS } })), { G, MS });
+    await pq.close();
+    await qctx.addInitScript(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (k, v) { if (/^rata_apps_/.test(k)) throw new DOMException('full', 'QuotaExceededError'); return set.call(this, k, v); };
+    });
+    pq = await open(true, { context: qctx });
+    await pq.evaluate(() => go('apps'));
+    const q = await seen(pq);
+    q.left = await pq.evaluate(() => ({ old: localStorage.getItem('rata_apps'), mine: localStorage.getItem(APPS_KEY),
+      holding: Object.keys(localStorage).filter((k) => /ann\.lee|contoso/i.test(localStorage.getItem(k) || '')) }));
+    check(q.left.old === null && q.left.mine === null && !q.left.holding.length && q.sum === '' && q.hinted === 0 && !q.leak,
+      `the app: a localStorage too full to take the move loses it, and the browser-wide entry is removed all the same: ${JSON.stringify(q)}`);
+    await pq.close();
+    await qctx.close();
   }
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -4162,7 +4263,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
   /* Any page this context opens from here on, other than RATA started again below. */
   const popups = [];
   ctx.on('page', (p) => popups.push(p.url()));
-  await pg.evaluate(() => { localStorage.removeItem('rata_apps'); });
+  await pg.evaluate(() => { localStorage.removeItem(APPS_KEY); });
   await pg.click('#rail [data-view="apps"]');
   const view = await pg.evaluate(() => ({
     groups: [...document.querySelectorAll('#apps-groups .launch-group h2')].map((h) => h.textContent),
@@ -4170,7 +4271,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
     names: [...document.querySelectorAll('#apps-groups .launch-name')].map((n) => n.textContent),
     kinds: [...document.querySelectorAll('#apps-groups .apps-item')].every((li) => li.querySelector('.launch-badge') && li.querySelector('.launch-kind').textContent),
     pins: [...document.querySelectorAll('#apps-groups .launch-pin')].map((b) => b.getAttribute('aria-label') + ':' + b.getAttribute('aria-pressed')),
-    pinnedRow: document.querySelector('#apps-pinned').hidden, recentRow: document.querySelector('#apps-recent').hidden, stored: localStorage.getItem('rata_apps'),
+    pinnedRow: document.querySelector('#apps-pinned').hidden, recentRow: document.querySelector('#apps-recent').hidden, stored: localStorage.getItem(APPS_KEY),
   }));
   check(view.groups.join() === 'Google,Microsoft,Adobe,Apple,Slack,Signing' && JSON.stringify(view.hrefs) === JSON.stringify(LAUNCHED) && view.kinds,
     `Apps shows each group, every tile with its icon, name and kind, at its vendor's own address: ${view.hrefs.length} tiles`);
@@ -4199,7 +4300,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
   await pg.waitForTimeout(200);
   let opened = await pg.evaluate(() => __mock.opened);
   check(JSON.stringify(opened) === JSON.stringify(LAUNCHED) && popups.length === 0, `every tile goes to open_link with exactly its address, and no window opens in the app (${popups.length})`);
-  const recent = await pg.evaluate(() => ({ shown: [...document.querySelectorAll('#apps-recent .launch-name')].map((n) => n.textContent), kept: JSON.parse(localStorage.getItem('rata_apps')).recent }));
+  const recent = await pg.evaluate(() => ({ shown: [...document.querySelectorAll('#apps-recent .launch-name')].map((n) => n.textContent), kept: JSON.parse(localStorage.getItem(APPS_KEY)).recent }));
   check(recent.shown.join() === 'RabbitSign,Acrobat Sign,DocuSign,Slack' && recent.kept.length === 4, `Recent keeps the last four opened, newest first: ${JSON.stringify(recent)}`);
 
   /* Pins: pressed, shown first, kept across a restart. */
@@ -4250,7 +4351,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
   acct = await pg.evaluate(() => ({ gErr: document.querySelector('#apps-google-err').textContent, mErr: document.querySelector('#apps-microsoft-err').textContent,
     inv: [document.querySelector('#apps-google').getAttribute('aria-invalid'), document.querySelector('#apps-microsoft').getAttribute('aria-invalid')].join(),
     desc: document.querySelector('#apps-google').getAttribute('aria-describedby'), focus: document.activeElement.id, open: !document.querySelector('#apps-acct').hidden,
-    kept: (JSON.parse(localStorage.getItem('rata_apps')) || {}).acct, href: document.querySelector('#apps-groups .launch-tile').getAttribute('href') }));
+    kept: (JSON.parse(localStorage.getItem(APPS_KEY)) || {}).acct, href: document.querySelector('#apps-groups .launch-tile').getAttribute('href') }));
   check(/^That is not an address\./.test(acct.gErr) && /^That is not an address\./.test(acct.mErr) && acct.inv === 'true,true' && /apps-google-err/.test(acct.desc)
     && acct.focus === 'apps-google' && acct.open && acct.kept === undefined && acct.href === 'https://docs.new',
   `the fields refuse what is not an address, say so beside each, and keep nothing: ${JSON.stringify(acct)}`);
@@ -4258,7 +4359,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
   await pg.fill('#apps-google', ' ' + G + ' ');
   await pg.fill('#apps-microsoft', MS);
   await pg.click('#apps-acct-save');
-  acct = await pg.evaluate(() => ({ open: !document.querySelector('#apps-acct').hidden, focus: document.activeElement.id, kept: JSON.parse(localStorage.getItem('rata_apps')).acct,
+  acct = await pg.evaluate(() => ({ open: !document.querySelector('#apps-acct').hidden, focus: document.activeElement.id, kept: JSON.parse(localStorage.getItem(APPS_KEY)).acct,
     sum: document.querySelector('#apps-acct-sum').textContent, note: document.querySelectorAll('#apps-groups .launch-note')[0].textContent,
     msNote: document.querySelectorAll('#apps-groups .launch-note')[1].textContent, said: document.querySelector('#apps-groups .launch-tile .vh').textContent }));
   check(!acct.open && acct.focus === 'apps-acct-btn' && acct.kept.google === G && acct.kept.microsoft === MS && acct.sum === 'Google: ' + G + ' · Microsoft: ' + MS
@@ -4278,7 +4379,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
     save(); await new Promise((r) => setTimeout(r, 300));
     const has = (x) => /contoso\.example|ann\.lee/i.test(x);
     return { sync: has(JSON.stringify(forCloud(S))), ws: has(JSON.stringify(S)),
-      stores: Object.keys(localStorage).filter((k) => k !== 'rata_apps' && has(localStorage.getItem(k) || '')),
+      stores: Object.keys(localStorage).filter((k) => k !== APPS_KEY && has(localStorage.getItem(k) || '')),
       calls: [...new Set(__mock.calls.filter(([, a]) => has(JSON.stringify(a || {}))).map(([c]) => c))] };
   });
   check(!leak.sync && !leak.ws && !leak.stores.length && leak.calls.join() === 'open_link',
@@ -4293,7 +4394,7 @@ console.log('\n— Apps: the web apps a click away, pinned, recent, searched, an
   await pg.emulateMedia({ colorScheme: 'light' });
   await pg.click('#apps-acct-btn');
   await pg.click('#apps-acct-clear');
-  acct = await pg.evaluate(() => ({ kept: JSON.parse(localStorage.getItem('rata_apps')).acct, sum: document.querySelector('#apps-acct-sum').textContent,
+  acct = await pg.evaluate(() => ({ kept: JSON.parse(localStorage.getItem(APPS_KEY)).acct, sum: document.querySelector('#apps-acct-sum').textContent,
     hrefs: [...document.querySelectorAll('#apps-groups .launch-tile')].map((a) => a.getAttribute('href')) }));
   check(acct.kept === undefined && acct.sum === '' && JSON.stringify(acct.hrefs) === JSON.stringify(LAUNCHED), `Clear both forgets them, and every tile is its own address again: ${JSON.stringify({ kept: acct.kept, sum: acct.sum })}`);
   check(await pg.evaluate(() => !/[–—]/.test(document.querySelector('#view-apps').textContent + document.querySelector('#apps-acct').textContent)), 'no em or en dash in Apps');
