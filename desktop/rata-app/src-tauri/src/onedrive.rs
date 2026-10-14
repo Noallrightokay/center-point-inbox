@@ -37,7 +37,11 @@
 //! fragment that fails part way (a dropped connection, a 5xx, a short
 //! Retry-After) is gone on with from where the session says it stands, a
 //! few times a save, and the session address's 401, 404 and 410 say the
-//! upload ended, never that OneDrive is disconnected (SEC-11).
+//! upload ended, never that OneDrive is disconnected (SEC-11). Only when the
+//! last fragment went and its answer was lost (never after OneDrive's own
+//! answer, nor a connection never made), and the session is then gone or
+//! cannot say, is nothing cancelled or sent again: OneDrive may have saved
+//! it, and a second session would make `name 1.pdf`.
 //!
 //! **Disconnect and Delete account win** (SEC-7, SEC-8, as Slack's): both
 //! empty the keychain under the list's lock and bump a generation, and a
@@ -537,12 +541,23 @@ impl Answer {
     }
 }
 
+/// A request that brought back no answer: why, and whether it may have
+/// reached OneDrive all the same (`lost`). A connection that was never made
+/// sent nothing; one that dropped after it was made, or timed out, may have
+/// delivered every byte before it went.
+struct NoAnswer {
+    why: Fail,
+    lost: bool,
+}
+
 /// Why an upload session did not bring back the file.
 enum Unfinished {
     /// It failed: the session is cancelled, and this is said.
     Failed(Fail),
-    /// The last fragment went and no answer came back, and the session is
-    /// gone or could not be asked: OneDrive may have made the file.
+    /// The last fragment went and its answer was lost on the way back
+    /// (`NoAnswer::lost`), and the session is then gone or could not be
+    /// asked: OneDrive may have made the file. Never after an answer
+    /// OneDrive gave, nor after a connection that was never made.
     Unsure,
 }
 
@@ -561,11 +576,14 @@ enum Content {
     Bytes(Vec<u8>),
 }
 
-/// What RATA holds of the sign-in while it runs: the refresh token (also in
-/// the keychain) and the access token (only here).
+/// What RATA holds of the sign-in while it runs: the refresh token, the one
+/// the keychain is known to hold whole (`stored`: the same, unless the
+/// keychain refused a rotation this session), and the access token (only
+/// here).
 #[derive(Clone)]
 struct Kept {
     refresh: String,
+    stored: String,
     access: Option<Access>,
 }
 
@@ -781,11 +799,23 @@ impl OneDrive {
         cap: usize,
         too_much: &str,
     ) -> Result<Answer, Fail> {
-        let unreachable = |e: reqwest::Error| {
-            Fail::Net(format!(
+        self.heard(req, cap, too_much).await.map_err(|n| n.why)
+    }
+
+    /// [`OneDrive::answer`], saying too whether a request that brought no
+    /// answer may have arrived: anything but a connection never made.
+    async fn heard(
+        &self,
+        req: reqwest::RequestBuilder,
+        cap: usize,
+        too_much: &str,
+    ) -> Result<Answer, NoAnswer> {
+        let unreachable = |e: reqwest::Error| NoAnswer {
+            lost: !e.is_connect(),
+            why: Fail::Net(format!(
                 "OneDrive could not be reached: {}",
                 e.without_url()
-            ))
+            )),
         };
         let mut resp = req.send().await.map_err(unreachable)?;
         let status = resp.status().as_u16();
@@ -808,7 +838,10 @@ impl OneDrive {
             }
             body.extend_from_slice(&chunk);
             if body.len() > cap {
-                return Err(Fail::Refused("too-large", too_much.to_string()));
+                return Err(NoAnswer {
+                    why: Fail::Refused("too-large", too_much.to_string()),
+                    lost: false,
+                });
             }
         }
         Ok(Answer {
@@ -976,7 +1009,7 @@ impl OneDrive {
                 .header("Content-Type", "application/octet-stream")
                 .timeout(wait)
                 .body(part);
-            let failed = match self.answer(req, BODY_MAX, TOO_MUCH).await {
+            let (failed, lost) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
                 Ok(a) => match a.status {
                     202 if !last => {
                         start = end;
@@ -1001,30 +1034,37 @@ impl OneDrive {
                         )));
                     }
                     // A range OneDrive already had: ask it what it lacks.
-                    416 => Fail::Net(
-                        "OneDrive lost track of how much of the file it had (status 416). Try again."
-                            .into(),
+                    416 => (
+                        Fail::Net(
+                            "OneDrive lost track of how much of the file it had (status 416). Try again."
+                                .into(),
+                        ),
+                        false,
                     ),
-                    _ => a.upload_fail(),
+                    _ => (a.upload_fail(), false),
                 },
-                Err(f) => f,
+                Err(n) => (n.why, n.lost),
             };
-            if !resumable(&failed) {
+            // Only the last fragment, sent and its answer lost, may have
+            // made the file. An answer OneDrive gave (a 503, a 429) or a
+            // connection never made did not, and is said as it is.
+            let unsure = last && lost;
+            let spent = resumes == RESUMES;
+            if !resumable(&failed) || (spent && !unsure) {
                 return Err(Failed(failed));
             }
-            if resumes == RESUMES {
-                return Err(if last { Unsure } else { Failed(failed) });
-            }
             resumes += 1;
-            match self.session_stands(http, at, failed).await {
+            match self.session_stands(http, at, failed.clone()).await {
+                // Resumes spent, and the session still waiting for bytes:
+                // the file was not made.
+                Ok(Stands::From(_)) if spent => return Err(Failed(failed)),
                 // Never past what was sent.
                 Ok(Stands::From(next)) if next < total && next <= end => start = next,
                 Ok(Stands::From(_)) => return Err(out_of_turn()),
-                Ok(Stands::Over) if last => return Err(Unsure),
+                Ok(Stands::Over) | Err(_) if unsure => return Err(Unsure),
                 Ok(Stands::Over) => {
                     return Err(Failed(Fail::Refused("refused", UPLOAD_STOPPED.into())));
                 }
-                Err(f) if last && resumable(&f) => return Err(Unsure),
                 Err(f) => return Err(Failed(f)),
             }
         }
@@ -1312,6 +1352,7 @@ impl Rata {
         self.onedrive.hold(
             self.onedrive.generation(),
             Kept {
+                stored: granted.refresh.clone(),
                 refresh: granted.refresh,
                 access: Some(granted.access),
             },
@@ -1389,6 +1430,7 @@ impl Rata {
             None => match vault::get_onedrive_secret(self.vault()) {
                 Ok(refresh) => {
                     let k = Kept {
+                        stored: refresh.clone(),
                         refresh,
                         access: None,
                     };
@@ -1444,18 +1486,24 @@ impl Rata {
                 // asks for the old one to be discarded. One the keychain
                 // will not take is still held for this session. One it takes
                 // only half of (the pieces but not the entry naming them)
-                // gets the old one written back whole, as a mailbox's is
-                // (security review L5): the old one still works, half of each
-                // does not.
-                if refresh != kept.refresh
-                    && vault::put_onedrive_secret(self.vault(), &refresh).is_err()
-                {
-                    let _ = vault::put_onedrive_secret(self.vault(), &kept.refresh);
+                // gets the last one it held whole written back, as a
+                // mailbox's is (security review L5): that one still works,
+                // half of each does not. Never the one held in memory, which
+                // after an earlier refusal this session the keychain never
+                // had.
+                let mut stored = kept.stored.clone();
+                if refresh != stored {
+                    if vault::put_onedrive_secret(self.vault(), &refresh).is_ok() {
+                        stored = refresh.clone();
+                    } else {
+                        let _ = vault::put_onedrive_secret(self.vault(), &stored);
+                    }
                 }
                 self.onedrive.hold(
                     generation,
                     Kept {
                         refresh,
+                        stored,
                         access: Some(access),
                     },
                 );
@@ -2064,6 +2112,7 @@ mod tests {
             app.onedrive.generation(),
             Kept {
                 refresh: REFRESH.into(),
+                stored: REFRESH.into(),
                 access: Some(Access {
                     token: ACCESS.into(),
                     expires_at: now() + 3600,
@@ -3240,6 +3289,117 @@ mod tests {
         });
     }
 
+    /// SEC-11 (R20): "may have saved it" only when the last fragment went
+    /// and its answer was lost on the way back. An answer OneDrive gave (a
+    /// 503 every time) or a connection never made is said as it is, and the
+    /// session cancelled; telling the customer to look for a file that was
+    /// never sent would hide the reason.
+    #[test]
+    fn the_last_fragment_is_said_maybe_saved_only_when_its_answer_was_lost() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let dir = Scratch::new();
+            let app = od_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let busy = || with(503, r#"{"error":{"code":"serviceNotAvailable"}}"#);
+            let needs = |from: &str| ok(&format!(r#"{{"nextExpectedRanges":["{from}-"]}}"#));
+            let session = |name: &str| {
+                srv.on(
+                    &format!("POST /v1.0/me/drive/root:/{name}:/createUploadSession"),
+                    ok(&format!(r#"{{"uploadUrl":"{}/up/{name}"}}"#, srv.base)),
+                );
+                srv.on(&format!("DELETE /up/{name}"), with(204, ""));
+            };
+            let save = |name: &'static str| app.onedrive_save(None, name, b"hello", false);
+
+            // One fragment, OneDrive answering 503 every time and the session
+            // still waiting for it: OneDrive's own reason, and cancelled.
+            session("a.txt");
+            for _ in 0..RESUMES {
+                srv.on("PUT /up/a.txt", busy());
+                srv.on("GET /up/a.txt", needs("0"));
+            }
+            srv.on("PUT /up/a.txt", busy());
+            let e = save("a.txt").await.unwrap_err();
+            assert_eq!(e.kind, "offline");
+            assert!(e.error.contains("serviceNotAvailable"), "{}", e.error);
+            assert!(!e.error.contains("may have saved"), "{}", e.error);
+            assert_eq!(srv.asked_for("PUT", "/up/a.txt").len(), RESUMES + 1);
+            assert_eq!(srv.asked_for("GET", "/up/a.txt").len(), RESUMES);
+            assert_eq!(srv.asked_for("DELETE", "/up/a.txt").len(), 1);
+
+            // A 503, and the session cannot be asked: the reason, cancelled.
+            session("b.txt");
+            srv.on("PUT /up/b.txt", busy());
+            for _ in 0..ASKS {
+                srv.on(
+                    "GET /up/b.txt",
+                    with(500, r#"{"error":{"code":"generalException"}}"#),
+                );
+            }
+            let e = save("b.txt").await.unwrap_err();
+            assert!(e.error.contains("generalException"), "{}", e.error);
+            assert!(!e.error.contains("may have saved"), "{}", e.error);
+            assert_eq!(srv.asked_for("DELETE", "/up/b.txt").len(), 1);
+
+            // A 503, and then the session gone: it stopped, and was not made.
+            session("c.txt");
+            srv.on("PUT /up/c.txt", busy());
+            srv.on("GET /up/c.txt", with(404, ""));
+            let e = save("c.txt").await.unwrap_err();
+            assert_eq!(e.error, UPLOAD_STOPPED);
+
+            // The answer lost every time, the session still waiting after
+            // the last resume: not made, so the reason, and cancelled.
+            session("d.txt");
+            for _ in 0..=RESUMES {
+                srv.on("PUT /up/d.txt", cut());
+                srv.on("GET /up/d.txt", needs("0"));
+            }
+            let e = save("d.txt").await.unwrap_err();
+            assert!(
+                e.error.starts_with("OneDrive could not be reached"),
+                "{}",
+                e.error
+            );
+            assert_eq!(srv.asked_for("PUT", "/up/d.txt").len(), RESUMES + 1);
+            assert_eq!(srv.asked_for("GET", "/up/d.txt").len(), RESUMES + 1);
+            assert_eq!(srv.asked_for("DELETE", "/up/d.txt").len(), 1);
+
+            // OneDrive busy, then the last resume's answer lost and the
+            // session gone after it: that one may have made the file.
+            session("e.txt");
+            for _ in 0..RESUMES {
+                srv.on("PUT /up/e.txt", busy());
+                srv.on("GET /up/e.txt", needs("0"));
+            }
+            srv.on("PUT /up/e.txt", cut());
+            srv.on("GET /up/e.txt", with(404, ""));
+            let e = save("e.txt").await.unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("offline", MAY_HAVE_SAVED));
+            assert!(srv.asked_for("DELETE", "/up/e.txt").is_empty());
+
+            // An upload host that cannot be reached at all: nothing was
+            // sent, and the reason is said.
+            let closed = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = closed.local_addr().unwrap().port();
+            drop(closed);
+            srv.on(
+                "POST /v1.0/me/drive/root:/f.txt:/createUploadSession",
+                ok(&format!(
+                    r#"{{"uploadUrl":"http://127.0.0.1:{port}/up/f.txt"}}"#
+                )),
+            );
+            let e = save("f.txt").await.unwrap_err();
+            assert_eq!(e.kind, "offline");
+            assert!(
+                e.error.starts_with("OneDrive could not be reached"),
+                "{}",
+                e.error
+            );
+        });
+    }
+
     #[test]
     fn a_program_named_as_a_document_needs_confirmation_and_nothing_empty_or_huge_goes() {
         rt().block_on(async {
@@ -3401,6 +3561,7 @@ mod tests {
                 held,
                 Kept {
                     refresh: REFRESH.into(),
+                    stored: REFRESH.into(),
                     access: None,
                 },
             );
@@ -3566,8 +3727,9 @@ mod tests {
     /// SEC-11 (R19): a rotated refresh token the keychain takes only half
     /// of (its second piece, not the entry naming the pieces) would leave
     /// the old token's first piece with the new one's second, which
-    /// Microsoft refuses at the next launch and OneDrive is parked. The old
-    /// one is written back whole instead; this session goes on with the new.
+    /// Microsoft refuses at the next launch and OneDrive is parked. The one
+    /// the keychain last held whole is written back instead, however many
+    /// times it refuses in a session; this session goes on with the newest.
     #[test]
     fn a_new_refresh_token_the_keychain_takes_half_of_puts_the_old_one_back_whole() {
         rt().block_on(async {
@@ -3575,15 +3737,27 @@ mod tests {
             // pieces each, different in both.
             let old = format!("graph-refresh-old-{}", "a".repeat(1200));
             let new = format!("graph-refresh-new-{}", "b".repeat(1200));
+            let newer = format!("graph-refresh-newer-{}", "c".repeat(1200));
+            let newest = format!("graph-refresh-newest-{}", "d".repeat(1500));
             let rotated = |refresh: &str| {
                 ok(&format!(
                     r#"{{"token_type":"Bearer","expires_in":3600,"access_token":"graph-access-secret-0002","refresh_token":"{refresh}"}}"#
                 ))
             };
+            let list = "GET /v1.0/me/drive/root/children";
+            // Graph refusing the access token: renewed, and asked again.
+            let renewed = |srv: &Scripted, answer: Reply| {
+                srv.on(
+                    list,
+                    with(401, r#"{"error":{"code":"InvalidAuthenticationToken"}}"#),
+                );
+                srv.on(TOKEN, answer);
+                srv.on(list, ok(r#"{"value":[]}"#));
+            };
             let srv = Scripted::start().await;
             let dir = Scratch::new();
             srv.on(TOKEN, rotated(&new));
-            srv.on("GET /v1.0/me/drive/root/children", ok(r#"{"value":[]}"#));
+            srv.on(list, ok(r#"{"value":[]}"#));
             let vault = Arc::new(HalfWay::default());
             let app = od_app(&dir, &srv.base, Some(PRO), vault.clone());
             vault::put_onedrive_secret(vault.as_ref(), &old).unwrap();
@@ -3592,30 +3766,40 @@ mod tests {
                 s.set_onedrive(Some(link()));
                 s.save().unwrap();
             }
+            let held = |app: &Rata| app.onedrive.held(app.onedrive.generation()).unwrap();
+            let in_keychain = || vault::get_onedrive_secret(vault.as_ref()).unwrap();
             vault.stick(true);
             app.onedrive_list(None).await.unwrap();
-            assert_eq!(
-                app.onedrive.held(app.onedrive.generation()).unwrap().refresh,
-                new,
-                "this session goes on with the new one"
-            );
-            let stored = vault::get_onedrive_secret(vault.as_ref()).unwrap();
-            assert!(stored == old, "the keychain holds the old one whole");
-            // Once the keychain takes it, the next one is kept whole.
-            vault.stick(false);
-            let newer = format!("graph-refresh-newer-{}", "c".repeat(1500));
-            srv.on(
-                "GET /v1.0/me/drive/root/children",
-                with(401, r#"{"error":{"code":"InvalidAuthenticationToken"}}"#),
-            );
-            srv.on(TOKEN, rotated(&newer));
-            srv.on("GET /v1.0/me/drive/root/children", ok(r#"{"value":[]}"#));
+            assert!(held(&app).refresh == new, "this session goes on with the new one");
+            assert!(in_keychain() == old, "the keychain holds the old one whole");
+            // Renewed again within the session, the keychain still stuck:
+            // the old one is written back again, never the new one, which
+            // the keychain never held (written back, its second piece would
+            // join the old one's first).
+            renewed(&srv, rotated(&newer));
             app.onedrive_list(None).await.unwrap();
-            assert!(vault::get_onedrive_secret(vault.as_ref()).unwrap() == newer);
-            assert_eq!(
-                srv.asked_for("POST", "/common/oauth2/v2.0/token")[1].form()["refresh_token"],
-                new
+            assert!(held(&app).refresh == newer);
+            assert!(in_keychain() == old, "the old one whole, after two refusals");
+            // A renewal with no new token, once the keychain takes it: the
+            // one held is kept, so the keychain catches up.
+            vault.stick(false);
+            renewed(
+                &srv,
+                ok(r#"{"token_type":"Bearer","expires_in":3600,"access_token":"graph-access-secret-0003"}"#),
             );
+            app.onedrive_list(None).await.unwrap();
+            assert!(in_keychain() == newer);
+            // And the next new one is kept whole.
+            renewed(&srv, rotated(&newest));
+            app.onedrive_list(None).await.unwrap();
+            assert!(in_keychain() == newest);
+            assert!(held(&app).stored == newest);
+            let sent: Vec<String> = srv
+                .asked_for("POST", "/common/oauth2/v2.0/token")
+                .iter()
+                .map(|a| a.form()["refresh_token"].clone())
+                .collect();
+            assert!(sent == [old.clone(), new.clone(), newer.clone(), newer.clone()]);
         });
     }
 
