@@ -676,7 +676,9 @@ button.cv-row:hover{background:var(--fill-2)}
 .slack-opt,.slack-file{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13.5px;cursor:pointer}
 .slack-opt:hover,.slack-file:hover{background:var(--fill-2)}
 .slack-opt .slack-name,.slack-file .slack-name{overflow-wrap:anywhere}
-.slack-opt .slack-kind{margin-left:auto;font-size:12px;color:var(--slate)}
+.slack-opt .slack-kind{margin-left:auto;font-size:12px;color:var(--slate);text-align:right}
+.slack-opt .slack-handle{font-size:12.5px;color:var(--slate);overflow-wrap:anywhere}
+#slack-lead.outside{padding:8px 12px;border-radius:var(--r-sm);background:var(--amber-soft);color:var(--amber)}
 .slack-wait{padding:8px;font-size:13px;color:var(--slate)}
 #slack-text{width:100%;min-height:150px;resize:vertical;border:none;padding:10px 12px;background:var(--card);box-shadow:var(--edge);outline:none;border-radius:var(--r-sm);font:inherit;font-size:13.5px;line-height:1.5;color:inherit}
 #slack-text:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
@@ -4584,11 +4586,39 @@ async function attachmentToCloud(m,a,c,btn,confirmed){
 let SLACK=null;
 const SLACK_LEAD=$('#slack-lead').textContent;
 function slackName(t){return t.kind==='channel'&&!t.name.startsWith('#')?'#'+t.name:t.name}
+/* A name is whatever its owner chose (SEC-11 R7), so each row says what it
+   is: the customer's own, a guest, a channel shared with another
+   organization. Rust lists the customer first and those channels last. */
+function slackKind(t){
+  if(t.kind==='channel')return t.shared==='external'?'Channel, shared with another organization':t.shared==='org'?'Channel, shared across your organization':'Channel';
+  if(t.me)return 'You';
+  return t.standing==='single-channel guest'?'Single-channel guest':t.standing==='guest'?'Guest':t.standing==='invited'?'Invited, has not joined':'Person';
+}
+/* As the audit line and a toast name it, with what tells it apart. */
+function slackWho(t){
+  if(t.kind==='channel')return slackName(t)+(t.shared==='external'?' (shared with another organization)':t.shared==='org'?' (shared across your organization)':'');
+  const about=[t.me?'you':t.standing||'',t.handle?'@'+t.handle:''].filter(Boolean);
+  return t.name+(about.length?' ('+about.join(', ')+')':'');
+}
+/* What is sent to a guest or to a channel shared with another organization
+   is seen, and kept, outside the workspace: the lead says so. */
+const slackOutside=t=>!!t&&(t.shared==='external'||t.standing==='guest'||t.standing==='single-channel guest');
+function slackLead(){
+  const t=SLACK&&(SLACK.targets||[]).find(x=>x.id===SLACK.chosen);
+  if(!slackOutside(t))return SLACK_LEAD;
+  const c=CONN.list.find(x=>x.service==='slack'),team=c&&c.account||'your workspace';
+  return (t.kind==='channel'?slackName(t)+' is shared with another organization.':t.name+' is a guest in '+team+', not a member.')
+    +' People outside '+team+' will see what you send, and keep it.';
+}
+function showSlackLead(){
+  const t=SLACK&&(SLACK.targets||[]).find(x=>x.id===SLACK.chosen),lead=$('#slack-lead');
+  lead.textContent=slackLead();lead.classList.toggle('outside',slackOutside(t));
+}
 async function openSlack(o){
   if(!slackReady())return;
   if(SLACK&&SLACK.busy){toast('RATA is still sending to Slack. Wait for its answer.');return}
   if(SLACK)closeSlack();
-  SLACK={files:o.files||[],targets:null,chosen:null,busy:false,error:''};
+  SLACK={files:o.files||[],targets:null,truncated:false,chosen:null,busy:false,error:''};
   $('#slack-text').value=o.text||'';
   $('#slack-q').value='';$('#slack-err').textContent='';
   slackBusy(false);
@@ -4608,7 +4638,7 @@ async function openSlack(o){
   let r;try{r=await apiFetch('/api/slack/targets')}catch(e){r={ok:false,error:failWhy(null,e)}}
   if(SLACK!==mine)return;
   if(!r||!r.ok){SLACK.error='Could not get your channels and people from Slack: '+failWhy(r);SLACK.targets=[]}
-  else SLACK.targets=r.targets;
+  else{SLACK.targets=r.targets;SLACK.truncated=r.truncated===true}
   renderSlackTargets();
 }
 function renderSlackTargets(){
@@ -4617,16 +4647,24 @@ function renderSlackTargets(){
   const note=(t,role)=>{const p=document.createElement('p');p.className='slack-wait';if(role)p.setAttribute('role',role);p.textContent=t;box.append(p)};
   if(!SLACK.targets){note('Loading your channels and people…','status');return}
   if(SLACK.error){note(SLACK.error,'alert');return}
+  /* SEC-11 R17: Slack had more than it listed. */
+  if(SLACK.truncated)note('Slack listed only part of your channels and people; one may be missing.');
   const q=$('#slack-q').value.trim().toLowerCase().replace(/^#/,'');
-  const shown=SLACK.targets.filter(t=>!q||t.name.toLowerCase().replace(/^#/,'').includes(q));
+  const hay=t=>[t.name.replace(/^#/,''),t.handle?'@'+t.handle:'',t.realName||''].join('\n').toLowerCase();
+  const shown=SLACK.targets.filter(t=>!q||hay(t).includes(q));
   if(!shown.length){note(SLACK.targets.length?'No channel or person matches.':'Slack lists no channel or person to send to.');return}
   for(const t of shown){
     const l=document.createElement('label');l.className='slack-opt';
     const rb=document.createElement('input');rb.type='radio';rb.name='slack-target';rb.value=t.id;rb.checked=SLACK.chosen===t.id;
-    rb.onchange=()=>{if(rb.checked)SLACK.chosen=t.id};
+    rb.onchange=()=>{if(rb.checked){SLACK.chosen=t.id;showSlackLead()}};
     const n=document.createElement('span');n.className='slack-name';n.textContent=slackName(t);
-    const k=document.createElement('span');k.className='slack-kind';k.textContent=t.kind==='person'?'Person':'Channel';
-    l.append(rb,n,k);box.append(l);
+    l.append(rb,n);
+    /* The handle is theirs alone in the workspace; a full name that is not
+       the one shown comes with it. */
+    const also=[t.realName&&t.realName!==t.name?t.realName:'',t.handle?'@'+t.handle:''].filter(Boolean).join(' · ');
+    if(also){const h=document.createElement('span');h.className='slack-handle';h.textContent=also;l.append(h)}
+    const k=document.createElement('span');k.className='slack-kind';k.textContent=slackKind(t);
+    l.append(k);box.append(l);
   }
 }
 /* Once Send is pressed the dialog stays until the answer is in (SEC-10):
@@ -4656,17 +4694,26 @@ async function sendSlack(){
     try{files.push(await f.get())}catch(e){done('Not sent to Slack: '+f.name+' could not be read. '+failWhy(null,e));return}
   }
   let r;try{r=await jsonPost('/api/slack/share',{target:t.id,text,files})}catch(e){r={ok:false,error:failWhy(null,e)}}
+  /* The message went and the files did not (SEC-11 R12): said as Rust
+     says it, never "Shared", and the message is taken out so that Send
+     tries only the files again. */
+  if(r&&!r.ok&&r.kind==='partial'){
+    if(SLACK===mine)$('#slack-text').value='';
+    audit('slack.share',slackWho(t)+', the message only');
+    done(failWhy(r)+' Send again to share only the files.');return;
+  }
   if(!r||!r.ok){done('Not sent to Slack: '+failWhy(r));return}
   mine.busy=false;
   if(SLACK===mine){slackBusy(false);closeSlack()}
-  audit('slack.share',slackName(t)+(files.length?' with '+files.map(f=>f.name).join(', '):''));
-  toast('Shared to '+(r.where||slackName(t)+' in Slack'));
+  audit('slack.share',slackWho(t)+(files.length?' with '+files.map(f=>f.name).join(', '):''));
+  toast('Shared to '+(r.where||slackWho(t)+' in Slack'));
 }
 function slackBusy(on){
   const send=$('#slack-send');
   send.disabled=on;send.textContent=on?'Sending…':'Send';
   $('#slack-cancel').disabled=on;$('#slack-close').disabled=on;
-  $('#slack-lead').textContent=on?'Sending. This stays open until Slack answers.':SLACK_LEAD;
+  if(on){$('#slack-lead').textContent='Sending. This stays open until Slack answers.';$('#slack-lead').classList.remove('outside')}
+  else showSlackLead();
 }
 $('#slack-send').onclick=sendSlack;
 $('#slack-cancel').onclick=closeSlack;

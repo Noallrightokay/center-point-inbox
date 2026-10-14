@@ -3,21 +3,25 @@
 //! Send only: a message, or files with a message, to a channel or a person
 //! the customer picks in Share to Slack. Nothing here reads a message from
 //! Slack; the only things asked of it are who and where the customer can
-//! send to (`conversations.list`, `users.list`) and the sending itself
+//! send to (`users.conversations`, `users.list`) and the sending itself
 //! (`chat.postMessage`, the two-step file upload).
 //!
 //! **Signing in.** Slack's OAuth v2 with a *user* token and PKCE (Slack's
 //! PKCE is generally available since 2026-03-30), so there is no client
 //! secret anywhere and no server of RATA's in the path:
 //!
-//! 1. A one-shot listener on `127.0.0.1` at one of [`PORTS`]. Slack treats a
+//! 1. A one-shot listener at one of [`PORTS`]. Slack treats a
 //!    `http://localhost` redirect as a desktop redirect once the app has PKCE
 //!    turned on, but it matches the redirect exactly as registered, port
 //!    and all, and refuses `127.0.0.1`. So the owner registers
-//!    `http://localhost:<port>` for each of the three ports, and RATA uses
-//!    the first it can listen on (`docs/CONNECTIONS-SETUP.md`). The
-//!    browser's `localhost` reaches the IPv4 listener; a browser that tries
-//!    `::1` first falls back to it when nothing answers there.
+//!    `http://localhost:<port>` for each of the three ports
+//!    (`docs/CONNECTIONS-SETUP.md`). A browser's `localhost` may be `::1`
+//!    as well as `127.0.0.1`, and browsers try `::1` first, so RATA listens
+//!    on both at the first port where it can hold both, and never at one
+//!    where another program holds either: whatever listens there would get
+//!    Slack's answer, and the tab with it (SEC-11 R2). Only a computer with
+//!    no IPv6 loopback at all, where nothing can listen on `::1` and no
+//!    browser tries it, makes do with `127.0.0.1`.
 //! 2. The customer's own browser opens `slack.com/oauth/v2/authorize` with
 //!    `user_scope`, a PKCE challenge (`S256`, the only method Slack takes)
 //!    and a random `state`, through `links::classify`, never the webview.
@@ -55,19 +59,21 @@
 //! Slack at all, exactly as before K3.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rata_mail::{looks_disguised, safe_file_name};
-use serde::Serialize;
+use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use crate::cloud::{Connected, Refusal, Service, Status, no_slack};
 use crate::core::Rata;
-use crate::oauth::{self, Attempt, Ended, Gate};
+use crate::oauth::{self, Attempt, Ended, Gate, Loopback};
 use crate::store::{SlackLink, Store, now};
 use crate::vault::{self, Unreadable};
 
@@ -502,15 +508,12 @@ impl Slack {
         self.gate.finish(which)
     }
 
-    /// The listener Slack sends the browser back to: the first of the
-    /// registered ports this computer lets RATA listen on.
-    async fn listen(&self) -> Result<(TcpListener, u16), String> {
-        for &port in &self.ports {
-            if let Ok(l) = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await
-                && let Ok(addr) = l.local_addr()
-            {
-                return Ok((l, addr.port()));
-            }
+    /// The listeners Slack sends the browser back to: `127.0.0.1` and `::1`
+    /// on the first of the registered ports where RATA can hold both
+    /// (SEC-11 R2).
+    async fn listen(&self) -> Result<(Loopback, u16), String> {
+        if let Some(got) = listen_on(&self.ports, Ipv6Addr::LOCALHOST.into()).await {
+            return Ok(got);
         }
         let ports: Vec<String> = self.ports.iter().map(u16::to_string).collect();
         Err(format!(
@@ -539,14 +542,17 @@ impl Slack {
     }
 
     /// One Web API method, as a form, with the token as a bearer token when
-    /// there is one. Slack's own refusal comes back as a [`Fail`]; nothing
-    /// in a sentence is ever a token.
-    async fn call(
+    /// there is one, its answer read as `T`. Slack's own refusal comes back
+    /// as a [`Fail`]; nothing in a sentence is ever a token. Whether Slack
+    /// said `ok` is read first, keeping nothing else of the answer, so a
+    /// listing's page is read straight into what RATA keeps of it (`Page`)
+    /// and never held whole (SEC-11 R18).
+    async fn call<T: DeserializeOwned>(
         &self,
         method: &str,
         token: Option<&str>,
         form: &[(&str, &str)],
-    ) -> Result<Value, Fail> {
+    ) -> Result<T, Fail> {
         let http = self.http().map_err(Fail::Net)?;
         let body = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(form)
@@ -585,8 +591,8 @@ impl Slack {
         if status == 429 {
             return Err(Fail::Limited(wait.unwrap_or(30)));
         }
-        let Ok(v) = serde_json::from_slice::<Value>(&got) else {
-            return Err(if status >= 500 {
+        let unreadable = || {
+            if status >= 500 {
                 Fail::Net(format!(
                     "Slack is not answering properly right now (status {status}). Try again in a minute."
                 ))
@@ -595,12 +601,16 @@ impl Slack {
                     "refused",
                     format!("Slack sent an answer RATA could not read (status {status})."),
                 )
-            });
+            }
         };
-        if v.get("ok").and_then(Value::as_bool) == Some(true) {
-            return Ok(v);
+        let Ok(Obj(head)) = serde_json::from_slice::<Obj<Head>>(&got) else {
+            return Err(unreadable());
+        };
+        let head = head.unwrap_or_default();
+        if head.ok.0 {
+            return serde_json::from_slice::<T>(&got).map_err(|_| unreadable());
         }
-        match v.get("error").and_then(Value::as_str) {
+        match head.error.0.as_deref() {
             Some(code) => Err(match classify(code) {
                 Fail::Limited(s) => Fail::Limited(wait.unwrap_or(s)),
                 other => other,
@@ -618,12 +628,12 @@ impl Slack {
     /// [`Slack::call`], waiting out one short Retry-After. Slack has done
     /// nothing with a request it answered `ratelimited`, so sending it again
     /// cannot post twice. A longer wait is said, not waited.
-    async fn call_patient(
+    async fn call_patient<T: DeserializeOwned>(
         &self,
         method: &str,
         token: Option<&str>,
         form: &[(&str, &str)],
-    ) -> Result<Value, Fail> {
+    ) -> Result<T, Fail> {
         match self.call(method, token, form).await {
             Err(Fail::Limited(s)) if s <= WAIT_MOST => {
                 tokio::time::sleep(self.second * (s.max(1) as u32)).await;
@@ -640,7 +650,7 @@ impl Slack {
         code: &str,
         attempt: &Attempt,
     ) -> Result<Granted, Fail> {
-        let got = self
+        let got: Value = self
             .call_patient(
                 "oauth.v2.access",
                 None,
@@ -666,7 +676,7 @@ impl Slack {
 
     /// Fresh tokens from the refresh token, which this spends.
     pub async fn renew(&self, client_id: &str, refresh: &str) -> Result<Tokens, Fail> {
-        let got = self
+        let got: Value = self
             .call_patient(
                 "oauth.v2.access",
                 None,
@@ -748,6 +758,48 @@ impl Slack {
             && u.port().is_none()
             && (host == "slack.com" || host.ends_with(".slack.com"))
     }
+}
+
+/// Listen on `127.0.0.1` and on `twin` (the IPv6 loopback; another
+/// loopback address in tests) at the first of `ports` where both can be
+/// held, never at one where another program holds either: the browser's
+/// `localhost` may go to either, and whoever listens there hears Slack's
+/// answer. Port 0 is any port the system picks, `twin` then taking the same
+/// one. Only a computer with no IPv6 loopback at all, where nothing can
+/// listen there and no browser will try it, makes do with `127.0.0.1`.
+async fn listen_on(ports: &[u16], twin: IpAddr) -> Option<(Loopback, u16)> {
+    for &port in ports {
+        let Ok(v4) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await else {
+            continue;
+        };
+        let Ok(port) = v4.local_addr().map(|a| a.port()) else {
+            continue;
+        };
+        match TcpListener::bind((twin, port)).await {
+            Ok(v6) => return Some((Loopback::two(v4, v6), port)),
+            Err(e) if no_loopback_there(&e) => return Some((Loopback::one(v4), port)),
+            // In use, refused, or anything else: another port.
+            Err(_) => continue,
+        }
+    }
+    None
+}
+
+/// Whether binding failed because this computer has no such loopback
+/// address at all: `AddrNotAvailable` (IPv6 switched off for the loopback),
+/// `Unsupported`, or EAFNOSUPPORT (no IPv6 in the system), which the
+/// standard library leaves uncategorized.
+fn no_loopback_there(e: &std::io::Error) -> bool {
+    #[cfg(windows)]
+    const EAFNOSUPPORT: i32 = 10047; // WSAEAFNOSUPPORT
+    #[cfg(target_os = "linux")]
+    const EAFNOSUPPORT: i32 = 97;
+    #[cfg(not(any(windows, target_os = "linux")))]
+    const EAFNOSUPPORT: i32 = 47; // macOS and the BSDs
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+    ) || e.raw_os_error() == Some(EAFNOSUPPORT)
 }
 
 /// Tokens as Slack writes them in `obj`: `access_token`, `refresh_token`
@@ -843,96 +895,473 @@ pub fn open_sign_in(url: &str) -> Result<(), String> {
     }
 }
 
+// ------------------------------------------------- what a listing keeps
+//
+// A listing's pages are read straight into these (SEC-11 R18): each name is
+// cut to one plain line as it is read, an element that is not an object is
+// passed over, an array or an object RATA does not read is skipped without
+// being kept, and at most `PAGE_MOST` elements of a page are kept. No page
+// is ever held as a whole `Value`.
+
+/// The most elements of one page that are kept: what RATA asks for.
+const PAGE_MOST: usize = 200;
+
+/// Reads one JSON value of any kind, keeping what `on_str` and `on_bool`
+/// make of a string or a boolean; anything else, an array or an object of
+/// any size included, is passed over without being kept.
+struct Loose<T> {
+    on_str: fn(&str) -> Option<T>,
+    on_bool: fn(bool) -> Option<T>,
+}
+
+impl<'de, T> Visitor<'de> for Loose<T> {
+    type Value = Option<T>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("any value")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Option<T>, E> {
+        Ok((self.on_str)(v))
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Option<T>, E> {
+        Ok((self.on_bool)(v))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Option<T>, E> {
+        Ok(None)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<T>, A::Error> {
+        IgnoredAny.visit_seq(seq).map(|_| None)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<T>, A::Error> {
+        IgnoredAny.visit_map(map).map(|_| None)
+    }
+}
+
+/// Slack's `true`. Anything else, or nothing, is false.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Flag(bool);
+
+impl<'de> Deserialize<'de> for Flag {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Flag, D::Error> {
+        d.deserialize_any(Loose {
+            on_str: |_| None,
+            on_bool: Some,
+        })
+        .map(|b| Flag(b == Some(true)))
+    }
+}
+
+/// A name Slack gave, one plain line of at most 80 characters (`plain`);
+/// none for anything but a string, or for nothing left of one.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Name(Option<String>);
+
+impl<'de> Deserialize<'de> for Name {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Name, D::Error> {
+        d.deserialize_any(Loose {
+            on_str: |s| Some(plain(s, 80)).filter(|s| !s.is_empty()),
+            on_bool: |_| None,
+        })
+        .map(Name)
+    }
+}
+
+/// An id, kept only when it is one of Slack's (`slack_id`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Id(Option<String>);
+
+impl<'de> Deserialize<'de> for Id {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Id, D::Error> {
+        d.deserialize_any(Loose {
+            on_str: |s| slack_id(s).then(|| s.to_string()),
+            on_bool: |_| None,
+        })
+        .map(Id)
+    }
+}
+
+/// A string kept as Slack wrote it (an error code, a cursor).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Text(Option<String>);
+
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Text, D::Error> {
+        d.deserialize_any(Loose {
+            on_str: |s| Some(s.to_string()),
+            on_bool: |_| None,
+        })
+        .map(Text)
+    }
+}
+
+/// An element read as `T` when it is an object; anything else is passed
+/// over, as none.
+#[derive(Debug)]
+struct Obj<T>(Option<T>);
+
+impl<T> Default for Obj<T> {
+    fn default() -> Obj<T> {
+        Obj(None)
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Obj<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Obj<T>, D::Error> {
+        struct Read<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for Read<T> {
+            type Value = Option<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<T>, A::Error> {
+                T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Some)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<T>, A::Error> {
+                IgnoredAny.visit_seq(seq).map(|_| None)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Option<T>, E> {
+                Ok(None)
+            }
+        }
+        d.deserialize_any(Read(std::marker::PhantomData)).map(Obj)
+    }
+}
+
+/// A listing's array: the first [`PAGE_MOST`] objects in it, read as `T`,
+/// and whether it held more. What is not an object, and everything past
+/// those, is passed over without being kept.
+#[derive(Debug)]
+struct Capped<T> {
+    items: Vec<T>,
+    more: bool,
+}
+
+impl<T> Default for Capped<T> {
+    fn default() -> Capped<T> {
+        Capped {
+            items: Vec::new(),
+            more: false,
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Capped<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Capped<T>, D::Error> {
+        struct Read<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for Read<T> {
+            type Value = Capped<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an array")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Capped<T>, A::Error> {
+                let mut got = Capped::default();
+                while let Some(Obj(item)) = seq.next_element::<Obj<T>>()? {
+                    let Some(item) = item else { continue };
+                    if got.items.len() == PAGE_MOST {
+                        got.more = true;
+                        IgnoredAny.visit_seq(seq)?;
+                        break;
+                    }
+                    got.items.push(item);
+                }
+                Ok(got)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Capped<T>, A::Error> {
+                IgnoredAny.visit_map(map).map(|_| Capped::default())
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Capped<T>, E> {
+                Ok(Capped::default())
+            }
+        }
+        d.deserialize_any(Read(std::marker::PhantomData))
+    }
+}
+
+/// Whether Slack said `ok`, and its error code if not: all `call` reads
+/// before the rest.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Head {
+    ok: Flag,
+    error: Text,
+}
+
+/// One page of `users.conversations` (`channels`) or `users.list`
+/// (`members`).
+#[derive(Debug, Deserialize)]
+#[serde(default, bound = "T: Deserialize<'de>")]
+struct Page<T> {
+    #[serde(rename = "channels", alias = "members")]
+    items: Capped<T>,
+    response_metadata: Obj<Meta>,
+}
+
+impl<T> Default for Page<T> {
+    fn default() -> Page<T> {
+        Page {
+            items: Capped::default(),
+            response_metadata: Obj::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Meta {
+    next_cursor: Text,
+}
+
+/// A conversation as `users.conversations` lists it: only what is read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Conv {
+    id: Id,
+    name: Name,
+    is_im: Flag,
+    is_mpim: Flag,
+    is_archived: Flag,
+    is_ext_shared: Flag,
+    is_pending_ext_shared: Flag,
+    is_org_shared: Flag,
+}
+
+/// A person as `users.list` lists them: only what is read.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Member {
+    id: Id,
+    /// Their handle, theirs alone in the workspace.
+    name: Name,
+    real_name: Name,
+    deleted: Flag,
+    is_bot: Flag,
+    is_app_user: Flag,
+    is_restricted: Flag,
+    is_ultra_restricted: Flag,
+    is_invited_user: Flag,
+    profile: Obj<Profile>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Profile {
+    display_name: Name,
+    real_name: Name,
+}
+
 // --------------------------------------------------------------- targets
 
 /// Somewhere to send to, as the page lists it: a channel by its name
-/// (without `#`), or a person by theirs. A person's id is their direct
-/// message's when there is one, else their own (opened when sent to).
+/// (without `#`), or a person by theirs, with their own id (their direct
+/// message is opened when sent to). A name is whatever its owner chose, so
+/// what tells two alike apart, or says who is outside the workspace, comes
+/// beside it (SEC-11 R7).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Target {
     pub id: String,
     pub name: String,
     pub kind: &'static str,
+    /// The person signed in: their own direct message.
+    pub me: bool,
+    /// A person's handle, theirs alone in the workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    /// A person's full name, when it is not the name shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub real_name: Option<String>,
+    /// A person who is not a full member: "guest", "single-channel guest",
+    /// or "invited" (has not joined).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub standing: Option<&'static str>,
+    /// A channel shared beyond the workspace: "external" (with another
+    /// organization, or about to be), or "org" (across the customer's own
+    /// organization). Never from `is_shared` alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared: Option<&'static str>,
+}
+
+impl Target {
+    /// How the toast and the audit line name it: "#general", "#vendors
+    /// (shared with another organization)", "Ann Lee (guest, @alee)", "Ann
+    /// Smith (you, @asmith)".
+    fn shown(&self) -> String {
+        if self.kind == "channel" {
+            return match self.shared {
+                Some("external") => format!("#{} (shared with another organization)", self.name),
+                Some(_) => format!("#{} (shared across your organization)", self.name),
+                None => format!("#{}", self.name),
+            };
+        }
+        let about: Vec<String> = [
+            if self.me {
+                Some("you".to_string())
+            } else {
+                self.standing.map(String::from)
+            },
+            self.handle.as_ref().map(|h| format!("@{h}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if about.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} ({})", self.name, about.join(", "))
+        }
+    }
+}
+
+/// Where the customer can share to, and whether Slack had more than RATA
+/// listed (SEC-11 R17), which the page says.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Listing {
+    pub targets: Vec<Target>,
+    pub truncated: bool,
 }
 
 /// The channels the person is in and the people they can write to, from
-/// one listing of each: channels first, then people, each by name. Deleted
-/// people, bots and Slackbot are left out; `me` is named "(you)".
-pub fn targets_from(convs: &[Value], people: &[Value], me: &str) -> Vec<Target> {
-    let truthy = |v: &Value, k: &str| v.get(k).and_then(Value::as_bool) == Some(true);
-    let mut ims: HashMap<String, String> = HashMap::new();
+/// one listing of each: the person signed in first, then channels by name
+/// (those shared with another organization last), then people by name.
+/// Deleted people, bots and Slackbot are left out. RATA writes nothing into
+/// a name: the person signed in is `me`.
+fn targets_from(convs: &[Conv], people: &[Member], me: &str) -> Vec<Target> {
     let mut channels = Vec::new();
     for c in convs {
-        let Some(id) = c.get("id").and_then(Value::as_str).filter(|i| slack_id(i)) else {
+        // `users.conversations` lists only the person's own, so each is one
+        // they are in, `is_member` or not. Direct messages and group ones
+        // are not targets: a person is reached through conversations.open.
+        let (Some(id), Some(name)) = (&c.id.0, &c.name.0) else {
             continue;
         };
-        if truthy(c, "is_im") {
-            if let Some(user) = c
-                .get("user")
-                .and_then(Value::as_str)
-                .filter(|u| slack_id(u))
-                && !truthy(c, "is_user_deleted")
-            {
-                ims.insert(user.to_string(), id.to_string());
-            }
+        if c.is_im.0 || c.is_mpim.0 || c.is_archived.0 {
             continue;
         }
-        if truthy(c, "is_archived") || truthy(c, "is_mpim") {
-            continue;
-        }
-        // A public channel is listed whether or not the person is in it; a
-        // private one only when they are, and says so.
-        let member = match c.get("is_member").and_then(Value::as_bool) {
-            Some(m) => m,
-            None => truthy(c, "is_private") || truthy(c, "is_group"),
+        let shared = if c.is_ext_shared.0 || c.is_pending_ext_shared.0 {
+            Some("external")
+        } else if c.is_org_shared.0 {
+            Some("org")
+        } else {
+            None
         };
-        if !member {
-            continue;
-        }
-        let name = plain(c.get("name").and_then(Value::as_str).unwrap_or(""), 80);
-        if name.is_empty() {
-            continue;
-        }
         channels.push(Target {
-            id: id.to_string(),
-            name,
+            id: id.clone(),
+            name: name.clone(),
             kind: "channel",
+            me: false,
+            handle: None,
+            real_name: None,
+            standing: None,
+            shared,
         });
     }
+    let mut mine = None;
     let mut persons = Vec::new();
     for p in people {
-        let Some(id) = p.get("id").and_then(Value::as_str).filter(|i| slack_id(i)) else {
-            continue;
-        };
-        if truthy(p, "deleted")
-            || truthy(p, "is_bot")
-            || truthy(p, "is_app_user")
-            || id == "USLACKBOT"
-        {
+        let Some(id) = &p.id.0 else { continue };
+        if p.deleted.0 || p.is_bot.0 || p.is_app_user.0 || id == "USLACKBOT" {
             continue;
         }
-        let profile = p.get("profile");
-        let pick = |v: Option<&Value>, k: &str| {
-            v.and_then(|v| v.get(k))
-                .and_then(Value::as_str)
-                .map(|s| plain(s, 80))
-                .filter(|s| !s.is_empty())
-        };
-        let Some(mut name) = pick(profile, "display_name")
-            .or_else(|| pick(profile, "real_name"))
-            .or_else(|| pick(Some(p), "real_name"))
-            .or_else(|| pick(Some(p), "name"))
+        let profile = p.profile.0.as_ref();
+        let full = profile
+            .and_then(|f| f.real_name.0.clone())
+            .or_else(|| p.real_name.0.clone());
+        let Some(name) = profile
+            .and_then(|f| f.display_name.0.clone())
+            .or_else(|| full.clone())
+            .or_else(|| p.name.0.clone())
         else {
             continue;
         };
-        if id == me {
-            name.push_str(" (you)");
-        }
-        persons.push(Target {
-            id: ims.get(id).cloned().unwrap_or_else(|| id.to_string()),
+        let standing = if p.is_ultra_restricted.0 {
+            Some("single-channel guest")
+        } else if p.is_restricted.0 {
+            Some("guest")
+        } else if p.is_invited_user.0 {
+            Some("invited")
+        } else {
+            None
+        };
+        let real_name = full.filter(|f| *f != name);
+        let t = Target {
+            id: id.clone(),
             name,
             kind: "person",
-        });
+            me: id == me,
+            handle: p.name.0.clone(),
+            real_name,
+            standing,
+            shared: None,
+        };
+        if t.me {
+            mine = Some(t);
+        } else {
+            persons.push(t);
+        }
     }
     let by_name = |a: &Target, b: &Target| {
         a.name
@@ -940,10 +1369,13 @@ pub fn targets_from(convs: &[Value], people: &[Value], me: &str) -> Vec<Target> 
             .cmp(&b.name.to_lowercase())
             .then_with(|| a.name.cmp(&b.name))
     };
-    channels.sort_by(by_name);
+    channels.sort_by(|a, b| {
+        (a.shared == Some("external"))
+            .cmp(&(b.shared == Some("external")))
+            .then_with(|| by_name(a, b))
+    });
     persons.sort_by(by_name);
-    channels.extend(persons);
-    channels
+    mine.into_iter().chain(channels).chain(persons).collect()
 }
 
 /// A file to share, as the page sent it: its name, and the bytes it read
@@ -1051,14 +1483,14 @@ impl Rata {
         // while the customer signs in means nothing is kept.
         let began = (self.epoch(), self.slack.generation());
         let failed = |e: String| refused("refused", e);
-        let (listener, port) = self.slack.listen().await.map_err(failed)?;
+        let (listeners, port) = self.slack.listen().await.map_err(failed)?;
         let attempt = Attempt::with_redirect(format!("http://localhost:{port}")).map_err(failed)?;
         let link = self.slack.authorize_link(&client_id, &attempt);
         // Nothing may return between `begin` and `finish`.
         let cancel = self.slack.begin().map_err(failed)?;
         let got: Result<Granted, Option<Refusal>> = async {
             open(&link).map_err(|e| Some(failed(e)))?;
-            let code = oauth::wait_for_code_from(listener, &attempt, &cancel, "Slack")
+            let code = oauth::wait_for_code_on(listeners, &attempt, &cancel, "Slack")
                 .await
                 .map_err(|e| match e {
                     Ended::Cancelled => None,
@@ -1193,7 +1625,7 @@ impl Rata {
     pub async fn revoke_slack(&self, tokens: Tokens) {
         let _ = self
             .slack
-            .call("auth.revoke", Some(&tokens.access), &[])
+            .call::<IgnoredAny>("auth.revoke", Some(&tokens.access), &[])
             .await;
     }
 
@@ -1280,12 +1712,12 @@ impl Rata {
     /// One Web API method with the workspace's token: renewed and tried
     /// once more if Slack says it ran out, and the sign-in parked if Slack
     /// has ended it.
-    async fn slack_api(
+    async fn slack_api<T: DeserializeOwned>(
         &self,
         link: &SlackLink,
         method: &str,
         form: &[(&str, &str)],
-    ) -> Result<Value, Refusal> {
+    ) -> Result<T, Refusal> {
         let generation = self.slack.generation();
         let (token, new) = self.slack_token(link, None).await?;
         let hidden = |f: Fail, t: &str| match f {
@@ -1308,77 +1740,88 @@ impl Rata {
         }
     }
 
-    /// Every page of a listing method, as far as [`PAGES_MAX`] pages.
-    async fn slack_pages(
+    /// Every page of a listing method, as far as [`PAGES_MAX`] pages, each
+    /// read straight into what RATA keeps of it (`Page`), so no page is
+    /// held whole (SEC-11 R18). With whether the listing is only part of
+    /// what Slack has (SEC-11 R17): more pages than RATA reads, a page with
+    /// more than it asked for, or a page after the first that Slack could
+    /// not give now (too many requests, or not reachable), which keeps
+    /// what was read. The first page failing, or the sign-in ending,
+    /// fails it.
+    async fn slack_pages<R: DeserializeOwned>(
         &self,
         link: &SlackLink,
         method: &str,
         form: &[(&str, &str)],
-        field: &str,
-    ) -> Result<Vec<Value>, Refusal> {
+    ) -> Result<(Vec<R>, bool), Refusal> {
         let mut out = Vec::new();
+        let mut cut = false;
         let mut cursor = String::new();
-        for _ in 0..PAGES_MAX {
+        for n in 0..PAGES_MAX {
             let mut ask: Vec<(&str, &str)> = form.to_vec();
             ask.push(("limit", PAGE));
             if !cursor.is_empty() {
                 ask.push(("cursor", &cursor));
             }
-            let page = self.slack_api(link, method, &ask).await?;
-            if let Some(items) = page.get(field).and_then(Value::as_array) {
-                out.extend(items.iter().cloned());
-            }
+            let page: Page<R> = match self.slack_api(link, method, &ask).await {
+                Ok(page) => page,
+                Err(e) if n > 0 && e.kind == "offline" => return Ok((out, true)),
+                Err(e) => return Err(e),
+            };
+            cut |= page.items.more;
+            out.extend(page.items.items);
             let next = page
-                .pointer("/response_metadata/next_cursor")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if next.is_empty() || next.len() > 1024 || next == cursor {
-                break;
+                .response_metadata
+                .0
+                .and_then(|m| m.next_cursor.0)
+                .unwrap_or_default();
+            let next = next.trim();
+            if next.is_empty() {
+                return Ok((out, cut));
             }
-            cursor = next;
+            if next.len() > 1024 || next == cursor {
+                return Ok((out, true));
+            }
+            cursor = next.to_string();
         }
-        Ok(out)
+        Ok((out, true))
     }
 
-    /// Where the customer can share to: the channels they are in and the
-    /// people of the workspace.
-    pub async fn slack_targets(&self) -> Result<Vec<Target>, Refusal> {
+    /// Where the customer can share to: the channels they are in (Slack's
+    /// `users.conversations`, which lists only theirs, never every public
+    /// channel of the workspace) and the people of the workspace, and
+    /// whether Slack had more than RATA listed.
+    pub async fn slack_targets(&self) -> Result<Listing, Refusal> {
         let link = self.slack_ready()?;
-        let convs = self
-            .slack_pages(
+        let (convs, convs_cut) = self
+            .slack_pages::<Conv>(
                 &link,
-                "conversations.list",
+                "users.conversations",
                 &[
-                    ("types", "public_channel,private_channel,im"),
+                    ("types", "public_channel,private_channel"),
                     ("exclude_archived", "true"),
                 ],
-                "channels",
             )
             .await?;
-        let people = self
-            .slack_pages(&link, "users.list", &[], "members")
-            .await?;
+        let (people, people_cut) = self.slack_pages::<Member>(&link, "users.list", &[]).await?;
         let targets = targets_from(&convs, &people, &link.user_id);
         if let Ok(mut names) = self.slack.names.lock() {
             names.clear();
             for t in &targets {
-                let shown = if t.kind == "channel" {
-                    format!("#{}", t.name)
-                } else {
-                    t.name.clone()
-                };
-                names.insert(t.id.clone(), shown);
+                names.insert(t.id.clone(), t.shown());
             }
         }
-        Ok(targets)
+        Ok(Listing {
+            targets,
+            truncated: convs_cut || people_cut,
+        })
     }
 
     /// Share `text`, and `files` with it, to `target`: a channel, a direct
     /// message, or a person (whose direct message is opened). Text alone is
-    /// a message; with files, the files go up first and the text is posted
-    /// with them. Everything is checked before anything is sent.
+    /// a message; with files, the files go up first, then the text is posted
+    /// as a message of its own and the files after it. Everything is checked
+    /// before anything is sent.
     pub async fn slack_share(
         &self,
         target: &str,
@@ -1440,7 +1883,7 @@ impl Rata {
         }
 
         let channel = if matches!(target.as_bytes()[0], b'U' | b'W') {
-            let opened = self
+            let opened: Value = self
                 .slack_api(&link, "conversations.open", &[("users", target)])
                 .await?;
             opened
@@ -1453,27 +1896,21 @@ impl Rata {
             target.to_string()
         };
 
+        let place = || {
+            self.slack
+                .name_of(target)
+                .map(|n| format!("{n} in {}", link.team))
+                .unwrap_or_default()
+        };
         if named.is_empty() {
-            self.slack_api(
-                &link,
-                "chat.postMessage",
-                &[
-                    ("channel", &channel),
-                    ("text", &text),
-                    // A mail's links are not fetched by Slack's unfurler:
-                    // a tracking link would tell its sender it was shared.
-                    ("unfurl_links", "false"),
-                    ("unfurl_media", "false"),
-                    ("parse", "none"),
-                    ("link_names", "false"),
-                ],
-            )
-            .await?;
+            self.post_text(&link, &channel, &text).await?;
         } else {
+            // The bytes go up first; nothing is shared until the files are
+            // completed, so a failure here has posted nothing.
             let mut uploaded = Vec::with_capacity(named.len());
             for (name, bytes) in named {
                 let length = bytes.len().to_string();
-                let got = self
+                let got: Value = self
                     .slack_api(
                         &link,
                         "files.getUploadURLExternal",
@@ -1494,22 +1931,63 @@ impl Rata {
                 self.slack.upload(url, bytes).await.map_err(refusal)?;
                 uploaded.push(serde_json::json!({ "id": id, "title": name }));
             }
-            let files_json = Value::Array(uploaded).to_string();
-            let mut form: Vec<(&str, &str)> =
-                vec![("files", &files_json), ("channel_id", &channel)];
+            // The text as a message of its own, then the files after it,
+            // with no text of their own: files.completeUploadExternal's
+            // `initial_comment` (and `blocks`) cannot turn Slack's unfurler
+            // off (SEC-11 R12).
             if !text.is_empty() {
-                form.push(("initial_comment", &text));
+                self.post_text(&link, &channel, &text).await?;
             }
-            self.slack_api(&link, "files.completeUploadExternal", &form)
-                .await?;
+            let files_json = Value::Array(uploaded).to_string();
+            let completed = self
+                .slack_api::<IgnoredAny>(
+                    &link,
+                    "files.completeUploadExternal",
+                    &[("files", &files_json), ("channel_id", &channel)],
+                )
+                .await;
+            if let Err(e) = completed {
+                if text.is_empty() {
+                    return Err(e);
+                }
+                // Never "Shared": the message is there, the files are not.
+                let place = place();
+                let to = if place.is_empty() {
+                    String::new()
+                } else {
+                    format!(" to {place}")
+                };
+                return Err(refused(
+                    "partial",
+                    format!(
+                        "The message was posted{to}, but the files were not: {}",
+                        e.error
+                    ),
+                ));
+            }
         }
-        Ok(Shared {
-            place: self
-                .slack
-                .name_of(target)
-                .map(|n| format!("{n} in {}", link.team))
-                .unwrap_or_default(),
-        })
+        Ok(Shared { place: place() })
+    }
+
+    /// Post `text` to `channel` as the signed-in person. Every text RATA
+    /// posts goes this way, so none of a mail's links is fetched by Slack's
+    /// unfurler: a tracking link would tell its sender the mail was shared.
+    /// No mention in it pings anyone either (`for_slack` escaped them).
+    async fn post_text(&self, link: &SlackLink, channel: &str, text: &str) -> Result<(), Refusal> {
+        self.slack_api::<IgnoredAny>(
+            link,
+            "chat.postMessage",
+            &[
+                ("channel", channel),
+                ("text", text),
+                ("unfurl_links", "false"),
+                ("unfurl_media", "false"),
+                ("parse", "none"),
+                ("link_names", "false"),
+            ],
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -1856,7 +2334,159 @@ mod tests {
         })
     }
 
+    /// A listener on this computer's IPv6 loopback, or none where it has
+    /// none (some containers): the tests that need one say so and stop.
+    fn ipv6_here() -> Option<std::net::TcpListener> {
+        std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).ok()
+    }
+
+    /// Connect Slack with a browser that comes back over `ip`, as Slack's
+    /// `localhost` redirect lets a browser do. A browser that cannot reach
+    /// RATA there gives up and the sign-in is cancelled, so a failure is
+    /// quick. Answers the sign-in and the page the browser got.
+    async fn connect_over(
+        app: &Rata,
+        ip: std::net::IpAddr,
+    ) -> (Result<Connected, Refusal>, Option<String>) {
+        let (tx, rx) = oneshot::channel::<String>();
+        let tx = Mutex::new(Some(tx));
+        let sign_in = app.connect_slack(|link| {
+            let _ = tx.lock().unwrap().take().unwrap().send(link.to_string());
+            Ok(())
+        });
+        let browser = async {
+            let link = url::Url::parse(&rx.await.unwrap()).unwrap();
+            let q: HashMap<String, String> = link.query_pairs().into_owned().collect();
+            let back = url::Url::parse(&q["redirect_uri"]).unwrap();
+            assert_eq!(back.host_str(), Some("localhost"));
+            let port = back.port().unwrap();
+            match tokio::net::TcpStream::connect((ip, port)).await {
+                Ok(mut s) => {
+                    s.write_all(
+                        format!(
+                            "GET /?code=the-code&state={} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n",
+                            q["state"]
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                    let mut got = String::new();
+                    s.read_to_string(&mut got).await.unwrap();
+                    Some(got)
+                }
+                Err(_) => {
+                    app.cancel_slack();
+                    None
+                }
+            }
+        };
+        tokio::join!(sign_in, browser)
+    }
+
     // ------------------------------------------------------ pure parts
+
+    /// SEC-11 R2: Slack's redirect says `localhost`, which a browser may try
+    /// over IPv6 first. A port where another program holds `[::1]` is
+    /// passed over, so that program never gets Slack's answer; with every
+    /// port held there, the sentence about ports is said.
+    #[test]
+    fn a_port_another_program_holds_on_the_ipv6_loopback_is_passed_over() {
+        let Some(held) = ipv6_here() else {
+            eprintln!("skipped: this computer has no IPv6 loopback");
+            return;
+        };
+        let p = held.local_addr().unwrap().port();
+        rt().block_on(async {
+            let slack = Slack::new(Some("1.2".into()), AUTHORIZE_URL, API_URL, &[p, 0], true);
+            let (_, port) = slack.listen().await.unwrap();
+            assert_ne!(port, p, "the port another program holds on ::1 is not used");
+            let more: Vec<std::net::TcpListener> = (0..2).map(|_| ipv6_here().unwrap()).collect();
+            let ports: Vec<u16> = std::iter::once(&held)
+                .chain(&more)
+                .map(|l| l.local_addr().unwrap().port())
+                .collect();
+            let slack = Slack::new(Some("1.2".into()), AUTHORIZE_URL, API_URL, &ports, true);
+            let e = slack.listen().await.err().expect("no port is usable");
+            assert!(e.contains("another program is using ports"), "{e}");
+        });
+    }
+
+    /// SEC-11 R2's rules wherever the tests run, with another loopback
+    /// address standing in for `::1`: both are held on one port, a port
+    /// where another program holds the second is passed over, an answer
+    /// reaching either listener is taken, and only an address this computer
+    /// does not have leaves `127.0.0.1` alone.
+    #[test]
+    fn both_loopbacks_are_held_on_one_port_or_another_port_is_used() {
+        let twin: IpAddr = Ipv4Addr::new(127, 0, 0, 2).into();
+        let Ok(held) = std::net::TcpListener::bind((twin, 0)) else {
+            eprintln!("skipped: 127.0.0.2 is not a loopback address here");
+            return;
+        };
+        let p = held.local_addr().unwrap().port();
+        rt().block_on(async {
+            let (listeners, port) = listen_on(&[p, 0], twin).await.unwrap();
+            assert_ne!(port, p, "the port another program holds is not used");
+            assert!(listeners.both());
+            // The browser's answer, over the second address.
+            let a = Attempt::with_redirect(format!("http://localhost:{port}")).unwrap();
+            let state = a.state.clone();
+            let browser = tokio::spawn(async move {
+                let mut s = tokio::net::TcpStream::connect((twin, port)).await.unwrap();
+                s.write_all(
+                    format!("GET /?code=the-code&state={state} HTTP/1.1\r\n\r\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+                let mut got = String::new();
+                s.read_to_string(&mut got).await.unwrap();
+                got
+            });
+            let code = oauth::wait_for_code_on(listeners, &a, &Notify::new(), "Slack").await;
+            assert_eq!(code, Ok("the-code".into()));
+            assert!(browser.await.unwrap().starts_with("HTTP/1.1 200"));
+
+            // Every port held on the second address: none is used.
+            let more: Vec<std::net::TcpListener> = (0..2)
+                .map(|_| std::net::TcpListener::bind((twin, 0)).unwrap())
+                .collect();
+            let ports: Vec<u16> = std::iter::once(&held)
+                .chain(&more)
+                .map(|l| l.local_addr().unwrap().port())
+                .collect();
+            assert!(listen_on(&ports, twin).await.is_none());
+
+            // An address this computer does not have at all (TEST-NET-1):
+            // nothing can listen there, so 127.0.0.1 stands alone.
+            let (alone, _) = listen_on(&[0], Ipv4Addr::new(192, 0, 2, 1).into())
+                .await
+                .unwrap();
+            assert!(!alone.both());
+        });
+    }
+
+    /// SEC-11 R2: a browser that goes to `localhost` over IPv6 reaches RATA.
+    #[test]
+    fn a_browser_that_comes_back_over_ipv6_reaches_rata() {
+        if ipv6_here().is_none() {
+            eprintln!("skipped: this computer has no IPv6 loopback");
+            return;
+        }
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            srv.api_on("oauth.v2.access", ok(GRANTED));
+            let dir = Scratch::new();
+            let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
+            let (got, page) = connect_over(&app, std::net::Ipv6Addr::LOCALHOST.into()).await;
+            let page = page.expect("RATA listens on ::1 too");
+            assert!(page.contains("RATA has what it needs from Slack"), "{page}");
+            assert!(
+                matches!(got, Ok(Connected::Done(ref st)) if st.connected),
+                "{got:?}"
+            );
+        });
+    }
 
     #[test]
     fn the_client_id_is_used_only_when_it_looks_like_one() {
@@ -1992,19 +2622,21 @@ mod tests {
 
     #[test]
     fn the_targets_are_the_channels_you_are_in_and_the_people() {
-        let convs: Vec<Value> = serde_json::from_str(
+        // As `users.conversations` lists them: only the person's own, so a
+        // public channel need not say `is_member` (SEC-11 R17).
+        let convs: Vec<_> = serde_json::from_str(
             r##"[
               {"id":"C0GEN","name":"general","is_channel":true,"is_member":true},
-              {"id":"C0OUT","name":"not-mine","is_channel":true,"is_member":false},
+              {"id":"C0PUB","name":"public-mine","is_channel":true},
               {"id":"C0OLD","name":"old","is_channel":true,"is_member":true,"is_archived":true},
               {"id":"G0SEC","name":"Secret\u202e","is_private":true},
+              {"id":"G0MPIM","name":"mpdm-a--b","is_mpim":true},
               {"id":"D0ANN","is_im":true,"user":"U0ANN"},
-              {"id":"D0GONE","is_im":true,"user":"U0GONE","is_user_deleted":true},
               {"id":"bad id","name":"x","is_member":true}
             ]"##,
         )
         .unwrap();
-        let people: Vec<Value> = serde_json::from_str(
+        let people: Vec<_> = serde_json::from_str(
             r#"[
               {"id":"U0ANN","name":"ann","profile":{"display_name":"","real_name":"Ann Lee"}},
               {"id":"U0BOB","name":"bob","real_name":"Bob","profile":{"display_name":"bobby"}},
@@ -2024,15 +2656,80 @@ mod tests {
         assert_eq!(
             shown,
             [
+                // The person signed in first, by their own name (SEC-11 R7).
+                ("U0ME", "Me Myself", "person"),
                 ("C0GEN", "general", "channel"),
+                ("C0PUB", "public-mine", "channel"),
                 ("G0SEC", "Secret", "channel"),
-                // Ann has a direct message, so it is used; Bob is opened when
-                // sent to.
-                ("D0ANN", "Ann Lee", "person"),
+                // A person is written to by their own id: their direct
+                // message is opened when sent to.
+                ("U0ANN", "Ann Lee", "person"),
                 ("U0BOB", "bobby", "person"),
-                ("U0ME", "Me Myself (you)", "person"),
             ]
         );
+    }
+
+    /// SEC-11 R7: a workspace member named "Ann Smith (you)" is not the
+    /// customer, a guest is not a colleague, and a channel shared with
+    /// another organization is not an internal one. Each says what it is.
+    #[test]
+    fn a_look_alike_a_guest_and_a_shared_channel_are_told_apart() {
+        let convs: Vec<_> = serde_json::from_str(
+            r##"[
+              {"id":"C0GEN","name":"general"},
+              {"id":"C0VEND","name":"imaging","is_shared":true,"is_ext_shared":true},
+              {"id":"C0PEND","name":"cardiology","is_pending_ext_shared":true},
+              {"id":"C0ORG","name":"all-acme","is_shared":true,"is_org_shared":true},
+              {"id":"C0SH","name":"shared-only","is_shared":true}
+            ]"##,
+        )
+        .unwrap();
+        let people: Vec<_> = serde_json::from_str(
+            r#"[
+              {"id":"U0FAKE","name":"annsmith2","real_name":"Mallory","profile":{"display_name":"Ann Smith (you)","real_name":"Mallory"}},
+              {"id":"U0ME","name":"asmith","profile":{"display_name":"Ann Smith (you)","real_name":"Ann Smith"}},
+              {"id":"U0GST","name":"vendor","is_restricted":true,"profile":{"display_name":"Bob Jones"}},
+              {"id":"U0ONE","name":"temp","is_restricted":true,"is_ultra_restricted":true,"profile":{"display_name":"Temp"}},
+              {"id":"U0INV","name":"newbie","is_invited_user":true,"profile":{"display_name":"New"}},
+              {"id":"U0COL","name":"col","profile":{"display_name":"Col"}}
+            ]"#,
+        )
+        .unwrap();
+        let t = targets_from(&convs, &people, "U0ME");
+        let rows: Vec<Value> = t.iter().map(|t| serde_json::to_value(t).unwrap()).collect();
+        let row = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap().clone();
+        // Exactly one is the customer, first, and RATA writes nothing into
+        // anyone's name: the two are told apart by `me` and the handle.
+        let me: Vec<&Value> = rows.iter().filter(|r| r["me"] == true).collect();
+        assert_eq!(me.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["id"], "U0ME");
+        let (mine, fake) = (row("U0ME"), row("U0FAKE"));
+        assert_eq!(mine["name"], "Ann Smith (you)");
+        assert_eq!(fake["name"], "Ann Smith (you)");
+        assert_eq!(mine["handle"], "asmith");
+        assert_eq!(fake["handle"], "annsmith2");
+        assert_ne!(fake["me"], true);
+        assert_eq!(fake["real_name"], "Mallory");
+        // Who is not a full member.
+        assert_eq!(row("U0GST")["standing"], "guest");
+        assert_eq!(row("U0ONE")["standing"], "single-channel guest");
+        assert_eq!(row("U0INV")["standing"], "invited");
+        assert!(row("U0COL").get("standing").is_none_or(Value::is_null));
+        // Which channels reach beyond the workspace: never from is_shared
+        // alone.
+        assert_eq!(row("C0VEND")["shared"], "external");
+        assert_eq!(row("C0PEND")["shared"], "external");
+        assert_eq!(row("C0ORG")["shared"], "org");
+        for id in ["C0SH", "C0GEN"] {
+            assert!(row(id).get("shared").is_none_or(Value::is_null), "{id}");
+        }
+        // Channels shared with another organization come after the others.
+        let channels: Vec<&Value> = rows
+            .iter()
+            .filter(|r| r["kind"] == "channel")
+            .map(|r| &r["id"])
+            .collect();
+        assert_eq!(channels, ["C0ORG", "C0GEN", "C0SH", "C0PEND", "C0VEND"]);
     }
 
     // ------------------------------------------------- against Slack
@@ -2177,17 +2874,31 @@ mod tests {
         assert_eq!(app.keep_slack(granted, began).unwrap_err().kind, "plan");
     }
 
+    /// What `slack_targets` answers the page, as the page reads it.
+    async fn listed(app: &Rata) -> Value {
+        serde_json::to_value(app.slack_targets().await.unwrap()).unwrap()
+    }
+
+    fn ids_of(listing: &Value) -> Vec<String> {
+        listing["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
     #[test]
     fn the_targets_are_read_page_by_page_with_the_token() {
         rt().block_on(async {
             let srv = Scripted::start().await;
             srv.api_on(
-                "conversations.list",
+                "users.conversations",
                 ok(r#"{"ok":true,"channels":[{"id":"C0GEN","name":"general","is_member":true}],"response_metadata":{"next_cursor":"dGVhbTpDMDYx"}}"#),
             );
             srv.api_on(
-                "conversations.list",
-                ok(r#"{"ok":true,"channels":[{"id":"C0ALL","name":"all-hands","is_member":true},{"id":"D0ANN","is_im":true,"user":"U0ANN"}],"response_metadata":{"next_cursor":""}}"#),
+                "users.conversations",
+                ok(r#"{"ok":true,"channels":[{"id":"C0ALL","name":"all-hands"},{"id":"D0ANN","is_im":true,"user":"U0ANN"}],"response_metadata":{"next_cursor":""}}"#),
             );
             srv.api_on(
                 "users.list",
@@ -2196,14 +2907,18 @@ mod tests {
             let dir = Scratch::new();
             let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
             connected(&app, &tokens(later()));
-            let t = app.slack_targets().await.unwrap();
-            let ids: Vec<&str> = t.iter().map(|t| t.id.as_str()).collect();
-            assert_eq!(ids, ["C0ALL", "C0GEN", "D0ANN"]);
+            let got = listed(&app).await;
+            assert_eq!(ids_of(&got), ["C0ALL", "C0GEN", "U0ANN"]);
+            assert_eq!(got["truncated"], false);
 
-            let pages = srv.asked_for("conversations.list");
+            // SEC-11 R17: only the person's own channels, never every public
+            // channel of the workspace, and no direct messages: a person is
+            // reached through conversations.open.
+            assert!(srv.asked_for("conversations.list").is_empty());
+            let pages = srv.asked_for("users.conversations");
             assert_eq!(pages.len(), 2);
             let first = pages[0].form();
-            assert_eq!(first["types"], "public_channel,private_channel,im");
+            assert_eq!(first["types"], "public_channel,private_channel");
             assert_eq!(first["exclude_archived"], "true");
             assert_eq!(first["limit"], "200");
             assert!(!first.contains_key("cursor"));
@@ -2216,13 +2931,14 @@ mod tests {
         });
     }
 
+    /// SEC-11 R17: a listing Slack has more of than RATA reads says so.
     #[test]
     fn a_listing_stops_after_its_last_page_even_if_slack_does_not() {
         rt().block_on(async {
             let srv = Scripted::start().await;
             for i in 0..PAGES_MAX + 3 {
                 srv.api_on(
-                    "conversations.list",
+                    "users.conversations",
                     ok(&format!(r#"{{"ok":true,"channels":[],"response_metadata":{{"next_cursor":"c{i}"}}}}"#)),
                 );
             }
@@ -2230,8 +2946,114 @@ mod tests {
             let dir = Scratch::new();
             let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
             connected(&app, &tokens(later()));
-            assert!(app.slack_targets().await.unwrap().is_empty());
-            assert_eq!(srv.asked_for("conversations.list").len(), PAGES_MAX);
+            let got = listed(&app).await;
+            assert!(ids_of(&got).is_empty());
+            assert_eq!(got["truncated"], true, "{got}");
+            assert_eq!(srv.asked_for("users.conversations").len(), PAGES_MAX);
+        });
+    }
+
+    /// SEC-11 R17: a page after the first that Slack cannot give now (too
+    /// many requests, or not reachable) keeps what was read and says the
+    /// listing is part of it; the first page failing, or the sign-in
+    /// ended, still fails.
+    #[test]
+    fn a_listing_cut_short_keeps_what_was_read_and_says_so() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let limited = || Reply {
+                status: 429,
+                headers: vec![("Retry-After", "120".into())],
+                body: r#"{"ok":false,"error":"ratelimited"}"#.into(),
+                asked: None,
+                hold: None,
+            };
+            let first = r#"{"ok":true,"channels":[{"id":"C0GEN","name":"general"}],"response_metadata":{"next_cursor":"next"}}"#;
+            srv.api_on("users.conversations", ok(first));
+            srv.api_on("users.conversations", limited());
+            srv.api_on(
+                "users.list",
+                ok(r#"{"ok":true,"members":[{"id":"U0ANN","name":"ann"}],"response_metadata":{"next_cursor":"more"}}"#),
+            );
+            srv.api_on(
+                "users.list",
+                ok(r#"{"ok":false,"error":"internal_error"}"#),
+            );
+            let dir = Scratch::new();
+            let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
+            connected(&app, &tokens(later()));
+            let got = listed(&app).await;
+            assert_eq!(ids_of(&got), ["C0GEN", "U0ANN"]);
+            assert_eq!(got["truncated"], true, "{got}");
+
+            // The first page refused: nothing to show, and said.
+            srv.api_on("users.conversations", limited());
+            let e = app.slack_targets().await.unwrap_err();
+            assert_eq!(e.kind, "offline", "{}", e.error);
+            assert!(e.error.contains("120 seconds"), "{}", e.error);
+
+            // The sign-in ended on a later page: parked, not a part listing.
+            srv.api_on("users.conversations", ok(first));
+            srv.api_on(
+                "users.conversations",
+                ok(r#"{"ok":false,"error":"token_revoked"}"#),
+            );
+            assert_eq!(app.slack_targets().await.unwrap_err().kind, "not-connected");
+            assert!(!entry(&app).connected);
+        });
+    }
+
+    /// SEC-11 R18: a listing keeps only what it reads of each page: at most
+    /// a page's worth of channels or people, each name cut to one plain
+    /// line, and nothing of an element that is not one. Slack sending more
+    /// than asked for says the listing is part of it.
+    #[test]
+    fn a_listing_keeps_only_what_it_reads_however_much_slack_sends() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let nested = format!("[{}]", vec!["0"; 200_000].join(","));
+            let long = "x".repeat(10_000);
+            let mut channels = vec![
+                nested.clone(),
+                "0".into(),
+                "\"C0STR\"".into(),
+                format!(r#"{{"id":"C0LONG","name":"{long}","topic":{nested}}}"#),
+                r#"{"id":"C0ODD","name":"odd","is_archived":"yes","is_ext_shared":{"x":1}}"#.into(),
+                r#"{"id":"C0BAD","name":["a"]}"#.into(),
+            ];
+            channels.extend((0..250).map(|i| format!(r#"{{"id":"C0N{i:03}","name":"n{i:03}"}}"#)));
+            srv.api_on(
+                "users.conversations",
+                ok(&format!(r#"{{"ok":true,"channels":[{}]}}"#, channels.join(","))),
+            );
+            srv.api_on(
+                "users.list",
+                ok(&format!(
+                    r#"{{"ok":true,"members":[{nested},{{"id":"U0ANN","name":"ann","profile":"{long}"}},{{"id":"U0BOB","name":"bob","profile":{{"display_name":"{long}","fields":{nested}}}}}]}}"#
+                )),
+            );
+            let dir = Scratch::new();
+            let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
+            connected(&app, &tokens(later()));
+            let got = listed(&app).await;
+            assert_eq!(got["truncated"], true, "more than a page of channels");
+            let targets = got["targets"].as_array().unwrap();
+            let channel_ids: Vec<&str> = targets
+                .iter()
+                .filter(|t| t["kind"] == "channel")
+                .map(|t| t["id"].as_str().unwrap())
+                .collect();
+            // 200 objects read: C0LONG, C0ODD, C0BAD (no name, not listed)
+            // and the first 197 of the rest.
+            assert_eq!(channel_ids.len(), 199, "{channel_ids:?}");
+            assert!(channel_ids.contains(&"C0LONG") && channel_ids.contains(&"C0ODD"));
+            assert!(channel_ids.contains(&"C0N196") && !channel_ids.contains(&"C0N197"));
+            let by_id = |id: &str| targets.iter().find(|t| t["id"] == id).unwrap();
+            assert_eq!(by_id("C0LONG")["name"].as_str().unwrap().chars().count(), 80);
+            assert!(by_id("C0ODD").get("shared").is_none_or(Value::is_null));
+            // People: a profile that is not one is as if absent.
+            assert_eq!(by_id("U0ANN")["name"], "ann");
+            assert_eq!(by_id("U0BOB")["name"].as_str().unwrap().chars().count(), 80);
         });
     }
 
@@ -2240,7 +3062,7 @@ mod tests {
         rt().block_on(async {
             let srv = Scripted::start().await;
             srv.api_on("oauth.v2.access", ok(ROTATED));
-            srv.api_on("conversations.list", ok(r#"{"ok":true,"channels":[]}"#));
+            srv.api_on("users.conversations", ok(r#"{"ok":true,"channels":[]}"#));
             srv.api_on("users.list", ok(r#"{"ok":true,"members":[]}"#));
             let dir = Scratch::new();
             let vault = Arc::new(Memory::default());
@@ -2257,7 +3079,7 @@ mod tests {
             // The listing used the new token, and the new pair is kept: the
             // old refresh token is spent.
             assert_eq!(
-                srv.asked_for("conversations.list")[0].auth.as_deref(),
+                srv.asked_for("users.conversations")[0].auth.as_deref(),
                 Some("Bearer xoxe.xoxp-1-access-secret-0002")
             );
             let kept =
@@ -2267,14 +3089,14 @@ mod tests {
 
             // Slack saying a token ran out early renews it once, and retries.
             srv.api_on(
-                "conversations.list",
+                "users.conversations",
                 ok(r#"{"ok":false,"error":"token_expired"}"#),
             );
             srv.api_on("oauth.v2.access", ok(&ROTATED.replace("0002", "0003")));
-            srv.api_on("conversations.list", ok(r#"{"ok":true,"channels":[]}"#));
+            srv.api_on("users.conversations", ok(r#"{"ok":true,"channels":[]}"#));
             srv.api_on("users.list", ok(r#"{"ok":true,"members":[]}"#));
             app.slack_targets().await.unwrap();
-            let lists = srv.asked_for("conversations.list");
+            let lists = srv.asked_for("users.conversations");
             assert_eq!(lists.len(), 3);
             assert_eq!(
                 lists[2].auth.as_deref(),
@@ -2292,7 +3114,7 @@ mod tests {
         rt().block_on(async {
             let srv = Scripted::start().await;
             srv.api_on(
-                "conversations.list",
+                "users.conversations",
                 ok(r#"{"ok":false,"error":"token_revoked"}"#),
             );
             let dir = Scratch::new();
@@ -2432,7 +3254,7 @@ mod tests {
         rt().block_on(async {
             let srv = Scripted::start().await;
             srv.api_on(
-                "conversations.list",
+                "users.conversations",
                 ok(r#"{"ok":true,"channels":[{"id":"C0GEN","name":"general","is_member":true}]}"#),
             );
             srv.api_on("users.list", ok(r#"{"ok":true,"members":[]}"#));
@@ -2504,12 +3326,16 @@ mod tests {
                 "files.completeUploadExternal",
                 ok(r#"{"ok":true,"files":[]}"#),
             );
+            srv.api_on(
+                "chat.postMessage",
+                ok(r#"{"ok":true,"channel":"C0GEN","ts":"1.2"}"#),
+            );
             let dir = Scratch::new();
             let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
             connected(&app, &tokens(later()));
             app.slack_share(
                 "C0GEN",
-                "See <these>",
+                "See <these> https://track.example/open?id=1",
                 vec![
                     ShareFile {
                         name: "../../report\u{202e}.pdf".into(),
@@ -2545,16 +3371,42 @@ mod tests {
             assert_eq!(up[1].body, b"hello");
             assert!(up.iter().all(|a| a.auth.is_none()));
             assert!(up[0].content_type.starts_with("application/octet-stream"));
-            // Then one completion, to the channel, with the text escaped.
+            // SEC-11 R12: the text goes as a message of its own, escaped,
+            // with Slack's unfurler told to leave its links alone, since
+            // files.completeUploadExternal's initial_comment cannot be: a
+            // tracking link would tell its sender the mail was shared.
+            let post = srv.asked_for("chat.postMessage");
+            assert_eq!(post.len(), 1);
+            let post = post[0].form();
+            assert_eq!(post["channel"], "C0GEN");
+            assert_eq!(
+                post["text"],
+                "See &lt;these&gt; https://track.example/open?id=1"
+            );
+            assert_eq!(post["unfurl_links"], "false");
+            assert_eq!(post["unfurl_media"], "false");
+            assert_eq!(post["parse"], "none");
+            assert_eq!(post["link_names"], "false");
+            // Then one completion, to the channel, with no text of its own.
             let done = srv.asked_for("files.completeUploadExternal")[0].form();
             assert_eq!(done["channel_id"], "C0GEN");
-            assert_eq!(done["initial_comment"], "See &lt;these&gt;");
+            assert!(
+                !done.contains_key("initial_comment") && !done.contains_key("blocks"),
+                "{done:?}"
+            );
             let files: Value = serde_json::from_str(&done["files"]).unwrap();
             assert_eq!(files[0]["id"], "F0ONE");
             assert_eq!(files[1]["id"], "F0TWO");
             assert_eq!(files[1]["title"], "notes.txt");
-            // No message was posted besides.
-            assert!(srv.asked_for("chat.postMessage").is_empty());
+            // In that order: the bytes up (nothing shared yet), the text,
+            // then the files after it.
+            let order: Vec<String> = srv.asked().into_iter().map(|a| a.path).collect();
+            let at = |p: &str| order.iter().position(|o| o == p).unwrap();
+            assert!(at("/upload/2") < at("/api/chat.postMessage"), "{order:?}");
+            assert!(
+                at("/api/chat.postMessage") < at("/api/files.completeUploadExternal"),
+                "{order:?}"
+            );
 
             // A file alone: no comment.
             srv.api_on(
@@ -2580,6 +3432,117 @@ mod tests {
                 !srv.asked_for("files.completeUploadExternal")[1]
                     .form()
                     .contains_key("initial_comment")
+            );
+            assert_eq!(
+                srv.asked_for("chat.postMessage").len(),
+                1,
+                "no message of its own"
+            );
+        });
+    }
+
+    /// SEC-11 R12: files whose completion fails once the message has gone
+    /// say exactly that, never "Shared"; an upload that fails posts
+    /// nothing at all.
+    #[test]
+    fn files_that_fail_after_the_message_went_say_the_message_went() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let up = |n: u32| {
+                ok(&format!(
+                    r#"{{"ok":true,"upload_url":"{}/upload/{n}","file_id":"F0N{n}"}}"#,
+                    srv.base
+                ))
+            };
+            srv.api_on(
+                "users.conversations",
+                ok(r#"{"ok":true,"channels":[{"id":"C0GEN","name":"general"}]}"#),
+            );
+            srv.api_on("users.list", ok(r#"{"ok":true,"members":[]}"#));
+            srv.api_on("files.getUploadURLExternal", up(1));
+            srv.on("/upload/1", ok("OK"));
+            srv.api_on("chat.postMessage", ok(r#"{"ok":true,"ts":"1.2"}"#));
+            srv.api_on(
+                "files.completeUploadExternal",
+                ok(r#"{"ok":false,"error":"internal_error"}"#),
+            );
+            let dir = Scratch::new();
+            let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
+            connected(&app, &tokens(later()));
+            app.slack_targets().await.unwrap();
+            let file = || {
+                vec![ShareFile {
+                    name: "a.txt".into(),
+                    bytes: b"a".to_vec(),
+                }]
+            };
+            let e = app.slack_share("C0GEN", "hello", file()).await.unwrap_err();
+            assert_eq!(e.kind, "partial", "{}", e.error);
+            assert!(
+                e.error.starts_with(
+                    "The message was posted to #general in Acme, but the files were not:"
+                ),
+                "{}",
+                e.error
+            );
+            assert!(!e.error.contains("Shared"), "{}", e.error);
+            assert_eq!(srv.asked_for("chat.postMessage").len(), 1);
+
+            // An upload that fails: nothing was posted, nothing said posted.
+            srv.api_on("files.getUploadURLExternal", up(2));
+            srv.on(
+                "/upload/2",
+                Reply {
+                    status: 500,
+                    ..ok("")
+                },
+            );
+            let e = app.slack_share("C0GEN", "hello", file()).await.unwrap_err();
+            assert_ne!(e.kind, "partial", "{}", e.error);
+            assert!(!e.error.contains("posted"), "{}", e.error);
+            assert_eq!(
+                srv.asked_for("chat.postMessage").len(),
+                1,
+                "nothing more posted"
+            );
+        });
+    }
+
+    /// SEC-11 R7: the toast says what a guest or a shared channel is.
+    #[test]
+    fn the_toast_names_a_guest_or_a_shared_channel_as_such() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            srv.api_on(
+                "users.conversations",
+                ok(r#"{"ok":true,"channels":[{"id":"C0VEND","name":"imaging","is_ext_shared":true},{"id":"C0ORG","name":"all-acme","is_org_shared":true}]}"#),
+            );
+            srv.api_on(
+                "users.list",
+                ok(r#"{"ok":true,"members":[{"id":"U0GST","name":"alee","is_restricted":true,"profile":{"display_name":"Ann Lee"}},{"id":"U0ME","name":"me","profile":{"display_name":"Me"}}]}"#),
+            );
+            srv.api_on("conversations.open", ok(r#"{"ok":true,"channel":{"id":"D0ANN"}}"#));
+            srv.api_on("conversations.open", ok(r#"{"ok":true,"channel":{"id":"D0ME"}}"#));
+            for _ in 0..4 {
+                srv.api_on("chat.postMessage", ok(r#"{"ok":true}"#));
+            }
+            let dir = Scratch::new();
+            let app = slack_app(&dir, &srv.api(), Some(PRO), Memory::default());
+            connected(&app, &tokens(later()));
+            app.slack_targets().await.unwrap();
+            let place = |t: &'static str| {
+                let app = &app;
+                async move { app.slack_share(t, "hi", vec![]).await.unwrap().place }
+            };
+            assert_eq!(place("U0GST").await, "Ann Lee (guest, @alee) in Acme");
+            assert_eq!(place("U0ME").await, "Me (you, @me) in Acme");
+            assert_eq!(
+                place("C0VEND").await,
+                "#imaging (shared with another organization) in Acme"
+            );
+            assert_eq!(
+                place("C0ORG").await,
+                "#all-acme (shared across your organization) in Acme"
             );
         });
     }
@@ -2771,7 +3734,7 @@ mod tests {
                 );
                 assert!(app.store().lock().unwrap().slack().is_none());
                 assert!(app.slack.held(app.slack.generation()).is_none());
-                assert!(srv.asked_for("conversations.list").is_empty());
+                assert!(srv.asked_for("users.conversations").is_empty());
             });
         }
     }
