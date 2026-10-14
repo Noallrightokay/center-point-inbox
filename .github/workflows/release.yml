@@ -755,9 +755,9 @@ jobs:
       # warning says so, and what is asserted is that the app stays up with
       # a clean log.
       # Everywhere, each one is then launched a second time while the first
-      # is up, and single instance (main.rs, review R5) must hand over and
-      # exit 0 with the first still running. On Linux that guard is a D-Bus
-      # name, so the script runs inside a session bus of its own
+      # is up, and must find the first (main.rs, review R5) and exit 0 with
+      # the first still running. On Linux single instance hands over through
+      # a D-Bus name, so the script runs inside a session bus of its own
       # (dbus-run-session, from the dbus package installed below).
       - name: Install and launch the app
         id: smoke

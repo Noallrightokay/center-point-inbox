@@ -130,12 +130,23 @@ pub const CREATED_KEEP: usize = 500;
 
 /// The shape of `mailboxes.json` this build writes, as its `version` field.
 ///
-/// A new field leaves it alone (an older build keeps what it does not know,
-/// `Contents::rest`). Raise it when a field that stands for a keychain
-/// sign-in (`slack`, `onedrive`, `google`) moves or changes shape: start
-/// (main.rs, `open_store`) forgets the sign-in of a service whose link it
-/// cannot find, and does that only in a file of this schema or older, so
-/// an older build never forgets a newer one's.
+/// Start forgets keychain entries the list does not account for, and does
+/// that only in a file of this schema or older ([`Store::accounts`]):
+/// `open_store` (main.rs) forgets a Slack, OneDrive or Google Drive sign-in
+/// whose link it cannot find, and on Windows `vault::settle_windows`
+/// deletes every entry under `vault::SERVICE` and `vault::PIECE_SERVICE`
+/// whose address is not in `mailboxes`. So raise it when any field that
+/// says which keychain entries are in use moves, is renamed or changes
+/// shape: `mailboxes` (and each mailbox's `email`), `slack`, `onedrive`,
+/// `google`, or a new field whose entries live under one of those
+/// services. Otherwise an older build sharing the file reads a newer one's
+/// as linking nothing and deletes its passwords and sign-ins. A file of a
+/// newer schema keeps its number when this build saves it ([`Store::save`]
+/// never lowers it), so an older build never forgets a newer one's.
+///
+/// Any other new top-level field leaves it alone: an older build keeps
+/// what it does not know (`Contents::rest`). A new field inside a mailbox
+/// or a link is not kept that way, and an older build's save drops it.
 pub const SCHEMA: u32 = 1;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -255,9 +266,13 @@ impl Store {
     /// own and never copied to a roaming profile's share. Where the whole
     /// profile travels in a container (FSLogix, User Profile Disks), Local
     /// AppData travels inside it, with the rest of that profile.
+    ///
+    /// The `version` written is this build's [`SCHEMA`], or the file's own
+    /// when a newer build wrote it: lowered, it would let this build's next
+    /// start take the newer build's links for none (review R14).
     pub fn save(&self) -> io::Result<()> {
         let body = serde_json::to_string_pretty(&Contents {
-            version: SCHEMA,
+            version: SCHEMA.max(self.on_disk.unwrap_or(0)),
             mailboxes: self.boxes.clone(),
             licence: self.licence.clone(),
             connections: self.connections.clone(),
@@ -278,6 +293,14 @@ impl Store {
     /// The schema version the file had when it was opened, for diagnostics.
     pub fn on_disk(&self) -> Option<u32> {
         self.on_disk
+    }
+
+    /// Whether this list says which keychain entries are in use, so that
+    /// start may forget the ones it does not name (see [`SCHEMA`]): only a
+    /// file that was read, and of this build's schema or an older one. A
+    /// missing or unreadable list, or a newer build's, says nothing.
+    pub fn accounts(&self) -> bool {
+        self.on_disk.is_some_and(|v| v <= SCHEMA)
     }
 
     pub fn licence(&self) -> Option<&str> {
@@ -482,16 +505,30 @@ fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Moved by its bytes, never through [`Store::open`], which reads a file it
 /// cannot parse as an empty list: only a list that reads is moved, and the
 /// roaming copy goes only once this computer's own is in place. One that
-/// does not read is left where it is and RATA starts empty, as it would
-/// with that file. A list already in `local` is never replaced, so one an
-/// older copy writes to the roaming folder later stays there. When the move
-/// fails the list is read where it was, as before, and moved next start.
+/// does not parse is left where it is and RATA starts empty, as it would
+/// with that file. One that is there but cannot be read now (a redirected
+/// folder whose share is offline, a file another program holds open) is
+/// opened where it is, as before: started empty here instead, the first
+/// save would make this computer's list, which is never replaced, and the
+/// roaming one would never move. A list already in `local` is never
+/// replaced, so one an older copy writes to the roaming folder later stays
+/// there. When the move fails the list is read where it was, as before, and
+/// moved next start. A roaming copy that could not be removed once the move
+/// was done is removed at a later start, if it is still exactly the list
+/// moved (`tidy_roaming`).
 pub fn moved(roaming: &Path, local: &Path) -> PathBuf {
-    if roaming == local || local.exists() {
+    if roaming == local {
         return local.to_path_buf();
     }
-    let Ok(bytes) = fs::read(roaming) else {
+    if local.exists() {
+        tidy_roaming(roaming, local);
         return local.to_path_buf();
+    }
+    let bytes = match fs::read(roaming) {
+        Ok(bytes) => bytes,
+        // Nothing to move: a first run.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return local.to_path_buf(),
+        Err(_) => return roaming.to_path_buf(),
     };
     if serde_json::from_slice::<Contents>(&bytes).is_err() {
         return local.to_path_buf();
@@ -499,13 +536,125 @@ pub fn moved(roaming: &Path, local: &Path) -> PathBuf {
     if write_whole(local, &bytes).is_err() {
         return roaming.to_path_buf();
     }
-    let _ = fs::remove_file(roaming);
+    // Which list was moved, kept until its roaming copy is gone, so that a
+    // removal refused now is tried again on that copy and on no other.
+    let mark = moved_mark(local);
+    let marked = fs::write(&mark, fingerprint(&bytes)).is_ok();
+    if remove_roaming(roaming) && marked {
+        let _ = fs::remove_file(&mark);
+    }
+    local.to_path_buf()
+}
+
+/// Where [`moved`] notes the list it moved until the roaming copy is gone.
+fn moved_mark(local: &Path) -> PathBuf {
+    local.with_extension("json.moved")
+}
+
+/// The SHA-256 of a list, in hex: all [`moved`] keeps of the list it moved.
+fn fingerprint(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The roaming list, a save it left half done, and its folder once empty.
+/// Whether the list itself is gone.
+fn remove_roaming(roaming: &Path) -> bool {
+    let gone = match fs::remove_file(roaming) {
+        Ok(()) => true,
+        Err(e) => e.kind() == io::ErrorKind::NotFound,
+    };
     let _ = fs::remove_file(roaming.with_extension("json.tmp"));
     if let Some(dir) = roaming.parent() {
         // Only when empty: anything else there is not the list's.
         let _ = fs::remove_dir(dir);
     }
-    local.to_path_buf()
+    gone
+}
+
+/// A roaming copy a move could not remove (the share refused, or another
+/// program had it open): removed now if it is still exactly the list that
+/// was moved, and then the note of it goes. One that has changed since was
+/// written there by an older copy of RATA afterwards and is left, as such a
+/// list always is; one that cannot be read now is tried again next start.
+fn tidy_roaming(roaming: &Path, local: &Path) {
+    let mark = moved_mark(local);
+    let Ok(moved) = fs::read_to_string(&mark) else {
+        return;
+    };
+    match fs::read(roaming) {
+        Ok(bytes) if fingerprint(&bytes) == moved.trim() => {
+            if remove_roaming(roaming) {
+                let _ = fs::remove_file(&mark);
+            }
+        }
+        Err(e) if e.kind() != io::ErrorKind::NotFound => {}
+        // Gone, or not the list moved.
+        _ => {
+            let _ = fs::remove_file(&mark);
+        }
+    }
+}
+
+/// What [`hold`] found.
+#[derive(Debug)]
+pub enum Hold {
+    /// This RATA has the list to itself while it keeps the file open and
+    /// locked.
+    Mine(fs::File),
+    /// Another RATA has it: one of this account, on this computer (or on
+    /// another computer sharing the same home folder).
+    Taken,
+    /// No lock can be had here (a folder that cannot be made, a file system
+    /// without locks): RATA starts without one, as before 0.1.52.
+    Unguarded,
+}
+
+/// One RATA per list (review R5): an exclusive lock on `mailboxes.lock`
+/// beside the list at `list`, waiting up to `wait` for one that is being
+/// let go (an update restarting RATA starts the new copy before the old has
+/// quite gone). The operating system lets go of it when the process ends,
+/// however it ends, so a crash leaves nothing behind that stops the next
+/// start.
+///
+/// It is the guard everywhere, because it is per account and per list:
+/// single instance's socket on macOS is one path in /tmp for every account
+/// on the Mac, which another account can hold or answer, and its D-Bus name
+/// on Linux is per session bus, or none when there is no bus RATA can use.
+/// The file is never removed: a lock on a file that was removed and made
+/// again is a lock on a different file, which another RATA could also have.
+pub fn hold(list: &Path, wait: std::time::Duration) -> Hold {
+    let path = list.with_extension("lock");
+    let opened = (|| {
+        if let Some(dir) = path.parent() {
+            make_dir(dir)?;
+        }
+        let mut open = fs::OpenOptions::new();
+        open.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open.mode(0o600);
+        }
+        open.open(&path)
+    })();
+    let Ok(file) = opened else {
+        return Hold::Unguarded;
+    };
+    let until = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Hold::Mine(file),
+            Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(fs::TryLockError::WouldBlock) => return Hold::Taken,
+            Err(fs::TryLockError::Error(_)) => return Hold::Unguarded,
+        }
+    }
 }
 
 /// `dir` and its parents. The last one, the app's own folder, is made 0700
@@ -1099,6 +1248,198 @@ mod tests {
         let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
         assert_eq!(moved(&roaming, &local), roaming, "tried again next start");
         assert_eq!(Store::open(&roaming).list().len(), 1);
+    }
+
+    /// A list that is there but cannot be read now (a redirected folder
+    /// whose share is offline, a file another program holds open) is opened
+    /// where it is, as 0.1.51 opened it, and moved at a later start. Opened
+    /// here instead, RATA started empty, and the first save made this
+    /// computer's list, which is never replaced: every mailbox was lost.
+    #[test]
+    fn a_roaming_list_that_cannot_be_read_now_is_opened_where_it_is() {
+        let dir = tmpdir();
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        // Something there that cannot be read as a file, nor replaced by
+        // one.
+        fs::create_dir_all(&roaming).unwrap();
+        fs::write(roaming.join("inside"), "").unwrap();
+        assert_eq!(moved(&roaming, &local), roaming);
+        assert!(!local.exists(), "nothing made here");
+        let s = Store::open(&roaming);
+        assert_eq!(s.on_disk(), None);
+        assert!(!s.accounts(), "and start forgets nothing by it");
+        assert!(s.save().is_err(), "nor is anything written over it");
+
+        // Readable again: it moves. (Opening tightened the folder to 0600
+        // on Unix, which would stop an account other than root emptying it.)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&roaming, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::remove_dir_all(&roaming).unwrap();
+        {
+            let mut s = Store::open(&roaming);
+            s.put(mailbox("owner@example.com"));
+            s.save().unwrap();
+        }
+        assert_eq!(moved(&roaming, &local), local);
+        assert_eq!(Store::open(&local).list().len(), 1);
+    }
+
+    /// The roaming copy goes once the list is here; when it could not be
+    /// removed then, a later start removes it, but only while it is still
+    /// exactly the list moved.
+    #[test]
+    fn a_roaming_copy_left_by_a_move_goes_at_a_later_start() {
+        let dir = tmpdir();
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        let mark = moved_mark(&local);
+        let list = |who: &str| {
+            let mut s = Store::open(&roaming);
+            s.put(mailbox(who));
+            s.set_licence(Some("v1.aaa.bbb".into()));
+            s.save().unwrap();
+            fs::read(&roaming).unwrap()
+        };
+        // A move that removes it at once keeps no note.
+        let bytes = list("owner@example.com");
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(!roaming.exists());
+        assert!(!mark.exists());
+
+        // One whose roaming copy could not be removed: still there, noted.
+        fs::create_dir_all(roaming.parent().unwrap()).unwrap();
+        fs::write(&roaming, &bytes).unwrap();
+        fs::write(roaming.with_extension("json.tmp"), "{ half").unwrap();
+        fs::write(&mark, fingerprint(&bytes)).unwrap();
+        // Unreadable for now: tried again next start.
+        fs::rename(&roaming, dir.join("aside")).unwrap();
+        fs::create_dir(&roaming).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(mark.exists());
+        fs::remove_dir(&roaming).unwrap();
+        fs::rename(dir.join("aside"), &roaming).unwrap();
+        // Readable, and the list moved: it goes, with what it left.
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(!roaming.exists(), "the roaming copy went");
+        assert!(!roaming.with_extension("json.tmp").exists());
+        assert!(!roaming.parent().unwrap().exists(), "and its folder");
+        assert!(!mark.exists(), "and the note");
+        assert_eq!(Store::open(&local).list().len(), 1);
+
+        // A list an older copy of RATA wrote there since is not the one
+        // moved: it stays, and the note goes.
+        list("second@example.org");
+        fs::write(&mark, fingerprint(&bytes)).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(roaming.exists());
+        assert!(!mark.exists());
+        // Nor is one there with no note.
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(roaming.exists());
+        assert_eq!(
+            Store::open(&local)
+                .find("owner@example.com")
+                .map(|m| &m.email[..]),
+            Some("owner@example.com"),
+            "this computer's own list is never replaced"
+        );
+
+        // Gone by itself: the note goes.
+        fs::remove_file(&roaming).unwrap();
+        fs::write(&mark, fingerprint(&bytes)).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(!mark.exists());
+    }
+
+    /// Review R14: a list a newer build wrote keeps its version when this
+    /// build saves it, so this build's next start still takes it for a
+    /// newer build's and forgets nothing by it.
+    #[test]
+    fn a_newer_builds_list_keeps_its_version_when_saved_here() {
+        let dir = tmpdir();
+        let file = dir.join("mailboxes.json");
+        fs::write(
+            &file,
+            r#"{"version":2,"mailboxes":[],"licence":"v1.x.y","later":{"a":1}}"#,
+        )
+        .unwrap();
+        let mut s = Store::open(&file);
+        assert!(!s.accounts());
+        s.put(mailbox("owner@example.com"));
+        s.save().unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(raw["version"], 2, "{raw}");
+        assert_eq!(raw["later"], serde_json::json!({"a": 1}));
+        let s = Store::open(&file);
+        assert_eq!(s.on_disk(), Some(2));
+        assert!(!s.accounts());
+
+        // This build's own, or an older one's, is written as this build's.
+        fs::write(&file, r#"{"version":0,"mailboxes":[]}"#).unwrap();
+        let s = Store::open(&file);
+        assert!(s.accounts());
+        s.save().unwrap();
+        assert_eq!(Store::open(&file).on_disk(), Some(SCHEMA));
+        // As is a list that could not be read, or none.
+        fs::write(&file, "{ this is not json").unwrap();
+        let s = Store::open(&file);
+        assert!(!s.accounts());
+        s.save().unwrap();
+        assert_eq!(Store::open(&file).on_disk(), Some(SCHEMA));
+    }
+
+    /// Review R5: one RATA per list. Another finds the lock held and is
+    /// told so once it has waited; when the first lets go (as it exits,
+    /// before an update's restart), the one waiting has it. The file is
+    /// never removed.
+    #[test]
+    fn one_rata_holds_the_list_at_a_time() {
+        use std::time::{Duration, Instant};
+        let dir = tmpdir();
+        let list = dir.join("fresh/mailboxes.json");
+        let lock = list.with_extension("lock");
+        let Hold::Mine(first) = hold(&list, Duration::ZERO) else {
+            panic!("the first RATA holds it");
+        };
+        assert!(lock.exists());
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(&lock), 0o600);
+            assert_eq!(mode(lock.parent().unwrap()), 0o700);
+        }
+        let asked = Instant::now();
+        assert!(matches!(
+            hold(&list, Duration::from_millis(300)),
+            Hold::Taken
+        ));
+        assert!(asked.elapsed() >= Duration::from_millis(300), "it waited");
+
+        let waiting = std::thread::spawn({
+            let list = list.clone();
+            move || hold(&list, Duration::from_secs(10))
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        first.unlock().unwrap();
+        let Hold::Mine(second) = waiting.join().unwrap() else {
+            panic!("the one waiting has it once the first lets go");
+        };
+        drop(first);
+        assert!(matches!(hold(&list, Duration::ZERO), Hold::Taken));
+        drop(second);
+        assert!(lock.exists(), "never removed");
+        assert!(matches!(hold(&list, Duration::ZERO), Hold::Mine(_)));
+
+        // Where no lock can be had, RATA starts without one.
+        fs::write(dir.join("a-file"), "").unwrap();
+        assert!(matches!(
+            hold(&dir.join("a-file/mailboxes.json"), Duration::ZERO),
+            Hold::Unguarded
+        ));
     }
 
     #[cfg(unix)]

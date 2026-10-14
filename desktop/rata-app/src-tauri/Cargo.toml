@@ -27,10 +27,19 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
-# One RATA at a time (main.rs, review R5). Its Linux half uses zbus and its
-# Windows half windows-sys, both already in the tree.
-tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
+
+# A second launch handing over to the first (main.rs, review R5), on
+# Windows and Linux; on macOS the list's lock is the only guard. Its Linux
+# half uses zbus and its Windows half windows-sys, both already in the tree.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+# Whether the session bus's address can be read before single instance's
+# plugin is set up, which panics when it cannot (main.rs). The zbus the
+# plugin itself uses, so nothing new is built.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 # Marking saved files as downloads on macOS (mark.rs). Already in the tree
 # through the updater's tar, so nothing new is built.

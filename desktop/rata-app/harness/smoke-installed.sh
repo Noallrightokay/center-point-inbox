@@ -19,12 +19,13 @@
 # alive after UP seconds has built its window. The log is kept and failed on
 # a panic.
 #
-# Then each one is launched a second time while the first is up: single
-# instance (main.rs, review R5) must hand over to the first and exit 0
-# within AGAIN seconds, and the first must stay up. On Linux that guard is a
+# Then each one is launched a second time while the first is up: it must
+# find the first (main.rs, review R5) and exit 0 within AGAIN seconds, and
+# the first must stay up. On Linux single instance hands over through a
 # name on the D-Bus session bus, which every desktop has and a runner does
 # not, so the Linux half runs inside a session bus of its own
-# (dbus-run-session, apt package dbus).
+# (dbus-run-session, apt package dbus). On macOS the list's lock stops it,
+# after waiting three seconds for the first to let go.
 set -u
 
 if [ "$(uname -s)" = Linux ] && [ -z "${RATA_SMOKE_BUS:-}" ]; then
@@ -67,9 +68,9 @@ clean_log() {
   fi
 }
 
-# Single instance: with $2 (the first launch's pid) up, run "$4…" (a second
-# launch of the same installation) with its output in $3. It must exit 0
-# within AGAIN seconds, having handed over to the first, which must still be
+# One RATA at a time: with $2 (the first launch's pid) up, run "$4…" (a
+# second launch of the same installation) with its output in $3. It must
+# exit 0 within AGAIN seconds, having found the first, which must still be
 # up afterwards. A second copy still running is two RATAs on one list.
 again() {
   local what="$1" first="$2" log="$3" start=$SECONDS second code
@@ -78,12 +79,12 @@ again() {
   second=$!
   while kill -0 "$second" 2>/dev/null && [ $((SECONDS - start)) -lt "$AGAIN" ]; do sleep 1; done
   if kill -0 "$second" 2>/dev/null; then
-    fail "$what, launched again, was still running ${AGAIN} s later beside the first: single instance did not stop it."
+    fail "$what, launched again, was still running ${AGAIN} s later beside the first: nothing stopped it."
     kill "$second" 2>/dev/null; sleep 1; kill -9 "$second" 2>/dev/null; wait "$second" 2>/dev/null
   else
     wait "$second"; code=$?
     if [ "$code" -ne 0 ]; then fail "$what, launched again, exited $code, not 0."
-    else say "$what, launched again, handed over to the first and exited 0 within $((SECONDS - start)) s."; fi
+    else say "$what, launched again, found the first and exited 0 within $((SECONDS - start)) s."; fi
   fi
   kill -0 "$first" 2>/dev/null || fail "$what exited when it was launched again."
   clean_log "$what, launched again" "$log"
@@ -239,7 +240,8 @@ mac() {
     else
       say "::warning::The window title could not be read on this runner ($(head -c 300 "$WORK/osascript.out")). Checked instead: RATA.app stayed up ${UP} s, which it does only once its window is built, and its log is clean."
     fi
-    # Single instance on macOS is a socket in /tmp named for the identifier.
+    # On macOS the guard is the list's lock (store::hold), not single
+    # instance's socket in /tmp, which every account on the Mac shares.
     again "RATA.app" "$pid" "$WORK/mac-again.log" "$exe"
   fi
   kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null

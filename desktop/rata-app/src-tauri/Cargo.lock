@@ -3611,6 +3611,7 @@ dependencies = [
  "url",
  "windows-sys 0.60.2",
  "xattr",
+ "zbus",
 ]
 
 [[package]]

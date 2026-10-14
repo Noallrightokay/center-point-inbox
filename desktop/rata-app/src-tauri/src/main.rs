@@ -33,6 +33,7 @@ mod watch;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::Manager;
 use tauri::webview::NewWindowResponse;
@@ -42,6 +43,16 @@ use crate::links::{Link, Navigation};
 use crate::store::Store;
 use crate::vault::{Keychain, Vault};
 
+/// How long a RATA starting waits for another to let go of the list
+/// (`store::hold`) before it takes that one for a copy still running and
+/// exits: long enough for an update's restart, where the new copy starts
+/// while the old is still on its way out.
+const HOLD_WAIT: Duration = Duration::from_secs(3);
+
+/// The lock on the list (`store::hold`), kept for as long as RATA runs and
+/// let go as it exits.
+struct OneRata(std::fs::File);
+
 /// The mailbox list, from this computer's own folder, with the keychain
 /// made to agree with it before anything else reads either.
 ///
@@ -50,13 +61,13 @@ use crate::vault::{Keychain, Vault};
 /// OneDrive or Google Drive sign-in the keychain holds without a link in
 /// the list is forgotten (review R5): another copy of RATA saved its list
 /// over this one's, or RATA stopped between keeping a sign-in and saving
-/// it. Only a list that was read, and written by this build's schema or an
-/// older one, says what is linked; with any other, nothing is forgotten.
-/// Run once, before `Rata` exists and after single instance has passed, so
-/// nothing can be keeping a sign-in meanwhile.
+/// it. Only a list that accounts for the keychain (`Store::accounts`: read,
+/// and of this build's schema or an older one) says what is linked; with
+/// any other, nothing is forgotten. Run once, before `Rata` exists and with
+/// the list's lock held, so nothing can be keeping a sign-in meanwhile.
 fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault) -> Store {
     let store = Store::open(store::moved(roaming, local));
-    if store.on_disk().is_some_and(|v| v <= store::SCHEMA) {
+    if store.accounts() {
         vault::forget_unlinked(
             vault,
             vault::Linked {
@@ -69,9 +80,39 @@ fn open_store(roaming: &Path, local: &Path, vault: &dyn Vault) -> Store {
     store
 }
 
+/// The addresses on the list, for the Windows start-up pass
+/// (`vault::settle_windows`), which deletes a mailbox's keychain entry
+/// whose address is not among them. Only from a list that accounts for the
+/// keychain, as `open_store` counts one; `None` otherwise, and then nothing
+/// is deleted.
+#[cfg(any(windows, test))]
+fn listed(store: &Store) -> Option<Vec<&str>> {
+    store
+        .accounts()
+        .then(|| store.list().iter().map(|m| m.email.as_str()).collect())
+}
+
+/// Whether single instance's plugin can be set up here. On Linux its guard
+/// is a name on the D-Bus session bus, and the plugin unwraps zbus's
+/// reading of the bus's address: one zbus cannot read (`disabled:`,
+/// `autolaunch:`, a `unix:` it does not know) made RATA panic at every
+/// start. Then RATA starts without the plugin, guarded by the list's lock
+/// alone. With no address set zbus tries `$XDG_RUNTIME_DIR/bus`, and a bus
+/// that is not there leaves the plugin without a guard, not a panic.
+#[cfg(target_os = "linux")]
+fn single_instance_here() -> bool {
+    zbus::Address::session().is_ok()
+}
+
+#[cfg(windows)]
+fn single_instance_here() -> bool {
+    true
+}
+
 /// A second RATA was started (from the Start menu, the launcher, or a
 /// second kind of installation): it has already been stopped, so bring
 /// this one's window forward instead. Nothing else.
+#[cfg(not(target_os = "macos"))]
 fn show_main(handle: &tauri::AppHandle) {
     if let Some(window) = handle.get_webview_window("main") {
         let _ = window.unminimize();
@@ -149,18 +190,31 @@ fn from_mail(handle: &tauri::AppHandle, url: &tauri::Url) {
 
 fn main() {
     let context = tauri::generate_context!();
-    // One RATA at a time, before anything else is set up (review R5). Two
-    // processes each held the whole list and wrote it whole, so the last
-    // to save dropped the other's links, and Disconnect or Delete account
-    // in one never reached the other's held sign-ins. A second launch
-    // hands over to the first and exits before its setup runs. Copies of
-    // the same identifier exclude each other on all three systems (a named
-    // mutex on Windows, a socket on macOS, a D-Bus name on Linux, so a
-    // .deb and an AppImage too). On Linux without a session bus there is
-    // no guard, and RATA starts as before.
-    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
-        |handle, _args, _cwd| show_main(handle),
-    ));
+    // One RATA at a time (review R5). Two processes each held the whole
+    // list and wrote it whole, so the last to save dropped the other's
+    // links, and Disconnect or Delete account in one never reached the
+    // other's held sign-ins. The guard is a lock on the list itself
+    // (`store::hold`, first thing in setup, before the list is read): per
+    // account and per list on all three systems, so a .deb and an AppImage
+    // too, and a RATA that finds it held by another exits.
+    //
+    // On Windows and Linux single instance's plugin comes first, so that a
+    // second launch in the same sign-in hands over to the first, which
+    // comes forward, and exits before its setup runs: a named mutex on
+    // Windows, a D-Bus name on Linux where zbus can read the session bus's
+    // address. Not on macOS: the Finder and the Dock already bring a
+    // running RATA forward, and the plugin's guard there is one socket in
+    // /tmp for every account on the Mac, which another account can hold so
+    // that RATA never opens.
+    let builder = tauri::Builder::default();
+    #[cfg(not(target_os = "macos"))]
+    let builder = if single_instance_here() {
+        builder.plugin(tauri_plugin_single_instance::init(|handle, _args, _cwd| {
+            show_main(handle)
+        }))
+    } else {
+        builder
+    };
     // Updates only where this build carries the key to check them against;
     // see `update`.
     let builder = if update::has_key(context.config()) {
@@ -177,26 +231,27 @@ fn main() {
             // R13; it held Roaming AppData until 0.1.52, and the list moves
             // from there once). Only the mailbox list goes here; see
             // `vault`.
-            let local = app.path().app_local_data_dir()?;
-            let roaming = app.path().app_data_dir()?;
-            let store = open_store(
-                &roaming.join("mailboxes.json"),
-                &local.join("mailboxes.json"),
-                &Keychain,
-            );
+            let local = app.path().app_local_data_dir()?.join("mailboxes.json");
+            let roaming = app.path().app_data_dir()?.join("mailboxes.json");
+            // One RATA per list (review R5; see `main`), before the list or
+            // the keychain is read.
+            match store::hold(&local, HOLD_WAIT) {
+                store::Hold::Mine(lock) => {
+                    app.manage(OneRata(lock));
+                }
+                store::Hold::Taken => {
+                    app.handle().cleanup_before_exit();
+                    std::process::exit(0);
+                }
+                store::Hold::Unguarded => {}
+            }
+            let store = open_store(&roaming, &local, &Keychain);
             // Windows only: keychain entries an earlier build wrote to roam
             // stay on this computer from now on, and a mailbox's that Unlink
             // or Delete account left in a roamed copy goes (review R6). The
-            // list counts only as `open_store` counts it: read, and of this
-            // schema or older.
+            // list counts only as `open_store` counts it.
             #[cfg(windows)]
-            {
-                let listed: Option<Vec<&str>> = store
-                    .on_disk()
-                    .filter(|v| *v <= store::SCHEMA)
-                    .map(|_| store.list().iter().map(|m| m.email.as_str()).collect());
-                vault::settle_windows(listed.as_deref());
-            }
+            vault::settle_windows(listed(&store).as_deref());
 
             // Built once and shared: each resolver carries its own cache, and
             // making a fresh one per refresh would throw that away.
@@ -286,14 +341,24 @@ fn main() {
             commands::created_read,
             commands::forget_created,
         ])
-        .run(context)
-        .expect("RATA could not start");
+        .build(context)
+        .expect("RATA could not start")
+        .run(|handle, event| {
+            // The list is let go as RATA exits, before an update's restart
+            // starts the new copy (`store::hold`); the system lets go of it
+            // anyway once the process has gone.
+            if let tauri::RunEvent::Exit = event
+                && let Some(one) = handle.try_state::<OneRata>()
+            {
+                let _ = one.0.unlock();
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fitted, open_store};
-    use crate::store::{DriveLink, SlackLink, Store};
+    use super::{fitted, listed, open_store};
+    use crate::store::{Auth, DriveLink, Mailbox, SlackLink, Store};
     use crate::vault::{self, Memory};
 
     fn tmpdir(name: &str) -> std::path::PathBuf {
@@ -301,6 +366,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    fn mailbox(email: &str) -> Mailbox {
+        Mailbox {
+            email: email.into(),
+            host: "imap.example.com".into(),
+            port: 993,
+            label: "Work".into(),
+            help: None,
+            source: "mx".into(),
+            added_at: 1,
+            auth_failed_at: None,
+            auth: Auth::Password,
+        }
     }
 
     /// Reviews R5 and R13 together, as start runs them: the list moves to
@@ -314,6 +393,7 @@ mod tests {
         let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
         {
             let mut s = Store::open(&roaming);
+            s.put(mailbox("owner@example.com"));
             s.set_slack(Some(SlackLink {
                 team_id: "T0123".into(),
                 team: "Acme".into(),
@@ -331,20 +411,20 @@ mod tests {
         assert_eq!(store.path_for_test(), local);
         assert!(!roaming.exists());
         assert!(store.slack().is_some());
+        assert_eq!(listed(&store), Some(vec!["owner@example.com"]));
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
         assert!(
             vault::get_onedrive_secret(&v).is_err(),
             "no OneDrive in the list: its sign-in went"
         );
 
-        // A list that does not read says nothing about what is linked, nor
-        // does one a newer schema wrote: nothing is forgotten.
+        // A list that does not read says nothing about what is linked:
+        // nothing is forgotten, and the Windows pass deletes nothing.
         vault::put_onedrive_secret(&v, "onedrive-sign-in").unwrap();
         std::fs::write(&local, "{ this is not json").unwrap();
         let store = open_store(&roaming, &local, &v);
         assert!(store.slack().is_none());
-        std::fs::write(&local, r#"{"version":99,"mailboxes":[]}"#).unwrap();
-        let _ = open_store(&roaming, &local, &v);
+        assert_eq!(listed(&store), None);
         assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
         assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
 
@@ -362,9 +442,114 @@ mod tests {
         }
         let store = open_store(&roaming, &local, &v);
         assert!(store.onedrive().is_some());
+        assert_eq!(listed(&store), Some(vec![]));
         assert_eq!(vault::get_onedrive_secret(&v).unwrap(), "onedrive-sign-in");
         assert!(vault::get_slack_secret(&v).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review R14: a list a newer build wrote (a .deb and an AppImage of
+    /// two versions share it) may keep its links and mailboxes in a shape
+    /// this build cannot see, so start forgets nothing by it: no sign-in,
+    /// and on Windows no mailbox's entry. Nor once this build has saved it,
+    /// which keeps its version.
+    #[test]
+    fn at_start_a_newer_builds_list_forgets_nothing_even_once_saved_here() {
+        let dir = tmpdir("newer");
+        let roaming = dir.join("Roaming/org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(
+            &local,
+            r#"{"version":2,"accounts":[{"address":"owner@example.com"}],"links":{"slack":{"team":"Acme"}}}"#,
+        )
+        .unwrap();
+        let v = Memory::default();
+        vault::put_slack_secret(&v, "slack-sign-in").unwrap();
+        vault::put_google_secret(&v, "google-sign-in").unwrap();
+
+        let store = open_store(&roaming, &local, &v);
+        assert_eq!(listed(&store), None);
+        assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
+
+        // Saved here (a licence renewal, say), then started again.
+        store.save().unwrap();
+        let store = open_store(&roaming, &local, &v);
+        assert_eq!(store.on_disk(), Some(2));
+        assert_eq!(listed(&store), None);
+        assert_eq!(vault::get_slack_secret(&v).unwrap(), "slack-sign-in");
+        assert_eq!(vault::get_google_secret(&v).unwrap(), "google-sign-in");
+        let raw = std::fs::read_to_string(&local).unwrap();
+        assert!(
+            raw.contains("\"accounts\"") && raw.contains("\"links\""),
+            "{raw}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Run by the test below in a child process of its own, under the
+    /// session bus address that test sets. Alone, it does nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn single_instance_probe() {
+        if std::env::var_os("RATA_PROBE_BUS").is_some() {
+            println!("single-instance={}", super::single_instance_here());
+        }
+    }
+
+    /// On Linux single instance's plugin unwraps zbus's reading of the
+    /// session bus's address, so an address zbus cannot read made RATA
+    /// panic at every start. Such an address now leaves the plugin out
+    /// (the list's lock still guards); a readable one, or none, keeps it.
+    /// Each in a child process, since the address comes from the
+    /// environment.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn at_start_a_session_bus_address_zbus_cannot_read_leaves_single_instance_out() {
+        let here = |address: Option<&str>| {
+            let mut probe = std::process::Command::new(std::env::current_exe().unwrap());
+            probe
+                .args([
+                    "tests::single_instance_probe",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("RATA_PROBE_BUS", "1")
+                .env("XDG_RUNTIME_DIR", "/run/user/1000");
+            match address {
+                Some(a) => probe.env("DBUS_SESSION_BUS_ADDRESS", a),
+                None => probe.env_remove("DBUS_SESSION_BUS_ADDRESS"),
+            };
+            let out = probe.output().unwrap();
+            let said = String::from_utf8_lossy(&out.stdout).into_owned();
+            assert!(out.status.success(), "{address:?}: {said}");
+            match (
+                said.contains("single-instance=true"),
+                said.contains("single-instance=false"),
+            ) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => panic!("{address:?}: {said}"),
+            }
+        };
+        for unreadable in [
+            "disabled:",
+            "autolaunch:",
+            "",
+            "unix:runtime=yes",
+            "unix:path=/run/user/1000/bus,guid=not-a-guid",
+        ] {
+            assert!(!here(Some(unreadable)), "{unreadable:?}");
+        }
+        for readable in [
+            "unix:path=/run/user/1000/bus",
+            "unix:abstract=/tmp/dbus-AbCd,guid=0123456789abcdef0123456789abcdef",
+            "tcp:host=127.0.0.1,port=4",
+        ] {
+            assert!(here(Some(readable)), "{readable:?}");
+        }
+        assert!(here(None), "unset: zbus tries $XDG_RUNTIME_DIR/bus");
     }
 
     #[test]

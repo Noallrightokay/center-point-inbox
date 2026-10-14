@@ -686,11 +686,14 @@ pub fn forget_unlinked(v: &dyn Vault, linked: Linked) -> Vec<&'static str> {
     forgot
 }
 
-/// Whether the keychain holds anything of a sign-in: its entry, or the
-/// piece a write or removal cut short leaves without one.
+/// Whether the keychain holds anything of a sign-in: its entry, or any
+/// piece a write or removal cut short leaves without one. `forget_own`
+/// stops at the first piece it cannot remove, so any of `#2` to
+/// `#PIECES_MAX` can be what is left.
 fn holds_any(v: &dyn Vault, own: Own) -> bool {
     let entry = own.entry();
-    own.get(v, entry).is_ok() || own.get(v, &format!("{entry}#2")).is_ok()
+    own.get(v, entry).is_ok()
+        || (2..=PIECES_MAX).any(|n| own.get(v, &format!("{entry}#{n}")).is_ok())
 }
 
 /// Which of `services` an entry Credential Manager lists is RATA's in,
@@ -704,15 +707,34 @@ fn rata_service(target: &str, user: &str, services: &[&'static str]) -> Option<&
         .find(|s| target.eq_ignore_ascii_case(&format!("{user}.{s}")))
 }
 
+/// The two services whose entries are a mailbox's: its own entry and the
+/// pieces of its Microsoft token. Always [`MAILBOXES`] but in a test on
+/// Windows, which runs the start-up pass's deletions on Credential Manager
+/// under services of its own, so that no real entry of RATA's is touched.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy)]
+struct MailboxServices {
+    entry: &'static str,
+    piece: &'static str,
+}
+
+/// A mailbox's entries are in `SERVICE`, its token's pieces in
+/// `PIECE_SERVICE`.
+#[cfg(any(windows, test))]
+const MAILBOXES: MailboxServices = MailboxServices {
+    entry: SERVICE,
+    piece: PIECE_SERVICE,
+};
+
 /// Whether an entry is a mailbox's, or a piece of its Microsoft token,
 /// for an address no longer in `listed`: what Unlink or Delete account left
 /// in a copy that came back with a roaming profile (review R6). Slack's,
 /// OneDrive's and Google's go by their link instead (`forget_unlinked`).
 #[cfg(any(windows, test))]
-fn left_behind(service: &str, name: &str, listed: &[&str]) -> bool {
-    let address = if service == SERVICE {
+fn left_behind(service: &str, name: &str, listed: &[&str], mailboxes: MailboxServices) -> bool {
+    let address = if service == mailboxes.entry {
         Some(name)
-    } else if service == PIECE_SERVICE {
+    } else if service == mailboxes.piece {
         name.rsplit_once('#')
             .filter(|(_, n)| {
                 n.parse::<usize>()
@@ -734,14 +756,18 @@ fn left_behind(service: &str, name: &str, listed: &[&str]) -> bool {
 /// forgotten. Best effort throughout: nothing here stops RATA starting.
 #[cfg(windows)]
 pub fn settle_windows(listed: Option<&[&str]>) {
-    settle_windows_in(&SERVICES, listed)
+    settle_windows_in(&SERVICES, MAILBOXES, listed)
 }
 
 #[cfg(windows)]
-fn settle_windows_in(services: &[&'static str], listed: Option<&[&str]>) {
+fn settle_windows_in(
+    services: &[&'static str],
+    mailboxes: MailboxServices,
+    listed: Option<&[&str]>,
+) {
     use windows_sys::Win32::Security::Credentials::CRED_PERSIST_ENTERPRISE;
     for mut found in windows::entries(services) {
-        if listed.is_some_and(|l| left_behind(found.service, &found.user, l)) {
+        if listed.is_some_and(|l| left_behind(found.service, &found.user, l, mailboxes)) {
             // By its exact target, as listed.
             let _ = keyring::Entry::new_with_target(&found.target, found.service, &found.user)
                 .and_then(|e| e.delete_credential());
@@ -1407,6 +1433,12 @@ mod tests {
         assert_eq!(forget_unlinked(&v, Linked::default()), vec![SLACK_SERVICE]);
         assert!(v.get_slack("workspace#3").is_err());
         assert!(forget_unlinked(&v, Linked::default()).is_empty());
+        // A removal cut short further on leaves only a later piece, and
+        // that is found too.
+        let last = format!("drive#{PIECES_MAX}");
+        v.put_google(&last, "the-end-of-a-token").unwrap();
+        assert_eq!(forget_unlinked(&v, Linked::default()), vec![GOOGLE_SERVICE]);
+        assert!(v.get_google(&last).is_err());
         // A keychain that will not answer holds nothing as far as RATA can
         // tell: nothing is forgotten, and starting does not fail.
         assert!(forget_unlinked(&Locked, Linked::default()).is_empty());
@@ -1459,20 +1491,35 @@ mod tests {
             None
         );
 
+        let behind = |service: &str, name: &str, listed: &[&str]| {
+            left_behind(service, name, listed, MAILBOXES)
+        };
         let listed = ["Owner@Example.com"];
-        assert!(!left_behind(SERVICE, "owner@example.com", &listed));
-        assert!(left_behind(SERVICE, "gone@example.com", &listed));
-        assert!(!left_behind(PIECE_SERVICE, "owner@example.com#2", &listed));
-        assert!(left_behind(PIECE_SERVICE, "gone@example.com#8", &listed));
+        assert!(!behind(SERVICE, "owner@example.com", &listed));
+        assert!(behind(SERVICE, "gone@example.com", &listed));
+        assert!(!behind(PIECE_SERVICE, "owner@example.com#2", &listed));
+        assert!(behind(PIECE_SERVICE, "gone@example.com#8", &listed));
         // Not a piece RATA writes: left alone.
-        assert!(!left_behind(PIECE_SERVICE, "gone@example.com", &listed));
-        assert!(!left_behind(PIECE_SERVICE, "gone@example.com#9", &listed));
-        assert!(!left_behind(PIECE_SERVICE, "gone@example.com#x", &listed));
+        assert!(!behind(PIECE_SERVICE, "gone@example.com", &listed));
+        assert!(!behind(PIECE_SERVICE, "gone@example.com#9", &listed));
+        assert!(!behind(PIECE_SERVICE, "gone@example.com#x", &listed));
         // Slack's, OneDrive's and Google's go by their link (R5), never here.
-        assert!(!left_behind(SLACK_SERVICE, "workspace", &listed));
-        assert!(!left_behind(ONEDRIVE_SERVICE, "drive", &[]));
+        assert!(!behind(SLACK_SERVICE, "workspace", &listed));
+        assert!(!behind(ONEDRIVE_SERVICE, "drive", &[]));
         // After Delete account the list is empty, and every mailbox's goes.
-        assert!(left_behind(SERVICE, "owner@example.com", &[]));
+        assert!(behind(SERVICE, "owner@example.com", &[]));
+        // Which services are a mailbox's is what the caller says: a test's
+        // own stand in for RATA's, and then RATA's are not a mailbox's.
+        let stand_in = MailboxServices {
+            entry: "org.mailrata.desktop.test-left",
+            piece: "org.mailrata.desktop.test-left-piece",
+        };
+        let behind = |service: &str, name: &str| left_behind(service, name, &listed, stand_in);
+        assert!(behind(stand_in.entry, "gone@example.com"));
+        assert!(behind(stand_in.piece, "gone@example.com#2"));
+        assert!(!behind(stand_in.entry, "owner@example.com"));
+        assert!(!behind(SERVICE, "gone@example.com"));
+        assert!(!behind(PIECE_SERVICE, "gone@example.com#2"));
     }
 
     /// Review R6: `keyring` writes every Windows entry
@@ -1505,7 +1552,7 @@ mod tests {
             .set_password("older")
             .unwrap();
         assert_eq!(mine()[0].persist, CRED_PERSIST_ENTERPRISE);
-        settle_windows_in(&[TEST], None);
+        settle_windows_in(&[TEST], MAILBOXES, None);
         let found = mine();
         assert_eq!(found.len(), 1, "replaced, not a second entry");
         assert_eq!(found[0].persist, CRED_PERSIST_LOCAL_MACHINE);
@@ -1513,6 +1560,57 @@ mod tests {
 
         Keychain::forget_in(TEST, &name).unwrap();
         assert!(mine().is_empty());
+    }
+
+    /// Review R6: the start-up pass's deletions, on Credential Manager
+    /// itself. Two services of the test's own stand in for a mailbox's
+    /// (`MailboxServices`), so that no entry of a real RATA on this computer
+    /// can be touched. An entry or a token piece of an address the list no
+    /// longer has goes, written either way, by its exact target; a listed
+    /// address's stays; with no list read, nothing goes.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_mailbox_entry_the_list_no_longer_has_goes_at_start() {
+        const ENTRY: &str = "org.mailrata.desktop.test-left";
+        const PIECE: &str = "org.mailrata.desktop.test-left-piece";
+        let ours = MailboxServices {
+            entry: ENTRY,
+            piece: PIECE,
+        };
+        let pid = std::process::id();
+        let kept = format!("kept-{pid}@example.com");
+        let kept_piece = format!("{kept}#2");
+        let gone = format!("gone-{pid}@example.com");
+        let gone_piece = format!("{gone}#3");
+        let held = |service: &'static str, name: &str| {
+            windows::entries(&[service]).iter().any(|f| f.user == name)
+        };
+        Keychain::put_in(ENTRY, &kept, "kept-password").unwrap();
+        Keychain::put_in(PIECE, &kept_piece, "kept-piece").unwrap();
+        Keychain::put_in(PIECE, &gone_piece, "gone-piece").unwrap();
+        // What 0.1.51 and earlier wrote, to roam.
+        keyring::Entry::new(ENTRY, &gone)
+            .unwrap()
+            .set_password("gone-password")
+            .unwrap();
+        assert!(held(ENTRY, &gone) && held(PIECE, &gone_piece));
+
+        settle_windows_in(&[ENTRY, PIECE], ours, Some(&[kept.as_str()]));
+        assert!(!held(ENTRY, &gone), "an unlisted address's entry went");
+        assert!(!held(PIECE, &gone_piece), "and its token's piece");
+        assert!(Keychain::get_in(ENTRY, &gone).is_err());
+        assert_eq!(Keychain::get_in(ENTRY, &kept).unwrap(), "kept-password");
+        assert_eq!(Keychain::get_in(PIECE, &kept_piece).unwrap(), "kept-piece");
+
+        // A list that was not read says nothing: nothing goes.
+        Keychain::put_in(ENTRY, &gone, "gone-password").unwrap();
+        settle_windows_in(&[ENTRY, PIECE], ours, None);
+        assert_eq!(Keychain::get_in(ENTRY, &gone).unwrap(), "gone-password");
+
+        for (service, name) in [(ENTRY, &kept), (ENTRY, &gone), (PIECE, &kept_piece)] {
+            Keychain::forget_in(service, name).unwrap();
+        }
+        assert!(!held(ENTRY, &kept) && !held(ENTRY, &gone) && !held(PIECE, &kept_piece));
     }
 
     #[test]

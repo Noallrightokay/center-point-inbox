@@ -73,11 +73,18 @@ $clock = [Diagnostics.Stopwatch]::StartNew()
 
 # The title of the process's main window. The window is built in setup
 # (main.rs), and the webview draws inside it from msedgewebview2.exe, which
-# owns no top-level window of its own.
+# owns no top-level window of its own. Single instance's own window,
+# "org.mailrata.desktop-siw", is made earlier, in the plugin's setup, unowned
+# and marked visible so that it gets messages; .NET can take it for the main
+# window until RATA's is up. So only a title beginning RATA ends the wait,
+# as on Linux, and any other is shown if nothing better comes.
 $title = ''
+$other = ''
 while ($clock.Elapsed.TotalSeconds -lt $Wait -and -not $app.HasExited) {
   $app.Refresh()
-  if ($app.MainWindowTitle) { $title = $app.MainWindowTitle; break }
+  $now = $app.MainWindowTitle
+  if ($now -like 'RATA*') { $title = $now; break }
+  if ($now) { $other = $now }
   Start-Sleep -Milliseconds 500
 }
 while ($clock.Elapsed.TotalSeconds -lt $Up -and -not $app.HasExited) { Start-Sleep -Milliseconds 500 }
@@ -88,8 +95,9 @@ if ($app.HasExited) {
   Write-Output ("RATA is still running after {0:N0} s." -f $clock.Elapsed.TotalSeconds)
 }
 if (-not $title) {
+  if ($other) { Write-Output "The last title read from RATA's process was `"$other`"." }
   $shown = Get-Process | Where-Object MainWindowTitle | ForEach-Object { "$($_.ProcessName): $($_.MainWindowTitle)" }
-  Fail "RATA showed no window with a title within $Wait s. Windows with titles on this runner: $($shown -join '; ')"
+  Fail "RATA showed no window titled RATA... within $Wait s. Windows with titles on this runner: $($shown -join '; ')"
 } elseif ($title -ne $Expect) {
   Fail "RATA's window is titled `"$title`", not `"$Expect`"."
 } else {
@@ -98,8 +106,9 @@ if (-not $title) {
 
 # Single instance (main.rs, review R5): RATA started again while it is open
 # finds the first (a named mutex and a hidden window, per sign-in session),
-# hands over to it and exits 0 at once, and the first stays up. A second
-# copy still running is two RATAs writing one mailbox list.
+# hands over to it and exits 0 at once, and the first stays up; the list's
+# own lock stops any copy that gets past that. A second copy still running
+# is two RATAs writing one mailbox list.
 if (-not $app.HasExited) {
   $second = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $out2 -RedirectStandardError $err2
   $null = $second.Handle
