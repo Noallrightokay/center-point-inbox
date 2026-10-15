@@ -2,11 +2,13 @@
 
 What the website does now: the landing page, sign-up and sign-in, the
 licence page (`/account`), the Stripe webhook that records who paid, licence
-issue (`/api/licence`) and renewal (`/api/licence/renew`), the AI relay
+issue (`/api/licence`) and renewal (`/api/licence/renew`), licences for
+subscriptions bought in the iPhone app (`/api/licence/apple`, and Apple's
+notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (841 checks).
+the website's test suites pass with `npm test` after it (993 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -56,9 +58,16 @@ retry hours later. **Re-run `database.sql` before deploying the build that
 carries it.** Without the table nothing breaks, but a first card checkout
 waits for that retry again, and the server log says to run section 6.
 
+Section 7 adds `apple_subscriptions`: the App Store's record of each
+subscription bought in the iPhone app (§11). Nothing reads it until the
+iPhone app is out, and nothing breaks without it, but `/api/licence/apple`
+answers 503 "App Store purchases are not switched on for RATA yet." and
+the server log says to run section 7. Run it before the first TestFlight
+purchase.
+
 **Check:** Table Editor → `subscriptions` shows both new columns, and
-`ai_usage` and `pending_subscriptions` exist; Database → Functions lists
-`ai_reserve` and `ai_settle`.
+`ai_usage`, `pending_subscriptions` and `apple_subscriptions` exist;
+Database → Functions lists `ai_reserve` and `ai_settle`.
 
 ## 2. The licence signing key
 
@@ -147,6 +156,8 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_DOMAIN` | **leave unset** — there is no domain add-on to sell (step 3) |
+| `APPLE_APP_ID` | the iPhone app's numeric Apple ID, from App Store Connect once its app record exists (§11). Without it only sandbox purchases (TestFlight, App Review) are accepted; a real one is answered "not switched on" |
+| `APPLE_BUNDLE_ID` | optional; the iPhone app's bundle id. Default `org.mailrata.desktop`; set it if the app record uses another (decision D9) |
 
 Public — these are emitted to every visitor, which is correct for all of them:
 
@@ -161,6 +172,11 @@ Public — these are emitted to every visitor, which is correct for all of them:
 `SUPABASE_ANON_KEY` by mistake — the two look alike and sit on the same page —
 and logs why. That refusal is covered by a test, but check the browser console
 after deploying anyway.
+
+Never set `APPLE_TEST_ROOT` or `APPLE_ALLOW_LOCAL` on the live site: they
+are for the tests. The first replaces Apple's root certificates, so no real
+purchase verifies; the second accepts purchases made in Xcode, which nobody
+signs. The server log says so when either is set.
 
 Leave unset unless you mean them: `STRIPE_ENTERPRISE` /
 `STRIPE_PRICE_ENTERPRISE` (Enterprise is not for sale), and `REDIRECT_TO`,
@@ -412,6 +428,90 @@ each customer's keychain.
 ＋ Email account with an `@outlook.com` address shows **Sign in with
 Microsoft** instead of a password box, and signing in links the mailbox
 (`docs/SMOKE.md`, the Outlook column).
+
+## 11. App Store subscriptions (the iPhone app)
+
+App Store guideline 3.1.1 forbids unlocking an iPhone app with a licence
+key, so the iPhone app sells Base and Pro itself, through Apple's In-App
+Purchase. Apple takes the money; mailrata.org turns a purchase into the same
+licence a Stripe subscription gets, whose subject is
+`apple:<original transaction id>` instead of an address. Buying needs no
+mailrata.org account, and Apple tells mailrata.org nothing personal. Three
+routes do it:
+
+- `POST /api/licence/apple`: the app sends the purchases StoreKit holds,
+  each signed by Apple, and gets a licence back. The site checks Apple's
+  signature with Apple's own library (`@apple/app-store-server-library`)
+  against Apple's root certificates in `lib/apple-roots`, offline: no call
+  to Apple per request.
+- `POST /api/apple/notifications`: Apple's App Store Server Notifications
+  V2, which keep the record current when a subscription renews, fails to
+  renew, expires or is refunded.
+- `/api/licence/renew` renews an `apple:` licence from that record.
+
+Desktop builds and the Stripe checkout do not change. The steps, in order:
+
+1. **Apple Developer Program**, enrolled as Account Holder, and in App
+   Store Connect → Business, the **Paid Apps agreement** accepted with its
+   banking and tax forms filled in. Until it is active, no product can be
+   bought, even in the sandbox.
+2. **App Store Small Business Program**: apply (developer.apple.com →
+   App Store Small Business Program), so Apple's commission is 15% rather
+   than 30% while proceeds stay under its limit.
+3. **The app record**: App Store Connect → Apps → New App, with the bundle
+   id you decide on (D9; the site assumes `org.mailrata.desktop`). Its
+   **Apple ID**, a number under App Information, is `APPLE_APP_ID`.
+4. **The subscriptions**: the app → Monetization → Subscriptions → one
+   subscription group named **RATA**, with two auto-renewable subscriptions,
+   each one month long:
+
+   | Product ID | Reference name | Level in the group |
+   |---|---|---|
+   | `org.mailrata.pro.monthly` | RATA Pro | 1 (highest) |
+   | `org.mailrata.base.monthly` | RATA Base | 2 |
+
+   The ids must be exactly these: `APPLE_PRODUCTS` in `lib/plan.js` names
+   them, and a product it does not name unlocks nothing. For each: a price,
+   a display name and description in every language you sell in (the plan
+   blurbs, which name no price, will do), and the review screenshot App
+   Review asks for (the purchase screen). Add no free trial. Introductory
+   offers and Family Sharing are your choice and need no code. Turn on
+   **Billing Grace Period** (on the same Subscriptions page): with the
+   notifications of step 5, RATA keeps renewing the licence until it ends.
+5. **Server notifications**: the app → App Information → App Store Server
+   Notifications. Version 2, the URL
+   `https://mailrata.org/api/apple/notifications`, for **both** Production
+   and Sandbox.
+6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
+   address that is not an Apple Account already.
+7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
+   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.desktop`
+   (§4).
+8. **The database**: run `database.sql` again (§1); section 7 adds
+   `apple_subscriptions`.
+9. **Redeploy** (§5).
+10. **The App Privacy answers** (the "nutrition label"): App Store Connect
+    → the app → App Privacy. For what this server does: *Purchases →
+    Purchase History* is collected, for *App Functionality*, not used for
+    tracking. It is keyed by Apple's transaction id, which only Apple can
+    tie to a person; answer *linked to the user* unless you are sure it is
+    not. The privacy policy (§5) already says what is kept, under
+    *Subscribing in the iPhone app*.
+11. **Test from TestFlight**, signed in to the App Store as the sandbox
+    tester: buy Base, upgrade to Pro, restore purchases on a second device,
+    and cancel. After each, Supabase → Table Editor →
+    `apple_subscriptions` shows the subscription's row with `environment`
+    Sandbox and the plan you expect; a cancelled one stays live until its
+    `expires_at`. Sandbox subscriptions renew every few minutes, so a
+    month passes quickly.
+
+**How to tell it worked:** `https://mailrata.org/api/apple/notifications`
+in a browser answers `"configured": true`; a TestFlight purchase writes
+its row within seconds; and the iPhone app opens its workspace after
+buying. The server log names the missing step otherwise: `APPLE_APP_ID is
+not set` (a real purchase before step 7), `run section 7 of
+rata-next/database.sql`, or a refused signature by Apple's library status
+name, never the purchase itself.
 
 ---
 

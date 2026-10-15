@@ -250,3 +250,51 @@ drop trigger if exists pending_subscriptions_touch on public.pending_subscriptio
 create trigger pending_subscriptions_touch
   before update on public.pending_subscriptions
   for each row execute function public.touch_updated_at();
+
+-- ------------------------------------------------------------
+-- 7. APPLE_SUBSCRIPTIONS — subscriptions bought in the iPhone
+--    app, through Apple's In-App Purchase.
+--
+--    The App Store's word on each one, keyed by Apple's original
+--    transaction id: what /api/licence/apple writes when the app
+--    sends the purchases StoreKit holds, what App Store Server
+--    Notifications (app/api/apple/notifications) keep up to date,
+--    and what /api/licence/renew reads to renew a licence whose
+--    subject is apple:<original_transaction_id>. Every write is
+--    ordered by signed_at, when Apple signed what it says, so a
+--    notification delivered late never undoes a later one.
+--
+--    Live means revoked_at is null and expires_at, or grace_until
+--    (Apple's billing grace period, when a renewal has failed), is
+--    still ahead.
+--
+--    It holds Apple's numbers, a product, a plan and dates: no
+--    name, no email address, no Apple ID. Apple tells RATA none of
+--    them. app_account_token and email stay empty: they are for
+--    linking a purchase to a mailrata.org account, which nothing
+--    does yet. A purchase belongs to no account, so deleting an
+--    account has nothing here to remove.
+--
+--    Only the server (service role) touches it; no policy lets a
+--    signed-in user read or write it.
+-- ------------------------------------------------------------
+create table if not exists public.apple_subscriptions (
+  original_transaction_id text primary key,
+  product_id text not null,                 -- APPLE_PRODUCTS in lib/plan.js
+  plan text not null,                       -- 'base' | 'pro'
+  environment text not null,                -- 'Production' | 'Sandbox'
+  expires_at timestamptz not null,
+  grace_until timestamptz,                  -- null unless Apple reported a grace period
+  revoked_at timestamptz,                   -- refunded or revoked; null when not
+  signed_at timestamptz not null,           -- when Apple signed what last wrote the row
+  app_account_token uuid,                   -- unused yet
+  email text,                               -- unused yet
+  updated_at timestamptz not null default now()
+);
+
+alter table public.apple_subscriptions enable row level security;
+
+drop trigger if exists apple_subscriptions_touch on public.apple_subscriptions;
+create trigger apple_subscriptions_touch
+  before update on public.apple_subscriptions
+  for each row execute function public.touch_updated_at();

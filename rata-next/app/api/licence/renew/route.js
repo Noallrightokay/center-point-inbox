@@ -3,6 +3,7 @@ import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
+import { APPLE_SAID, appleIdOf, appleRow, appleLive, tableMissing } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
 
@@ -90,6 +91,11 @@ async function renew(req) {
     return NextResponse.json({ error: 'The licence service is not configured.' }, { status: 500 });
   }
 
+  /* A licence from a purchase in the iPhone app names the purchase
+     (apple:<originalTransactionId>), not an address, and is renewed from
+     the App Store's record, never from Stripe's. */
+  if (email.startsWith('apple:')) return renewApple(sb, email);
+
   const { plan, pending } = await entitlementsForUser(sb, email);
   if (!plan && pending) {
     /* A purchase still being set up (settingUp in lib/plan.js): the checkout
@@ -140,6 +146,53 @@ async function renew(req) {
     plan,
     planLabel: def.label,
     email,
+    renewWithinDays: LICENCE_DAYS,
+    message: `Renewed for ${def.label}. Good for another ${LICENCE_DAYS} days offline.`,
+  });
+}
+
+/* Renewing a licence bought in the iPhone app (sub apple:<id>).
+
+   The iPhone app renews through /api/licence/apple first, with fresh
+   entitlements from StoreKit, and comes here only when StoreKit has
+   nothing; so this reads what the App Store's notifications last recorded.
+   Live is: not revoked, and not expired or inside a billing grace period
+   Apple reported (lib/apple.js, appleLive). Then it reissues exactly as a
+   live Stripe subscription does. The answers carry no `email`: an App
+   Store subject is not an address and is never shown as one. */
+async function renewApple(sb, sub) {
+  const id = appleIdOf(sub);
+  const held = id ? await appleRow(sb, id) : { row: null };
+  if (held.error) {
+    if (tableMissing(held.error)) {
+      console.warn('licence/renew: the database has no apple_subscriptions table; run section 7 of rata-next/database.sql');
+      return NextResponse.json({ licensed: false, reason: 'not-configured', message: APPLE_SAID.off }, { status: 503 });
+    }
+    console.warn('licence/renew: could not read an App Store subscription', held.error.code || held.error.message);
+    return NextResponse.json({ licensed: false, reason: 'unavailable', message: APPLE_SAID.renewBusy }, { status: 503 });
+  }
+  if (!appleLive(held.row)) {
+    return NextResponse.json({ licensed: false, reason: 'no-subscription', message: APPLE_SAID.nothingLive });
+  }
+
+  const plan = held.row.plan;
+  let renewed;
+  try {
+    renewed = issue({ email: sub, plan });
+  } catch (e) {
+    console.error(`licence/renew: no licence could be issued: ${e.message}`);
+    return NextResponse.json({
+      licensed: false,
+      reason: 'not-configured',
+      message: 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+    }, { status: 500 });
+  }
+  const def = planDef(plan);
+  return NextResponse.json({
+    licensed: true,
+    licence: renewed,
+    plan,
+    planLabel: def.label,
     renewWithinDays: LICENCE_DAYS,
     message: `Renewed for ${def.label}. Good for another ${LICENCE_DAYS} days offline.`,
   });

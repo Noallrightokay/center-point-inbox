@@ -280,6 +280,24 @@ export default async function run(state) {
       check(ledger.get(k) === start + 2000 && ledger.get(k) <= 2_000_000, `the month ends at what the one answered request cost: ${ledger.get(k)} µ$`);
     }
 
+    console.log('\n— a licence from the App Store —');
+    {
+      /* An iPhone purchase's licence names the purchase, apple:<original
+         transaction id>, not an address. The relay takes it like any other
+         and keeps its allowance under exactly that, lower-cased like an
+         address, so the cap holds per purchase. */
+      const sub = 'apple:2000000123456789';
+      const lic = issue({ email: sub, plan: 'pro' }, keys.privateKey);
+      db.calls.length = 0;
+      const r = await ai({ licence: lic, task: 'summarize', text: SECRET });
+      const held = db.calls.find(c => c.fn === 'ai_reserve');
+      check(r.status === 200 && /merger/.test(r.d.text) && held && held.body.p_email === sub && db.calls.every(c => c.body.p_email === sub),
+        `a Pro licence for ${sub} gets a summary, held and settled under ${held && held.body.p_email}`);
+      check(ledger.get(`${sub}|${month}`) === 2000, `and the month's usage is kept under it: ${ledger.get(`${sub}|${month}`)} µ$`);
+      const baseLic = issue({ email: 'apple:2000000123456790', plan: 'base' }, keys.privateKey);
+      check((await ai({ licence: baseLic, task: 'summarize', text: SECRET })).status === 403, 'and its plan decides what it may ask, as for any licence');
+    }
+
     console.log('\n— it keeps nothing —');
     const writes = db.calls.map((c) => JSON.stringify(c.body));
     check(writes.every((w) => !/merger|555-0100|Bonjour/.test(w)), `the database is only ever sent an address, a month and a number: ${writes[0]}`);

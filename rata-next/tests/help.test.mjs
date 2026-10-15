@@ -56,6 +56,9 @@ const SOURCES = [
   'desktop/rata-app/src-tauri/src/cloud.rs',
   'desktop/rata-app/src-tauri/src/created.rs',
   'rata-next/public/app.html',
+  /* What mailrata.org answers about an App Store purchase (APPLE_SAID),
+     which the iPhone app shows. */
+  'rata-next/lib/apple.js',
 ];
 
 const squash = s => s.replace(/\s+/g, ' ').trim();
@@ -192,6 +195,22 @@ export default async function run(state) {
     const notBrowser = part.slice(0, part.indexOf('id="browser"'));
     const early = notBrowser.match(/OneDrive|Google Drive|Share to Slack|\bSlack\b|SharePoint|Dropbox/g) || [];
     check(early.length === 0, `no connection a release cannot make is offered: ${early.join(', ') || 'none'}`);
+  }
+
+  console.log('\n— the iPhone app: what mailrata.org answers about an App Store purchase —');
+  {
+    /* Each sentence the iPhone app can be shown about its purchase is
+       quoted and explained, from lib/apple.js as it is now; and the part
+       quotes no price, which only the App Store may show. */
+    const { APPLE_SAID } = await import('../lib/apple.js');
+    const at = html.indexOf('<section id="iphone"');
+    const part = at < 0 ? '' : html.slice(at, html.indexOf('</section>', at));
+    const quoted = [...part.matchAll(/<blockquote class="said">([\s\S]*?)<\/blockquote>/g)].map(m => squash(entities(m[1])));
+    for (const key of ['nothingLive', 'unverified', 'busy', 'off']) {
+      check(quoted.includes(APPLE_SAID[key]), `#iphone quotes APPLE_SAID.${key}: "${APPLE_SAID[key]}"`);
+    }
+    check(html.includes('<a href="#iphone">') && /What it means/.test(part) && /Restore purchases/.test(part), 'it is in the contents, explained, and names Restore purchases');
+    check(!/\$\s?\d/.test(part) && /price the App Store shows/.test(part), 'no price but the App Store\'s own');
   }
 
   console.log('\n— install matches BETA.md §1, and reporting says what never to paste —');

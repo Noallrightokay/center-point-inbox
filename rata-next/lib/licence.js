@@ -78,7 +78,13 @@ function publicKeyFrom(pem) {
 }
 
 /* Issue a licence. Everything the app needs to decide what to unlock, and
-   nothing it does not: no name, no mailbox list, no card details. */
+   nothing it does not: no name, no mailbox list, no card details.
+
+   `email` is the licence's subject, `sub`: the address a Stripe subscription
+   is keyed on, or, for a subscription bought in the iPhone app,
+   `apple:<originalTransactionId>` (lib/apple.js, appleSub), which is not an
+   address and is never mailed or shown. The app needs only a subject that is
+   not empty; renewal and the AI relay read it back as it is written here. */
 export function issue({ email, plan, days = LICENCE_DAYS, now = Date.now() }, privatePem = process.env.LICENCE_PRIVATE_KEY) {
   const addr = String(email || '').trim().toLowerCase();
   if (!addr) throw new Error('a licence needs an address to be issued to');
