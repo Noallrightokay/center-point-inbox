@@ -43,6 +43,12 @@ const FLAGS_ADD: u32 = 0x2;
 /// resolver says `NO_SUCH_RECORD`. It also hands back each CNAME it follows
 /// on the way to the record asked for, which `reply` passes over.
 const FLAGS_RETURN_INTERMEDIATES: u32 = 0x1000;
+/// The answer came from the system's cache. A cached "no such record" is
+/// not the last word: the resolver can ask the network anyway, and a real
+/// answer then follows (Apple's own `dns-sd -q` on macOS showed the record
+/// 116 ms after a cached "No Such Record"). So it is believed only once
+/// `SETTLE` has passed with nothing fresher.
+const FLAGS_ANSWERED_FROM_CACHE: u32 = 0x4000_0000;
 const ANY_INTERFACE: u32 = 0;
 const CLASS_IN: u16 = 1;
 const NO_ERROR: i32 = 0;
@@ -147,9 +153,16 @@ struct Heard {
     more: Cell<bool>,
     /// The type asked for has been answered, or said not to exist.
     answered: Cell<bool>,
+    /// The cache said there is no such record, which a fresh answer may
+    /// still overturn (`FLAGS_ANSWERED_FROM_CACHE`).
+    cached_none: Cell<bool>,
     /// The error the resolver reported, other than "no such record".
     failed: Cell<Option<i32>>,
 }
+
+/// How long a cached "no such record" is given to be overturned by the
+/// network before it is believed.
+const SETTLE: Duration = Duration::from_secs(1);
 
 /// Called by `DNSServiceProcessResult`, once for each reply. It cannot
 /// panic, which across this boundary would end the app.
@@ -179,7 +192,11 @@ extern "C" fn reply(
         // The name, or this record at it, does not exist: that is an answer,
         // and an empty one.
         NO_SUCH_RECORD | NO_SUCH_NAME => {
-            heard.answered.set(true);
+            if flags & FLAGS_ANSWERED_FROM_CACHE == 0 {
+                heard.answered.set(true);
+            } else {
+                heard.cached_none.set(true);
+            }
             return;
         }
         _ => {
@@ -214,6 +231,7 @@ fn ask_now(name: &CString, rrtype: u16, by: Instant) -> (Vec<Vec<u8>>, Ended) {
         records: Cell::new(vec![]),
         more: Cell::new(false),
         answered: Cell::new(false),
+        cached_none: Cell::new(false),
         failed: Cell::new(None),
     };
     let context = ptr::from_ref(&heard).cast_mut().cast::<c_void>();
@@ -257,17 +275,23 @@ impl Drop for Question {
 
 impl Question {
     /// Read replies until the type asked for has been answered with nothing
-    /// queued behind, the resolver fails, or `by` comes.
+    /// queued behind, the resolver fails, or `by` comes. A cached "no such
+    /// record" ends it `SETTLE` later unless something fresher comes first.
     fn wait(&self, heard: &Heard, by: Instant) -> Ended {
         // SAFETY: the reference is live until `self` is dropped.
         let fd = unsafe { DNSServiceRefSockFD(self.0) };
         if fd < 0 {
             return Ended::Closed;
         }
+        let mut settled: Option<Instant> = None;
         loop {
-            let left = by.saturating_duration_since(Instant::now());
+            let until = settled.map_or(by, |s| s.min(by));
+            let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Ended::OutOfTime;
+                return match settled {
+                    Some(_) => Ended::Answered,
+                    None => Ended::OutOfTime,
+                };
             }
             let ms = c_int::try_from(left.as_millis().max(1)).unwrap_or(c_int::MAX);
             let mut ready = PollFd {
@@ -280,8 +304,9 @@ impl Question {
             if n < 0 && Error::last_os_error().kind() == ErrorKind::Interrupted {
                 continue;
             }
+            // Time is up: the next turn says how this ended.
             if n == 0 {
-                return Ended::OutOfTime;
+                continue;
             }
             // The connection failed, or closed with nothing left to read.
             if n < 0 || ready.revents & POLLIN == 0 {
@@ -297,6 +322,9 @@ impl Question {
             }
             if heard.answered.get() && !heard.more.get() {
                 return Ended::Answered;
+            }
+            if heard.cached_none.get() && settled.is_none() {
+                settled = Some(Instant::now() + SETTLE);
             }
         }
     }

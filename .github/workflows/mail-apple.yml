@@ -81,25 +81,12 @@ jobs:
       - name: Diagnostics (temporary)
         if: ${{ !cancelled() }}
         run: |
-          scutil --dns | sed -n 1,40p
-          python3 - <<'EOF'
-          import random, socket, time
-          nx = "nx-%d.gmail.com" % random.randint(10000, 99999)
-          for name in [nx, nx + ".", "nx-%d.invalid" % random.randint(10000, 99999), "imap.gmail.com", "imap.gmail.com."]:
-              for family, label in [(0, "any"), (socket.AF_INET, "v4"), (socket.AF_INET6, "v6")]:
-                  t = time.time()
-                  try:
-                      got = sorted({a[4][0] for a in socket.getaddrinfo(name, 0, family, socket.SOCK_STREAM)})
-                  except Exception as e:
-                      got = repr(e)
-                  print(f"getaddrinfo {name} {label}: {time.time() - t:.2f}s {got}")
-          EOF
-          dig microsoft.com TXT | grep -E "flags:|MSG SIZE|SERVER" || true
-          dig +tcp microsoft.com TXT | grep -E "flags:|MSG SIZE" || true
-          perl -e 'alarm 12; exec @ARGV' dns-sd -q microsoft.com TXT > q.txt 2>&1 || true
-          echo "dns-sd -q microsoft.com TXT: $(grep -c ' Add ' q.txt) added"; head -6 q.txt
-          perl -e 'alarm 12; exec @ARGV' dns-sd -q google._domainkey.anthropic.com TXT > d.txt 2>&1 || true
-          head -6 d.txt | cut -c1-160
+          cargo test --lib --features system-dns probe_getaddrinfo -- --ignored --nocapture 2>&1 | grep PROBE || true
+          nx="nx-$RANDOM.gmail.com"
+          perl -e 'alarm 12; exec @ARGV' dns-sd -G v4v6 "$nx" > g.txt 2>&1 || true
+          echo "dns-sd -G v4v6 $nx:"; head -8 g.txt
+          perl -e 'alarm 12; exec @ARGV' dns-sd -q "$nx" A > a.txt 2>&1 || true
+          echo "dns-sd -q $nx A:"; head -8 a.txt
 
       - name: Clippy, with the system's resolver
         if: ${{ !cancelled() }}

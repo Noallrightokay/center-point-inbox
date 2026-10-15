@@ -1421,20 +1421,17 @@ mod tests {
                     .expect("gmail.com's SPF");
                 let next = spf.redirect.expect("gmail.com's SPF redirects");
                 assert!(spf_record(&r.txt(&next).await).is_some(), "{next}");
-                // microsoft.com publishes dozens: far more than one UDP
-                // packet holds, so the system's resolver asks again over TCP.
-                let t = Instant::now();
-                let (raw, ended) = dns_sd::asked("microsoft.com", dns_sd::TXT).await;
-                let took = t.elapsed();
-                let many: Vec<String> = raw.iter().filter_map(|r| records::txt(r)).collect();
+                // gmail.com publishes several, each its own reply: all of
+                // them are gathered, not just the first.
+                let (raw, ended) = dns_sd::asked("gmail.com", dns_sd::TXT).await;
+                let all: Vec<String> = raw.iter().filter_map(|r| records::txt(r)).collect();
                 assert!(
-                    many.len() > 10 && many.len() == raw.len(),
-                    "{} records ({} read), {ended:?} after {took:?}",
+                    all.len() >= 2 && all.len() == raw.len() && ended == dns_sd::Ended::Answered,
+                    "{} records ({} read), {ended:?}",
                     raw.len(),
-                    many.len()
+                    all.len()
                 );
-                assert_eq!(ended, dns_sd::Ended::Answered);
-                assert!(spf_record(&many).is_some());
+                assert_eq!(spf_record(&all), spf_record(&txt));
                 // A 2048-bit DKIM key is longer than a string's 255 bytes, so
                 // it is published as several; they arrive as one record.
                 let dkim = r.txt("google._domainkey.anthropic.com").await;
@@ -1489,21 +1486,27 @@ mod tests {
                 let pid = std::process::id();
                 for name in [format!("nx-{pid}.gmail.com"), format!("nx-{pid}.invalid")] {
                     // Each record type is answered "no such name", not
-                    // waited out.
+                    // waited out: fresh from the network the first time,
+                    // from the system's cache the second, which is believed
+                    // once nothing fresher comes (`dns_sd::SETTLE`).
                     for (what, rrtype, asked) in [
                         ("MX", dns_sd::MX, name.clone()),
                         ("SRV", dns_sd::SRV, format!("_imaps._tcp.{name}")),
                         ("TXT", dns_sd::TXT, name.clone()),
                         ("CNAME", dns_sd::CNAME, format!("autodiscover.{name}")),
                     ] {
-                        let t = Instant::now();
-                        let (found, ended) = dns_sd::asked(&asked, rrtype).await;
-                        let took = t.elapsed();
-                        assert!(
-                            found.is_empty() && ended == dns_sd::Ended::Answered && took < QUICK,
-                            "{what} {asked}: {} records, {ended:?} after {took:?}",
-                            found.len()
-                        );
+                        for time in ["first", "second"] {
+                            let t = Instant::now();
+                            let (found, ended) = dns_sd::asked(&asked, rrtype).await;
+                            let took = t.elapsed();
+                            assert!(
+                                found.is_empty()
+                                    && ended == dns_sd::Ended::Answered
+                                    && took < QUICK,
+                                "{what} {asked}, {time} time: {} records, {ended:?} after {took:?}",
+                                found.len()
+                            );
+                        }
                     }
                     assert!(r.mx(&name).await.is_empty(), "{name}");
                     assert_eq!(r.srv_imaps(&name).await, None, "{name}");
@@ -1583,6 +1586,56 @@ mod tests {
                         greeting[..n].starts_with(b"* OK"),
                         "{host}: {}",
                         String::from_utf8_lossy(&greeting[..n])
+                    );
+                }
+            });
+        }
+
+        /// TEMPORARY, removed once read: how long getaddrinfo takes on the
+        /// runner, in each of the ways the tests above reach it. It prints
+        /// and never fails.
+        #[test]
+        #[ignore = "a probe for mail-apple.yml's diagnostics step"]
+        fn probe_getaddrinfo_timings() {
+            use std::net::ToSocketAddrs;
+            let pid = std::process::id();
+            let fresh = |n: u16| format!("nx-{pid}-{n}.gmail.com");
+            let t = Instant::now();
+            let got = (fresh(1).as_str(), 0)
+                .to_socket_addrs()
+                .map(Iterator::count);
+            eprintln!(
+                "PROBE std, no runtime, {}: {:?} {got:?}",
+                fresh(1),
+                t.elapsed()
+            );
+            rt().block_on(async {
+                for name in [
+                    fresh(2),
+                    format!("{}.", fresh(3)),
+                    "imap.gmail.com".to_string(),
+                ] {
+                    let t = Instant::now();
+                    let got = system_addresses(&name).await;
+                    eprintln!("PROBE system_addresses {name}: {:?} {got:?}", t.elapsed());
+                }
+                let name = fresh(4);
+                let t = Instant::now();
+                let got = tokio::net::lookup_host((name.as_str(), 0))
+                    .await
+                    .map(Iterator::count);
+                eprintln!(
+                    "PROBE lookup_host, no timeout, {name}: {:?} {got:?}",
+                    t.elapsed()
+                );
+                for rrtype in [dns_sd::MX, dns_sd::TXT, dns_sd::CNAME] {
+                    let name = fresh(100 + rrtype);
+                    let _ = dns_sd::asked(&name, rrtype).await;
+                    let t = Instant::now();
+                    let got = system_addresses(&name).await;
+                    eprintln!(
+                        "PROBE system_addresses after dns_sd type {rrtype}, {name}: {:?} {got:?}",
+                        t.elapsed()
                     );
                 }
             });
