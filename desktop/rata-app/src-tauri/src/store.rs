@@ -516,12 +516,14 @@ fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// folder whose share is offline, a file another program holds open) is
 /// opened where it is, as before: started empty here instead, the first
 /// save would make this computer's list, which is never replaced, and the
-/// roaming one would never move. A list already in `local` is never
-/// replaced, so one an older copy writes to the roaming folder later stays
-/// there. When the move fails the list is read where it was, as before, and
-/// moved next start. A roaming copy that could not be removed once the move
-/// was done is removed at a later start, if it is still exactly the list
-/// moved (`tidy_roaming`).
+/// roaming one would never move. Only a list that is surely not there is a
+/// first run ([`absent`]): Windows reports a share it cannot reach as "not
+/// found" too. A list already in `local` is never replaced, so one an
+/// older copy writes to the roaming folder later stays there. When the move
+/// fails the list is read where it was, as before, and moved next start. A
+/// roaming copy that could not be removed once the move was done is
+/// removed at a later start, if it is still exactly the list moved
+/// (`tidy_roaming`).
 pub fn moved(roaming: &Path, local: &Path) -> PathBuf {
     if roaming == local {
         return local.to_path_buf();
@@ -533,7 +535,7 @@ pub fn moved(roaming: &Path, local: &Path) -> PathBuf {
     let bytes = match fs::read(roaming) {
         Ok(bytes) => bytes,
         // Nothing to move: a first run.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return local.to_path_buf(),
+        Err(e) if absent(&e, roaming) => return local.to_path_buf(),
         Err(_) => return roaming.to_path_buf(),
     };
     if serde_json::from_slice::<Contents>(&bytes).is_err() {
@@ -566,12 +568,27 @@ fn fingerprint(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Whether `e`, from reading or removing the roaming list at `roaming`,
+/// says that list is not there. "Not found" alone does not: Windows gives
+/// it for a share it cannot reach (`ERROR_BAD_NETPATH`,
+/// `ERROR_BAD_NET_NAME`) and a drive that is not there
+/// (`ERROR_INVALID_DRIVE`), which is a redirected Roaming AppData whose
+/// server is offline, with the list on it. So only when the folder that
+/// holds RATA's own (Roaming AppData itself) answers too.
+fn absent(e: &io::Error, roaming: &Path) -> bool {
+    e.kind() == io::ErrorKind::NotFound
+        && roaming
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(Path::is_dir)
+}
+
 /// The roaming list, a save it left half done, and its folder once empty.
 /// Whether the list itself is gone.
 fn remove_roaming(roaming: &Path) -> bool {
     let gone = match fs::remove_file(roaming) {
         Ok(()) => true,
-        Err(e) => e.kind() == io::ErrorKind::NotFound,
+        Err(e) => absent(&e, roaming),
     };
     let _ = fs::remove_file(roaming.with_extension("json.tmp"));
     if let Some(dir) = roaming.parent() {
@@ -585,23 +602,21 @@ fn remove_roaming(roaming: &Path) -> bool {
 /// program had it open): removed now if it is still exactly the list that
 /// was moved, and then the note of it goes. One that has changed since was
 /// written there by an older copy of RATA afterwards and is left, as such a
-/// list always is; one that cannot be read now is tried again next start.
+/// list always is; one that cannot be read now, or whose share does not
+/// answer ([`absent`]), is tried again next start.
 fn tidy_roaming(roaming: &Path, local: &Path) {
     let mark = moved_mark(local);
     let Ok(moved) = fs::read_to_string(&mark) else {
         return;
     };
-    match fs::read(roaming) {
-        Ok(bytes) if fingerprint(&bytes) == moved.trim() => {
-            if remove_roaming(roaming) {
-                let _ = fs::remove_file(&mark);
-            }
-        }
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {}
-        // Gone, or not the list moved.
-        _ => {
-            let _ = fs::remove_file(&mark);
-        }
+    let gone = match fs::read(roaming) {
+        Ok(bytes) if fingerprint(&bytes) == moved.trim() => remove_roaming(roaming),
+        // Not the list moved.
+        Ok(_) => true,
+        Err(e) => absent(&e, roaming),
+    };
+    if gone {
+        let _ = fs::remove_file(&mark);
     }
 }
 
@@ -1294,6 +1309,62 @@ mod tests {
         assert_eq!(Store::open(&local).list().len(), 1);
     }
 
+    /// Windows says "not found" for a share it cannot reach as well as for
+    /// a file that is not there, so a redirected Roaming AppData whose
+    /// server is offline read as a first run: RATA started empty here, the
+    /// first save made this computer's list, the roaming one never moved,
+    /// and the next start's Windows pass deleted every mailbox's password.
+    /// Here Roaming AppData itself is out of reach (taken away, which reads
+    /// as "not found" on every system): the list is opened where it is, as
+    /// 0.1.51 opened it, nothing is made here, and it moves once the share
+    /// is back.
+    #[test]
+    fn a_roaming_list_on_a_share_that_does_not_answer_is_not_a_first_run() {
+        let dir = tmpdir();
+        let share = dir.join("Roaming");
+        let roaming = share.join("org.mailrata.desktop/mailboxes.json");
+        let local = dir.join("Local/org.mailrata.desktop/mailboxes.json");
+        {
+            let mut s = Store::open(&roaming);
+            s.put(mailbox("owner@example.com"));
+            s.set_licence(Some("v1.aaa.bbb".into()));
+            s.save().unwrap();
+        }
+        let offline = dir.join("offline");
+        fs::rename(&share, &offline).unwrap();
+        let e = fs::read(&roaming).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound, "as Windows says it");
+
+        assert_eq!(moved(&roaming, &local), roaming);
+        assert!(!local.exists(), "nothing made here");
+        assert!(!local.parent().unwrap().exists());
+        assert!(
+            !Store::open(&roaming).accounts(),
+            "and start forgets nothing by it"
+        );
+
+        // Back: it moves.
+        fs::rename(&offline, &share).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(!roaming.exists());
+        let s = Store::open(&local);
+        assert_eq!(s.list().len(), 1);
+        assert_eq!(s.licence(), Some("v1.aaa.bbb"));
+
+        // Where Roaming AppData answers, a list that is not there is a
+        // first run, as before.
+        let fresh = dir.join("Fresh");
+        fs::create_dir_all(fresh.join("Roaming")).unwrap();
+        let elsewhere = fresh.join("Local/org.mailrata.desktop/mailboxes.json");
+        assert_eq!(
+            moved(
+                &fresh.join("Roaming/org.mailrata.desktop/mailboxes.json"),
+                &elsewhere
+            ),
+            elsewhere
+        );
+    }
+
     /// The roaming copy goes once the list is here; when it could not be
     /// removed then, a later start removes it, but only while it is still
     /// exactly the list moved.
@@ -1328,6 +1399,13 @@ mod tests {
         assert!(mark.exists());
         fs::remove_dir(&roaming).unwrap();
         fs::rename(dir.join("aside"), &roaming).unwrap();
+        // On a share that does not answer (which Windows reports as "not
+        // found"): not taken for gone, and tried again next start.
+        let share = dir.join("Roaming");
+        fs::rename(&share, dir.join("offline")).unwrap();
+        assert_eq!(moved(&roaming, &local), local);
+        assert!(mark.exists(), "the note is kept");
+        fs::rename(dir.join("offline"), &share).unwrap();
         // Readable, and the list moved: it goes, with what it left.
         assert_eq!(moved(&roaming, &local), local);
         assert!(!roaming.exists(), "the roaming copy went");
