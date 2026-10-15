@@ -1,0 +1,108 @@
+name: Mail on Apple systems
+
+# The mail engine on Apple's systems, which nothing else tests before a
+# release: its tests on macOS, both as the macOS app has it (hickory) and as
+# an iOS build has it (the system's own resolver, src/dns_sd.rs), the
+# system's resolver against real DNS, and the engine built for iOS and the
+# iOS Simulator. Apple's iOS SDK is only on a Mac, so none of this can run on
+# the Linux runners; a public repository's macOS runners cost nothing.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/rata-mail/**"
+      - ".github/workflows/mail-apple.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop/rata-mail/**"
+      - ".github/workflows/mail-apple.yml"
+
+concurrency:
+  group: mail-apple-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The toolchain desktop-ci.yml pins; bump the two together.
+  RUST: "1.94.1"
+
+jobs:
+  mail:
+    name: Mail layer on macOS
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop/rata-mail
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          components: clippy
+
+      - name: Add the iOS targets
+        run: rustup target add --toolchain "$RUST" aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-mail
+
+      # Every step from here runs even when one before it failed, so that
+      # one run (and a macOS run takes a while) says everything that is
+      # wrong. The job still fails if any of them does.
+
+      # The macOS app's engine, hickory reading the system's DNS settings,
+      # exactly as before.
+      - name: Tests, with hickory as the macOS app has it
+        if: ${{ !cancelled() }}
+        run: cargo test --all-targets
+
+      # The same tests with names looked up as iOS looks them up: every one
+      # that resolves a real name (MX, SRV, the guard's addresses) goes
+      # through dns_sd and getaddrinfo instead.
+      - name: Tests, through the system's resolver as iOS has it
+        if: ${{ !cancelled() }}
+        run: cargo test --all-targets --features system-dns
+
+      # resolve.rs `through_the_system`: MX, SRV, TXT and CNAME records from
+      # real DNS, a name that does not exist (empty, and at once), discovery
+      # end to end, and a TLS greeting from an IMAP server at the addresses
+      # the system gave. Ignored everywhere else; they need an Apple system
+      # and the network.
+      - name: The system's resolver against real DNS
+        if: ${{ !cancelled() }}
+        run: cargo test --lib --features system-dns -- --ignored
+
+      - name: Clippy, with the system's resolver
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --features system-dns -- -D warnings
+
+      - name: Clippy for iOS
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --target aarch64-apple-ios -- -D warnings
+
+      # Nothing on iOS uses hickory, and its System Configuration reader is
+      # macOS-only; neither may come back into the iOS build by another way.
+      - name: No hickory in the iOS build
+        if: ${{ !cancelled() }}
+        run: |
+          for target in aarch64-apple-ios aarch64-apple-ios-sim; do
+            found=$(cargo tree --target "$target" -e normal --prefix none | grep -E '^(hickory|system-configuration|resolv-conf)' || true)
+            if [ -n "$found" ]; then
+              echo "::error::$target builds what iOS cannot use:"
+              echo "$found"
+              exit 1
+            fi
+          done
+          echo "Neither iOS target builds hickory or System Configuration."
+
+      - name: Build for iOS
+        if: ${{ !cancelled() }}
+        run: cargo build --target aarch64-apple-ios
+
+      - name: Build for the iOS Simulator
+        if: ${{ !cancelled() }}
+        run: cargo build --target aarch64-apple-ios-sim
