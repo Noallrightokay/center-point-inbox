@@ -1,0 +1,135 @@
+name: iOS
+
+# RATA for iOS is the desktop shell (desktop/rata-app/src-tauri) built as a
+# library without self-update (--no-default-features): the system starts it
+# through `mobile_entry_point` (lib.rs), and its store updates it. Apple's
+# systems are reached only here, on GitHub's Macs. Nothing for Apple can be
+# compiled on Linux: aws-lc-sys and objc2's helpers need Apple's SDK.
+#
+# Built in steps (the PR "RATA for iOS"). So far: the shell compiles for iOS,
+# the desktop shell still compiles for macOS, and a build without
+# self-update holds none of the updater.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      # The shell compiles the interface in (sync-ui.sh), so a change there
+      # can break this build without touching desktop/ at all.
+      - "rata-next/public/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "rata-next/public/**"
+      - ".github/workflows/ios.yml"
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The toolchain the desktop's CI pins; bump them together.
+  RUST: "1.94.1"
+
+jobs:
+  # A store's build or a phone's must not carry RATA's own updater: the
+  # store updates it, and an app that fetches new code of its own is
+  # refused there. The `self-update` feature leaves out the plugin, and
+  # build.rs the feed's addresses and key from the config compiled in. This
+  # proves it on the program itself, built for release as a store build
+  # would be, against a build with the feature, which must hold every sign
+  # the check looks for (harness/verify-release.sh --no-updater). Linux,
+  # because the program is the same code there and a Mac's time is dearer.
+  no-updater:
+    name: Without self-update, no updater
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # apt waits on a stalled download almost for ever, which once used up
+      # a whole job's time limit before any test ran (#110). Give up on a
+      # stalled fetch after 30 s and try again, three times. A slow mirror
+      # (about 100 KB/s on 2026-09-30) still takes minutes for the webview's
+      # 100 MB, so each install step has 15 minutes, not the job's whole time.
+      - name: Make apt retry a stalled download instead of hanging
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/80-rata-retries >/dev/null
+
+      - name: Install the system webview
+        timeout-minutes: 15
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+          # Release builds, unlike the desktop CI's debug ones.
+          key: release
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - name: Build without self-update
+        run: |
+          cargo build --release --no-default-features
+          cp target/release/rata-app "$RUNNER_TEMP/rata-app-without-self-update"
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Build with it, as the desktop installers are
+        run: cargo build --release
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: No updater in the build without self-update
+        run: |
+          bash desktop/rata-app/harness/verify-release.sh --no-updater \
+            "$RUNNER_TEMP/rata-app-without-self-update" \
+            desktop/rata-app/src-tauri/target/release/rata-app
+
+  # The shell compiled for iOS, as the library the app links, with clippy's
+  # warnings as errors: what only a computer has is cfg(desktop), and a
+  # phone's branches must compile and say nothing. Then the desktop shell
+  # for macOS, which otherwise is compiled only when a release is built.
+  ios:
+    name: Shell for iOS
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          targets: aarch64-apple-ios
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+          key: ios
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - name: Clippy for iOS, without self-update
+        run: cargo clippy --lib --target aarch64-apple-ios --no-default-features -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: The desktop shell still compiles for macOS
+        run: cargo check --all-targets
+        working-directory: desktop/rata-app/src-tauri

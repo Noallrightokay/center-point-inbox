@@ -18,6 +18,15 @@
 # from the release, so a partial run never reads as a pass.
 #   ./verify-release.sh --title v1.0.0   prints the window title that release
 #                                        must show, and nothing else.
+#   ./verify-release.sh --no-updater BIN [WITH]
+#                                        BIN, a program built without
+#                                        self-update (an app store's, a
+#                                        phone's), holds none of the
+#                                        updater; WITH, one built with it,
+#                                        holds every sign of it, so a sign
+#                                        that no longer means anything fails
+#                                        rather than passing for ever. Exit
+#                                        0 or 1; nothing is downloaded.
 set -u
 # The title a version's window carries, derived as release.yml's smoke
 # derives it: 0.x is a beta ("RATA 0.1.42 beta"), 1.x and on are not
@@ -27,6 +36,33 @@ title_for() {
   case "$v" in 0.*) echo "RATA $v beta" ;; *) echo "RATA $v" ;; esac
 }
 if [ "${1:-}" = "--title" ]; then title_for "${2:?give a version or tag}"; exit 0; fi
+# What only the updater puts in a program: the feed's address and a
+# setting of its config (both gone from a build without self-update by
+# build.rs), the plugin's own name and words, and RATA's sentence for a
+# feed it cannot reach (update.rs).
+UPDATER_SIGNS=(
+  'releases/download/updater/'
+  'requireSignedVersion'
+  'tauri-plugin-updater'
+  'Updater does not have any endpoints set'
+  'could not reach its update feed'
+)
+no_updater() {
+  local bin="$1" with="${2:-}" sign n w bad=0
+  [ -f "$bin" ] || { echo "no-updater: FAIL: no binary at $bin"; return 1; }
+  [ -z "$with" ] || [ -f "$with" ] || { echo "no-updater: FAIL: no binary at $with"; return 1; }
+  for sign in "${UPDATER_SIGNS[@]}"; do
+    n=$(grep -acF -- "$sign" "$bin")
+    if [ -n "$with" ]; then w=$(grep -acF -- "$sign" "$with"); else w="-"; fi
+    echo "\"$sign\": without=$n with=$w"
+    [ "$n" -eq 0 ] || bad=1
+    [ -z "$with" ] || [ "$w" -ge 1 ] || bad=1
+  done
+  if [ "$bad" -eq 0 ]; then echo "no-updater: pass"; return 0; fi
+  echo "no-updater: FAIL: the build without self-update holds the updater, or a sign above no longer marks it"
+  return 1
+}
+if [ "${1:-}" = "--no-updater" ]; then no_updater "${2:?give the program built without self-update}" "${3:-}"; exit $?; fi
 PUB="${PUB_PEM:?set PUB_PEM to the licence public key (PEM) the release was built with}"
 case "$PUB" in /*) ;; *) PUB="$PWD/$PUB" ;; esac
 [ -r "$PUB" ] || { echo "PUB_PEM: cannot read $PUB"; exit 1; }

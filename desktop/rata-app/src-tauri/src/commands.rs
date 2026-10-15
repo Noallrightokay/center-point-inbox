@@ -361,15 +361,16 @@ pub async fn save_attachment(
         .await
 }
 
-/// The Downloads folder. On Linux Tauri only finds it through the desktop's
-/// `user-dirs.dirs`, which not every system has — without it, every save
-/// failed there — so the conventional `~/Downloads` stands in.
+/// Where saves go (`core::save_folder`): the Downloads folder on a
+/// computer, the app's own Documents folder on iOS.
 fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
     let paths = handle.path();
-    paths
-        .download_dir()
-        .ok()
-        .or_else(|| paths.home_dir().ok().map(|h| h.join("Downloads")))
+    crate::core::save_folder(
+        cfg!(target_os = "ios"),
+        paths.document_dir().ok(),
+        paths.download_dir().ok(),
+        paths.home_dir().ok(),
+    )
 }
 
 /// An attachment's bytes, for the Format Bridge to convert or for the page to
@@ -486,9 +487,9 @@ pub fn save_file(
 /// one the customer confirmed — for the browser. Anything that is not http
 /// or https is refused here, whatever the page asked.
 #[tauri::command]
-pub fn open_link(url: String) -> Result<(), String> {
+pub fn open_link(handle: AppHandle, url: String) -> Result<(), String> {
     match crate::links::classify(&url) {
-        Some(crate::links::Link::Web(u)) => crate::links::open_in_browser(&u),
+        Some(crate::links::Link::Web(u)) => crate::links::open_web(&handle, &u),
         _ => Err("RATA only opens web addresses (http and https).".into()),
     }
 }
@@ -860,7 +861,7 @@ pub async fn open_created(app: App<'_>, id: String) -> Result<Reopened, FileRefu
 #[tauri::command]
 pub async fn created_list(app: App<'_>) -> Result<Vec<Listed>, FileRefusal> {
     let rata = app.inner().clone();
-    off_window(move || Ok(rata.created_list())).await
+    off_window(move || rata.created_listing()).await
 }
 
 /// A file RATA made, as it is on disk now, as base64 for Send with RATA.
