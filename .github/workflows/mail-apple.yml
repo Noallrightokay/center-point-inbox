@@ -74,19 +74,8 @@ jobs:
       # and the network.
       - name: The system's resolver against real DNS
         if: ${{ !cancelled() }}
+        # One at a time, so that each one's timing is its own.
         run: cargo test --lib --features system-dns -- --ignored --test-threads=1
-
-      # TEMPORARY, removed once read: how this runner's resolver answers
-      # what the step above asks.
-      - name: Diagnostics (temporary)
-        if: ${{ !cancelled() }}
-        run: |
-          cargo test --lib --features system-dns probe_getaddrinfo -- --ignored --nocapture 2>&1 | grep PROBE || true
-          nx="nx-$RANDOM.gmail.com"
-          perl -e 'alarm 12; exec @ARGV' dns-sd -G v4v6 "$nx" > g.txt 2>&1 || true
-          echo "dns-sd -G v4v6 $nx:"; head -8 g.txt
-          perl -e 'alarm 12; exec @ARGV' dns-sd -q "$nx" A > a.txt 2>&1 || true
-          echo "dns-sd -q $nx A:"; head -8 a.txt
 
       - name: Clippy, with the system's resolver
         if: ${{ !cancelled() }}

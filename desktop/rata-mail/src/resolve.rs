@@ -224,6 +224,10 @@ impl Resolver {
 
     /// Where a name is an alias for, if it is one: the first CNAME answer,
     /// which is the name's own record. A failed lookup is no alias.
+    ///
+    /// Not for a host RATA then connects to: on iOS, where both go to the
+    /// system's resolver, a CNAME question about a name that does not exist
+    /// holds up the address lookup of that name (`crate::dns_sd`).
     pub async fn cname(&self, name: &str) -> Option<String> {
         let target = self.cname_answer(name).await?;
         Some(target.trim_end_matches('.').to_string())
@@ -1508,10 +1512,14 @@ mod tests {
                             );
                         }
                     }
+                    // As discovery asks: the CNAME of the domain's
+                    // autodiscover name, never of a host it dials (see
+                    // `dns_sd`, on what a CNAME question does to one).
+                    let auto = format!("autodiscover.{name}");
                     assert!(r.mx(&name).await.is_empty(), "{name}");
                     assert_eq!(r.srv_imaps(&name).await, None, "{name}");
                     assert!(r.txt(&name).await.is_empty(), "{name}");
-                    assert_eq!(r.cname(&name).await, None, "{name}");
+                    assert_eq!(r.cname(&auto).await, None, "{auto}");
                     let t = Instant::now();
                     assert_eq!(check_host(&r, &name).await, HostVerdict::NotFound);
                     let took = t.elapsed();
@@ -1586,56 +1594,6 @@ mod tests {
                         greeting[..n].starts_with(b"* OK"),
                         "{host}: {}",
                         String::from_utf8_lossy(&greeting[..n])
-                    );
-                }
-            });
-        }
-
-        /// TEMPORARY, removed once read: how long getaddrinfo takes on the
-        /// runner, in each of the ways the tests above reach it. It prints
-        /// and never fails.
-        #[test]
-        #[ignore = "a probe for mail-apple.yml's diagnostics step"]
-        fn probe_getaddrinfo_timings() {
-            use std::net::ToSocketAddrs;
-            let pid = std::process::id();
-            let fresh = |n: u16| format!("nx-{pid}-{n}.gmail.com");
-            let t = Instant::now();
-            let got = (fresh(1).as_str(), 0)
-                .to_socket_addrs()
-                .map(Iterator::count);
-            eprintln!(
-                "PROBE std, no runtime, {}: {:?} {got:?}",
-                fresh(1),
-                t.elapsed()
-            );
-            rt().block_on(async {
-                for name in [
-                    fresh(2),
-                    format!("{}.", fresh(3)),
-                    "imap.gmail.com".to_string(),
-                ] {
-                    let t = Instant::now();
-                    let got = system_addresses(&name).await;
-                    eprintln!("PROBE system_addresses {name}: {:?} {got:?}", t.elapsed());
-                }
-                let name = fresh(4);
-                let t = Instant::now();
-                let got = tokio::net::lookup_host((name.as_str(), 0))
-                    .await
-                    .map(Iterator::count);
-                eprintln!(
-                    "PROBE lookup_host, no timeout, {name}: {:?} {got:?}",
-                    t.elapsed()
-                );
-                for rrtype in [dns_sd::MX, dns_sd::TXT, dns_sd::CNAME] {
-                    let name = fresh(100 + rrtype);
-                    let _ = dns_sd::asked(&name, rrtype).await;
-                    let t = Instant::now();
-                    let got = system_addresses(&name).await;
-                    eprintln!(
-                        "PROBE system_addresses after dns_sd type {rrtype}, {name}: {:?} {got:?}",
-                        t.elapsed()
                     );
                 }
             });

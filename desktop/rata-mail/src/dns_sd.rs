@@ -16,6 +16,13 @@
 //! another, nor the async runtime. The answers are each record's rdata, read
 //! by `crate::records`.
 //!
+//! One thing seen on macOS 15 that callers must keep clear of: after a CNAME
+//! question about a name that does not exist, getaddrinfo for that same name
+//! waits 10 s and more instead of answering at once (as it does after an MX
+//! or TXT question about it, in about 25 ms). Discovery asks CNAME only of
+//! `autodiscover.<domain>`, which RATA never connects to, so no host it
+//! dials is ever asked about this way.
+//!
 //! Built for iOS, and on a Mac with the `system-dns` feature for the tests
 //! that prove it (build.rs, `.github/workflows/mail-apple.yml`); everywhere
 //! else hickory answers, as before.
