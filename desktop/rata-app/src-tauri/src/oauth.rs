@@ -61,7 +61,12 @@ pub const WAIT: Duration = Duration::from_secs(5 * 60);
 /// sent to a server that will refuse it part way through.
 pub const EARLY: u64 = 120;
 
-const HEAD_MAX: usize = 8 * 1024;
+/// The most of a request the listener reads. Google's file chooser puts
+/// every file picked into the address before the code (`google`), about 47
+/// characters a file, so a few hundred files run far past the 8 KiB this
+/// once was (SEC-11 R21). One connection is read at a time, within
+/// `HEAD_WAIT`, so this stays bounded.
+const HEAD_MAX: usize = 64 * 1024;
 /// A browser sends its request line at once. Connections are answered one
 /// at a time, so a program that connects and says nothing holds up the real
 /// answer by this much (security review L1).
@@ -401,12 +406,74 @@ pub async fn wait_for_answer_from(
     cancel: &Notify,
     who: &str,
 ) -> Result<(String, HashMap<String, String>), Ended> {
+    wait_for_answer_on(Loopback::one(listener), attempt, cancel, who).await
+}
+
+/// Where the browser comes back to: a listener on `127.0.0.1`, and for a
+/// provider whose redirect says `localhost` (Slack, `slack`), one on `::1`
+/// at the same port beside it. A browser may try `localhost` over IPv6
+/// first, so RATA holds both, and no other program can be listening there
+/// for the answer (SEC-11 R2). Microsoft and Google send the browser to the
+/// literal `127.0.0.1` and need only the one.
+pub struct Loopback {
+    v4: TcpListener,
+    v6: Option<TcpListener>,
+}
+
+impl Loopback {
+    pub fn one(v4: TcpListener) -> Loopback {
+        Loopback { v4, v6: None }
+    }
+
+    pub fn two(v4: TcpListener, v6: TcpListener) -> Loopback {
+        Loopback { v4, v6: Some(v6) }
+    }
+
+    /// Whether the second listener is there.
+    #[cfg(test)]
+    pub fn both(&self) -> bool {
+        self.v6.is_some()
+    }
+
+    /// The next connection to either listener.
+    async fn accept(&self) -> std::io::Result<TcpStream> {
+        let got = match &self.v6 {
+            None => self.v4.accept().await,
+            Some(v6) => tokio::select! {
+                got = self.v4.accept() => got,
+                got = v6.accept() => got,
+            },
+        };
+        got.map(|(stream, _)| stream)
+    }
+}
+
+/// [`wait_for_code_from`], on every listener of `listeners`.
+pub async fn wait_for_code_on(
+    listeners: Loopback,
+    attempt: &Attempt,
+    cancel: &Notify,
+    who: &str,
+) -> Result<String, Ended> {
+    wait_for_answer_on(listeners, attempt, cancel, who)
+        .await
+        .map(|(code, _)| code)
+}
+
+/// [`wait_for_answer_from`], on every listener of `listeners`: the same
+/// cancel, deadline and one answer, whichever the browser reaches.
+pub async fn wait_for_answer_on(
+    listeners: Loopback,
+    attempt: &Attempt,
+    cancel: &Notify,
+    who: &str,
+) -> Result<(String, HashMap<String, String>), Ended> {
     loop {
         tokio::select! {
             _ = cancel.notified() => return Err(Ended::Cancelled),
             _ = tokio::time::sleep_until(attempt.deadline) => return Err(Ended::TimedOut),
-            got = listener.accept() => {
-                let Ok((stream, _)) = got else { continue };
+            got = listeners.accept() => {
+                let Ok(stream) = got else { continue };
                 match answer(stream, &attempt.state, who).await {
                     (Heard::Ours(Callback::Code(code)), fields) => return Ok((code, fields)),
                     (Heard::Ours(Callback::Denied), _) => return Err(Ended::Denied),
@@ -432,11 +499,20 @@ async fn answer(mut stream: TcpStream, state: &str, who: &str) -> (Heard, HashMa
         }
     })
     .await;
-    let line = String::from_utf8_lossy(&head);
-    let line = line.lines().next().unwrap_or("");
-    let mut parts = line.split(' ');
-    let (got, fields) = match (read, parts.next(), parts.next()) {
-        (Ok(()), Some("GET"), Some(target)) => heard_with(target, state, who),
+    // Only a request line whose CRLF arrived within the cap is read (SEC-11
+    // R21): a line cut short is never parsed as if it were whole.
+    let within = &head[..head.len().min(HEAD_MAX)];
+    let line_end = within.windows(2).position(|w| w == b"\r\n");
+    let too_long = read.is_ok() && line_end.is_none() && head.len() >= HEAD_MAX;
+    let (got, fields) = match (read, line_end) {
+        (Ok(()), Some(end)) => {
+            let line = String::from_utf8_lossy(&within[..end]);
+            let mut parts = line.split(' ');
+            match (parts.next(), parts.next()) {
+                (Some("GET"), Some(target)) => heard_with(target, state, who),
+                _ => (Heard::Stray, HashMap::new()),
+            }
+        }
         _ => (Heard::Stray, HashMap::new()),
     };
     let (status, words) = match &got {
@@ -454,10 +530,35 @@ async fn answer(mut stream: TcpStream, state: &str, who: &str) -> (Heard, HashMa
             "200 OK",
             format!("{who} could not sign you in. You can close this tab; RATA says why."),
         ),
+        // Its state cannot be checked, so it ends nothing: ending the wait
+        // on any such request would let another program stop a sign-in.
+        Heard::Stray if too_long => (
+            "414 URI Too Long",
+            if who == "Google" {
+                "Too many files were chosen at once. Close this tab, choose fewer in RATA, and try again.".into()
+            } else {
+                "That address was too long for RATA to read. You can close this tab.".into()
+            },
+        ),
         Heard::Stray => ("404 Not Found", "Nothing here.".into()),
     };
     let _ = stream.write_all(page(status, &words).as_bytes()).await;
     let _ = stream.shutdown().await;
+    if too_long {
+        // The rest of what the browser sent, read and dropped, so the page
+        // reaches it rather than a reset connection. Briefly, and no more
+        // than a little: one connection is answered at a time.
+        let _ = timeout(Duration::from_millis(500), async {
+            let mut more = 0usize;
+            while more < 16 * HEAD_MAX {
+                match stream.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => more += n,
+                }
+            }
+        })
+        .await;
+    }
     (got, fields)
 }
 
@@ -1236,6 +1337,84 @@ mod tests {
             // Nothing on the page is fetched from anywhere.
             assert!(!ours.contains("src=") && !ours.contains("href="), "{ours}");
             assert!(!ours.contains("the-code"), "{ours}");
+        });
+    }
+
+    /// One request to a listener at `port`, as a browser sends it, and the
+    /// page it got back.
+    async fn ask_at(port: u16, target: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut got = String::new();
+        s.read_to_string(&mut got).await.unwrap();
+        got
+    }
+
+    /// SEC-11 R21: Google's chooser puts the files picked before the code,
+    /// so choosing a couple of hundred makes a request line far past 8 KiB.
+    /// It is read whole, and Google keeps the first `PICKED_MAX`.
+    #[test]
+    fn a_chooser_answer_with_hundreds_of_files_is_read_whole() {
+        rt().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let mut a = Attempt::new(port).unwrap();
+            a.deadline = Instant::now() + Duration::from_secs(4);
+            // Docs ids are 44 characters; the commas are encoded.
+            let ids: Vec<String> = (0..200).map(|i| format!("1{i:0>43}")).collect();
+            let target = format!(
+                "/?picked_file_ids={}&code=the-code&scope=https://www.googleapis.com/auth/drive.file&state={}",
+                ids.join("%2C"),
+                a.state
+            );
+            assert!(target.len() > 9_000, "{}", target.len());
+            let browser = tokio::spawn(async move { ask_at(port, &target).await });
+            let got = wait_for_answer_from(listener, &a, &Notify::new(), "Google").await;
+            let page = browser.await.unwrap();
+            let (code, fields) = got.unwrap();
+            assert_eq!(code, "the-code");
+            assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+            let picked =
+                crate::google::picked_ids(fields.get("picked_file_ids").map(String::as_str));
+            assert_eq!(picked.len(), crate::google::PICKED_MAX);
+            assert_eq!(picked[0], ids[0]);
+        });
+    }
+
+    /// SEC-11 R21: a request line that does not end within the cap is never
+    /// read as if it were whole (the state cannot be checked on a line cut
+    /// short), gets a page saying what to do, and the wait goes on: ending
+    /// it on any such request would let another program stop a sign-in.
+    #[test]
+    fn a_request_line_past_the_cap_gets_a_page_and_the_wait_goes_on() {
+        rt().block_on(async {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let mut a = Attempt::new(port).unwrap();
+            a.deadline = Instant::now() + Duration::from_secs(6);
+            let state = a.state.clone();
+            let browser = tokio::spawn(async move {
+                // The state and a code come first, and the line goes on past
+                // the cap.
+                let long = format!(
+                    "/?state={state}&code=cut-short&picked_file_ids={}",
+                    "1".repeat(70 * 1024)
+                );
+                let first = ask_at(port, &long).await;
+                let then = ask_at(port, &format!("/?code=the-code&state={state}")).await;
+                (first, then)
+            });
+            let got = wait_for_answer_from(listener, &a, &Notify::new(), "Google").await;
+            let (first, then) = browser.await.unwrap();
+            assert_eq!(got.map(|(c, _)| c), Ok("the-code".into()));
+            assert!(first.starts_with("HTTP/1.1 414"), "{}", &first[..first.len().min(200)]);
+            assert!(
+                first.contains("Too many files were chosen at once. Close this tab, choose fewer in RATA, and try again."),
+                "{first}"
+            );
+            assert!(then.starts_with("HTTP/1.1 200"), "{then}");
         });
     }
 

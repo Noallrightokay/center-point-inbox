@@ -736,7 +736,7 @@ pub async fn cloud_save(
 /// workspace's people. A build without Slack's client id refuses, as
 /// before K3.
 #[tauri::command]
-pub async fn slack_targets(app: App<'_>) -> Result<Vec<crate::slack::Target>, Refusal> {
+pub async fn slack_targets(app: App<'_>) -> Result<crate::slack::Listing, Refusal> {
     app.slack_targets().await
 }
 

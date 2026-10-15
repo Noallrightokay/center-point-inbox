@@ -18,13 +18,27 @@
 # setup (main.rs), and a setup that fails ends the process, so a process
 # alive after UP seconds has built its window. The log is kept and failed on
 # a panic.
+#
+# Then each one is launched a second time while the first is up: it must
+# find the first (main.rs, review R5) and exit 0 within AGAIN seconds, and
+# the first must stay up. On Linux single instance hands over through a
+# name on the D-Bus session bus, which every desktop has and a runner does
+# not, so the Linux half runs inside a session bus of its own
+# (dbus-run-session, apt package dbus). On macOS the list's lock stops it,
+# after waiting three seconds for the first to let go.
 set -u
+
+if [ "$(uname -s)" = Linux ] && [ -z "${RATA_SMOKE_BUS:-}" ]; then
+  command -v dbus-run-session >/dev/null || { printf '::error::%s\n' "dbus-run-session is not installed (apt package dbus)."; exit 1; }
+  RATA_SMOKE_BUS=1 exec dbus-run-session -- bash "$0" "$@"
+fi
 
 VERSION="${VERSION:?set VERSION to the version being released, as in tauri.conf.json}"
 EXPECT="${EXPECT_TITLE:?set EXPECT_TITLE to the window title the build must show}"
 BUNDLE="${BUNDLE:-src-tauri/target}"
 UP="${UP:-15}"          # seconds the process must stay alive
 WAIT="${WAIT:-20}"      # seconds to wait for the window to appear
+AGAIN="${AGAIN:-15}"    # seconds a second launch has to hand over and exit
 WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rata-smoke.XXXXXX")"
 FAILED=0
 
@@ -54,11 +68,35 @@ clean_log() {
   fi
 }
 
+# One RATA at a time: with $2 (the first launch's pid) up, run "$4…" (a
+# second launch of the same installation) with its output in $3. It must
+# exit 0 within AGAIN seconds, having found the first, which must still be
+# up afterwards. A second copy still running is two RATAs on one list.
+again() {
+  local what="$1" first="$2" log="$3" start=$SECONDS second code
+  shift 3
+  "$@" >"$log" 2>&1 &
+  second=$!
+  while kill -0 "$second" 2>/dev/null && [ $((SECONDS - start)) -lt "$AGAIN" ]; do sleep 1; done
+  if kill -0 "$second" 2>/dev/null; then
+    fail "$what, launched again, was still running ${AGAIN} s later beside the first: nothing stopped it."
+    kill "$second" 2>/dev/null; sleep 1; kill -9 "$second" 2>/dev/null; wait "$second" 2>/dev/null
+  else
+    wait "$second"; code=$?
+    if [ "$code" -ne 0 ]; then fail "$what, launched again, exited $code, not 0."
+    else say "$what, launched again, found the first and exited 0 within $((SECONDS - start)) s."; fi
+  fi
+  kill -0 "$first" 2>/dev/null || fail "$what exited when it was launched again."
+  clean_log "$what, launched again" "$log"
+}
+
 # ---------------------------------------------------------------- Linux
 
 # Wait for a window titled exactly $EXPECT from process $1, keep it running
 # until it has been up UP seconds, and report. xdotool reads _NET_WM_NAME
 # through Xlib, so this is the same title a tester reads off the title bar.
+# With $4, the name of a function that launches the same installation again,
+# a second launch is then checked (`again`) while the first is still up.
 linux_watch() {
   local what="$1" pid="$2" log="$3" start=$SECONDS title="" wid="" ids w n h geo
   while [ $((SECONDS - start)) -lt "$WAIT" ]; do
@@ -86,6 +124,7 @@ linux_watch() {
     say "$what's window size: ${geo:-unknown}"
     case "$geo" in *HEIGHT=*) h=${geo##*HEIGHT=}; h=${h%% *}; [ "$h" -le 768 ] || fail "$what's window is ${h} px tall on a 768 px screen: fit_to_screen did not shrink it." ;; esac
   fi
+  if [ -n "${4:-}" ] && kill -0 "$pid" 2>/dev/null; then again "$what" "$pid" "${log%.log}-again.log" "$4"; fi
   kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   clean_log "$what" "$log"
 }
@@ -101,6 +140,11 @@ linux() {
     export XDG_RUNTIME_DIR="$WORK/run-$1"; mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
     unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME
   }
+  # Each installation launched again by the same person, for `again`. The
+  # AppImage's second runtime reuses the first's extracted folder and would
+  # delete it on exit, under the first; NO_CLEANUP keeps it.
+  deb_again() { fresh_home deb; DISPLAY=:99 exec /usr/bin/rata-app; }
+  appimage_again() { fresh_home appimage; cd "$WORK" && NO_CLEANUP=1 APPIMAGE_EXTRACT_AND_RUN=1 DISPLAY=:99 exec ./RATA.AppImage; }
 
   Xvfb :99 -screen 0 1366x768x24 -nolisten tcp >"$WORK/xvfb.log" 2>&1 &
   local xvfb=$!
@@ -116,7 +160,7 @@ linux() {
       else
         say "$(dpkg -s rata 2>/dev/null | grep -E '^(Package|Version):' | tr '\n' ' ')installed as $(dpkg -S /usr/bin/rata-app)"
         ( fresh_home deb; DISPLAY=:99 exec /usr/bin/rata-app >"$WORK/deb.log" 2>&1 ) &
-        linux_watch "The installed .deb" $! "$WORK/deb.log"
+        linux_watch "The installed .deb" $! "$WORK/deb.log" deb_again
       fi
     else
       fail "apt could not install $deb."
@@ -127,7 +171,7 @@ linux() {
     img="$FOUND"
     cp "$img" "$WORK/RATA.AppImage"; chmod +x "$WORK/RATA.AppImage"
     ( fresh_home appimage; cd "$WORK" && APPIMAGE_EXTRACT_AND_RUN=1 DISPLAY=:99 exec ./RATA.AppImage >"$WORK/appimage.log" 2>&1 ) &
-    linux_watch "The AppImage" $! "$WORK/appimage.log"
+    linux_watch "The AppImage" $! "$WORK/appimage.log" appimage_again
   fi
 
   kill "$xvfb" 2>/dev/null
@@ -196,6 +240,9 @@ mac() {
     else
       say "::warning::The window title could not be read on this runner ($(head -c 300 "$WORK/osascript.out")). Checked instead: RATA.app stayed up ${UP} s, which it does only once its window is built, and its log is clean."
     fi
+    # On macOS the guard is the list's lock (store::hold), not single
+    # instance's socket in /tmp, which every account on the Mac shares.
+    again "RATA.app" "$pid" "$WORK/mac-again.log" "$exe"
   fi
   kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   clean_log "RATA.app" "$WORK/mac.log"

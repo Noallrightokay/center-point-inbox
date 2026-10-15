@@ -674,17 +674,31 @@
          refused with kind 'needs-confirmation' unless `confirmed`, which
          the page sends only after its own question (askDisguised), as
          save_attachment.
-       slack_targets() -> [{ id, name, kind: 'channel'|'person' }]
+       slack_targets() -> { targets: [{ id, name, kind: 'channel'|'person',
+         me, handle?, real_name?, standing?, shared? }], truncated }
+         A name is whatever its owner chose, so what tells two alike apart
+         comes beside it (SEC-11 R7): `me` is the person signed in (listed
+         first); `handle` a person's Slack handle, theirs alone in the
+         workspace; `real_name` their full name when it is not `name`;
+         `standing` 'guest' | 'single-channel guest' | 'invited' for a
+         person who is not a full member; `shared` 'external' for a channel
+         shared with another organization (listed after the others) or
+         'org' for one shared across the customer's own. `truncated`: Slack
+         has more channels or people than were listed (SEC-11 R17).
        slack_share({ target, text, files: [{ name, data }] }) -> { where }
+         With files, the text goes as a message of its own and the files
+         after it (SEC-11 R12). Files that fail once the text has gone are
+         refused with kind 'partial', whose `error` says the message was
+         posted and the files were not.
 
        Every refusal is a rejected { service, kind, error }; kind is one of
        unknown, unavailable, unlicensed, plan, not-found, not-connected,
-       gone, refused, offline, too-large, needs-confirmation, disk, unsure.
-       The page shows `error` and acts on `kind` only for
-       needs-confirmation and unsure: a cloud_save whose last part went and
-       whose answer was lost (OneDrive, Google Drive), so the file may be
-       there; the page says so without "Could not save" and reads the
-       folder on show again.
+       gone, refused, offline, too-large, needs-confirmation, disk, partial,
+       unsure. The page shows `error` and acts on `kind` only for
+       needs-confirmation, partial (above) and unsure: a cloud_save whose
+       last part went and whose answer was lost (OneDrive, Google Drive), so
+       the file may be there; the page says so without "Could not save" and
+       reads the folder on show again.
        Everything that comes back (names, accounts, notes, paths, `where`,
        `error`) is the provider's or a stranger's text: the page draws it
        with textContent only. */
@@ -780,8 +794,19 @@
     async '/api/slack/targets'() {
       try {
         const r = await invoke('slack_targets');
-        return { ok: true, targets: (Array.isArray(r) ? r : []).filter((x) => x && typeof x === 'object' && x.id != null)
-          .map((x) => ({ id: String(x.id), name: String(x.name || ''), kind: x.kind === 'person' ? 'person' : 'channel' })) };
+        /* { targets, truncated }; a bare list (the demo's backend) reads too. */
+        const list = Array.isArray(r) ? r : (r && Array.isArray(r.targets) ? r.targets : []);
+        return {
+          ok: true,
+          truncated: !Array.isArray(r) && !!r && r.truncated === true,
+          targets: list.filter((x) => x && typeof x === 'object' && x.id != null).map((x) => ({
+            id: String(x.id), name: String(x.name || ''), kind: x.kind === 'person' ? 'person' : 'channel', me: x.me === true,
+            ...(x.handle ? { handle: String(x.handle) } : {}),
+            ...(x.real_name ? { realName: String(x.real_name) } : {}),
+            ...(['guest', 'single-channel guest', 'invited'].includes(x.standing) ? { standing: x.standing } : {}),
+            ...(['external', 'org'].includes(x.shared) ? { shared: x.shared } : {}),
+          })),
+        };
       } catch (e) {
         return { ok: false, error: e && e.error ? String(e.error) : String(e) };
       }
@@ -798,7 +823,7 @@
         });
         return { ok: true, where: String((r && r.where) || '') };
       } catch (e) {
-        return { ok: false, error: e && e.error ? String(e.error) : String(e) };
+        return { ok: false, error: e && e.error ? String(e.error) : String(e), kind: e && e.kind === 'partial' ? 'partial' : undefined };
       }
     },
 
