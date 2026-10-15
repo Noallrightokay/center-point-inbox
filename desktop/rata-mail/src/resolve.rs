@@ -1423,8 +1423,17 @@ mod tests {
                 assert!(spf_record(&r.txt(&next).await).is_some(), "{next}");
                 // microsoft.com publishes dozens: far more than one UDP
                 // packet holds, so the system's resolver asks again over TCP.
-                let many = r.txt("microsoft.com").await;
-                assert!(many.len() > 10, "{}", many.len());
+                let t = Instant::now();
+                let (raw, ended) = dns_sd::asked("microsoft.com", dns_sd::TXT).await;
+                let took = t.elapsed();
+                let many: Vec<String> = raw.iter().filter_map(|r| records::txt(r)).collect();
+                assert!(
+                    many.len() > 10 && many.len() == raw.len(),
+                    "{} records ({} read), {ended:?} after {took:?}",
+                    raw.len(),
+                    many.len()
+                );
+                assert_eq!(ended, dns_sd::Ended::Answered);
                 assert!(spf_record(&many).is_some());
                 // A 2048-bit DKIM key is longer than a string's 255 bytes, so
                 // it is published as several; they arrive as one record.
@@ -1479,25 +1488,31 @@ mod tests {
                 let r = system();
                 let pid = std::process::id();
                 for name in [format!("nx-{pid}.gmail.com"), format!("nx-{pid}.invalid")] {
-                    let quick = |what: &str, started: Instant| {
-                        let took = started.elapsed();
-                        assert!(took < QUICK, "{what} {name}: {took:?}");
-                    };
-                    let t = Instant::now();
+                    // Each record type is answered "no such name", not
+                    // waited out.
+                    for (what, rrtype, asked) in [
+                        ("MX", dns_sd::MX, name.clone()),
+                        ("SRV", dns_sd::SRV, format!("_imaps._tcp.{name}")),
+                        ("TXT", dns_sd::TXT, name.clone()),
+                        ("CNAME", dns_sd::CNAME, format!("autodiscover.{name}")),
+                    ] {
+                        let t = Instant::now();
+                        let (found, ended) = dns_sd::asked(&asked, rrtype).await;
+                        let took = t.elapsed();
+                        assert!(
+                            found.is_empty() && ended == dns_sd::Ended::Answered && took < QUICK,
+                            "{what} {asked}: {} records, {ended:?} after {took:?}",
+                            found.len()
+                        );
+                    }
                     assert!(r.mx(&name).await.is_empty(), "{name}");
-                    quick("MX", t);
-                    let t = Instant::now();
                     assert_eq!(r.srv_imaps(&name).await, None, "{name}");
-                    quick("SRV", t);
-                    let t = Instant::now();
                     assert!(r.txt(&name).await.is_empty(), "{name}");
-                    quick("TXT", t);
-                    let t = Instant::now();
                     assert_eq!(r.cname(&name).await, None, "{name}");
-                    quick("CNAME", t);
                     let t = Instant::now();
                     assert_eq!(check_host(&r, &name).await, HostVerdict::NotFound);
-                    quick("addresses of", t);
+                    let took = t.elapsed();
+                    assert!(took < QUICK, "addresses of {name}: {took:?}");
                 }
             });
         }

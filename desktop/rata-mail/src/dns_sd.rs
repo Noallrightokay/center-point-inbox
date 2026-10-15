@@ -99,8 +99,31 @@ unsafe extern "C" {
 /// resolver fails, and when no answer has come within `SYSTEM_WAIT`, which
 /// is how hickory's failed lookups are treated on the desktop.
 pub(crate) async fn ask(name: &str, rrtype: u16) -> Vec<Vec<u8>> {
+    asked(name, rrtype).await.0
+}
+
+/// How a question ended. Only the tests read it, to tell an answer from a
+/// question that was waited out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum Ended {
+    /// The type asked for was answered, or said not to exist, with nothing
+    /// more queued behind.
+    Answered,
+    /// The system's resolver failed, with dns_sd's error code.
+    Failed(i32),
+    /// The connection to the system's resolver closed or failed.
+    Closed,
+    /// No answer by the deadline.
+    OutOfTime,
+    /// The name cannot be asked at all.
+    NotAsked,
+}
+
+/// [`ask`], and how the question ended.
+pub(crate) async fn asked(name: &str, rrtype: u16) -> (Vec<Vec<u8>>, Ended) {
     let Some(name) = question(name).and_then(|n| CString::new(n).ok()) else {
-        return vec![];
+        return (vec![], Ended::NotAsked);
     };
     let by = Instant::now() + SYSTEM_WAIT;
     let asking = tokio::task::spawn_blocking(move || ask_now(&name, rrtype, by));
@@ -109,8 +132,8 @@ pub(crate) async fn ask(name: &str, rrtype: u16) -> Vec<Vec<u8>> {
     // blocking task frees its question whenever that returns.
     let grace = tokio::time::Instant::from_std(by) + Duration::from_millis(250);
     match tokio::time::timeout_at(grace, asking).await {
-        Ok(Ok(records)) => records,
-        _ => vec![],
+        Ok(Ok(found)) => found,
+        _ => (vec![], Ended::OutOfTime),
     }
 }
 
@@ -124,8 +147,8 @@ struct Heard {
     more: Cell<bool>,
     /// The type asked for has been answered, or said not to exist.
     answered: Cell<bool>,
-    /// The resolver reported an error other than "no such record".
-    failed: Cell<bool>,
+    /// The error the resolver reported, other than "no such record".
+    failed: Cell<Option<i32>>,
 }
 
 /// Called by `DNSServiceProcessResult`, once for each reply. It cannot
@@ -160,7 +183,7 @@ extern "C" fn reply(
             return;
         }
         _ => {
-            heard.failed.set(true);
+            heard.failed.set(Some(error));
             return;
         }
     }
@@ -185,13 +208,13 @@ extern "C" fn reply(
 
 /// Ask, and gather the answers until there are no more or `by` comes. This
 /// blocks, so it runs on tokio's blocking threads.
-fn ask_now(name: &CString, rrtype: u16, by: Instant) -> Vec<Vec<u8>> {
+fn ask_now(name: &CString, rrtype: u16, by: Instant) -> (Vec<Vec<u8>>, Ended) {
     let heard = Heard {
         want: rrtype,
         records: Cell::new(vec![]),
         more: Cell::new(false),
         answered: Cell::new(false),
-        failed: Cell::new(false),
+        failed: Cell::new(None),
     };
     let context = ptr::from_ref(&heard).cast_mut().cast::<c_void>();
     let mut sd: ServiceRef = ptr::null_mut();
@@ -209,13 +232,16 @@ fn ask_now(name: &CString, rrtype: u16, by: Instant) -> Vec<Vec<u8>> {
             context,
         )
     };
-    if started != NO_ERROR || sd.is_null() {
-        return vec![];
+    if started != NO_ERROR {
+        return (vec![], Ended::Failed(started));
     }
-    let asked = Question(sd);
-    asked.wait(&heard, by);
-    drop(asked);
-    heard.records.take()
+    if sd.is_null() {
+        return (vec![], Ended::Closed);
+    }
+    let asking = Question(sd);
+    let ended = asking.wait(&heard, by);
+    drop(asking);
+    (heard.records.take(), ended)
 }
 
 /// One question in flight. Dropping it frees it, which also closes its
@@ -232,16 +258,16 @@ impl Drop for Question {
 impl Question {
     /// Read replies until the type asked for has been answered with nothing
     /// queued behind, the resolver fails, or `by` comes.
-    fn wait(&self, heard: &Heard, by: Instant) {
+    fn wait(&self, heard: &Heard, by: Instant) -> Ended {
         // SAFETY: the reference is live until `self` is dropped.
         let fd = unsafe { DNSServiceRefSockFD(self.0) };
         if fd < 0 {
-            return;
+            return Ended::Closed;
         }
         loop {
             let left = by.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return;
+                return Ended::OutOfTime;
             }
             let ms = c_int::try_from(left.as_millis().max(1)).unwrap_or(c_int::MAX);
             let mut ready = PollFd {
@@ -254,17 +280,23 @@ impl Question {
             if n < 0 && Error::last_os_error().kind() == ErrorKind::Interrupted {
                 continue;
             }
-            // Out of time, or the connection failed or closed with nothing
-            // left to read.
-            if n <= 0 || ready.revents & POLLIN == 0 {
-                return;
+            if n == 0 {
+                return Ended::OutOfTime;
+            }
+            // The connection failed, or closed with nothing left to read.
+            if n < 0 || ready.revents & POLLIN == 0 {
+                return Ended::Closed;
             }
             // SAFETY: the reference is live, and its socket has a reply.
-            if unsafe { DNSServiceProcessResult(self.0) } != NO_ERROR {
-                return;
+            let processed = unsafe { DNSServiceProcessResult(self.0) };
+            if processed != NO_ERROR {
+                return Ended::Failed(processed);
             }
-            if heard.failed.get() || (heard.answered.get() && !heard.more.get()) {
-                return;
+            if let Some(error) = heard.failed.get() {
+                return Ended::Failed(error);
+            }
+            if heard.answered.get() && !heard.more.get() {
+                return Ended::Answered;
             }
         }
     }
