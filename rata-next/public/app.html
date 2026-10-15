@@ -99,8 +99,12 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .vh{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
 
 /* ---------- shell ---------- */
-#app{display:flex;height:100%;overflow:hidden}
-#rail{width:232px;flex-shrink:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-right:1px solid var(--hair-2);display:flex;flex-direction:column;padding:22px 14px 16px;overflow-y:auto}
+/* A phone's own edges (viewport-fit=cover): the status bar or the camera at
+   the top, the notch and the rounded corners at the sides in landscape. The
+   rail and the top bar reach under the status bar and keep what is in them
+   below it; nothing sits under the notch. Every inset is 0 on a computer. */
+#app{display:flex;height:100%;overflow:hidden;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+#rail{width:232px;flex-shrink:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-right:1px solid var(--hair-2);display:flex;flex-direction:column;padding:calc(22px + env(safe-area-inset-top,0px)) 14px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto}
 .brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
 .brand-mark{width:38px;height:38px;flex-shrink:0;display:grid;place-items:center}
 .brand-name{font-family:'Fredoka',var(--sans);font-weight:600;font-size:20px;letter-spacing:.04em;line-height:1.1}
@@ -121,7 +125,7 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 #compose-btn:hover{background:var(--tint-btn-hover)}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.topbar{height:56px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 24px;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
+.topbar{height:calc(56px + env(safe-area-inset-top,0px));flex-shrink:0;display:flex;align-items:center;gap:14px;padding:env(safe-area-inset-top,0px) 24px 0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
 .topbar h1{font-size:20px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
 .topbar .eyebrow{font-size:11px;color:var(--faint);display:block;font-weight:500}
 .top-search{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);box-shadow:var(--edge);border-radius:var(--r-sm);padding:7px 12px;width:min(320px,30vw);color:var(--faint);transition:background .15s}
@@ -484,7 +488,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .srv-all{margin-top:6px}
 
 /* ---------- compose ---------- */
-#compose-ov{position:fixed;inset:0;background:rgba(14,16,20,.38);display:none;z-index:50}
+#compose-ov{position:fixed;inset:0;background:rgba(14,16,20,.38);display:none;z-index:50;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
 #compose-ov.open{display:flex;align-items:flex-end;justify-content:center}
 #compose{width:min(680px,100%);max-height:92vh;background:var(--card);border-radius:var(--r) var(--r) 0 0;display:flex;flex-direction:column;animation:up .16s ease-out;box-shadow:var(--shadow-lg)}
 @keyframes up{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
@@ -591,7 +595,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .src-meta{font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
 /* ---------- account menu ---------- */
 #acct-btn{width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:13px;display:grid;place-items:center;margin-left:12px;flex-shrink:0;box-shadow:var(--edge)}
-#acct-menu{position:absolute;top:56px;right:18px;width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
+#acct-menu{position:absolute;top:calc(56px + env(safe-area-inset-top,0px));right:calc(18px + env(safe-area-inset-right,0px));width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
 #acct-menu.open{display:block;animation:pop .16s ease-out}
 /* Menus and dialog cards fade and rise 4 px in 160 ms (DESIGN.md, Motion):
    no scale, no overshoot. Five rules use it (the account menu and the link,
@@ -624,7 +628,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
    list, outlined as focus is (DESIGN.md), and only once a key has moved it. */
 #keys-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:62;align-items:center;justify-content:center;padding:20px}
 #keys-ov.open{display:flex}
-#keys-card{width:min(660px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#keys-card{width:min(660px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 .keys-head{display:flex;align-items:center;margin-bottom:12px}
 .keys-head h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
 .keys-head .cmp-close{margin-left:auto}
@@ -668,7 +672,7 @@ button.cv-row:hover{background:var(--fill-2)}
 /* Share to Slack (K1): a dialog like the link question, a little wider. */
 #slack-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
 #slack-ov.open{display:flex}
-#slack-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#slack-card{width:min(540px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 #slack-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
 #slack-card legend,#slack-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
 #slack-card fieldset legend{margin-top:0}
@@ -686,7 +690,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .slack-err:empty{display:none}
 #create-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
 #create-ov.open{display:flex}
-#create-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#create-card{width:min(540px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 #create-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
 #create-card legend,#create-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
 #create-card fieldset legend{margin-top:0}
@@ -757,6 +761,19 @@ button.cv-row:hover{background:var(--fill-2)}
 .saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
 .saveto-menu button:hover{background:var(--fill-2)}
 @media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu{animation:none}}
+/* A question asked in the page (ask, askText), never through the browser's
+   own confirm() or prompt(), which the webview on Apple's systems answers
+   with Cancel and with nothing. Above the Undo toast, so nothing under a
+   question can change while it waits. */
+#ask-ov,#asktext-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:100;align-items:center;justify-content:center;padding:20px}
+#ask-ov.open,#asktext-ov.open{display:flex}
+#ask-card,#asktext-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
+#ask-card h2,#asktext-card h2{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35;overflow-wrap:anywhere}
+#asktext-card label{display:block;font-size:13px;font-weight:500;margin:4px 0 6px}
+@media (prefers-reduced-motion:reduce){#ask-card,#asktext-card{animation:none}}
+/* Every question and sheet keeps its 20 px from a phone's edges, or the
+   status bar, notch or home indicator where that is more. */
+#pic-ov,#welcome-ov,#link-ov,#warn-ov,#keys-ov,#slack-ov,#create-ov,#ask-ov,#asktext-ov{padding:max(20px,env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) max(20px,env(safe-area-inset-bottom,0px)) max(20px,env(safe-area-inset-left,0px))}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -769,7 +786,7 @@ button.cv-row:hover{background:var(--fill-2)}
 /* ---------- assist ---------- */
 #assist-fab{position:fixed;right:20px;bottom:20px;width:48px;height:48px;border-radius:var(--r);background:var(--card);display:grid;place-items:center;box-shadow:var(--shadow-lg);z-index:45;transition:var(--lift)}
 #assist-fab:hover{background:var(--fill-2)}
-#assist-ov{position:fixed;inset:0;background:rgba(14,16,20,.32);display:none;z-index:46}
+#assist-ov{position:fixed;inset:0;background:rgba(14,16,20,.32);display:none;z-index:46;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
 #assist-ov.open{display:flex;justify-content:flex-end}
 #assist{width:min(420px,100%);height:100%;background:var(--card);display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:slidein .16s ease-out}
 @keyframes slidein{from{transform:translateX(12px);opacity:0}to{transform:none;opacity:1}}
@@ -777,7 +794,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .as-head{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--hair-2)}
 .as-head b{font-size:15px;font-weight:600}
 .as-actions{display:flex;gap:8px;padding:14px 18px 6px}
-.as-out{flex:1;overflow-y:auto;padding:12px 18px 24px}
+.as-out{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
 .as-sum{font-size:14px;color:var(--slate);margin:6px 0 14px}
 .as-sum b{color:var(--ink);font-weight:600}
 .as-item{background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:var(--lift)}
@@ -814,7 +831,7 @@ body.send-counting #toast{bottom:76px}
 /* A newer RATA, ready to install (desktop app). */
 /* Above the licence prompt (bridge.css, 99999): an update may be exactly what a
    copy whose licence check fails needs. */
-#upd-bar{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:100000;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px);padding:10px 12px 10px 16px;border-radius:var(--r);background:var(--card);box-shadow:var(--shadow-lg);font-size:13.5px}
+#upd-bar{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:100000;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px);padding:10px 12px 10px 16px;border-radius:var(--r);background:var(--card);box-shadow:var(--shadow-lg);font-size:13.5px}
 #upd-bar[hidden]{display:none}
 #upd-bar .upd-text{font-weight:600}
 #upd-bar .upd-why{display:block;font-weight:400;color:var(--faint);font-size:12.5px;max-width:520px}
@@ -868,14 +885,14 @@ body.send-counting #toast{bottom:76px}
    bottom where a thumb is. */
 @media (max-width:900px){
   #rail{display:none}
-  #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--hair-2);z-index:40}
+  #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--hair-2);z-index:40;padding:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
   #mnav button{flex:1;padding:8px 0 max(8px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--faint)}
   #mnav button.active{color:var(--tint)}
   #mnav svg{width:22px;height:22px}
   #mnav button:active{transform:none}
   #main{padding-bottom:60px}
   .side-list{width:100%;border-right:none}
-  .detail-pane{display:none;position:fixed;inset:0;bottom:60px;z-index:30;background:var(--bg)}
+  .detail-pane{display:none;position:fixed;inset:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 60px env(safe-area-inset-left,0px);z-index:30;background:var(--bg)}
   .detail-pane.open{display:flex}
   .md-inner{padding:18px 14px 60px}
   .md-back{display:inline-flex!important;align-items:center;gap:6px;color:var(--tint);font-weight:600;font-size:15px;padding:12px 16px 0}
@@ -921,7 +938,7 @@ body.send-counting #toast{bottom:76px}
 /* Tablet landscape and small laptops: both panes fit, but 232px of rail is
    232px not being read in. Icons only until there is room for words. */
 @media (min-width:901px) and (max-width:1200px){
-  #rail{width:72px;padding:18px 10px 14px;align-items:center}
+  #rail{width:72px;padding:calc(18px + env(safe-area-inset-top,0px)) 10px calc(14px + env(safe-area-inset-bottom,0px));align-items:center}
   #rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
   /* Icons only, and still named: the label is there for a screen reader. */
   #rail .nav-label{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
@@ -1238,6 +1255,25 @@ body.send-counting #toast{bottom:76px}
     <p id="w-sub">Your account is ready. Let's bring your inboxes over.</p>
     <div id="w-rows"></div>
     <button class="btn primary" id="w-enter" style="width:100%;margin-top:16px;justify-content:center">Enter RATA</button>
+  </div>
+</div>
+
+<!-- A question RATA asks before it does something (ask), and a name it asks
+     for (askText), in place of the browser's confirm() and prompt() -->
+<div id="ask-ov" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-text">
+  <div id="ask-card">
+    <h2 id="ask-title"></h2>
+    <p class="link-lead" id="ask-text"></p>
+    <div class="link-btns"><button class="btn" id="ask-cancel">Cancel</button><button class="btn danger" id="ask-ok"></button></div>
+  </div>
+</div>
+<div id="asktext-ov" role="dialog" aria-modal="true" aria-labelledby="asktext-title" aria-describedby="asktext-text">
+  <div id="asktext-card">
+    <h2 id="asktext-title"></h2>
+    <label for="asktext-in" id="asktext-label"></label>
+    <input class="txt" id="asktext-in" type="text" autocomplete="off">
+    <p class="link-lead" id="asktext-text"></p>
+    <div class="link-btns"><button class="btn" id="asktext-cancel">Cancel</button><button class="btn primary" id="asktext-ok"></button></div>
   </div>
 </div>
 
@@ -2015,6 +2051,74 @@ window.addEventListener('keydown',e=>{
   if(!WARN_DONE)return;
   if(e.key==='Escape'||(e.key==='Enter'&&document.activeElement!==$('#warn-go'))){e.preventDefault();e.stopPropagation();closeWarn(false)}
 },true);
+/* A question in the page (ask: yes or no; askText: a name), never the
+   browser's own. The webview on Apple's systems has no panel for
+   window.confirm() or prompt(): WKWebView answers the one with Cancel and
+   the other with nothing, so on an iPhone or a Mac a question asked that way
+   could never be answered yes. Built as the disguised-program question is:
+   the safe choice has the focus (Cancel, for anything that cannot be taken
+   back), Escape and the backdrop cancel, the keyboard stays inside
+   (DLG_ORDER), keyDialog keeps message keys away, and the focus goes back to
+   what asked. One question at a time: a new one answers the one waiting as
+   cancelled. Every word goes in as text. */
+let ASK=null,ASK_DOWN=null;
+function askEnd(v){
+  const a=ASK;if(!a)return;
+  ASK=null;a.el.classList.remove('open');dlgClose(a.el);a.res(v);
+}
+function askShow(el,first,no){
+  dlgOpen(el);el.classList.add('open');first.focus();
+  return new Promise(res=>{ASK={el,res,no}});
+}
+function ask({title,text,ok,cancel,danger}={}){
+  if(ASK)askEnd(ASK.no);
+  $('#ask-title').textContent=title||'';
+  $('#ask-text').textContent=text||'';
+  const go=$('#ask-ok');go.textContent=ok||'OK';go.className='btn '+(danger?'danger':'primary');
+  $('#ask-cancel').textContent=cancel||'Cancel';
+  return askShow($('#ask-ov'),danger?$('#ask-cancel'):go,false);
+}
+/* Answers the name typed, trimmed and at most `max` characters, or null
+   when nothing was typed or the question was cancelled. */
+function askText({title,label,value,max,ok,text}={}){
+  if(ASK)askEnd(ASK.no);
+  const n=max||200,inp=$('#asktext-in');
+  $('#asktext-title').textContent=title||'';
+  $('#asktext-label').textContent=label||'';
+  $('#asktext-text').textContent=text||'At most '+n+' characters.';
+  $('#asktext-ok').textContent=ok||'OK';
+  inp.maxLength=n;inp.value=String(value||'').slice(0,n);
+  const p=askShow($('#asktext-ov'),inp,null);
+  ASK.max=n;inp.select();
+  return p;
+}
+function askTextSay(){
+  if(!ASK||ASK.el.id!=='asktext-ov')return;
+  askEnd($('#asktext-in').value.trim().slice(0,ASK.max)||null);
+}
+$('#ask-cancel').onclick=()=>askEnd(false);
+$('#ask-ok').onclick=()=>{if(ASK&&ASK.el.id==='ask-ov')askEnd(true)};
+$('#asktext-cancel').onclick=()=>askEnd(null);
+$('#asktext-ok').onclick=askTextSay;
+/* The backdrop cancels, when the press began on it too (not a selection
+   dragged out of the field). */
+['#ask-ov','#asktext-ov'].forEach(s=>{
+  const el=$(s);
+  el.addEventListener('pointerdown',e=>{ASK_DOWN=e.target});
+  el.addEventListener('click',e=>{if(e.target===el&&ASK_DOWN===el&&ASK)askEnd(ASK.no)});
+});
+/* Escape cancels. Enter answers yes only on the confirming button (or, for
+   a name, in the field); anywhere else it cancels. Nothing behind the
+   question hears either key. */
+window.addEventListener('keydown',e=>{
+  if(!ASK||e.isComposing||e.keyCode===229||(e.key!=='Escape'&&e.key!=='Enter')||topDialog()!==ASK.el)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  const at=document.activeElement;
+  if(e.key==='Escape')askEnd(ASK.no);
+  else if(ASK.el.id==='ask-ov')askEnd(at===$('#ask-ok'));
+  else if(at===$('#asktext-cancel'))askEnd(null);
+  else askTextSay();
+},true);
 /* An attachment goes to the Downloads folder and is never opened by RATA:
    it is a stranger's file, and running it is the customer's decision. */
 async function saveAttachment(m,a,btn,confirmed){
@@ -2404,7 +2508,7 @@ const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'s
    Undo toast, say). The disguised-program question's own keys (Escape and
    Enter cancel) are unchanged; the picture and the shortcut sheet keep
    their own return. Topmost first, as their z-index stacks them. */
-const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_ORDER=['#rata-licence','#ask-ov','#asktext-ov','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
 const DLG_FROM=new Map();
 function topDialog(){
   for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
@@ -2547,8 +2651,14 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async e=>{
   }
   const n=SEL.size;
   if(act==='del'){
-    if(!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
-    const list=chosen(),out=await takeOff(list,'trash',()=>{SEL.clear();drawList()});
+    /* What is deleted is what the question named: the messages selected
+       when it was asked, as many of them as are still here once it is
+       answered. */
+    const ids=new Set(SEL);
+    if(!await ask({title:'Delete '+n+' message'+(n===1?'':'s')+' from your workspace?',
+      text:'Mail in a linked mailbox goes to that mailbox\u2019s Trash.',ok:'Delete',danger:true}))return;
+    const list=S.messages.filter(m=>ids.has(m.id));if(!list.length)return;
+    const out=await takeOff(list,'trash',()=>{SEL.clear();drawList()});
     if(out.back)drawList();
     if(list.length>out.back)await audit('mail.bulk','del \u00d7 '+(list.length-out.back));
     toast(leftSaying('Deleted',list.length,out,0));
@@ -4075,7 +4185,7 @@ function keyTyping(el){
    a disguised program, deleting the account, the licence box, the welcome,
    a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||ASK||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
@@ -5305,10 +5415,11 @@ function renderFolders(){
       e.preventDefault();fileInto(id,name);
     };
   });
-  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=e=>{
+  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=async e=>{
     e.stopPropagation();
     const f=x.dataset.foldrm;
-    if(!confirm(`Delete the folder "${f}"? The files in it stay — they go back to Unfiled.`))return;
+    if(!await ask({title:`Delete the folder "${f}"?`,text:'The files in it stay. They go back to Unfiled.',ok:'Delete folder',danger:true}))return;
+    if(!S.folders.includes(f))return;
     S.folders=S.folders.filter(n=>n!==f);
     S.documents.forEach(d=>{if(d.folder===f)delete d.folder});
     if(folderFilter===f)folderFilter='all';
@@ -6064,8 +6175,8 @@ $('#del-confirm').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventD
 $('#del-go').onclick=deleteAccount;
 $('#del-email').addEventListener('keydown',e=>{if(e.key==='Enter')deleteAccount()});
 
-$('#btn-reset').onclick=()=>{
-  if(!confirm('Wipe this workspace back to a blank slate? This cannot be undone.'))return;
+$('#btn-reset').onclick=async()=>{
+  if(!await ask({title:'Wipe this workspace back to a blank slate?',text:'This cannot be undone.',ok:'Wipe workspace',danger:true}))return;
   S=seed();save();
   audit('workspace.reset','Workspace wiped to blank slate');
   $('#rail-prof').textContent=S.settings.profile;
@@ -6364,9 +6475,11 @@ function renderDraftHead(){
    Drafts, as before. */
 $('#cmp-discard').onclick=async()=>{
   const srv=CMP_SRV,saved=!!srv.rec;
-  if(!confirm(saved?'Discard this draft? It will be moved to the Trash, with anything attached to it.'
-    :CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
-    :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
+  if(!await ask(saved?{title:'Discard this draft?',text:'It will be moved to the Trash, with anything attached to it.',ok:'Discard',cancel:'Keep writing',danger:true}
+    :CMP_DRAFT?{title:'Stop finishing this draft?',text:'Your changes here will be gone; the draft stays in your Drafts folder.',ok:'Stop finishing',cancel:'Keep writing',danger:true}
+    :{title:'Discard this draft?',text:'What you have written, and anything attached to it, will be gone.',ok:'Discard',cancel:'Keep writing',danger:true}))return;
+  /* Only the draft the question was about, still open. */
+  if(CMP_SRV!==srv||!ov.classList.contains('open'))return;
   srv.discarded=true;
   newDraft();composeNew();
   /* A save of it may still be on its way; its copy goes too. */
@@ -6421,8 +6534,8 @@ $$('#inbox-mode button').forEach(b=>b.onclick=()=>{
 $('#main-acct').onchange=e=>{panes[0]=e.target.value;renderMail()};
 
 
-$('#folder-new').onclick=()=>{
-  const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);
+$('#folder-new').onclick=async()=>{
+  const name=await askText({title:'New folder',label:'Name this folder: a client, a project, a quarter',max:40,ok:'Create folder'});
   if(!name)return;
   if(S.folders.includes(name)){toast('You already have a folder with that name');return}
   S.folders.push(name);save();audit('folder.create',name);
@@ -7086,7 +7199,8 @@ function addLinked(type,label,extra){
 }
 async function removeLinked(id){
   const l=S.linked.find(x=>x.id===id);if(!l)return;
-  if(!confirm(`Remove ${l.label}? Messages already in your workspace stay; live sync for this account stops.`))return;
+  if(!await ask({title:`Remove ${l.label}?`,text:'Messages already in your workspace stay; live sync for this account stops.',ok:'Remove',danger:true}))return;
+  if(!S.linked.some(x=>x.id===id))return;
   /* In the desktop app a mailbox's password lives in this computer's keychain,
      and Remove has to take it out of there — not just off the screen. Asked
      first, so a failure leaves the row in place instead of showing a mailbox
@@ -8307,17 +8421,22 @@ function showWelcome(ob){
 })();
 </script>
 <script>
-if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
+/* Installing this page as an app is the website's. Inside RATA's own app
+   (window.__RATA_NATIVE__, which bridge.js sets before this runs) there is
+   nothing to install: no Install button, and no service worker. */
+const __native=!!window.__RATA_NATIVE__;
+if('serviceWorker' in navigator){if(!__native)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
 let __dp=null;
 const __isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
 const __standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
-addEventListener('beforeinstallprompt',e=>{e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
-if(__isIOS&&!__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
-if(__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
+addEventListener('beforeinstallprompt',e=>{if(__native)return;e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
+if(__isIOS&&!__standalone&&!__native)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
+if(__standalone||__native)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
 function installApp(){
+  if(__native)return;
   if(__dp){__dp.prompt();__dp.userChoice.then(()=>{__dp=null});return}
-  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:typeof glide==='function'?glide():'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
-  else if(typeof toast==='function')toast('In Chrome or Edge: menu → Install Rata');else alert('In Chrome or Edge: browser menu → "Install Rata".');
+  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:typeof glide==='function'?glide():'smooth',block:'center'})}else toast('iPhone/iPad: open in Safari → Share → Add to Home Screen')}
+  else toast('In Chrome or Edge: menu → Install Rata');
 }
 document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.onclick=installApp));
 </script>

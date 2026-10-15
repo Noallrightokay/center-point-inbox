@@ -403,7 +403,15 @@ async function open(licensed, opts = {}) {
     await route.fulfill({ response: resp, headers: { ...resp.headers(), 'content-security-policy': APP_CSP } });
   });
   page.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
-  page.on('dialog', (d) => d.accept());
+  /* The browser's own dialogs answer nothing on Apple's webview (WKWebView
+     has no panel for confirm or prompt), so the page asks in the page
+     (ask, askText) and any native dialog fails here. The one allowance is
+     aiOk's confirm(AI_NOTICE), which claude/assist-v1 replaces with a
+     dialog of its own, after which it is moot. */
+  page.on('dialog', (d) => {
+    if (!(d.type() === 'confirm' && /^Summaries, translation and task flags are done by RATA/.test(d.message()))) { console.log(`  FAIL  the page opened the browser's own ${d.type()} dialog: ${d.message()}`); fails++; }
+    d.accept();
+  });
   /* What mailrata.org answers a renewal with (bridge.js renew()). */
   if (opts.renew) {
     page.__renewals = 0;
@@ -447,6 +455,13 @@ async function open(licensed, opts = {}) {
   return page;
 }
 const row = (page) => page.evaluate(() => S.linked.find((l) => l.type === 'mail' && l.label === 'me@example.com') || null);
+/* The page's own question (ask, or askText for a name): waits for it,
+   answers it, and waits for it to close. */
+const answer = async (page, yes = true) => {
+  const id = await (await page.waitForSelector('#ask-ov.open, #asktext-ov.open', { timeout: 3000 })).evaluate((e) => e.id);
+  await page.click('#' + id.replace('-ov', '') + (yes ? '-ok' : '-cancel'));
+  await page.waitForFunction(() => !ASK);
+};
 const toasts = (page) => page.evaluate(() => window.__toasts.splice(0));
 
 
@@ -595,6 +610,7 @@ console.log('\n— mail the server kept is never hidden: a refused Delete, Archi
   await pg.evaluate((why) => { __mock.change = () => ({ ok: false, done: [], gone: [], kind: 'no-place', error: why }); }, noTrash);
   await pick(['me@example.com_1', 'me@example.com_2']);
   await pg.click('#bulk-bar [data-bulk="del"]');
+  await answer(pg);
   t = await toasted();
   both = [await state('me@example.com_1'), await state('me@example.com_2')];
   check(both.every((x) => x.held && !x.gone && /^The text of /.test(x.text)) && t === 'Nothing was changed — me@example.com: ' + noTrash,
@@ -683,6 +699,7 @@ console.log('\n— drafts begun elsewhere are finished here —');
     `a draft with a file is fetched whole and keeps its file, with no "(no subject)": ${JSON.stringify(c2)}`);
   await pg.evaluate(() => { __mock.calls = []; });
   await pg.click('#cmp-discard');
+  await answer(pg);
   const kept = await pg.evaluate(() => ({ calls: __mock.calls.filter(([c]) => c === 'change_messages').length, has: S.messages.some((m) => m.id === 'me@example.com_drafts_22'),
     title: document.querySelector('#cmp-title').textContent, files: document.querySelector('#cmp-files').textContent,
     hidden: ['#cmp-cc', '#cmp-bcc'].every((q) => document.querySelector(q).hidden) }));
@@ -714,8 +731,6 @@ console.log('\n— drafts begun elsewhere are finished here —');
 console.log('\n— drafts written here are saved to the mailbox (F1) —');
 {
   const pg = await open(true);
-  const dialogs = [];
-  pg.on('dialog', (d) => dialogs.push(d.message()));
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const saves = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'save_draft').map(([, a]) => a));
   const acts = () => pg.evaluate(() => __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => ({ folder: a.folder, uids: a.uids, action: a.action })));
@@ -808,8 +823,10 @@ console.log('\n— drafts written here are saved to the mailbox (F1) —');
   await settle();
   await pg.click('#compose-btn');
   await reset();
-  dialogs.length = 0;
   await pg.click('#cmp-discard');
+  await pg.waitForSelector('#ask-ov.open', { timeout: 3000 }).catch(() => {});
+  const dialogs = [await pg.evaluate(() => document.querySelector('#ask-ov.open #ask-text')?.textContent || '')];
+  await answer(pg);
   await settle();
   a = await acts();
   d = await drafts();
@@ -1592,7 +1609,9 @@ console.log('\n— a gap that cannot be filled no longer stops Load older mail (
     S.linked.push({ id: 'lk_side', type: 'mail', label: 'side@example.net', status: 'live' });
     S.gaps = [{ email: 'side@example.net', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }, { email: 'me@example.com', folder: 'sent', uidvalidity: 7, top: 50, floor: 10 }];
   });
-  await pg.evaluate(() => removeLinked('lk_side'));
+  const removing = pg.evaluate(() => removeLinked('lk_side'));
+  await answer(pg);
+  await removing;
   g = await pg.evaluate(() => S.gaps.map((x) => x.email));
   check(g.join() === 'me@example.com', `Remove takes that mailbox's gaps with it and leaves the others: ${JSON.stringify(g)}`);
   /* A mailbox parked for its password keeps its gap for later, and Load
@@ -1629,7 +1648,9 @@ console.log('\n— a message\'s identity: a removed mailbox, a rebuilt folder, f
   /* 1. A mailbox removed: its mail stays, as RATA's copy only. */
   await sync([mk(1), mk(2), mk(3)]);
   const lk = await pg.evaluate(() => S.linked.find((l) => l.label === 'me@example.com').id);
-  await pg.evaluate((id) => removeLinked(id), lk);
+  const removing = pg.evaluate((id) => removeLinked(id), lk);
+  await answer(pg);
+  await removing;
   const kept = await pg.evaluate(() => S.messages.filter((m) => m.mailbox === 'me@example.com').map((m) => ({ id: m.id, acct: m.acct, ref: serverRef(m), email: actEmail(m) })));
   check(kept.length === 3 && kept.every((m) => m.acct === kept[0].acct && /^lk/.test(m.acct) && !m.ref && m.email === ''),
     `mail of a removed mailbox stays, and RATA no longer counts it as on a server: ${JSON.stringify(kept)}`);
@@ -3589,6 +3610,347 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
   for (let k = 0; k < 5; k++) { await lp.keyboard.press('Tab'); licIn = licIn && await lp.evaluate(() => document.querySelector('#rata-licence').contains(document.activeElement)); }
   check(lic === 'dialog:true:Your licence key' && licIn, `the licence box is a modal dialog named by its heading, and Tab stays in it: ${JSON.stringify({ lic, licIn })}`);
   await lctx.close();
+}
+
+console.log('\n— questions asked in the page, never the browser’s own: WKWebView answers confirm() with Cancel and prompt() with nothing —');
+{
+  /* None of the three pages calls the browser's confirm, prompt or alert,
+     however it is spelled (window.confirm, self['prompt']); comments are
+     left out, and so is a method of something else (an install prompt's
+     own prompt()). The one allowance is aiOk's confirm(AI_NOTICE), which
+     claude/assist-v1 replaces with a dialog of its own; once it has, the
+     allowance is moot and this still holds. */
+  const strip = (t) => t.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const NATIVE = /(?<![\w$.])(?:confirm|prompt|alert)\s*\(|\b(?:window|self|globalThis|top|parent|frames)\s*(?:\??\.\s*|\[\s*['"`])(?:confirm|prompt|alert)\b/g;
+  for (const [name, at] of [['app.html', '../../../rata-next/public/app.html'], ['auth.html', '../../../rata-next/public/auth.html'], ['bridge.js', '../ui-src/bridge.js']]) {
+    const code = strip(_read(new URL(at, import.meta.url), 'utf8'));
+    const calls = [...code.matchAll(NATIVE)].map((m) => code.slice(m.index, m.index + 40).split('\n')[0]);
+    const allowed = name === 'app.html' ? calls.filter((c) => /^confirm\(AI_NOTICE\)/.test(c)) : [];
+    check(allowed.length <= 1 && calls.length === allowed.length,
+      `${name} calls no confirm, prompt or alert${name === 'app.html' ? ' (but aiOk’s confirm(AI_NOTICE), until claude/assist-v1 replaces it)' : ''}: ${JSON.stringify(calls)}`);
+  }
+
+  /* AxeBuilder needs a page made from a context of its own. */
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  const axe = async (pg, where) => {
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx });
+  const mk = (uid) => ({ id: 'me@example.com_' + uid, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example', from_name: 'Ann ' + uid, from_addr: 'ann@example.org',
+    to_name: '', to_addr: 'me@example.com', subject: 'Subject ' + uid, preview: 'Preview ' + uid, body: 'Body ' + uid, ts: Date.now() - uid * 60e3, unread: false, starred: false,
+    uid, uidvalidity: 7, message_id: 'ask' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  await pg.evaluate(async (msgs) => { __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] }; await serverSync('mail', true); __mock.refresh = null; }, [1, 2, 3, 4].map(mk));
+  /* The question on screen: its role, what names and describes it, where
+     the focus is, and its two buttons. */
+  const shown = () => pg.evaluate(() => {
+    const o = document.querySelector('#ask-ov.open, #asktext-ov.open');
+    if (!o) return null;
+    const by = (a) => (o.getAttribute(a) || '').split(' ').map((i) => (document.getElementById(i) || {}).textContent || '').join(' ');
+    return { id: o.id, role: o.getAttribute('role'), modal: o.getAttribute('aria-modal'), label: by('aria-labelledby'), desc: by('aria-describedby'),
+      focus: document.activeElement && document.activeElement.id, ok: o.querySelector('[id$="-ok"]').textContent, cancel: o.querySelector('[id$="-cancel"]').textContent };
+  });
+  const closed = () => pg.evaluate(() => !ASK && !document.querySelector('#ask-ov.open, #asktext-ov.open'));
+  const calls = (cmd) => pg.evaluate((cmd) => __mock.calls.filter(([c]) => c === cmd).map(([, a]) => a), cmd);
+  const held = (ids) => pg.evaluate((ids) => ids.map((i) => S.messages.some((m) => m.id === i)), ids);
+
+  /* Delete of several (the selection bar). */
+  await pg.evaluate(() => { __mock.calls = []; window.__toasts = []; go('inbox'); mailFilter = 'all'; renderMailFilters(); renderMail();
+    selecting = true; SEL.clear(); SEL.add('me@example.com_1'); SEL.add('me@example.com_2'); bulkRefresh(); });
+  await pg.click('#bulk-bar [data-bulk="del"]');
+  let q = await shown();
+  check(q && q.id === 'ask-ov' && q.role === 'alertdialog' && q.modal === 'true' && q.label === 'Delete 2 messages from your workspace?' && /Trash/.test(q.desc)
+    && q.focus === 'ask-cancel' && q.ok === 'Delete' && q.cancel === 'Cancel',
+    `Delete of several asks in the page: an alertdialog named by its question and described by what happens, with Cancel focused: ${JSON.stringify(q)}`);
+  await axe(pg, 'a question (ask), Delete of several');
+  /* While it waits, nothing behind it hears a key: x would tick a message,
+     c would open the composer, and Tab goes round the question only. */
+  await pg.keyboard.press('x');
+  await pg.keyboard.press('c');
+  let inside = true;
+  for (let i = 0; i < 4; i++) { await pg.keyboard.press('Tab'); inside = inside && await pg.evaluate(() => $('#ask-ov').contains(document.activeElement)); }
+  let st = await pg.evaluate(() => ({ sel: [...SEL].sort().join(), compose: $('#compose-ov').classList.contains('open'), dialog: keyDialog() }));
+  check(st.sel === 'me@example.com_1,me@example.com_2' && !st.compose && st.dialog && inside,
+    `while it waits, message keys do nothing, the selection stays, keyDialog counts it, and Tab stays inside: ${JSON.stringify(Object.assign(st, { inside }))}`);
+  await pg.keyboard.press('Escape');
+  st = await pg.evaluate(() => ({ sel: SEL.size, focus: document.activeElement && document.activeElement.dataset.bulk, selecting }));
+  check((await closed()) && st.sel === 2 && st.selecting && st.focus === 'del' && (await held(['me@example.com_1', 'me@example.com_2'])).every(Boolean) && (await calls('change_messages')).length === 0,
+    `Escape cancels: nothing leaves the list or reaches the mailbox, the selection stays, and the focus is back on Delete: ${JSON.stringify(st)}`);
+  await pg.click('#bulk-bar [data-bulk="del"]');
+  await pg.waitForSelector('#ask-ov.open');
+  /* Something ticks another message while the question waits: Delete
+     still takes only the two it asked about. */
+  await pg.evaluate(() => SEL.add('me@example.com_3'));
+  await pg.click('#ask-ok');
+  await pg.waitForTimeout(300);
+  let ch = await calls('change_messages');
+  let h = await held(['me@example.com_1', 'me@example.com_2', 'me@example.com_3']);
+  check((await closed()) && !h[0] && !h[1] && h[2] && ch.length === 1 && ch[0].action === 'trash' && ch[0].uids.slice().sort().join() === '1,2'
+    && (await toasts(pg)).includes('Deleted — 2'),
+    `Delete deletes the two it asked about, to the Trash, and no more: ${JSON.stringify({ h, ch })}`);
+  await pg.evaluate(() => { selecting = false; SEL.clear(); bulkRefresh(); });
+
+  /* One question at a time: a second answers the first as cancelled. */
+  const two = await pg.evaluate(async () => {
+    const a = ask({ title: 'First?', text: 'One', ok: 'Yes', danger: true });
+    const b = askText({ title: 'Second', label: 'A name', max: 10, ok: 'Save' });
+    const first = await a;
+    const now = { title: $('#asktext-title').textContent, open: $('#asktext-ov').classList.contains('open'), askOpen: $('#ask-ov').classList.contains('open') };
+    const c = ask({ title: 'Third?', text: 'Three', ok: 'Yes' });
+    const second = await b;
+    const third = { title: $('#ask-title').textContent, focus: document.activeElement.id };
+    askEnd(false);
+    return { first, now, second, third, last: await c };
+  });
+  check(two.first === false && two.now.title === 'Second' && two.now.open && !two.now.askOpen && two.second === null && two.third.title === 'Third?' && two.third.focus === 'ask-ok' && two.last === false,
+    `a second question answers the one waiting as cancelled (false, or null for a name), and one that undoes nothing has its confirming button focused: ${JSON.stringify(two)}`);
+
+  /* Discard, in the composer: the composer stays until it is answered. */
+  await pg.evaluate(() => { window.__RATA_DRAFT_EVERY = 60e3; __mock.calls = []; newDraft(); openCompose(); });
+  await pg.fill('#cmp-subj', 'Half');
+  await pg.fill('#cmp-body', 'A thought');
+  await pg.click('#cmp-discard');
+  q = await shown();
+  check(q && q.id === 'ask-ov' && q.label === 'Discard this draft?' && /will be gone/.test(q.desc) && q.focus === 'ask-cancel' && q.ok === 'Discard' && q.cancel === 'Keep writing'
+    && await pg.evaluate(() => $('#compose-ov').classList.contains('open')),
+    `Discard asks over the composer, which stays open, with Keep writing focused: ${JSON.stringify(q)}`);
+  await pg.keyboard.press('Escape');
+  st = await pg.evaluate(() => ({ open: $('#compose-ov').classList.contains('open'), subj: $('#cmp-subj').value, body: $('#cmp-body').value, focus: document.activeElement.id }));
+  check((await closed()) && st.open && st.subj === 'Half' && st.body === 'A thought' && st.focus === 'cmp-discard',
+    `Escape answers the question only: the composer stays open with the draft in it, and the focus is back on Discard: ${JSON.stringify(st)}`);
+  await pg.click('#cmp-discard');
+  await pg.waitForSelector('#ask-ov.open');
+  await pg.click('#ask-ok');
+  await pg.waitForTimeout(200);
+  st = await pg.evaluate(() => ({ open: $('#compose-ov').classList.contains('open'), subj: $('#cmp-subj').value, body: $('#cmp-body').value, title: $('#cmp-title').textContent }));
+  check((await closed()) && st.open && st.subj === '' && st.body === '' && st.title === 'New message', `Discard then empties the composer: ${JSON.stringify(st)}`);
+  await pg.evaluate(() => closeCompose());
+
+  /* Files: Delete folder, and New folder (askText). */
+  await pg.evaluate(() => {
+    S.folders = ['Clients'];
+    S.documents.unshift({ id: 'dask1', name: 'Plan.md', fmt: 'MD', origin: 'rata', prov: 'rata', size: '10 B', bytes: 10, ts: Date.now(), content: 'Plan', hasFile: false, folder: 'Clients' });
+    go('docs'); folderFilter = 'all'; renderFolders(); renderDocs(); window.__toasts = [];
+  });
+  await pg.click('[data-foldrm="Clients"]');
+  q = await shown();
+  check(q && q.id === 'ask-ov' && q.label === 'Delete the folder "Clients"?' && /stay/.test(q.desc) && q.focus === 'ask-cancel' && q.ok === 'Delete folder',
+    `Delete folder asks in the page, with Cancel focused: ${JSON.stringify(q)}`);
+  /* A press on the backdrop cancels, as Escape does. */
+  await pg.mouse.click(4, 4);
+  st = await pg.evaluate(() => ({ folders: S.folders.join(), doc: S.documents.find((d) => d.id === 'dask1').folder }));
+  check((await closed()) && st.folders === 'Clients' && st.doc === 'Clients', `a press outside it cancels, and the folder and its file stay: ${JSON.stringify(st)}`);
+  await pg.click('[data-foldrm="Clients"]');
+  await pg.waitForSelector('#ask-ov.open');
+  await pg.click('#ask-ok');
+  await pg.waitForTimeout(100);
+  st = await pg.evaluate(() => ({ folders: S.folders.join(), doc: S.documents.find((d) => d.id === 'dask1').folder }));
+  check((await closed()) && st.folders === '' && st.doc === undefined, `Delete folder deletes it, and its file goes back to Unfiled: ${JSON.stringify(st)}`);
+
+  await pg.click('#folder-new');
+  q = await shown();
+  const field = await pg.evaluate(() => ({ max: $('#asktext-in').maxLength, value: $('#asktext-in').value, labelled: $('#asktext-in').labels[0] && $('#asktext-in').labels[0].textContent }));
+  check(q && q.id === 'asktext-ov' && q.role === 'dialog' && q.modal === 'true' && q.label === 'New folder' && q.desc === 'At most 40 characters.' && q.focus === 'asktext-in'
+    && q.ok === 'Create folder' && field.max === 40 && field.value === '' && field.labelled === 'Name this folder: a client, a project, a quarter',
+    `New folder asks for the name in the page: a dialog with the field focused, labelled, and at most 40 characters: ${JSON.stringify({ q, field })}`);
+  await axe(pg, 'a question asking for a name (askText), New folder');
+  await pg.keyboard.type('Q3');
+  await pg.keyboard.press('Escape');
+  st = await pg.evaluate(() => ({ folders: S.folders.join(), focus: document.activeElement.id }));
+  check((await closed()) && st.folders === '' && st.focus === 'folder-new', `Escape cancels it, makes no folder, and gives the focus back to New folder: ${JSON.stringify(st)}`);
+  await pg.click('#folder-new');
+  await pg.waitForSelector('#asktext-ov.open');
+  await pg.keyboard.press('Enter');
+  check((await closed()) && (await pg.evaluate(() => S.folders.length)) === 0, 'an empty name is a cancel: Enter makes nothing');
+  await pg.click('#folder-new');
+  await pg.waitForSelector('#asktext-ov.open');
+  await pg.keyboard.type('x'.repeat(45));
+  await pg.keyboard.press('Enter');
+  st = await pg.evaluate(() => ({ folders: S.folders.slice(), toasts: window.__toasts.slice() }));
+  check((await closed()) && st.folders.length === 1 && st.folders[0] === 'x'.repeat(40) && st.toasts.includes(`Folder "${'x'.repeat(40)}" created`),
+    `Enter in the field makes the folder, its name cut at 40 characters: ${JSON.stringify(st.folders)}`);
+  await pg.click('#folder-new');
+  await pg.waitForSelector('#asktext-ov.open');
+  await pg.keyboard.type('  Board  ');
+  await pg.click('#asktext-ok');
+  st = await pg.evaluate(() => S.folders.slice());
+  check((await closed()) && st.includes('Board') && st.length === 2, `Create folder makes it too, without the spaces around the name: ${JSON.stringify(st)}`);
+
+  /* Remove a mailbox, in Settings. Enter answers what has the focus. */
+  await pg.evaluate(() => { __mock.calls = []; window.__toasts = []; go('set'); renderLinked(); });
+  const lk = await pg.evaluate(() => S.linked.find((l) => l.label === 'me@example.com').id);
+  await pg.click(`[data-lkrm="${lk}"]`);
+  q = await shown();
+  check(q && q.id === 'ask-ov' && q.label === 'Remove me@example.com?' && /live sync for this account stops/.test(q.desc) && q.focus === 'ask-cancel' && q.ok === 'Remove',
+    `Remove asks in the page, naming the mailbox, with Cancel focused: ${JSON.stringify(q)}`);
+  await pg.keyboard.press('Enter');
+  st = await pg.evaluate((id) => ({ linked: S.linked.some((l) => l.id === id), focus: document.activeElement.dataset.lkrm }), lk);
+  check((await closed()) && st.linked && st.focus === lk && (await calls('unlink_mailbox')).length === 0,
+    `Enter on Cancel cancels: the mailbox stays linked and its keychain entry is not touched: ${JSON.stringify(st)}`);
+  await pg.click(`[data-lkrm="${lk}"]`);
+  await pg.waitForSelector('#ask-ov.open');
+  await pg.keyboard.press('Tab');
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(200);
+  const un = await calls('unlink_mailbox');
+  st = await pg.evaluate((id) => S.linked.some((l) => l.id === id), lk);
+  check((await closed()) && !st && un.length === 1 && un[0].email === 'me@example.com' && (await toasts(pg)).includes('Unlinked me@example.com'),
+    `Enter on Remove removes it, keychain entry first: ${JSON.stringify(un)}`);
+
+  /* Reset workspace, last: it wipes what the checks above stood on. */
+  await pg.evaluate(() => go('set'));
+  await pg.click('#btn-reset');
+  q = await shown();
+  check(q && q.id === 'ask-ov' && q.label === 'Wipe this workspace back to a blank slate?' && q.desc === 'This cannot be undone.' && q.focus === 'ask-cancel' && q.ok === 'Wipe workspace',
+    `Reset workspace asks in the page, with Cancel focused: ${JSON.stringify(q)}`);
+  await pg.keyboard.press('Escape');
+  check((await closed()) && (await pg.evaluate(() => S.messages.length > 0 && S.folders.length === 2)), 'Escape cancels it, and the workspace is as it was');
+  await pg.click('#btn-reset');
+  await pg.waitForSelector('#ask-ov.open');
+  await pg.click('#ask-ok');
+  await pg.waitForTimeout(200);
+  check((await closed()) && (await pg.evaluate(() => S.messages.length === 0 && S.folders.length === 0)) && (await toasts(pg)).includes('Reset complete'), 'Wipe workspace wipes it');
+
+  /* The cards fade and rise as the other questions do, except under
+     reduced motion (DESIGN.md). */
+  const pop = async () => pg.evaluate(() => {
+    const out = [];
+    for (const [o, c] of [['#ask-ov', '#ask-card'], ['#asktext-ov', '#asktext-card']]) { $(o).classList.add('open'); out.push(getComputedStyle($(c)).animationName); $(o).classList.remove('open'); }
+    return out;
+  });
+  const moving = await pop();
+  await pg.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await pop();
+  check(moving.every((n) => n === 'pop') && still.every((n) => n === 'none'), `both questions pop, except under reduced motion: ${JSON.stringify({ moving, still })}`);
+  await ctx.close();
+}
+
+console.log('\n— a phone’s edges: the top bar, the rail, every question and sheet and the licence box keep clear of the status bar, the notch and the home indicator —');
+{
+  /* Chromium stands in for the phone: env(safe-area-inset-*) as an iPhone
+     reports it (47 at the top in portrait, 47 at each side in landscape),
+     through the DevTools protocol. A computer reports 0 everywhere, and
+     nothing moves there. */
+  const at = async (viewport, insets, licensed = true) => {
+    const ctx = await browser.newContext({ viewport });
+    const pg = await open(licensed, { context: ctx });
+    if (insets) await (await ctx.newCDPSession(pg)).send('Emulation.setSafeAreaInsetsOverride', { insets });
+    return { ctx, pg };
+  };
+  const measure = (pg) => pg.evaluate(() => {
+    const cs = (s) => getComputedStyle(document.querySelector(s));
+    const pad = (s) => { if (!document.querySelector(s)) return null; const c = cs(s); return [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].map((v) => parseFloat(v)); };
+    const out = { topbar: { pad: pad('.topbar'), height: document.querySelector('.topbar').getBoundingClientRect().height }, app: pad('#app'), rail: pad('#rail'),
+      compose: pad('#compose-ov'), acct: parseFloat(cs('#acct-menu').top), overlays: {} };
+    for (const s of ['#ask-ov', '#asktext-ov', '#warn-ov', '#link-ov', '#keys-ov', '#pic-ov', '#slack-ov', '#create-ov', '#welcome-ov']) out.overlays[s] = pad(s);
+    if (document.querySelector('#rata-licence')) out.licence = pad('#rata-licence');
+    return out;
+  });
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const all = (o, want) => Object.values(o).every((p) => same(p, want));
+
+  let { ctx, pg } = await at({ width: 1280, height: 800 }, null);
+  let m = await measure(pg);
+  check(same(m.topbar.pad, [0, 24, 0, 24]) && m.topbar.height === 56 && same(m.app, [0, 0, 0, 0]) && same(m.rail, [22, 14, 16, 14]) && all(m.overlays, [20, 20, 20, 20]) && same(m.compose, [0, 0, 0, 0]) && m.acct === 56,
+    `on a computer nothing moves: the top bar 56 px, the rail and every question as before: ${JSON.stringify(m)}`);
+  await ctx.close();
+
+  ({ ctx, pg } = await at({ width: 390, height: 844 }, { top: 47, right: 0, bottom: 34, left: 0 }));
+  m = await measure(pg);
+  check(same(m.topbar.pad, [47, 24, 0, 24]) && m.topbar.height === 103 && m.acct === 103, `a phone upright: the top bar reaches under the status bar and keeps its 56 px below it, and the account menu opens below that: ${JSON.stringify(m.topbar)} ${m.acct}`);
+  check(all(m.overlays, [47, 20, 34, 20]) && same(m.compose, [47, 0, 0, 0]),
+    `every question and sheet keeps clear of the status bar and the home indicator, and the composer of the status bar: ${JSON.stringify({ overlays: m.overlays, compose: m.compose })}`);
+  const pane = await pg.evaluate(() => { go('inbox'); const d = $('#mail-detail'); d.classList.add('open'); const r = d.getBoundingClientRect(); d.classList.remove('open'); return [r.top, r.left]; });
+  check(same(pane, [47, 0]), `the reading pane, over the list on a phone, starts below the status bar: ${JSON.stringify(pane)}`);
+  /* The shortcut sheet is taller than a phone: it scrolls inside the room
+     left between the status bar and the home indicator. */
+  const sheet = await pg.evaluate(async () => {
+    openKeys();
+    const c = $('#keys-card');
+    await Promise.all(c.getAnimations().map((a) => a.finished.catch(() => {})));
+    const r = c.getBoundingClientRect(), out = [r.top, r.bottom, c.scrollHeight > r.height + 1];
+    closeKeys(); return out;
+  });
+  check(sheet[0] >= 47 && sheet[1] <= 844 - 34 && sheet[2], `a sheet taller than the phone stays between the status bar and the home indicator and scrolls: ${JSON.stringify(sheet)}`);
+  await ctx.close();
+
+  ({ ctx, pg } = await at({ width: 844, height: 390 }, { top: 0, right: 47, bottom: 21, left: 47 }));
+  m = await measure(pg);
+  const nav = await pg.evaluate(() => { const c = getComputedStyle($('#mnav')); return [parseFloat(c.paddingLeft), parseFloat(c.paddingRight)]; });
+  check(same(m.app, [0, 47, 0, 47]) && same(nav, [47, 47]) && all(m.overlays, [20, 47, 21, 47]),
+    `a phone on its side: nothing sits under the notch, the page, the bottom bar and every question included: ${JSON.stringify({ app: m.app, nav, overlays: m.overlays['#ask-ov'] })}`);
+  await ctx.close();
+
+  ({ ctx, pg } = await at({ width: 1024, height: 768 }, { top: 24, right: 0, bottom: 20, left: 0 }));
+  m = await measure(pg);
+  check(same(m.rail, [42, 10, 34, 10]) && same(m.topbar.pad, [24, 24, 0, 24]), `a tablet with the rail showing: the rail and the top bar start below its status bar: ${JSON.stringify({ rail: m.rail, topbar: m.topbar.pad })}`);
+  await ctx.close();
+
+  ({ ctx, pg } = await at({ width: 390, height: 844 }, { top: 47, right: 0, bottom: 34, left: 0 }, false));
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  m = await measure(pg);
+  check(same(m.licence, [47, 20, 34, 20]), `the licence box keeps clear of the status bar and the home indicator too: ${JSON.stringify(m.licence)}`);
+  await ctx.close();
+}
+
+console.log('\n— inside the app there is nothing to install: no Install button, no service worker —');
+{
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  /* Counts every service worker registration the page asks for. */
+  const counted = async (opts) => {
+    const ctx = await browser.newContext(opts);
+    await ctx.addInitScript(() => {
+      if (window !== window.top) return;
+      window.__sw = 0;
+      if (window.ServiceWorkerContainer) { const r = ServiceWorkerContainer.prototype.register; ServiceWorkerContainer.prototype.register = function (...a) { window.__sw++; return r.apply(this, a); }; }
+    });
+    return ctx;
+  };
+  const looks = (pg) => pg.evaluate(() => ({ native: !!window.__RATA_NATIVE__, sw: window.__sw, buttons: [...document.querySelectorAll('.js-install')].map((b) => getComputedStyle(b).display) }));
+
+  /* The app, on an iPhone: a browser would offer Install there. */
+  let ctx = await counted({ userAgent: IPHONE });
+  let pg = await open(true, { context: ctx });
+  await pg.waitForLoadState('load');
+  await pg.evaluate(() => { const e = new Event('beforeinstallprompt', { cancelable: true }); e.prompt = () => { window.__prompted = true; }; e.userChoice = Promise.resolve({}); dispatchEvent(e); });
+  await pg.evaluate(() => installApp());
+  let l = await looks(pg);
+  check(l.native && l.sw === 0 && l.buttons.length > 0 && l.buttons.every((d) => d === 'none') && !(await pg.evaluate(() => window.__prompted)) && !(await toasts(pg)).some((t) => /Install|Home Screen/.test(t)),
+    `in the app (window.__RATA_NATIVE__), on an iPhone and after the browser offers to install, Install never shows, does nothing, and no service worker is registered: ${JSON.stringify(l)}`);
+  await ctx.close();
+
+  /* The website keeps both, and its hints are toasts, never alert(). */
+  const web = async (userAgent) => {
+    const c = await counted(userAgent ? { userAgent } : {});
+    await c.addInitScript(() => { if (window === window.top) localStorage.setItem('centra_session', JSON.stringify({ uid: 'local_w', email: 'web@example.com', mode: 'local' })); });
+    const p = await c.newPage();
+    const native = [];
+    p.on('dialog', (d) => { native.push(d.type()); d.dismiss(); });
+    await p.goto(B + '/app.html');
+    await p.waitForFunction(() => typeof S !== 'undefined' && S && typeof go === 'function', null, { timeout: 20000 });
+    await p.waitForLoadState('load');
+    await p.evaluate(() => { window.__toasts = []; const t = toast; toast = (m) => { window.__toasts.push(String(m)); return t(m); }; });
+    return { c, p, native };
+  };
+  let w = await web(IPHONE);
+  l = await looks(w.p);
+  await w.p.evaluate(() => installApp());
+  let said = await w.p.evaluate(() => window.__toasts.slice());
+  check(!l.native && l.sw === 1 && l.buttons.length > 0 && l.buttons.every((d) => d === 'inline-flex') && said.includes('iPhone/iPad: open in Safari → Share → Add to Home Screen') && w.native.length === 0,
+    `on the website on an iPhone, Install shows, the service worker is registered, and Install's hint is a toast: ${JSON.stringify({ l, said, native: w.native })}`);
+  await w.c.close();
+  w = await web(null);
+  await w.p.evaluate(() => installApp());
+  said = await w.p.evaluate(() => window.__toasts.slice());
+  check(said.includes('In Chrome or Edge: menu → Install Rata') && w.native.length === 0, `and elsewhere, with nothing the browser offered, the hint is a toast too: ${JSON.stringify({ said, native: w.native })}`);
+  await w.c.close();
 }
 
 console.log('\n— Delete account in the app removes what is on this computer, and only that (I7) —');

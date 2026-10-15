@@ -17,7 +17,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  /* 20px from the edges, or more on a phone: clear of the status bar, the
+     notch and the home indicator (app.html sets viewport-fit=cover). */
+  padding: max(20px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px))
+    max(20px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px));
   font: 15px/1.55 'Geist', system-ui, -apple-system, sans-serif;
   color: #15171C;
 }
