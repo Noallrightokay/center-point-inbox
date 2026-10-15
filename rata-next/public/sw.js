@@ -71,6 +71,10 @@ self.addEventListener('fetch', e => {
   // back forever (and write them to disk). Always straight to the network.
   if (url.origin === location.origin && url.pathname.startsWith('/api/')) return;
 
+  // Nor the store-safe pages (lib/in-app.js): offline, the fallback below
+  // would show the app, whose links lead to the prices, in their place.
+  if (url.origin === location.origin && url.pathname.startsWith('/in-app/')) return;
+
   // Pages: network-first so updates land, cached shell when offline
   if (e.request.mode === 'navigate' || e.request.destination === 'document' || url.pathname.endsWith('config.js')) {
     e.respondWith(

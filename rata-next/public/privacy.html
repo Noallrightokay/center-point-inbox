@@ -97,14 +97,14 @@ footer a:hover{color:var(--ink)}
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<nav aria-label="Main"><div class="wrap nav-in">
+<!-- in-app:brand --><nav aria-label="Main"><div class="wrap nav-in">
   <a class="logo" href="index.html" aria-label="RATA home">
     <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
     <b>RATA</b>
   </a>
   <a class="plain" href="privacy.html" aria-current="page">Privacy</a>
   <a class="plain" href="terms.html">Terms</a>
-</div></nav>
+</div></nav><!-- in-app:end -->
 
 <main id="main" class="doc"><div class="wrap doc-in">
   <aside class="toc" aria-label="On this page">
@@ -165,7 +165,7 @@ footer a:hover{color:var(--ink)}
 
     <section id="payment" aria-labelledby="pay-h">
       <h2 id="pay-h">Payment</h2>
-      <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy at <a href="https://stripe.com/privacy">stripe.com/privacy</a>.</p>
+      <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy<!-- in-app:cut --> at <a href="https://stripe.com/privacy">stripe.com/privacy</a><!-- in-app:end -->.</p>
     </section>
 
     <section id="app" aria-labelledby="app-h">
@@ -229,13 +229,13 @@ footer a:hover{color:var(--ink)}
   </article>
 </div></main>
 
-<footer><div class="wrap">
+<!-- in-app:cut --><footer><div class="wrap">
   <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
   <a href="index.html">Home</a>
   <a href="account.html">Licence</a>
   <a href="privacy.html">Privacy</a>
   <a href="terms.html">Terms</a>
   <span>© 2026 RATA</span>
-</div></footer>
+</div></footer><!-- in-app:end -->
 </body>
 </html>

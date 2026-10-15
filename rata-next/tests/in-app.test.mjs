@@ -1,0 +1,429 @@
+/* The store-safe pages under /in-app/ (the store plan's stage 1, item 6).
+
+   Google Play fails a consumption-only app when any link in it "eventually
+   leads to" a purchase, so what is checked here is the whole of what a
+   store build could reach from these pages: every same-site link is
+   followed, every page found must be under /in-app/, an outside link may go
+   only to another service's privacy policy, and no link or URL string on
+   any of them, or in a script they load, leads to the prices, the licence
+   page, the app, the sign-in, Stripe or the releases page. The copies must
+   say everything their pages say, from the page as it is now, so the help
+   page's and the privacy policy's own tests keep covering them. And the
+   deletion page must say what deletion removes and keeps as lib/account.js
+   decides it, and work, by keyboard and screen reader, against the same
+   stand-in Supabase as the account route's own test. */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+import AxeBuilder from '@axe-core/playwright';
+import { startServer, makeChecker, fakeSupabase, fakeSupabaseKey } from './helpers.mjs';
+import { IN_APP_PAGES, storeSafe } from '../lib/in-app.js';
+import { blocksDeletion, DELETION_REMOVES, DELETION_KEEPS } from '../lib/account.js';
+
+const SITE = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = f => readFileSync(join(SITE, 'public', f), 'utf8');
+
+const START = ['/in-app/help', '/in-app/privacy', '/in-app/terms', '/in-app/delete-account'];
+
+/* The outside pages an in-app page may link to: other services' privacy
+   policies, which sell nothing. Written here as well as in lib/in-app.js on
+   purpose, so a page added there is added here too, by somebody deciding it
+   sells nothing. */
+const POLICIES = [
+  ['www.anthropic.com', '/legal'],
+  ['privacy.microsoft.com', '/'],
+  ['policies.google.com', '/'],
+  ['developers.google.com', '/terms/api-services-user-data-policy'],
+];
+const isPolicy = u => u.protocol === 'https:' && !u.port && POLICIES.some(([host, path]) =>
+  u.hostname === host && (u.pathname === path || u.pathname.startsWith(path.endsWith('/') ? path : path + '/')));
+
+/* Where nothing on these pages may lead, written as URL strings, wherever
+   they are: an attribute, a script, a comment or the text. */
+const BANNED = [
+  ['the prices', /#pricing\b/i],
+  ['Stripe', /\bstripe\.com\b/i],
+  ['the releases page', /\/releases\b/i],
+  ['a page that sells, by its file', /\b(?:index|account|app|auth)\.html\b/i],
+  ['a page that sells, by its path', /(?:mailrata\.org|["'`(=])\/(?:account|app|auth)(?:\.html)?(?![\w.-])/i],
+  ['the home page', /(?:https?:)?\/\/mailrata\.org\/?(?=["'`\s<>)#?]|$)/i],
+];
+
+const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', nbsp: ' ', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”', rarr: '→', hellip: '…' };
+const entities = s => s.replace(/&(\w+);/g, (m, n) => ENT[n] ?? m).replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n));
+/* What a reader sees, as one line. A link's tags and a comment take no room
+   on screen, so they leave none here: a link a copy turns into its words
+   reads exactly as it did. */
+const visible = html => entities(html
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/<\/?a\b[^>]*>/gi, '')
+  .replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const mainOf = html => (html.match(/<main\b[\s\S]*<\/main>/i) || [''])[0];
+const CUT = /<!-- in-app:cut -->([\s\S]*?)<!-- in-app:end -->/g;
+
+/* Everything on a page that can take somebody somewhere. A stylesheet or an
+   icon is part of the page, not somewhere to go. */
+function linksIn(html) {
+  const out = [];
+  for (const m of html.matchAll(/<(a|area|form|iframe|frame|link|base)\b([^>]*)>/gi)) {
+    const tag = m[1].toLowerCase();
+    if (tag === 'link' && /\brel="(?:stylesheet|icon|apple-touch-icon)"/i.test(m[2])) continue;
+    const at = m[2].match(/\b(?:href|action|src)="([^"]*)"/i);
+    out.push({ tag, url: at ? entities(at[1]) : '' });
+  }
+  for (const m of html.matchAll(/<meta\b[^>]*http-equiv="refresh"[^>]*>/gi)) out.push({ tag: 'meta refresh', url: m[0] });
+  return out;
+}
+
+export default async function run(state) {
+  const check = makeChecker(state);
+
+  /* The site as a store build's links would find it, with Stripe's links
+     set, so a page that loaded the whole site configuration would be
+     caught carrying them. */
+  const s = await startServer({ env: {
+    STRIPE_BASE: 'https://buy.stripe.com/test_base',
+    STRIPE_PRO: 'https://buy.stripe.com/test_pro',
+    STRIPE_PORTAL: 'https://billing.stripe.com/p/login/test_portal',
+  } });
+  try {
+    const origin = new URL(s.url).origin;
+
+    console.log('\n— every page a store build can reach from here is under /in-app/ —');
+    const pages = new Map();
+    const scripts = new Map();
+    {
+      const queue = [...START];
+      while (queue.length) {
+        const path = queue.shift();
+        if (pages.has(path)) continue;
+        const r = await fetch(s.url + path, { redirect: 'manual' });
+        const html = await r.text();
+        pages.set(path, html);
+        check(r.status === 200 && /text\/html/.test(r.headers.get('content-type') || ''), `${path} -> ${r.status} ${r.headers.get('content-type')}`);
+        const wrong = [];
+        for (const { tag, url } of linksIn(html)) {
+          /* A form with no action goes nowhere but its own page, whose
+             script takes the submit (the deletion page's sign-in). */
+          if (tag === 'form' && !url) continue;
+          if (tag !== 'a' && tag !== 'area' && tag !== 'form') { wrong.push(`a <${tag}> to ${url || '(nowhere)'}`); continue; }
+          if (url.startsWith('#')) {
+            if (url.length > 1 && !html.includes(`id="${url.slice(1)}"`)) wrong.push(`${url}, which is nowhere on the page`);
+            continue;
+          }
+          let u;
+          try { u = new URL(url, s.url + path); } catch { wrong.push(`${url}, which does not parse`); continue; }
+          if (u.protocol === 'mailto:') continue;
+          if (u.origin === origin) {
+            if (!u.pathname.startsWith('/in-app/')) wrong.push(`${url}, a page outside /in-app/`);
+            else queue.push(u.pathname);
+            continue;
+          }
+          if (!isPolicy(u)) wrong.push(`${url}, which is not another service's privacy policy`);
+        }
+        check(wrong.length === 0, `${path} links nowhere else${wrong.length ? `:\n         ${wrong.join('\n         ')}` : ''}`);
+        if (/<link\b[^>]*rel="manifest"/i.test(html)) check(false, `${path} links the web app manifest, which opens /app`);
+        for (const m of html.matchAll(/<script\b[^>]*\bsrc="([^"]*)"/gi)) scripts.set(new URL(entities(m[1]), s.url + path).href, null);
+      }
+      check(START.every(p => pages.has(p)) && pages.size === START.length,
+        `found ${pages.size} pages, all of them the four in-app pages: ${[...pages.keys()].join(', ')}`);
+      for (const path of ['/in-app/app', '/in-app/index', '/in-app/account', '/in-app/auth', '/in-app/help.html']) {
+        const r = await fetch(s.url + path, { redirect: 'manual' });
+        check(r.status === 404, `${path} is no page (${r.status}): only the copies are made`);
+      }
+    }
+
+    console.log('\n— nothing on them, or in what they load, leads to buying —');
+    {
+      /* Scripts are followed too, as are scripts a script names (the
+         Supabase library the deletion page loads when someone signs in). */
+      const queue = [...scripts.keys()];
+      while (queue.length) {
+        const href = queue.shift();
+        if (scripts.get(href) != null) continue;
+        const u = new URL(href);
+        if (u.origin !== origin) { check(false, `a script from another host: ${href}`); scripts.set(href, ''); continue; }
+        const r = await fetch(href);
+        const js = await r.text();
+        scripts.set(href, js);
+        check(r.status === 200, `script ${u.pathname}${u.search} -> ${r.status}`);
+        for (const m of js.matchAll(/["'`](\/(?:vendor|in-app)\/[\w./-]+\.js)["'`]/g)) {
+          const next = new URL(m[1], href).href;
+          if (!scripts.has(next)) { scripts.set(next, null); queue.push(next); }
+        }
+      }
+      for (const [where, text] of [...pages, ...[...scripts].map(([h, js]) => [new URL(h).pathname + new URL(h).search, js])]) {
+        const found = BANNED.flatMap(([what, re]) => {
+          const m = text.match(re);
+          return m ? [`${what}: ${JSON.stringify(text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 20))}`] : [];
+        });
+        check(found.length === 0, `${where}: no link or URL string to the prices, the licence page, the app, the sign-in, Stripe or the releases${found.length ? `\n         ${found.join('\n         ')}` : ''}`);
+      }
+      check([...scripts.keys()].some(h => h.includes('/api/config')),
+        'the deletion page reads the site configuration, so the scan above saw what it reads');
+    }
+
+    console.log('\n— the copies say everything their pages say, from the page as it is now —');
+    for (const [name, file] of Object.entries(IN_APP_PAGES)) {
+      const source = read(file);
+      const served = pages.get(`/in-app/${name}`) || '';
+      check(served === storeSafe(name, source), `/in-app/${name} is exactly what lib/in-app.js makes from public/${file} as it is now`);
+      check(/<nav\b/i.test(source) && /<footer\b/i.test(source) && !/<nav\b|<footer\b/i.test(served),
+        `/in-app/${name}: ${file}'s site navigation and footer are left out`);
+      const brand = (served.match(/<header><div class="wrap nav-in">([\s\S]*?)<\/header>/) || [])[1] || '';
+      check(/<b>RATA<\/b>/.test(brand) && !/<a\b/i.test(brand), `/in-app/${name} names RATA at the top, as text`);
+      check(/<meta name="robots" content="noindex">/.test(served), `/in-app/${name} asks search engines for the page itself instead`);
+      /* What a reader of the page's main part sees is the same, word for
+         word, but for what a source marks to leave out, and those marks
+         inside the text are only ever a link's few words. */
+      const cuts = [...mainOf(source).matchAll(CUT)].map(m => m[1]);
+      check(cuts.every(c => /<a\b/i.test(c) && visible(c).length <= 40),
+        `${file}: what it leaves out of its text is only links (${cuts.map(c => JSON.stringify(visible(c))).join(', ') || 'none'})`);
+      const want = visible(mainOf(source).replace(CUT, ''));
+      const got = visible(mainOf(served));
+      let at = 0;
+      while (at < want.length && want[at] === got[at]) at++;
+      check(want.length > 1000 && want === got,
+        `/in-app/${name} says all ${want.length} characters of ${file}'s text` +
+        (want === got ? '' : `\n         first difference: ${JSON.stringify(want.slice(at, at + 60))} became ${JSON.stringify(got.slice(at, at + 60))}`));
+    }
+    {
+      /* The help page's quotes and the privacy policy's promises are
+         checked on the pages themselves (help.test.mjs, legal.test.mjs);
+         the copies carry the same, so a store build shows them too. */
+      const help = pages.get('/in-app/help') || '';
+      const said = h => (h.match(/<blockquote class="said">/g) || []).length;
+      check(said(help) > 0 && said(help) === said(read('help.html')), `/in-app/help quotes all ${said(help)} of RATA's sentences`);
+      const policy = visible(pages.get('/in-app/privacy') || '');
+      check(DELETION_REMOVES.every(x => policy.includes(x.replace(/[‘’]/g, '’'))), '/in-app/privacy names everything deletion removes');
+    }
+
+    console.log('\n— a link added to a page later is judged too —');
+    {
+      /* storeSafe keeps only what it knows is safe, so a source that gains
+         a link nobody thought about still makes a safe copy. */
+      const src = read('help.html').replace('<h1>Help</h1>',
+        '<h1>Help</h1><p>New: <a href="index.html#pricing">plans</a>, <a href="/account">licence</a>, '
+        + '<a href="https://buy.stripe.com/x">buy</a>, <a href="https://mailrata.org/">home</a>, <a href="//mailrata.org/app">app</a>, '
+        + '<a href="privacy.html?x=1">odd</a>, <a href="/delete-account">gone</a>, <a href="https://policies.google.com.evil.example/">fake</a>, '
+        + '<a href="mailto:help@example.org">mail</a>, <a href="terms.html#ai">terms</a>, <a href="/in-app/delete-account">delete</a>, '
+        + '<a href="https://policies.google.com/privacy">Google</a>, <a href="#install">install</a>.</p>');
+      const kept = [...storeSafe('help', src).matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g)]
+        .filter(m => /^(plans|licence|buy|home|app|odd|gone|fake|mail|terms|delete|Google|install)$/.test(m[2]))
+        .map(m => `${m[2]}=${m[1]}`);
+      check(JSON.stringify(kept) === JSON.stringify(['mail=mailto:help@example.org', 'terms=/in-app/terms#ai',
+        'delete=/in-app/delete-account', 'Google=https://policies.google.com/privacy', 'install=#install']),
+        `only mailto:, the in-app pages, a policy page and the page itself stay links: ${kept.join(', ')}`);
+      const odd = storeSafe('help', read('help.html').replace('<h1>Help</h1>',
+        `<h1>Help</h1><p><a href=index.html>bare</a> <a href='/app'>single</a> <a id="here">anchor</a></p>`));
+      check(!/<a href=index|<a href='\/app'/.test(odd) && /<p>bare single <a id="here">anchor<\/a><\/p>/.test(odd),
+        'an address written without double quotes is not judged, so it is not kept either');
+      for (const [what, bad] of [['a script', '<script>location="/"</script>'], ['a handler', '<p onclick="go()">x</p>'],
+        ['a refresh', '<meta http-equiv="refresh" content="0;url=/">'], ['a form', '<form action="/"></form>']]) {
+        let made = true;
+        try { storeSafe('help', read('help.html').replace('<h1>Help</h1>', `<h1>Help</h1>${bad}`)); } catch { made = false; }
+        check(!made, `a page that gains ${what} makes no copy, rather than one nobody judged`);
+      }
+      const unmarked = read('privacy.html').replace(/<!-- in-app:(?:brand|cut|end) -->/g, '');
+      let threw = '';
+      try { storeSafe('privacy', unmarked); } catch (e) { threw = e.message; }
+      check(/marks nothing/.test(threw), `a page that loses its marks makes no copy at all: "${threw}"`);
+      threw = '';
+      try { storeSafe('privacy', read('privacy.html').replace('<!-- in-app:cut --><footer>', '<footer>')); } catch (e) { threw = e.message; }
+      check(/without its other half|footer/.test(threw), `nor one whose footer is no longer marked: "${threw}"`);
+    }
+
+    console.log('\n— the website\'s service worker leaves them to the network —');
+    {
+      /* Offline, the worker answers a page it never cached with the app,
+         which leads to the prices. */
+      const sw = read('sw.js');
+      const at = sw.search(/if \(url\.origin === location\.origin && url\.pathname\.startsWith\('\/in-app\/'\)\) return;/);
+      check(at > 0 && at < sw.indexOf("caches.match('./app.html')"), 'sw.js never answers an /in-app/ page');
+    }
+
+    console.log('\n— the deletion page —');
+    const page = pages.get('/in-app/delete-account') || '';
+    {
+      const text = visible(page);
+      check(/<title>[^<]*RATA[^<]*<\/title>/.test(page) && /<h1\b[^>]*>[^<]*RATA[^<]*<\/h1>/.test(page), 'it names RATA, in its title and heading');
+      check(!/<nav\b|<footer\b/i.test(page), 'it has no site navigation or footer');
+      const list = id => [...((page.match(new RegExp(`<ul id="${id}"[^>]*>([\\s\\S]*?)</ul>`)) || [])[1] || '').matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m => visible(m[1]));
+      const removes = list('del-removes');
+      const keeps = list('del-keeps');
+      check(JSON.stringify(removes) === JSON.stringify(DELETION_REMOVES),
+        `what it removes is DELETION_REMOVES, in order: ${JSON.stringify(removes)}`);
+      /* The last of DELETION_KEEPS is said from inside the app ("this
+         device ... here"); on a web page it is the app's own copy, as the
+         privacy policy says it. */
+      check(JSON.stringify(keeps.slice(0, -1)) === JSON.stringify(DELETION_KEEPS.slice(0, -1))
+        && /this device/.test(DELETION_KEEPS.at(-1)) && keeps.length === DELETION_KEEPS.length
+        && /^what the RATA app holds on your device, until you uninstall it$/.test(keeps.at(-1) || ''),
+        `what it keeps is DELETION_KEEPS, the last said as on a web page: ${JSON.stringify(keeps)}`);
+      check(/does not cancel/.test(text) && /App Store/.test(text) && /Google Play/.test(text),
+        'it says deleting the account does not cancel a subscription paid through Apple or Google');
+      check(!/[—–]/.test(text) && !/!/.test(text), 'no em dash, en dash or exclamation mark (DESIGN.md)');
+      const loads = [...page.matchAll(/<(?:script|img|link)\b[^>]*\b(?:src|href)="([^"]*)"/gi)].map(m => m[1]);
+      check(loads.length > 0 && loads.every(u => u.startsWith('/') && !u.startsWith('//')), `it loads only its own site's files: ${loads.join(', ')}`);
+      check(!/\son[a-z]+=/i.test(page) && !/\sstyle=/i.test(page), 'no inline event handler or style attribute');
+      const js = [...scripts].filter(([h]) => h.includes('/in-app/')).map(([, j]) => j || '').join('\n');
+      check(js.length > 0 && !/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(js),
+        'its script draws every word with textContent, never as HTML');
+      const lib = (read('auth.html').match(/vendor\/supabase-js-[\w.-]+\.js/) || [])[0];
+      check(!!lib && js.includes(`'/${lib}'`), `it signs in through the sign-in page's own Supabase client (${lib})`);
+    }
+
+    console.log('\n— without a sign-in service, it says so instead of offering a form that cannot work —');
+    {
+      const browser = await chromium.launch();
+      try {
+        const pg = await browser.newPage();
+        await pg.goto(s.url + '/in-app/delete-account');
+        await pg.waitForFunction(() => document.querySelector('#del-off') && !document.querySelector('#del-off').hidden);
+        const off = await pg.evaluate(() => ({
+          said: document.querySelector('#del-off').textContent.trim(),
+          disabled: [...document.querySelectorAll('#del-signin input, #del-signin button')].every(e => e.disabled),
+        }));
+        check(off.disabled && /not switched on/i.test(off.said), `the form is off and the page says why: "${off.said}"`);
+      } finally { await browser.close(); }
+    }
+  } finally { await s.stop(); }
+
+  await deletesForReal(check);
+}
+
+/* The page against the stand-in Supabase the account route's own test
+   uses: signing in through the browser, then DELETE /api/account. */
+async function deletesForReal(check) {
+  const supabase = await fakeSupabase();
+  const { USER, fake } = supabase;
+  const s = await startServer({ env: {
+    SUPABASE_URL: supabase.url,
+    SUPABASE_ANON_KEY: fakeSupabaseKey('anon'),
+    SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
+  } });
+  const browser = await chromium.launch();
+  const axe = async (pg, where) => {
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))),
+      new Promise(r => setTimeout(r, 1000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    const bad = r.violations.filter(v => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map(n => n.target.join(' ')).join(' | ')}`);
+    check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map(v => v.id))}`);
+  };
+  const focused = pg => pg.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.tagName));
+  const alertOf = pg => pg.evaluate(() => {
+    const a = document.querySelector('#del-msg');
+    return a && !a.hidden ? { role: a.getAttribute('role'), text: a.textContent.trim() } : null;
+  });
+  try {
+    for (const scheme of ['light', 'dark']) {
+      const ctx = await browser.newContext({ colorScheme: scheme });
+      const pg = await ctx.newPage();
+      await pg.goto(s.url + '/in-app/delete-account');
+      await axe(pg, `the page as it opens, ${scheme}`);
+      await ctx.close();
+    }
+
+    console.log('\n— by keyboard alone: a wrong password is refused in the sign-in service\'s own words —');
+    const ctx = await browser.newContext();
+    const pg = await ctx.newPage();
+    await pg.goto(s.url + '/in-app/delete-account');
+    let tabs = 0;
+    while ((await focused(pg)) !== 'del-email' && tabs++ < 12) await pg.keyboard.press('Tab');
+    check((await focused(pg)) === 'del-email', `Tab reaches the email field (${tabs} presses)`);
+    await pg.keyboard.type('leaver@example.com');
+    await pg.keyboard.press('Tab');
+    check((await focused(pg)) === 'del-password', 'then the password');
+    await pg.keyboard.type('not my password');
+    fake.calls = [];
+    await pg.keyboard.press('Enter');
+    await pg.waitForFunction(() => { const a = document.querySelector('#del-msg'); return a && !a.hidden && a.textContent.trim(); });
+    const wrong = await alertOf(pg);
+    check(wrong?.role === 'alert' && wrong.text === 'Invalid login credentials', `said as an alert: ${JSON.stringify(wrong)}`);
+    check(fake.calls.some(c => c.startsWith('POST /auth/v1/token')) && !fake.calls.some(c => c.startsWith('DELETE ')),
+      'the password went to the sign-in service, and nothing was deleted');
+    await axe(pg, 'a refused password');
+
+    console.log('\n— signed in, it asks once more, and shows the server\'s own refusal —');
+    await pg.keyboard.press('ControlOrMeta+a');
+    await pg.keyboard.type(fake.password);
+    await pg.keyboard.press('Enter');
+    await pg.waitForFunction(() => !document.querySelector('#del-confirm').hidden);
+    const asked = await pg.evaluate(() => ({
+      signinHidden: document.querySelector('#del-signin').hidden,
+      said: document.querySelector('#del-confirm').textContent.replace(/\s+/g, ' ').trim(),
+      focus: document.activeElement && document.activeElement.id,
+      msg: document.querySelector('#del-msg').hidden,
+      password: document.querySelector('#del-password').value,
+    }));
+    check(asked.signinHidden && asked.said.includes('leaver@example.com'), `it names the account it is about to delete: "${asked.said.slice(0, 90)}…"`);
+    check(asked.focus === 'del-confirm-h', `and the focus moves to that question (${asked.focus})`);
+    check(asked.msg && asked.password === '', 'the old refusal is gone, and so is the password from the form');
+    await axe(pg, 'the question before deleting');
+
+    fake.sub = { plan: 'pro', status: 'active', event_at: null, updated_at: new Date().toISOString() };
+    const refusal = blocksDeletion(fake.sub);
+    await pg.keyboard.press('Tab');
+    check((await focused(pg)) === 'del-go', 'Tab reaches Delete my account');
+    fake.calls = [];
+    await pg.keyboard.press('Enter');
+    await pg.waitForFunction(() => { const a = document.querySelector('#del-msg'); return a && !a.hidden && a.textContent.trim(); });
+    const refused = await alertOf(pg);
+    check(refused?.role === 'alert' && refused.text === refusal, `the server's own sentence: ${JSON.stringify(refused?.text)}`);
+    check(fake.calls.some(c => c === 'GET /auth/v1/user') && !fake.calls.some(c => c.startsWith('DELETE ')),
+      'the session went with the request, and nothing was deleted');
+    check(await pg.evaluate(() => !document.querySelector('#del-confirm').hidden && !document.querySelector('#del-go').disabled),
+      'the question stays, to try again once the subscription is cancelled');
+    await axe(pg, 'a refusal');
+
+    console.log('\n— and once nothing is in the way, the account goes, and the page says so —');
+    fake.sub = null;
+    fake.calls = [];
+    await pg.focus('#del-go');
+    await pg.keyboard.press('Enter');
+    await pg.waitForFunction(() => !document.querySelector('#del-done').hidden);
+    const done = await pg.evaluate(() => ({
+      said: document.querySelector('#del-done').textContent.replace(/\s+/g, ' ').trim(),
+      focus: document.activeElement && document.activeElement.id,
+      confirmHidden: document.querySelector('#del-confirm').hidden,
+      msg: document.querySelector('#del-msg').hidden,
+    }));
+    check(/deleted/i.test(done.said) && done.confirmHidden && done.msg, `it says it is done: "${done.said}"`);
+    check(done.focus === 'del-done-h', `and the focus moves there (${done.focus})`);
+    check(fake.calls.includes(`DELETE /auth/v1/admin/users/${USER.id}`) && fake.calls.some(c => c.startsWith('DELETE /rest/v1/ai_usage')),
+      'the login and everything keyed to it were deleted');
+    await axe(pg, 'the account deleted');
+    await ctx.close();
+
+    console.log('\n— Cancel signs out and starts again —');
+    {
+      const c2 = await browser.newContext();
+      const p2 = await c2.newPage();
+      await p2.goto(s.url + '/in-app/delete-account');
+      await p2.fill('#del-email', 'Leaver@Example.com');
+      await p2.fill('#del-password', fake.password);
+      await p2.press('#del-password', 'Enter');
+      await p2.waitForFunction(() => !document.querySelector('#del-confirm').hidden);
+      fake.calls = [];
+      await p2.focus('#del-cancel');
+      await p2.keyboard.press('Enter');
+      await p2.waitForFunction(() => !document.querySelector('#del-signin').hidden);
+      await p2.waitForFunction(() => document.activeElement && document.activeElement.id === 'del-email');
+      check(fake.calls.some(c => c.startsWith('POST /auth/v1/logout')) && !fake.calls.some(c => c.startsWith('DELETE ')),
+        'the session is ended at the sign-in service, nothing is deleted, and the focus is back on the email');
+      const kept = await p2.evaluate(() => [...Object.keys(localStorage), ...Object.keys(sessionStorage)]);
+      check(kept.length === 0, `and nothing of the sign-in is kept in the browser (${kept.join(', ') || 'nothing'})`);
+      await c2.close();
+    }
+  } finally {
+    await browser.close();
+    await s.stop();
+    await supabase.close();
+  }
+}

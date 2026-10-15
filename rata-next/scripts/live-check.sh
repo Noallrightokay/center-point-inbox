@@ -12,7 +12,8 @@
 # from the app's own origins is allowed, and from a stranger's is not), the
 # security headers are on, /api/config publishes no service-role key, the
 # landing page's screenshots are there, and the privacy policy and terms are
-# served with every [OWNER: ...] placeholder filled in. It cannot sign up, pay or link a
+# served with every [OWNER: ...] placeholder filled in, and the store-safe pages under
+# /in-app/ are there and lead nowhere that sells. It cannot sign up, pay or link a
 # mailbox: those are the owner's steps in LAUNCH.md §6.
 set -u
 BASE="${1:-https://mailrata.org}"
@@ -133,8 +134,9 @@ printf '%s' "$body" | grep -q 'href="privacy.html"' && printf '%s' "$body" | gre
 
 echo "- the privacy policy and terms (LAUNCH.md, before §6) -"
 # Each must be served, be the page it says, and carry none of the owner's
-# placeholders: a live page that still says [OWNER: ...] names nobody.
-for pair in "privacy.html:Privacy policy" "terms.html:Terms of service"; do
+# placeholders: a live page that still says [OWNER: ...] names nobody. The
+# store-safe copies under /in-app/ are made from them, so they say the same.
+for pair in "privacy.html:Privacy policy" "terms.html:Terms of service" "in-app/privacy:Privacy policy" "in-app/terms:Terms of service"; do
   p="${pair%%:*}"; want="${pair#*:}"
   s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
@@ -142,6 +144,14 @@ for pair in "privacy.html:Privacy policy" "terms.html:Terms of service"; do
   left=$(printf '%s' "$page" | grep -o '\[OWNER:[^]]*\]' | sort -u | tr '\n' ' ')
   [ -z "$left" ]; check $? "/$p has every [OWNER: ...] filled in${left:+ (still: $left)}"
 done
+
+echo "- the store-safe pages a store build opens (lib/in-app.js) -"
+for p in in-app/help in-app/privacy in-app/terms in-app/delete-account; do
+  s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
+  page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
+  ! printf '%s' "$page" | grep -qiE '#pricing|stripe\.com|/releases|(index|account|app|auth)\.html|="/(account|app|auth)"|<nav|<footer'; check $? "/$p has no site navigation and no link that sells"
+done
+printf '%s' "$(curl -sS --max-time 20 "$BASE/in-app/delete-account" 2>/dev/null)" | grep -q '<h1>Delete your RATA account</h1>'; check $? "/in-app/delete-account is the deletion page"
 
 echo
 if [ "$fails" = 0 ]; then echo "All checks passed."; else echo "$fails check(s) failed."; fi
