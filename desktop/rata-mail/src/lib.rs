@@ -33,16 +33,24 @@
 //! * **Judging a file name** (`names`) — a sender's attachment name made safe
 //!   to create, and a program dressed as a document (`invoice.pdf.exe`)
 //!   flagged where the attachment is listed, so the app can ask first.
+//! * **Looking names up on iOS** (`dns_sd`, `records`) — an iOS app cannot
+//!   read the network's DNS settings, so there the system's own resolver
+//!   answers instead of hickory. `system_dns` is set by build.rs: for iOS,
+//!   and on a Mac with the `system-dns` feature, for its tests.
 
 pub mod body;
 pub mod compose;
 pub mod credential;
 pub mod discover;
+#[cfg(system_dns)]
+mod dns_sd;
 pub mod guard;
 pub mod html;
 pub mod imap;
 pub mod key;
 pub mod names;
+#[cfg(any(system_dns, test))]
+mod records;
 pub mod resolve;
 pub mod smtp;
 pub mod words;
