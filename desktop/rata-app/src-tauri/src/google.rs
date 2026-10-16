@@ -181,9 +181,10 @@ const NOT_CHOSEN: &str = "Google lets RATA open only the files you chose for it 
 const UPLOAD_ENDED: &str = "Google Drive ended the upload part way. Try again.";
 
 /// Said when the last piece may have arrived and Google could not then be
-/// asked what it holds: it may have made the file, and Drive keeps two
-/// files of one name, so saving again could make two. Its own kind,
-/// `unsure`, so the page says it as it is and never as a failure.
+/// asked what it holds, or a small save's one request went and its answer
+/// was lost: it may have made the file, and Drive keeps two files of one
+/// name, so saving again could make two. Its own kind, `unsure`, so the
+/// page says it as it is and never as a failure.
 const MAY_HAVE_SAVED: &str = "The connection to Google Drive was lost as the last of the file went up, so Google Drive may have saved it. Check your Google Drive before saving it again.";
 
 const TOO_MUCH: &str = "Google Drive sent far more than RATA asked for.";
@@ -1155,7 +1156,10 @@ impl GoogleDrive {
     }
 
     /// One new file in My Drive in one multipart request: the metadata and
-    /// the bytes. Answers the new file's `id`, `name` and `size`.
+    /// the bytes. Answers the new file's `id`, `name` and `size`. A request
+    /// that went and whose answer was lost may have made the file, and
+    /// Drive keeps two files of one name, so that is `unsure`, said as it
+    /// is, never "could not be reached", which invites a second copy.
     async fn create_small(
         &self,
         token: &str,
@@ -1174,7 +1178,11 @@ impl GoogleDrive {
             )
             .timeout(Duration::from_secs(60 + (bytes.len() / (64 * 1024)) as u64))
             .body(multipart(&boundary, meta, mime, bytes));
-        let a = self.answer(req, BODY_MAX, TOO_MUCH).await?;
+        let a = match self.heard(req, BODY_MAX, TOO_MUCH).await {
+            Ok(a) => a,
+            Err(n) if n.lost => return Err(Fail::Refused("unsure", MAY_HAVE_SAVED.into())),
+            Err(n) => return Err(n.why),
+        };
         if !(200..300).contains(&a.status) {
             return Err(a.fail());
         }
@@ -3481,6 +3489,56 @@ mod tests {
                 .unwrap_err();
             assert_eq!(e.kind, "disk");
             assert!(!e.error.contains(ACCESS), "{}", e.error);
+        });
+    }
+
+    /// SEC-11 (R20), third review: a small save is one request, with no
+    /// session to ask. Sent and its answer lost, it may have made the file,
+    /// and Drive keeps two files of one name: `unsure`, said as it is, and
+    /// nothing sent again. A connection never made sent nothing, and is
+    /// said as it is.
+    #[test]
+    fn a_small_save_whose_answer_was_lost_may_have_saved_it() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            srv.on(&format!("POST {UPLOAD}"), cut());
+            let dir = Scratch::new();
+            let app = g_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let e = app
+                .google_save(None, "notes.txt", b"hello", false)
+                .await
+                .unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("unsure", MAY_HAVE_SAVED));
+            assert_eq!(srv.asked_for("POST", UPLOAD).len(), 1, "never sent twice");
+            assert!(
+                srv.asked_for("POST", "/token").is_empty(),
+                "nothing renewed"
+            );
+            assert!(entry(&app).connected, "nothing parked");
+
+            // Nowhere to connect to: nothing went, so the reason.
+            let closed = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = closed.local_addr().unwrap().port();
+            drop(closed);
+            let dir = Scratch::new();
+            let app = g_app(
+                &dir,
+                &format!("http://127.0.0.1:{port}"),
+                Some(PRO),
+                Memory::default(),
+            );
+            signed_in(&app);
+            let e = app
+                .google_save(None, "notes.txt", b"hello", false)
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind, "offline");
+            assert!(
+                e.error.starts_with("Google Drive could not be reached"),
+                "{}",
+                e.error
+            );
         });
     }
 

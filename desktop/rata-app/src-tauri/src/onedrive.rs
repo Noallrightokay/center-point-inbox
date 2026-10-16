@@ -38,10 +38,12 @@
 //! Retry-After) is gone on with from where the session says it stands, a
 //! few times a save, and the session address's 401, 404 and 410 say the
 //! upload ended, never that OneDrive is disconnected (SEC-11). Only when the
-//! last fragment went and its answer was lost (never after OneDrive's own
-//! answer, nor a connection never made), and the session is then gone or
-//! cannot say, is nothing cancelled or sent again: OneDrive may have saved
-//! it, and a second session would make `name 1.pdf`.
+//! last fragment may have made the file is nothing cancelled or sent again:
+//! when it went and its answer was lost (never a connection never made) and
+//! the session is then gone or cannot say, or when OneDrive answered it with
+//! a 5xx that gives no reason (a front door's 502 or 504) and the session is
+//! then over. OneDrive may have saved it, and a second session would make
+//! `name 1.pdf`; any other answer OneDrive gave is said as it is.
 //!
 //! **Disconnect and Delete account win** (SEC-7, SEC-8, as Slack's): both
 //! empty the keychain under the list's lock and bump a generation, and a
@@ -144,6 +146,11 @@ const UPLOAD_STOPPED: &str = "The upload to OneDrive stopped part way. Try again
 /// gone or could not be asked: OneDrive may have made the file. Its own
 /// kind, `unsure`, so the page says it as it is and never as a failure.
 const MAY_HAVE_SAVED: &str = "The connection to OneDrive was lost as the last of the file went up, so OneDrive may have saved it. Check the folder before saving it again.";
+
+/// Said when OneDrive answered the last fragment with an error of its own
+/// (a 5xx) and the upload session was then over: a front door's 502 or 504
+/// can come after the file was made behind it. Kind `unsure`, as above.
+const MAY_HAVE_SAVED_AFTER_ERROR: &str = "OneDrive answered the last of the file with an error and then closed the upload, so it may have saved it. Check the folder before saving it again.";
 
 const TOO_MUCH: &str = "OneDrive sent far more than RATA asked for.";
 
@@ -558,10 +565,12 @@ enum Unfinished {
     /// The last fragment may have arrived (sent and its answer lost on the
     /// way back, `NoAnswer::lost`, or answered 416, OneDrive holding those
     /// bytes), and nothing OneDrive said after showed the session still
-    /// waiting for bytes: OneDrive may have made the file. Never when no
-    /// attempt at the last fragment may have arrived: an answer OneDrive
-    /// gave, or a connection that was never made.
-    Unsure,
+    /// waiting for bytes; or it was answered with a 5xx that gives no
+    /// reason and the session was then over. OneDrive may have made the
+    /// file; this is the sentence. Never when no attempt at the last
+    /// fragment may have arrived: any other answer OneDrive gave, or a
+    /// connection that was never made.
+    Unsure(&'static str),
 }
 
 /// Where an upload session stands, by its own answer.
@@ -966,7 +975,7 @@ impl OneDrive {
         let http = self.http().map_err(Fail::Net)?;
         match self.fragments(http, at, bytes).await {
             Ok(item) => Ok(item),
-            Err(Unfinished::Unsure) => Err(Fail::Refused("unsure", MAY_HAVE_SAVED.into())),
+            Err(Unfinished::Unsure(why)) => Err(Fail::Refused("unsure", why.into())),
             Err(Unfinished::Failed(f)) => {
                 let _ = http.delete(at.clone()).send().await;
                 Err(f)
@@ -1006,6 +1015,18 @@ impl OneDrive {
         // be the file made, and a session cancelled and "Try again" would
         // make `name 1.pdf` beside it.
         let mut made = false;
+        // Whether an attempt at the last fragment was answered with a 5xx
+        // that does not say why (not 507's full drive). Weaker than `made`:
+        // OneDrive, or the front door before it (a 502 or 504), had the
+        // bytes and failed to answer, and the file may have been made
+        // behind it, so a session over or gone after it (asked then, or
+        // meeting the fragment sent again) is "may have saved", never
+        // "stopped part way. Try again.", which would make `name 1.pdf`.
+        // A session still listing the range is gone on with, or, with no
+        // going on, the 5xx said as it is; and unlike `made`, a session
+        // that cannot be asked is the failure said as it is too. Kept for
+        // the rest of the save, as `made` is.
+        let mut faulted = false;
         // Each fragment once, and a few resumes; never a loop with no end.
         let most = total / self.chunk.max(1) + 6;
         for _ in 0..most {
@@ -1022,7 +1043,7 @@ impl OneDrive {
                 .header("Content-Type", "application/octet-stream")
                 .timeout(wait)
                 .body(part);
-            let (failed, arrived, ended) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
+            let (failed, arrived, ended, erred) = match self.heard(req, BODY_MAX, TOO_MUCH).await {
                 Ok(a) => match a.status {
                     202 if !last => {
                         start = end;
@@ -1054,20 +1075,35 @@ impl OneDrive {
                         ),
                         true,
                         false,
+                        false,
                     ),
-                    _ => (a.upload_fail(), false, a.session_ended()),
+                    _ => {
+                        let failed = a.upload_fail();
+                        // OneDrive, or the front door before it, failing to
+                        // answer; never a 5xx that says why (507, a full
+                        // drive), which made nothing.
+                        let erred = a.status >= 500
+                            && matches!(failed, Fail::Net(_) | Fail::Limited(_));
+                        (failed, false, a.session_ended(), erred)
+                    }
                 },
-                Err(n) => (n.why, n.lost, false),
+                Err(n) => (n.why, n.lost, false, false),
             };
-            // Only the last fragment may make the file. An answer OneDrive
-            // gave (a 503, a 429) or a connection never made did not, and
-            // is said as it is, unless an earlier attempt may have.
+            // Only the last fragment may make the file. Any other answer
+            // OneDrive gave (a 429, a 423) or a connection never made did
+            // not, and is said as it is, unless an earlier attempt may have.
+            // A 5xx may have, but only a session then over says so.
             made |= last && arrived;
-            if made && ended {
-                return Err(Unsure);
+            faulted |= last && erred;
+            if (made || faulted) && ended {
+                return Err(Unsure(if made {
+                    MAY_HAVE_SAVED
+                } else {
+                    MAY_HAVE_SAVED_AFTER_ERROR
+                }));
             }
             let go_on = resumable(&failed) && resumes < RESUMES;
-            if !go_on && !made {
+            if !go_on && !made && !faulted {
                 return Err(Failed(failed));
             }
             resumes += 1;
@@ -1077,8 +1113,14 @@ impl OneDrive {
                 // Still waiting for bytes, and no going on: the file was not
                 // made.
                 Ok(Stands::From(next)) if !go_on && next < total => return Err(Failed(failed)),
-                _ if made => return Err(Unsure),
+                _ if made => return Err(Unsure(MAY_HAVE_SAVED)),
+                // Over or gone after a 5xx to the last fragment: the file
+                // may have been made behind it.
+                Ok(Stands::Over) if faulted => return Err(Unsure(MAY_HAVE_SAVED_AFTER_ERROR)),
                 Ok(Stands::From(_)) => return Err(out_of_turn()),
+                // Asked only because a 5xx may have made the file, and
+                // OneDrive could not say: the 5xx, as it is.
+                Err(_) if !go_on => return Err(Failed(failed)),
                 Ok(Stands::Over) => {
                     return Err(Failed(Fail::Refused("refused", UPLOAD_STOPPED.into())));
                 }
@@ -3332,19 +3374,19 @@ mod tests {
             let save = |name: &'static str| app.onedrive_save(None, name, b"hello", false);
 
             // One fragment, OneDrive answering 503 every time and the session
-            // still waiting for it: OneDrive's own reason, and cancelled.
+            // still waiting for it, asked once more after the last 503 (which
+            // may have made the file): OneDrive's own reason, and cancelled.
             session("a.txt");
-            for _ in 0..RESUMES {
+            for _ in 0..=RESUMES {
                 srv.on("PUT /up/a.txt", busy());
                 srv.on("GET /up/a.txt", needs("0"));
             }
-            srv.on("PUT /up/a.txt", busy());
             let e = save("a.txt").await.unwrap_err();
             assert_eq!(e.kind, "offline");
             assert!(e.error.contains("serviceNotAvailable"), "{}", e.error);
             assert!(!e.error.contains("may have saved"), "{}", e.error);
             assert_eq!(srv.asked_for("PUT", "/up/a.txt").len(), RESUMES + 1);
-            assert_eq!(srv.asked_for("GET", "/up/a.txt").len(), RESUMES);
+            assert_eq!(srv.asked_for("GET", "/up/a.txt").len(), RESUMES + 1);
             assert_eq!(srv.asked_for("DELETE", "/up/a.txt").len(), 1);
 
             // A 503, and the session cannot be asked: the reason, cancelled.
@@ -3361,12 +3403,18 @@ mod tests {
             assert!(!e.error.contains("may have saved"), "{}", e.error);
             assert_eq!(srv.asked_for("DELETE", "/up/b.txt").len(), 1);
 
-            // A 503, and then the session gone: it stopped, and was not made.
+            // A 503, and then the session gone: the file may have been made
+            // behind it (third review), so nothing is cancelled or sent again.
             session("c.txt");
             srv.on("PUT /up/c.txt", busy());
             srv.on("GET /up/c.txt", with(404, ""));
             let e = save("c.txt").await.unwrap_err();
-            assert_eq!(e.error, UPLOAD_STOPPED);
+            assert_eq!(
+                (e.kind, e.error.as_str()),
+                ("unsure", MAY_HAVE_SAVED_AFTER_ERROR)
+            );
+            assert!(srv.asked_for("DELETE", "/up/c.txt").is_empty());
+            assert_eq!(srv.asked_for("PUT", "/up/c.txt").len(), 1);
 
             // The answer lost every time, the session still waiting after
             // the last resume: not made, so the reason, and cancelled.
@@ -3513,6 +3561,124 @@ mod tests {
             let e = save("f.txt").await.unwrap_err();
             assert_eq!((e.kind, e.error.as_str()), ("refused", UPLOAD_STOPPED));
             assert_eq!(count("DELETE", "f.txt"), 1);
+        });
+    }
+
+    /// SEC-11 (R20), third review: a 502 or 504 from Microsoft's front
+    /// door to the last fragment can come after the file was made behind
+    /// it. A session then over or gone is "may have saved", with nothing
+    /// cancelled or sent again (a second session would make `name 1.txt`);
+    /// a session still listing the range is gone on with; a 5xx that says
+    /// why (507, a full drive) made nothing and is said as it is.
+    #[test]
+    fn a_5xx_to_the_last_fragment_then_the_session_over_may_have_saved_it() {
+        rt().block_on(async {
+            let srv = Scripted::start().await;
+            let dir = Scratch::new();
+            let app = od_app(&dir, &srv.base, Some(PRO), Memory::default());
+            signed_in(&app);
+            let needs = |from: &str| ok(&format!(r#"{{"nextExpectedRanges":["{from}-"]}}"#));
+            let gone = || with(404, r#"{"error":{"code":"itemNotFound"}}"#);
+            let session = |name: &str| {
+                srv.on(
+                    &format!("POST /v1.0/me/drive/root:/{name}:/createUploadSession"),
+                    ok(&format!(r#"{{"uploadUrl":"{}/up/{name}"}}"#, srv.base)),
+                );
+                srv.on(&format!("DELETE /up/{name}"), with(204, ""));
+            };
+            let save = |name: &'static str| app.onedrive_save(None, name, b"hello", false);
+            let count =
+                |method: &str, name: &str| srv.asked_for(method, &format!("/up/{name}")).len();
+            let sessions = |name: &str| {
+                srv.asked_for(
+                    "POST",
+                    &format!("/v1.0/me/drive/root:/{name}:/createUploadSession"),
+                )
+                .len()
+            };
+
+            // 502 and 504 with no body, then the session gone or saying it
+            // needs nothing more.
+            for (name, status, then) in [
+                ("a.txt", 502, gone()),
+                ("b.txt", 504, gone()),
+                ("c.txt", 502, ok(r#"{"nextExpectedRanges":[]}"#)),
+            ] {
+                session(name);
+                srv.on(&format!("PUT /up/{name}"), with(status, ""));
+                srv.on(&format!("GET /up/{name}"), then);
+                let e = save(name).await.unwrap_err();
+                assert_eq!(
+                    (e.kind, e.error.as_str()),
+                    ("unsure", MAY_HAVE_SAVED_AFTER_ERROR),
+                    "{name}"
+                );
+                assert_eq!(count("PUT", name), 1, "{name}: not sent again");
+                assert_eq!(count("DELETE", name), 0, "{name}: nothing cancelled");
+                assert_eq!(sessions(name), 1, "{name}: one session");
+            }
+
+            // A 502, the session still listing the range: gone on with, and
+            // the file comes back.
+            session("d.txt");
+            srv.on("PUT /up/d.txt", with(502, ""));
+            srv.on("GET /up/d.txt", needs("0"));
+            srv.on(
+                "PUT /up/d.txt",
+                with(201, r#"{"id":"F!D","name":"d.txt","file":{}}"#),
+            );
+            let placed = save("d.txt").await.unwrap();
+            assert_eq!(placed.id, "F!D");
+            assert_eq!((count("PUT", "d.txt"), count("DELETE", "d.txt")), (2, 0));
+
+            // A 504, the range still listed, and the fragment sent again
+            // meeting a session that has finished: it may have been the 504
+            // that made the file.
+            session("e.txt");
+            srv.on("PUT /up/e.txt", with(504, ""));
+            srv.on("GET /up/e.txt", needs("0"));
+            srv.on("PUT /up/e.txt", gone());
+            let e = save("e.txt").await.unwrap_err();
+            assert_eq!(
+                (e.kind, e.error.as_str()),
+                ("unsure", MAY_HAVE_SAVED_AFTER_ERROR)
+            );
+            assert_eq!(count("DELETE", "e.txt"), 0);
+
+            // A 502, and the session cannot be asked (refused for a reason
+            // of its own): the 502, as it is, and cancelled.
+            session("f.txt");
+            srv.on("PUT /up/f.txt", with(502, ""));
+            srv.on(
+                "GET /up/f.txt",
+                with(403, r#"{"error":{"code":"accessDenied"}}"#),
+            );
+            let e = save("f.txt").await.unwrap_err();
+            assert_eq!(e.kind, "refused", "{}", e.error);
+            assert!(!e.error.contains("may have saved"), "{}", e.error);
+            assert_eq!(count("DELETE", "f.txt"), 1);
+
+            // 507, a full drive: nothing made, said as it is, nothing asked,
+            // and cancelled, even with the session gone after.
+            session("g.txt");
+            srv.on("PUT /up/g.txt", with(507, ""));
+            srv.on("GET /up/g.txt", gone());
+            let e = save("g.txt").await.unwrap_err();
+            assert_eq!(e.kind, "disk", "{}", e.error);
+            assert_eq!(count("GET", "g.txt"), 0);
+            assert_eq!(count("DELETE", "g.txt"), 1);
+
+            // A 5xx to a fragment before the last makes nothing: the
+            // session then gone is the upload stopping, and cancelled.
+            session("h.bin");
+            srv.on("PUT /up/h.bin", with(502, ""));
+            srv.on("GET /up/h.bin", gone());
+            let e = app
+                .onedrive_save(None, "h.bin", &vec![3u8; 400 * 1024], false)
+                .await
+                .unwrap_err();
+            assert_eq!((e.kind, e.error.as_str()), ("refused", UPLOAD_STOPPED));
+            assert_eq!(count("DELETE", "h.bin"), 1);
         });
     }
 
