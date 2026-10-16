@@ -1276,7 +1276,7 @@ Dropbox, Box) with no account at all.
 
 State (2026-10-05): K1 done ([#138](https://github.com/Noallrightokay/center-point-inbox/pull/138)), K5 done ([#134](https://github.com/Noallrightokay/center-point-inbox/pull/134)), K6 done (Rust [#137](https://github.com/Noallrightokay/center-point-inbox/pull/137), page [#139](https://github.com/Noallrightokay/center-point-inbox/pull/139), with 0.1.5's launcher restored in Files on the owner's request). A review of K6 found three issues, fixed in SEC-9 ([#140](https://github.com/Noallrightokay/center-point-inbox/pull/140)): F1, the page handed Rust the bytes of the file RATA would open, so a page could have a document with an outside template opened (Rust now writes its own blanks and takes no bytes); F2, a downloaded file left at a name RATA had used could be opened as RATA's (a marked file is refused, and no save takes a recorded name); F3, making and opening did not check the plan (they now need Pro). All go out in 0.1.49. Still to check by hand: the three blanks in Microsoft Office and in Pages, Numbers and Keynote. K3 done ([#142](https://github.com/Noallrightokay/center-point-inbox/pull/142)): Share to Slack in Rust, live in any build made after the owner sets `RATA_SLACK_CLIENT_ID`; the Slack app needs PKCE on and the three redirects `http://localhost:28417` to `28419` (Slack matches the port), not yet seen against a real Slack. A review of K1 and K6's page (2026-10-05) found no High and no XSS, one Medium and four Lows, fixed in SEC-10 ([#143](https://github.com/Noallrightokay/center-point-inbox/pull/143)): Settings named services the build cannot connect; a disguised program could reach Downloads from a cloud folder without the question; Cancel during a Slack send hid its result; a send resumed after a restart attached a made file as edited since; a wrong comment. Both go out in 0.1.50. K2 done ([#147](https://github.com/Noallrightokay/center-point-inbox/pull/147)): OneDrive in Rust, live in any build with `RATA_MS_CLIENT_ID` once the owner adds Graph `Files.ReadWrite` to that registration; not yet seen against a real Microsoft account. The website sells Create file and the two folders on Pro since [#145](https://github.com/Noallrightokay/center-point-inbox/pull/145), and the demo has a contributor's guide ([#146](https://github.com/Noallrightokay/center-point-inbox/pull/146)). K4 done ([#148](https://github.com/Noallrightokay/center-point-inbox/pull/148)): Google Drive in Rust, `drive.file` with Google's file chooser, live in any build with `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET` once the owner's Google project (Drive and Picker APIs, consent screen, brand verification) exists; not yet seen against a real Google account. Every Rust card of Workstream K is now built; each service waits only on the owner's registration.
 
-State (2026-10-15): part 4 of the security review (SEC-11, 2026-10-14,
+State (2026-10-16): part 4 of the security review (SEC-11, 2026-10-14,
 `docs/SECURITY-REVIEW-2026-09.md`) covered Workstream K, Apps and the
 demo: no High, 6 Medium, 20 Low. Stage A is merged for the demo (D1 to D5,
 [#155](https://github.com/Noallrightokay/center-point-inbox/pull/155)),
@@ -1285,9 +1285,11 @@ Slack (R2, R7, R12, R17, R21 and the Slack half of R18,
 [#159](https://github.com/Noallrightokay/center-point-inbox/pull/159)) and
 the platform (R5, R6, R13, R14: one RATA at a time, the list in Local
 AppData and keychain entries that stay on the computer on Windows,
-[#160](https://github.com/Noallrightokay/center-point-inbox/pull/160));
-OneDrive and Google Drive's half (R18, R19, R20) is in review
-([#157](https://github.com/Noallrightokay/center-point-inbox/pull/157)).
+[#160](https://github.com/Noallrightokay/center-point-inbox/pull/160)),
+and OneDrive and Google Drive (R18's other half, R19, R20: bounded error
+answers, a half-written rotation put back, large saves resumed and a
+possibly saved file never sent twice,
+[#157](https://github.com/Noallrightokay/center-point-inbox/pull/157)).
 Stage B, the connect and disconnect lifecycle across Slack, OneDrive and
 Google Drive (R1, R3, R4, R8, R9, R10, R11, R15), is open, and must land
 before the owner adds any of K2 to K4's registrations to a build. What
@@ -1302,7 +1304,7 @@ has merged goes out in 0.1.52.
 The plan, the store rules behind it and the owner's decisions are in
 `docs/APP-STORES.md`. iOS first, then Google Play; the Mac App Store is
 undecided. On 2026-10-15 the owner chose Apple In-App Purchase (option A1)
-for iOS and consumption-only (G1) for Google Play. State (2026-10-15), all
+for iOS and consumption-only (G1) for Google Play. State (2026-10-16), all
 open and none merged: stage 1's store build of the interface
 ([#165](https://github.com/Noallrightokay/center-point-inbox/pull/165)),
 store-safe pages on mailrata.org
@@ -1313,7 +1315,8 @@ for iOS, the engine's DNS through the system
 ([#163](https://github.com/Noallrightokay/center-point-inbox/pull/163)) and
 the shell as a library a phone can start
 ([#166](https://github.com/Noallrightokay/center-point-inbox/pull/166));
-the in-app purchase server is being written (`claude/iap-server`); the
+and the in-app purchase server on mailrata.org
+([#167](https://github.com/Noallrightokay/center-point-inbox/pull/167)); the
 StoreKit bridge and the purchase screen are still to come. Nothing has run
 on a phone.
 

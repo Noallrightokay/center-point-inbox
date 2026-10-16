@@ -535,14 +535,22 @@ folder; open a file in the Bridge. Save the same attachment to OneDrive
 twice: **Pass:** OneDrive (the website) shows two files, the second with
 a "1" added to its name; nothing was replaced. Try a work or school
 account too if you have one, and note any "needs admin approval" page
-word for word.
+word for word. **A dropped connection** (v0.1.52 and later): save a file
+of more than 10 MB to OneDrive and turn the Wi-Fi off for about five
+seconds while it goes up, then on again. **Pass:** the save finishes and
+OneDrive shows the file once; or RATA says OneDrive may have saved it,
+and OneDrive shows it once. A second copy with "1" added is a fail.
 
 **F7. Google Drive** (v0.1.51, needs the two Google variables). **Connect**
 opens Google's sign-in and then Google's file chooser in the browser:
 pick a Word file and a Google Doc. **Pass:** Files lists the two (the
 Google Doc as `.docx`) and nothing else from your Drive; open each in the
 Bridge. Save the same attachment twice: two files in Drive. Press
-**Choose files** and pick one more: it joins the list. **Disconnect**:
+**Choose files** and pick one more: it joins the list. **A dropped
+connection** (v0.1.52 and later): save a file of more than 5 MB and turn
+the Wi-Fi off for about five seconds while it goes up, then on again.
+**Pass:** Drive shows the file once, whether RATA says it was saved or
+that Google Drive may have saved it. **Disconnect**:
 https://myaccount.google.com/permissions no longer lists RATA within a
 minute.
 

@@ -148,7 +148,7 @@ purchase screen are still being built (`docs/APP-STORES.md`), so steps 1,
    both to `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester account.
 7. On the server: `APPLE_BUNDLE_ID` and `APPLE_APP_ID` (`rata-next/LAUNCH.md`
-   will list them once the in-app purchase server has merged).
+   will list them once the in-app purchase server, #167, has merged).
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
 10. The App Privacy answers ("nutrition label"), the age rating, the

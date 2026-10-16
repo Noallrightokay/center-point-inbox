@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 311 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 326 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (578 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (579 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -1783,7 +1783,13 @@ drive), no address. Refresh token in the keychain under
 `vault.rs`), access token in memory renewed 2 minutes early; a 401 renews
 once, `invalid_grant` parks ("Connect OneDrive again"), network errors
 never park; Disconnect and Delete account empty the keychain under the
-list's lock and bump a generation, as K3. Listing: `/children`, `$top=200`,
+list's lock and bump a generation, as K3. A rotated refresh token the
+keychain refuses, or takes only half of (the pieces but not the entry
+naming them), is held in memory for the session, and RATA writes back
+`Kept::stored`, the one the keychain last held whole, never the one held
+in memory, which after an earlier refusal the keychain never had (SEC-11
+R19, as `core.rs` does for a mailbox, security review L5); the keychain
+catches up at the next renewal it takes. Listing: `/children`, `$top=200`,
 `@odata.nextLink` followed only to Graph's own scheme, host, port and
 `/v1.0/` (else `truncated`), 10 pages and 2 000 items at most, folders
 and files only; the top's id is `""`. Reading: metadata first, refused
@@ -1795,11 +1801,47 @@ name) **without** the Authorization header. Saving: always an upload
 session with `conflictBehavior: rename`, because Graph's simple PUT
 replaces an existing file and documents no conflict behaviour; one
 fragment, or 10 MiB fragments (multiples of 320 KiB) above that, to the
-session's own content-host address without the token, cancelled with
-DELETE on a failure; `safe_file_name`, `confirmed` for a disguised
-program, no empty file, `SAVE_MAX`. Ids: letters, digits and `!._-`,
-alphanumeric first, at most 256. Errors are the status and Graph's error
-`code` only; nothing goes to Copy diagnostics. Only `/me/drive`: no
+session's own content-host address without the token; `safe_file_name`,
+`confirmed` for a disguised program, no empty file, `SAVE_MAX`. **A
+fragment that fails part way does not end the save (SEC-11 R20, #157):**
+after a transport error, a 5xx, a 429 or 503 whose Retry-After is at most
+`WAIT_MOST` (10 s), or a 416 (a range OneDrive already had), RATA asks
+the session where it stands (`session_stands`: `GET` on the upload
+address without the token, up to `ASKS` (4) times, waiting 1, 2, 4 and
+8 s, or Retry-After up to `WAIT_MOST`) and goes on from the first
+`nextExpectedRanges` offset, never past what was sent, at most `RESUMES`
+(3) times a save. Each fragment's own timeout is unchanged (60 s plus 1 s
+per 64 KiB). The upload address's 401, 403 without a Graph code, 404, 410
+and `itemNotFound` (`session_ended`) say "The upload to OneDrive stopped
+part way. Try again." (`UPLOAD_STOPPED`), never not connected or not
+found; 413, 507 and `quotaLimitReached` are said as before. A failed
+session is cancelled with DELETE, except when OneDrive may have made the
+file. Once an attempt at the last fragment went and its answer was lost
+(`NoAnswer::lost`: any transport failure but a connection never made,
+reqwest's `is_connect`) or was answered 416, the save is `made` for good:
+from then on only the session saying it still waits for bytes is a
+failure, and a session over, gone or silent is refused with kind
+`unsure` and `MAY_HAVE_SAVED` ("The connection to OneDrive was lost as the
+last of the file went up, so OneDrive may have saved it. Check the folder
+before saving it again."), with nothing cancelled or sent again, since a
+second session with `rename` would make `name 1.pdf`. A 5xx that gives no
+reason (not 507, a full drive) to the last fragment, with the session
+then over, is `unsure` too, in its own words (`MAY_HAVE_SAVED_AFTER_ERROR`:
+a front door's 502 or 504 can come after the file was made); a session
+still listing the range is gone on with, and one that cannot be asked is
+the 5xx as it is. After OneDrive's own answer every time (a 503 or 429
+throughout), or connections that were never made, the reason is said and
+the session cancelled; when the resumes run out after a lost last
+fragment, the session is asked once more to tell the two apart. The page
+says an `unsure` save as "<name>: <sentence>", never "Could not save",
+which invites the retry that makes a second copy, audits it as
+`cloud.save.unsure`, and reads the folder on show again (`cloudSave`;
+harness check). Ids: letters, digits and `!._-`, alphanumeric first, at
+most 256. An answer that is not a success is read only as far as
+`ERROR_MAX` (64 KiB; SEC-11 R18) and parsed for Graph's `error.code` alone
+(`GraphError`), never as a `serde_json::Value`, and said by its HTTP
+status when it does not parse; the rest is left unread. Errors are the
+status and that code only; nothing goes to Copy diagnostics. Only `/me/drive`: no
 SharePoint sites or Shared with me. Not yet seen against a real
 Microsoft account. **Google Drive (K4, `google.rs`)** exists only in a
 build with both `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`
@@ -1825,12 +1867,42 @@ redirect followed, `READ_MAX`; Google's own files through `files.export`
 (10 MB). `cloud_save`: always a new file in My Drive; multipart up to
 5 MB, else resumable in 8 MiB pieces following 308 `Range`, the session
 address required to match the upload address's scheme, host, port and
-path exactly (the token goes with the pieces, to that address only), a
-failed session deleted; `safe_file_name`, `confirmed`, 100 MB. Tokens,
-races and errors as K2: refresh token under `org.mailrata.desktop.google`,
-`invalid_grant` parks, Disconnect revokes at
-`oauth2.googleapis.com/revoke` best effort, the store keeps only the
-display name from `about.get`, when, and parked. `oauth.rs`'s listener
+path exactly (the token goes with the pieces, to that address only);
+`safe_file_name`, `confirmed`, 100 MB. **Resumed, as K2 (SEC-11 R20,
+#157):** a piece that fails the same ways (a transport error, a 5xx, a
+short Retry-After) is followed by a status question (`upload_stands`: an
+empty `PUT` with `Content-Range: bytes */<total>` and `Content-Length:
+0`, up to `ASKS` (4) times with the same waits); a 308 goes on from its
+`Range`, never past what was sent, and a 200 or 201 is the file; at most
+`RESUMES` (3) resumes, counted apart from the pieces. A 401 to a token
+Google took before is the token running out on a slow line (the session
+outlived it), so `Bearer` renews it for the same connection, at most
+`RENEWS` (2) times a save, asks what the session holds with the new token
+and goes on; only while the Google Drive connected when the save began is
+still connected, else "Google Drive was disconnected while RATA was
+saving the file, so nothing more was sent." and no other connection's
+token goes anywhere. Any other 401, or a 404 or 410, from a piece or a
+question is "Google Drive ended the upload part way. Try again."
+(`UPLOAD_ENDED`), never `Expired`, so `with_google` neither renews and
+begins again from byte 0 nor parks over it. A failed session is deleted,
+with the newest token, except when the last piece went and its answer was
+lost (`made`, kept for the rest of the save) and the session is then over
+or cannot say: that is kind `unsure` with `MAY_HAVE_SAVED` ("The
+connection to Google Drive was lost as the last of the file went up, so
+Google Drive may have saved it. Check your Google Drive before saving it
+again."), with nothing deleted or sent again, since Drive keeps two files
+of one name. A small save's one multipart request sent and its answer
+lost is `unsure` the same way; a connection never made is said as it is.
+The page treats `unsure` as for OneDrive. Tokens, races and errors as K2:
+refresh token under `org.mailrata.desktop.google`, the same `Kept::stored`
+write-back of a half-written rotation (R19), `invalid_grant` parks,
+Disconnect revokes at `oauth2.googleapis.com/revoke` best effort, the
+store keeps only the display name from `about.get`, when, and parked; an
+error answer is read to `ERROR_MAX` (64 KiB, R18) and parsed for Google's
+first `errors[].reason`, else its `status`, else the HTTP status. Still
+open for stage B (R8): neither service checks, before each fragment or
+piece, that the connection a save began on is still the one connected
+(only Google's token renewal does). `oauth.rs`'s listener
 can hand back extra redirect fields (`heard_with`, `wait_for_answer_from`;
 `heard_from` is gone). It reads at most 64 KiB of a request (`HEAD_MAX`;
 8 KiB until SEC-11 R21, and Google's chooser puts every file picked into
@@ -2069,8 +2141,8 @@ confirmation before paid launch (LAUNCH.md §7, D8). Part 4 (SEC-11,
 2026-10-14) covers connected accounts, Apps and the demo: no High, 6
 Medium, 20 Low. Stage A has fixed the demo's five (D1 to D5, #155), Apps'
 Your accounts (R16, #156), Slack's (R2, R7, R12, R17, R21 and R18's Slack
-half, #159) and the platform's (R5, R6, R13, R14, #160); R19, R20 and
-R18's OneDrive and Google half are in review (#157). Stage B, the connect
+half, #159), the platform's (R5, R6, R13, R14, #160) and OneDrive and
+Google Drive's (R19, R20 and R18's other half, #157). Stage B, the connect
 and disconnect lifecycle of Slack, OneDrive and Google Drive (R1, R3, R4,
 R8, R9, R10, R11, R15), must land before the owner adds any of their
 registrations to a build; none is switched on in a released build. The `loopback-tests`

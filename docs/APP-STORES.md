@@ -107,7 +107,7 @@ testing on real devices and on an IPv6-only network.
 **Stage 4: the owner's accounts and forms** (below, and
 `docs/OWNER-CHECKLIST.md` §9).
 
-**In flight, 2026-10-15** (all open, none merged):
+**In flight, 2026-10-16** (all open, none merged):
 
 | Branch | Pull request | What |
 |---|---|---|
@@ -116,7 +116,7 @@ testing on real devices and on an IPv6-only network.
 | `claude/nat64-guard` | #164 | Stage 1: the outbound guard judges `64:ff9b::/96` by the IPv4 address inside, so IPv6-only networks work. |
 | `claude/ios-dns` | #163 | Stage 3: on iOS the engine looks names up through the system (`dns_sd` and getaddrinfo) instead of hickory. |
 | `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone. Step 1 of 2; step 2 is the Xcode project and a Simulator run. |
-| `claude/iap-server` | not yet | The in-app purchase server on mailrata.org: `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. |
+| `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. |
 
 Still to come: the StoreKit 2 bridge (a local Tauri plugin for iOS only,
 called only from Rust: products, buy, restore, manage), and the purchase
@@ -162,7 +162,8 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
 10. The App Privacy ("nutrition label") answers.
 11. From TestFlight: a purchase, a restore, an upgrade and a cancellation.
 
-Steps 7 to 9 wait for the in-app purchase server to merge. Before the
+Steps 7 to 9 wait for the in-app purchase server (#167) to merge; its
+`LAUNCH.md` steps are then the full ones. Before the
 first submission, also: the Digital Services Act trader details (shown
 publicly; without them RATA is not on the EU store), the age-rating
 questionnaire, the encryption questions, the privacy policy and support
