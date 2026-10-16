@@ -54,7 +54,7 @@ press Summarize, Translate or Run briefing on.
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
 | `infrastructure/licence/` | `mint.sh`, which mints a tester's licence on the VPS and checks the signing key against the one the released app trusts. |
 | `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries) and how. |
-| `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's OneDrive, Slack and Google Drive registrations), `OWNER-CHECKLIST.md` (every step only the owner can take), `APP-STORES.md` (RATA on the iOS App Store and Google Play: decisions, rules and stages), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 
 There is no `src/`. An earlier version of this product was nine .NET
 microservices on Kubernetes; it was abandoned and the code removed in favour of
@@ -69,13 +69,16 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 305 tests, no network required
+cargo test --all-targets   # 318 tests; a few ask real DNS (below)
 cargo clippy --all-targets -- -D warnings
 ```
 
 Toolchain is pinned to **1.94.1** in CI; anything from that release on works.
 
-Those tests never open a socket beyond a scripted server of their own.
+Apart from DNS lookups (some tests ask the system's resolver about names
+that have been stable for years or that do not exist; `resolve.rs` marks
+the ones that need real answers, and two of those need real MX records),
+those tests never open a socket beyond a scripted server of their own.
 Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
@@ -104,7 +107,7 @@ Never enable it in `rata-app`.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
-cargo test          # 136 tests
+cargo test          # 326 tests on Linux
 ```
 
 On Linux you need the system webview first:
@@ -122,7 +125,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (562 checks, among them axe-core accessibility scans of the inbox, an
+policy (579 checks, among them axe-core accessibility scans of the inbox, an
 open message, the composer, Settings and the dialogs, in light and dark,
 failing on any serious or critical rule). CI runs it as *Desktop interface,
 driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
