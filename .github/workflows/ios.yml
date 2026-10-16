@@ -8,8 +8,10 @@ name: iOS
 #
 # What runs here: the shell compiled for iOS, the desktop shell still
 # compiling for macOS, a build without self-update holding none of the
-# updater nor a desktop build the smoke self-test, and RATA itself built for
-# the iOS Simulator and run there, with its self-test and screenshots.
+# updater nor a desktop build the smoke self-test, RATA itself built for
+# the iOS Simulator and run there, with its self-test and screenshots, and
+# RATA built for a device as a store's build would be, unsigned, whose
+# program the privacy manifest is checked against.
 
 on:
   push:
@@ -37,6 +39,12 @@ concurrency:
 env:
   # The toolchain the desktop's CI pins; bump them together.
   RUST: "1.94.1"
+  # The Tauri CLI that makes and builds the Xcode project: the tauri
+  # crate's version in Cargo.lock, which the Simulator job checks.
+  TAURI_CLI: "2.12.0"
+  # Homebrew's own housekeeping costs minutes and changes nothing here.
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
 
 jobs:
   # A store's build or a phone's must not carry RATA's own updater: the
@@ -181,13 +189,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     env:
-      # The Tauri CLI that makes and builds the Xcode project: the tauri
-      # crate's version in Cargo.lock, which a step below checks.
-      TAURI_CLI: "2.12.0"
       BUNDLE: org.mailrata.desktop
-      # Homebrew's own housekeeping costs minutes and changes nothing here.
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-      HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -225,10 +227,14 @@ jobs:
           key: ios-simulator
           # The Tauri CLI is cached on its own, by its version.
           cache-bin: "false"
+          # A failed run's compiling is kept for the next.
+          cache-on-failure: "true"
 
-      - name: Cache the Tauri CLI
+      # Kept as soon as it is installed, so that a later step failing does
+      # not cost the next run its ten minutes again.
+      - name: The Tauri CLI, cached
         id: tauri-cli
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cargo/bin/cargo-tauri
           key: cargo-tauri-${{ env.TAURI_CLI }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST }}
@@ -236,6 +242,13 @@ jobs:
       - name: Install the Tauri CLI
         if: steps.tauri-cli.outputs.cache-hit != 'true'
         run: cargo install tauri-cli --version "$TAURI_CLI" --locked
+
+      - name: Keep the Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-${{ env.TAURI_CLI }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST }}
 
       - name: Assemble the web assets
         run: ./sync-ui.sh
@@ -254,16 +267,32 @@ jobs:
       # key's public half alone, so the licence below works in this build
       # and no other, and the real key is never involved. mint.sh signs it
       # exactly as it signs a customer's, with OpenSSL 3.
+      #
+      # The public half reaches the Rust build as Cargo's own [env], where
+      # licence.rs's option_env! reads it: Xcode compiles the Rust code
+      # (`tauri ios xcode-script`), and the Tauri CLI hands that build only
+      # the variables named TAURI*, WRY*, CARGO_*, RUST_*, PATH and TMPDIR
+      # (tauri-cli's mobile/mod.rs, env_vars), so RATA_LICENCE_PUBLIC_KEY in
+      # the environment alone never arrives. The runner's Cargo home is
+      # thrown away with it.
       - name: A throwaway licence key, and a Pro licence signed with it
         run: |
           openssl_bin="$(brew --prefix openssl@3)/bin"
           key="$RUNNER_TEMP/throwaway-licence.key"
           "$openssl_bin/openssl" genpkey -algorithm ed25519 -out "$key"
+          pub="$("$openssl_bin/openssl" pkey -in "$key" -pubout)"
           {
             echo 'RATA_LICENCE_PUBLIC_KEY<<PEM'
-            "$openssl_bin/openssl" pkey -in "$key" -pubout
+            echo "$pub"
             echo 'PEM'
           } >> "$GITHUB_ENV"
+          config="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          if grep -qs '^\[env\]' "$config"; then
+            echo "::error::$config already has an [env] table"; exit 1
+          fi
+          # A JSON string is a TOML basic string too.
+          python3 -c 'import json, sys; print("\n[env]\nRATA_LICENCE_PUBLIC_KEY = " + json.dumps(sys.argv[1]))' \
+            "$pub" >> "$config"
           licence=$(PATH="$openssl_bin:$PATH" RATA_LICENCE_KEY="$key" RATA_ANY_KEY=1 \
             bash infrastructure/licence/mint.sh smoke@example.com pro 2 2>/dev/null)
           case "$licence" in v1.*.*) ;; *) echo "::error::mint.sh made no licence"; exit 1 ;; esac
@@ -276,14 +305,20 @@ jobs:
           [ -n "$app" ] || { echo "::error::no .app under gen/apple/build"; exit 1; }
           echo "APP=$PWD/$app" >> "$GITHUB_ENV"
           echo "Built $app"
+          # The key's own line of base64, as licence.rs holds the PEM.
+          b64="$(printf '%s\n' "$RATA_LICENCE_PUBLIC_KEY" | sed -n 2p)"
+          if grep -rqaF -- "$b64" "$app"; then
+            echo "The throwaway licence key is compiled in."
+          else
+            echo "::error::the build has no licence key: the licence below could not be checked"; exit 1
+          fi
         working-directory: desktop/rata-app/src-tauri
 
+      # The required-reason APIs are judged on the device's release build
+      # (the job below), not here: a debug build exports every symbol, so
+      # the linker keeps every binding the program never calls.
       - name: The app carries its identifier, its Info.plist keys and its privacy manifest
         run: bash desktop/rata-app/ios/check-app.sh "$APP"
-
-      - name: The privacy manifest gives a reason for each required-reason API the program uses
-        if: ${{ !cancelled() && env.APP != '' }}
-        run: bash desktop/rata-app/ios/required-reasons.sh "$APP/RATA" desktop/rata-app/ios/PrivacyInfo.xcprivacy
 
       - name: Boot an iPhone simulator
         if: ${{ !cancelled() && env.APP != '' }}
@@ -334,3 +369,99 @@ jobs:
           name: ios-simulator
           path: ${{ env.OUT }}
           retention-days: 14
+
+  # RATA for a phone, built as a store's build would be: release, without
+  # self-update or the self-test, for aarch64-apple-ios, and not signed
+  # (--no-sign: the owner's certificate is the TestFlight step's). Its
+  # program is what the privacy manifest describes, so the required-reason
+  # APIs are judged here: a release link keeps only what the program can
+  # reach, where the Simulator's debug build keeps every binding. Then the
+  # same checks of the app as the Simulator's, and neither the updater nor
+  # the self-test in it.
+  device:
+    name: iOS app for a device, unsigned
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The newest Xcode this image has
+        run: |
+          xcode=$(python3 desktop/rata-app/ios/newest-xcode.py)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen and libimobiledevice, which tauri ios init asks for
+        timeout-minutes: 10
+        run: brew install xcodegen libimobiledevice
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST }}
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/rata-app/src-tauri
+          key: ios-device
+          cache-bin: "false"
+          cache-on-failure: "true"
+
+      # Kept as soon as it is installed, so that a later step failing does
+      # not cost the next run its ten minutes again.
+      - name: The Tauri CLI, cached
+        id: tauri-cli
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-${{ env.TAURI_CLI }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST }}
+
+      - name: Install the Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "$TAURI_CLI" --locked
+
+      - name: Keep the Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-${{ env.TAURI_CLI }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST }}
+
+      - name: Assemble the web assets
+        run: ./sync-ui.sh
+        working-directory: desktop/rata-app
+
+      - name: Make the Xcode project
+        run: cargo tauri ios init --ci --skip-targets-install
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: RATA's changes to it
+        run: bash desktop/rata-app/ios/prepare.sh
+
+      - name: Build for a device, release, unsigned
+        run: |
+          cargo tauri ios build --target aarch64 --no-sign --ci -- --no-default-features
+          ipa=$(find gen/apple/build -maxdepth 3 -type f -name '*.ipa' | head -n 1)
+          [ -n "$ipa" ] || { echo "::error::no .ipa under gen/apple/build"; exit 1; }
+          unpacked="$RUNNER_TEMP/device-ipa"
+          rm -rf "$unpacked" && mkdir -p "$unpacked"
+          ditto -x -k "$ipa" "$unpacked"
+          app=$(find "$unpacked/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)
+          [ -n "$app" ] || { echo "::error::no .app in $ipa"; exit 1; }
+          echo "DEVICE_APP=$app" >> "$GITHUB_ENV"
+          ls -la "$ipa" "$app"
+          lipo -info "$app/RATA"
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: The app carries its identifier, its Info.plist keys and its privacy manifest
+        run: bash desktop/rata-app/ios/check-app.sh "$DEVICE_APP"
+
+      - name: The privacy manifest gives a reason for each required-reason API the program uses
+        if: ${{ !cancelled() && env.DEVICE_APP != '' }}
+        run: bash desktop/rata-app/ios/required-reasons.sh "$DEVICE_APP/RATA" desktop/rata-app/ios/PrivacyInfo.xcprivacy
+
+      - name: Neither the updater nor the smoke self-test is in it
+        if: ${{ !cancelled() && env.DEVICE_APP != '' }}
+        run: |
+          bash desktop/rata-app/harness/verify-release.sh --no-updater "$DEVICE_APP/RATA"
+          bash desktop/rata-app/harness/verify-release.sh --no-smoke "$DEVICE_APP/RATA"

@@ -55,6 +55,28 @@ const ENTRY: &str = "self-test";
 const DISCOVER: &str = "someone@anthropic.com";
 /// A real IMAP server, for the greeting.
 const IMAP_HOST: &str = "imap.gmail.com";
+/// Where L1's records are read: Microsoft's minecraft.net, which publishes
+/// both, an autodiscover alias and an SPF record naming Microsoft 365, as
+/// the engine's own test of them on Apple's systems reads them. Its TXT
+/// answer fits one UDP reply: microsoft.com's does not, and the system
+/// then asks again over TCP, which the DNS GitHub's Macs use never answers
+/// (rata-mail, resolve.rs).
+const L1_DOMAIN: &str = "minecraft.net";
+
+/// Script errors the page is known to have that are not RATA's, each with
+/// why, matched by how they begin. They are still reported, as `expected`.
+///
+/// tauri-plugin-notification adds a start-up script to every page
+/// (`init-iife.js`) which, on every system but Windows, asks the plugin
+/// whether notifications are allowed. RATA lets its page call no plugin
+/// command at all (it has no capabilities: new-mail notifications are sent
+/// from Rust, `notify.rs`), so the question is refused and its promise
+/// rejected with nobody to catch it. macOS and Linux have had the same
+/// rejection all along.
+const EXPECTED_ERRORS: [(&str, &str); 1] = [(
+    "unhandled rejection: notification.is_permission_granted not allowed.",
+    "the notification plugin's own start-up script asks a command RATA's page may not use",
+)];
 
 /// One check and what it found.
 #[derive(Debug, Clone, Serialize)]
@@ -491,8 +513,11 @@ async fn network(smoke: &Smoke) {
     };
     smoke.record(judge_mx(&r.mx("gmail.com").await));
     smoke.record(judge_srv(r.srv_imaps("gmail.com").await));
-    let txt = r.txt("microsoft.com").await;
-    let alias = r.cname("autodiscover.microsoft.com").await;
+    // The TXT question first: a CNAME question holds up later ones about
+    // the name it was asked of (Resolver::cname), and nothing more is asked
+    // about the autodiscover name.
+    let txt = r.txt(L1_DOMAIN).await;
+    let alias = r.cname(&format!("autodiscover.{L1_DOMAIN}")).await;
     smoke.record(judge_l1(&txt, alias));
     smoke.record(judge_discovery(
         rata_mail::resolve::discover(&r, DISCOVER, None).await,
@@ -523,20 +548,34 @@ fn judge_srv(found: Option<(String, u16)>) -> Check {
     )
 }
 
-/// What L1 reads of a domain behind a mail filter, asked of microsoft.com:
-/// its SPF record (a TXT record, read strictly) and its autodiscover alias,
-/// which names Microsoft 365.
+/// What L1 reads of a domain behind a mail filter, asked of [`L1_DOMAIN`]:
+/// its SPF record (a TXT record, read strictly), whose mailbox providers
+/// must be Microsoft 365 alone, and its autodiscover alias, which must name
+/// Microsoft 365 too.
 fn judge_l1(txt: &[String], alias: Option<String>) -> Check {
-    use rata_mail::discover::{autodiscover_provider, parse_spf, spf_record};
+    use rata_mail::discover::{
+        MS_IMAP, autodiscover_provider, parse_spf, spf_provider, spf_record,
+    };
     let spf = spf_record(txt).and_then(parse_spf);
-    let microsoft = alias.as_deref().and_then(autodiscover_provider).is_some();
+    let named: Vec<&str> = spf
+        .iter()
+        .flat_map(|s| s.includes.iter())
+        .filter_map(|i| spf_provider(i))
+        .map(|h| h.host)
+        .collect();
+    let by_spf = !named.is_empty() && named.iter().all(|h| *h == MS_IMAP);
+    let by_alias = alias
+        .as_deref()
+        .and_then(autodiscover_provider)
+        .is_some_and(|h| h.host == MS_IMAP);
     Check::new(
         "l1 records",
-        spf.as_ref().is_some_and(|s| !s.includes.is_empty()) && microsoft,
+        by_spf && by_alias,
         json!({
-            "microsoft.com txt records": txt.len(),
+            format!("{L1_DOMAIN} txt records"): txt.len(),
             "spf includes": spf.map(|s| s.includes),
-            "autodiscover.microsoft.com": alias,
+            "spf names": named,
+            format!("autodiscover.{L1_DOMAIN}"): alias,
         }),
     )
 }
@@ -584,8 +623,9 @@ fn judge_greeting(said: Result<String, String>) -> Check {
 
 // ------------------------------------------------------------- the page
 
-/// The page loaded, is RATA's, has no script errors, has the bridge where
-/// it should (app.html), and showed the view asked for.
+/// The page loaded, is RATA's, has no script errors but the expected ones
+/// ([`EXPECTED_ERRORS`]), has the bridge where it should (app.html), and
+/// showed the view asked for.
 fn judge_page(page: Option<&Page>, view: Option<&str>) -> Check {
     let Some(p) = page else {
         return Check::new("page", false, json!({ "error": "the page never reported" }));
@@ -600,8 +640,23 @@ fn judge_page(page: Option<&Page>, view: Option<&str>) -> Check {
     if p.path == "app.html" && !(p.bridge && p.tauri) {
         wrong.push("the bridge is not there".into());
     }
-    if !p.errors.is_empty() {
-        wrong.push(format!("{} script error(s)", p.errors.len()));
+    let mut expected: Vec<String> = Vec::new();
+    let mut errors: Vec<&str> = Vec::new();
+    for e in &p.errors {
+        match EXPECTED_ERRORS
+            .iter()
+            .find(|(start, _)| e.starts_with(start))
+        {
+            Some((_, why)) => expected.push(format!("{e} ({why})")),
+            None => errors.push(e),
+        }
+    }
+    if !errors.is_empty() {
+        wrong.push(format!(
+            "{} script error(s): {}",
+            errors.len(),
+            errors.join(" | ")
+        ));
     }
     if let Some(v) = view {
         if p.path != "app.html" {
@@ -613,7 +668,7 @@ fn judge_page(page: Option<&Page>, view: Option<&str>) -> Check {
     Check::new(
         "page",
         wrong.is_empty(),
-        json!({ "path": p.path, "problems": wrong }),
+        json!({ "path": p.path, "problems": wrong, "expected": expected }),
     )
 }
 
@@ -791,7 +846,36 @@ mod tests {
 
         let mut broken = page("app.html", "RATA");
         broken.errors = vec!["ReferenceError: Can't find variable: Notification".into()];
-        assert!(!judge_page(Some(&broken), None).ok);
+        let c = judge_page(Some(&broken), None);
+        assert!(!c.ok);
+        assert!(
+            c.detail["problems"][0]
+                .as_str()
+                .unwrap()
+                .contains("Can't find variable")
+        );
+
+        // The notification plugin's own question, refused as on a computer:
+        // expected, and still reported. Anything beside it still fails, and
+        // so does the same words not at the start.
+        let refused = "unhandled rejection: notification.is_permission_granted not allowed. \
+                       Permissions associated with this command: notification:default";
+        let mut plugin = page("app.html", "RATA");
+        plugin.errors = vec![refused.into()];
+        let c = judge_page(Some(&plugin), None);
+        assert!(c.ok, "{c:?}");
+        assert!(
+            c.detail["expected"][0]
+                .as_str()
+                .unwrap()
+                .starts_with(refused)
+        );
+        plugin
+            .errors
+            .push("TypeError: x is undefined (app.html:12)".into());
+        assert!(!judge_page(Some(&plugin), None).ok);
+        plugin.errors = vec![format!("could not load {refused}")];
+        assert!(!judge_page(Some(&plugin), None).ok);
 
         // Asked for Settings: it must be app.html, with Settings showing.
         assert!(!judge_page(Some(&page("auth.html", "Sign in to RATA")), Some("set")).ok);
@@ -831,14 +915,29 @@ mod tests {
         assert!(!judge_srv(Some((IMAP_HOST.into(), 143))).ok);
         assert!(!judge_srv(None).ok);
 
+        // An SPF record naming Microsoft 365 among senders that are not
+        // mailbox providers, and the autodiscover alias: both say Microsoft.
         let spf = vec![
             "google-site-verification=abc".to_string(),
-            "v=spf1 include:_spf-a.microsoft.com include:spf-a.hotmail.com -all".to_string(),
+            "v=spf1 include:spf.protection.outlook.com include:_spf.salesforce.com -all"
+                .to_string(),
         ];
         let alias = Some("autodiscover.outlook.com".to_string());
-        assert!(judge_l1(&spf, alias.clone()).ok);
+        let c = judge_l1(&spf, alias.clone());
+        assert!(c.ok, "{c:?}");
+        assert_eq!(c.detail["spf names"][0], rata_mail::discover::MS_IMAP);
+        assert_eq!(c.detail["minecraft.net txt records"], 2);
+        // Either half missing, an SPF record naming no provider or another
+        // one too, or an alias somewhere else, is not what L1 needs.
         assert!(!judge_l1(&spf, None).ok);
-        assert!(!judge_l1(&[], alias).ok);
+        assert!(!judge_l1(&[], alias.clone()).ok);
+        let unknown = vec!["v=spf1 include:_spf-a.microsoft.com -all".to_string()];
+        assert!(!judge_l1(&unknown, alias.clone()).ok);
+        let two = vec![
+            "v=spf1 include:spf.protection.outlook.com include:_spf.google.com ~all".to_string(),
+        ];
+        assert!(!judge_l1(&two, alias).ok);
+        assert!(!judge_l1(&spf, Some("autodiscover.example.com".into())).ok);
 
         assert!(judge_greeting(Ok("* OK Gimap ready".into())).ok);
         assert!(!judge_greeting(Ok("* BYE".into())).ok);

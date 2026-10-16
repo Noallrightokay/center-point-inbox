@@ -11,6 +11,10 @@
 #     Objective-C classes it links to (NSUserDefaults);
 #   - the class and method names it asks for by name at run time (strings),
 #     which is how Rust's Objective-C bindings reach a class or a method.
+# Give it a release build, as the store gets: a debug build for iOS exports
+# every symbol, so its linker keeps each of the thousands of bindings
+# objc2's crates generate (UITextInputMode's activeInputModes among them)
+# whether anything calls it or not.
 # Exit 0 when the manifest declares exactly the categories found, 1 when a
 # category is used and not declared, or declared and not used.
 set -euo pipefail

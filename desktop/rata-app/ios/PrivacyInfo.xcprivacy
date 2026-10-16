@@ -9,7 +9,12 @@
 
   The required-reason APIs are the ones the built program calls, found by
   required-reasons.sh from its undefined symbols and the class and method
-  names it asks for. The iOS job fails when they and this list differ.
+  names it asks for, in the device's release build (ios.yml): a debug
+  build keeps bindings nothing calls. The iOS job fails when they and this
+  list differ. Not here, because nothing in RATA calls them: system boot
+  time (Rust's clocks read clock_gettime, which is not on Apple's list, and
+  nothing asks for mach_absolute_time or systemUptime), disk space, active
+  keyboards and user defaults.
 -->
 <plist version="1.0">
 <dict>
@@ -29,16 +34,6 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
-			</array>
-		</dict>
-		<!-- 35F9.1: time elapsed between events inside the app (timeouts,
-		     how long a check took). -->
-		<dict>
-			<key>NSPrivacyAccessedAPIType</key>
-			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
-			<key>NSPrivacyAccessedAPITypeReasons</key>
-			<array>
-				<string>35F9.1</string>
 			</array>
 		</dict>
 	</array>
