@@ -520,6 +520,10 @@ mod tests {
             "254.169.in-addr.arpa",
             "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa",
             "b.e.f.ip6.arpa",
+            // Any other reverse zone too: the guard refuses all of `.arpa`,
+            // where no mail server is named.
+            "1.2.0.192.in-addr.arpa",
+            "arpa",
             // What dns_sd would read as an escape: `\l` is `l`, `\108` is
             // `l`, `\046` is a dot inside a label.
             "acme.loca\\l",
@@ -561,7 +565,6 @@ mod tests {
             "a_b.example.com",
             "Autodiscover.Example.COM.",
             "254.169.in-addr.arpa.example.com",
-            "1.2.0.192.in-addr.arpa",
             "_",
         ] {
             assert_eq!(question(name).as_deref(), Some(name), "{name}");
