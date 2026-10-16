@@ -110,7 +110,9 @@ unsafe extern "C" {
 /// The rdata of every `rrtype` record at `name`, as the system's resolver
 /// hands it. Nothing when the name or the record does not exist, when the
 /// resolver fails, and when no answer has come within `SYSTEM_WAIT`, which
-/// is how hickory's failed lookups are treated on the desktop.
+/// is how hickory's failed lookups are treated on the desktop. Nothing, and
+/// at once, for a name under a domain the outbound guard refuses whatever
+/// DNS says, which is never asked (`records::question`).
 pub(crate) async fn ask(name: &str, rrtype: u16) -> Vec<Vec<u8>> {
     asked(name, rrtype).await.0
 }
@@ -129,7 +131,9 @@ pub(crate) enum Ended {
     Closed,
     /// No answer by the deadline.
     OutOfTime,
-    /// The name cannot be asked at all.
+    /// The name cannot be asked at all, or is under a domain no public mail
+    /// server has (`.local` above all, which would go out by multicast DNS
+    /// on the local network; `records::question`), so it was not.
     NotAsked,
 }
 
