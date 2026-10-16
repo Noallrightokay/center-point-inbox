@@ -212,6 +212,24 @@ customer's typed server says.
   tests cover them. `check_resolved` refuses a name if any answer is
   private. It has no loopback exception at all: the exception is only in
   `check_literal`, and only for the literal `127.0.0.1`.
+- *Follow-up, 2026-10-16, after this review (#164, #163).* NAT64's
+  well-known prefix `64:ff9b::/96` is no longer refused outright: an
+  address in it is judged by the IPv4 address in its last 32 bits, as 6to4
+  is, and passes exactly when that IPv4 address would (`64:ff9b::808:808`
+  passes; `64:ff9b::7f00:1`, `::a00:1`, `::a9fe:a9fe`, `::6440:1` and
+  `::c0a8:101` are refused), because on an IPv6-only network with DNS64 it
+  is the only answer an IPv4-only mail host has. Still refused: the
+  local-use `64:ff9b:1::/48` (RFC 8215), the rest of `64:ff9b::/32`, and a
+  /96 with anything but zeros before the IPv4 address. IPv4-mapped and
+  IPv4-compatible addresses are unchanged. The private names
+  (`is_private_name`) now also refuse the zones themselves (`local`,
+  `localhost`, `internal`) and all of `arpa`; before, `localhost` and names
+  under `.localhost`, `.local`, `.internal` and `.home.arpa`. Tests:
+  `nat64_is_judged_by_the_ipv4_address_inside`,
+  `the_rest_of_the_nat64_block_is_still_refused`,
+  `the_other_ipv4_embeddings_are_judged_as_before`,
+  `a_nat64_answer_is_judged_like_any_other`, `names_that_are_never_public`
+  (guard.rs), and the NAT64 tests in `resolve.rs`, `imap.rs` and `smtp.rs`.
 - Every socket in the engine's non-test code opens in `imap::dial`, which
   IMAP, the IDLE watch and SMTP all call with the addresses `resolve_public`
   returned, so there is one lookup and no rebinding window.

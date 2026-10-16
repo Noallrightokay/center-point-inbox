@@ -1304,21 +1304,22 @@ has merged goes out in 0.1.52.
 The plan, the store rules behind it and the owner's decisions are in
 `docs/APP-STORES.md`. iOS first, then Google Play; the Mac App Store is
 undecided. On 2026-10-15 the owner chose Apple In-App Purchase (option A1)
-for iOS and consumption-only (G1) for Google Play. State (2026-10-16), all
-open and none merged: stage 1's store build of the interface
+for iOS and consumption-only (G1) for Google Play. State (2026-10-16):
+merged, the NAT64 guard fix
+([#164](https://github.com/Noallrightokay/center-point-inbox/pull/164))
+and, for iOS, the engine's DNS through the system
+([#163](https://github.com/Noallrightokay/center-point-inbox/pull/163));
+open, stage 1's store build of the interface
 ([#165](https://github.com/Noallrightokay/center-point-inbox/pull/165)),
 store-safe pages on mailrata.org
-([#162](https://github.com/Noallrightokay/center-point-inbox/pull/162))
-and the NAT64 guard fix
-([#164](https://github.com/Noallrightokay/center-point-inbox/pull/164));
-for iOS, the engine's DNS through the system
-([#163](https://github.com/Noallrightokay/center-point-inbox/pull/163)) and
-the shell as a library a phone can start
-([#166](https://github.com/Noallrightokay/center-point-inbox/pull/166));
+([#162](https://github.com/Noallrightokay/center-point-inbox/pull/162)),
+for iOS the shell as a library a phone can start
+([#166](https://github.com/Noallrightokay/center-point-inbox/pull/166)),
 and the in-app purchase server on mailrata.org
 ([#167](https://github.com/Noallrightokay/center-point-inbox/pull/167)); the
 StoreKit bridge and the purchase screen are still to come. Nothing has run
-on a phone.
+on a phone, and nothing on a real IPv6-only network (`docs/APP-STORES.md`
+says what #163 and #164 leave).
 
 ---
 

@@ -92,12 +92,14 @@ yet seen on a Mac); the AI consent rewritten and made withdrawable;
 "Report this answer"; Privacy and Terms rows in Settings; store-safe help,
 privacy, terms and account-deletion pages; phone fixes (safe areas, no
 Install button, notification permission asked only when turned on); the
-outbound guard on IPv6-only networks; and groundwork for mobile.
+outbound guard on IPv6-only networks (done: #164, merged 2026-10-16); and
+groundwork for mobile.
 
 **Stage 2: the owner's decisions** (below).
 
 **Stage 3: the mobile builds.** The lib target, an Android keychain
-(keyring keeps nothing on Android), DNS on iOS through the system,
+(keyring keeps nothing on Android), DNS on iOS through the system (the
+engine's half done: #163, merged 2026-10-16; what it leaves is below),
 `rustls-platform-verifier` set up on Android, links through
 `tauri-plugin-opener`, links in formatted mail on mobile, saving through
 pickers and share sheets, background refresh, mobile sign-in, the Android
@@ -107,14 +109,39 @@ testing on real devices and on an IPv6-only network.
 **Stage 4: the owner's accounts and forms** (below, and
 `docs/OWNER-CHECKLIST.md` §9).
 
-**In flight, 2026-10-16** (all open, none merged):
+**Merged, 2026-10-16:**
+
+- #164 (`claude/nat64-guard`), stage 1. The outbound guard judges an
+  address in NAT64's well-known prefix `64:ff9b::/96` by the IPv4 address
+  in its last 32 bits, so a mail host with only IPv4 can be reached from
+  an IPv6-only network with DNS64. The rest of `64:ff9b::/32`, the
+  local-use `64:ff9b:1::/48` among it, stays refused; an operator's own
+  NAT64 prefix is judged as ordinary IPv6.
+- #163 (`claude/ios-dns`), stage 3, the engine's half of DNS on iOS. SRV,
+  MX and TXT through dns_sd, addresses through getaddrinfo (which makes the
+  NAT64 address on an IPv6-only network), no CNAME question ever, and
+  nothing asked under `local` or the other private zones. Every address is
+  still judged by the guard. Its tests run on a Mac and in an iOS Simulator
+  (CI job *Mail layer on macOS*), not on a phone.
+
+What they leave for stage 3, before submission:
+
+- A test on a real IPv6-only network with NAT64, on a device, which is how
+  Apple reviews (2.5.5). GitHub's runners have no such network.
+- An IPv4 address typed as the server is dialled as typed, never
+  synthesised to NAT64, so on an IPv6-only network it cannot be reached
+  (names are fine). Probably fixed by handing the literal to getaddrinfo on
+  iOS too (`resolve_public`), and not visible on any runner.
+- TXT over TCP through dns_sd has never been seen: an answer too big for one
+  UDP reply goes over TCP, and the macOS runners' DNS never answers one.
+  L1's SPF evidence for such a domain depends on it; check it on a device.
+
+**In flight, 2026-10-16** (open):
 
 | Branch | Pull request | What |
 |---|---|---|
 | `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Built in steps; not ready until its description says so. |
 | `claude/store-pages` | #162 | Stage 1: store-safe help, privacy and terms at `/in-app/…`, and a public account-deletion page. |
-| `claude/nat64-guard` | #164 | Stage 1: the outbound guard judges `64:ff9b::/96` by the IPv4 address inside, so IPv6-only networks work. |
-| `claude/ios-dns` | #163 | Stage 3: on iOS the engine looks names up through the system (`dns_sd` and getaddrinfo) instead of hickory. |
 | `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone. Step 1 of 2; step 2 is the Xcode project and a Simulator run. |
 | `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. |
 

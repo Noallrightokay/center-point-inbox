@@ -44,7 +44,7 @@ press Summarize, Translate or Run briefing on.
 
 | Path | What it is |
 |---|---|
-| `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, signing in with a password or an OAuth token, and the outbound guard. Knows nothing about the app. |
+| `desktop/rata-mail/` | The mail engine. A standalone Rust library: DNS discovery, IMAP, SMTP, signing in with a password or an OAuth token, and the outbound guard. On iOS it looks names up through the system's own resolver (`dns_sd.rs`, `records.rs`) instead of hickory. Knows nothing about the app. |
 | `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, Sign in with Microsoft, and the glue to the interface. |
 | `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the update feed's rules (`feed.cjs`, tested by `feed.test.cjs`), the release check (`verify-release.sh`; `--title <version>` prints the window title it expects, "beta" for 0.x only) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
 | `desktop/rata-app/demo/` | The clickable demo: the real interface over a fake backend in plain JavaScript (`demo-backend.js`) with invented sample mail. Its `README.md` is the guide for anyone who wants to change it, and needs no Rust. |
@@ -69,16 +69,23 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 318 tests; a few ask real DNS (below)
+cargo test --all-targets   # 343 tests; a few ask real DNS (below)
 cargo clippy --all-targets -- -D warnings
 ```
 
-Toolchain is pinned to **1.94.1** in CI; anything from that release on works.
+Toolchain is pinned to **1.94.1** in CI (`RUST` in `desktop-ci.yml` and in
+`mail-apple.yml`, bumped together; `release.yml` names it inline); anything
+from that release on works.
 
 Apart from DNS lookups (some tests ask the system's resolver about names
 that have been stable for years or that do not exist; `resolve.rs` marks
 the ones that need real answers, and two of those need real MX records),
-those tests never open a socket beyond a scripted server of their own.
+those tests never open a socket beyond a scripted server of their own. A
+resolver that answers MX questions with no records fails those two
+(`a_domain_at_microsoft_365_is_found_by_its_mx` and
+`a_real_business_domain_resolves_through_its_mx`). The container this
+project's assistant sessions run in is one (341 of 343 pass there); CI has
+real MX answers, and both pass there.
 Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
@@ -100,6 +107,21 @@ The `loopback-tests` feature lets the outbound guard connect to 127.0.0.1,
 so it refuses to compile without debug assertions, and `build.rs` refuses
 it in any release-profile build even with debug assertions forced on.
 Never enable it in `rata-app`.
+
+On iOS the engine cannot read the network's DNS settings, so there it asks
+the system's own resolver instead of hickory: SRV, MX and TXT through
+dns_sd (`dns_sd.rs`, answers read by `records.rs`), addresses through
+getaddrinfo, and every address still judged by the outbound guard.
+`build.rs` turns that on for iOS, and on a Mac only with the test-only
+`system-dns` feature, which the macOS app never uses. None of it can run
+on Linux, so the workflow *Mail on Apple systems* (`mail-apple.yml`, job
+*Mail layer on macOS*) runs on every change to the engine: the tests with
+hickory as the macOS app has it, again with `--features system-dns` (12
+of them, ignored elsewhere, ask real DNS and run in a step of their own),
+clippy for iOS, a check that hickory is not in the iOS build, a build and
+link for iOS and the iOS Simulator, and the tests in an iOS Simulator. It
+is not part of the release gate. Nothing of it has run on a phone or on a
+real IPv6-only network.
 
 ### The desktop app
 
@@ -236,6 +258,16 @@ explicit opt-in step for the Apple variables because of this.
 The Windows installer is `RATA_<version>_x64-setup.exe`. Anything promising a
 `.msi` is wrong.
 
+**On iOS, never ask the system's resolver for a CNAME.**
+A CNAME question about a name that has none holds up later questions that
+reach that name, from RATA or any other app, since the system's cache is shared:
+on macOS getaddrinfo then waited 10 seconds and more, and a TXT question was
+waited out in the iOS Simulator. So the engine learns whether
+`autodiscover.<domain>` is an alias from an address question, and takes
+the alias the system hands back on the way (`dns_sd::aliased`). Nor can a
+network test ask for a TXT set too big for one UDP reply (microsoft.com's):
+the macOS runners' DNS never answers it.
+
 ---
 
 ## How licensing works
@@ -317,7 +349,10 @@ Be realistic about this before promising anything to a customer.
   People, never from spam (v0.1.43), sent as `"Name" <address>`
 - Settings → Copy diagnostics (v0.1.43): a plain-text block for a bug report
   with no address, password or message text in it, plus Help and Report a bug
-- A guard that stops a hostile mail server redirecting the app at your own LAN
+- A guard that stops a hostile mail server redirecting the app at your own LAN;
+  on an IPv6-only network with NAT64 it judges an address in `64:ff9b::/96`
+  by the IPv4 address inside, so it no longer refuses a mail server that has
+  only IPv4 there (not yet seen on a real IPv6-only network)
 
 **Updates:** from v0.1.23 the app offers each new version itself and
 installs it only if it is signed with the project's update key, once that key
@@ -389,7 +424,10 @@ Dovecot and GreenMail on every PR (`tests/loopback.rs`), but not against
 Gmail, Outlook or any hosted provider. The classification that decides
 "wrong password" (`auth`) versus "refused token" (`oauth`) versus "server
 unreachable" (`net`), and the discovery chain against real DNS, have never
-run against a live provider.
+run against a live provider. Nor has the engine run on a phone or on a real
+IPv6-only network with NAT64, which is where Apple reviews apps: the NAT64
+guard and the iOS lookups are tested only in CI, the lookups on a Mac and
+in an iOS Simulator.
 
 That is what `docs/SMOKE.md` is for: a checklist, one column per provider,
 that the owner runs on real machines and records in `docs/MVP-EVIDENCE.md`.
