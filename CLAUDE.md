@@ -245,7 +245,13 @@ K1 and K6's page (SEC-10); v0.1.51 adds the Apps view (pins, Recent,
 search, Your accounts), OneDrive and Google Drive (K2, K4, live in a
 build with the owner's registrations) and Choose files, and reads PDFs in
 WebKit (PDF.js's `for await` over a `ReadableStream`, which WebKit cannot
-iterate; `pdfLib` gives the stream an async iterator). An
+iterate; `pdfLib` gives the stream an async iterator); v0.1.52 is the
+security review's part 4, stage A (SEC-11): one RATA at a time through a
+lock on the list, the list and Windows keychain entries kept on this
+computer rather than a roaming profile, Slack's sign-in on both loopbacks
+with targets that say who they are and no link previews, OneDrive and
+Google Drive saves that resume and say when a file may already be there,
+and Apps' accounts kept per RATA account. An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
