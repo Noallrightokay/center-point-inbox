@@ -100,6 +100,16 @@ An older one is refused with `reason: 'too-old'` before the database is
 asked, and the app shows the server's sentence: sign in at mailrata.org to
 get a new one. So a token that leaked long ago cannot be revived.
 
+**A licence from the App Store.** Since subscriptions are sold in the iPhone
+app, `sub` may instead be `apple:<originalTransactionId>`, Apple's number for
+the purchase, never an address. Such a licence renews from the
+`apple_subscriptions` row Apple's signed purchases and notifications keep,
+not from `subscriptions`, and its refusals never send anyone to sign in at
+mailrata.org, where a purchase on the phone has no account: one too old to
+renew itself, or one that cannot be read, is told to press Restore
+purchases (`APPLE_SAID`), which sends the phone's purchases to
+`/api/licence/apple` for a new one. See `LAUNCH.md` §11 and `lib/apple.js`.
+
 The worst somebody with a stolen token can do is obtain a copy of a token they
 already have — the endpoint returns a licence for the address inside the licence
 presented, and nothing else. Asking a customer to type an email and password

@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (994 checks).
+the website's test suites pass with `npm test` after it (1040 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -523,7 +523,11 @@ its row within seconds; and the iPhone app opens its workspace after
 buying. The server log names the missing step otherwise: `APPLE_APP_ID is
 not set` (a real purchase before step 7), `run section 7 of
 rata-next/database.sql`, or a refused signature by Apple's library status
-name, never the purchase itself.
+name, never the purchase itself. A line `licence/apple: N transaction(s)
+were for another app (INVALID_APP_IDENTIFIER)` after your own purchase
+means `APPLE_BUNDLE_ID` does not match the app's bundle id (steps 3 and 7):
+every purchase then looks like another app's, and the phone is told
+"There is no active RATA subscription on this Apple account."
 
 Two choices are made for you, and are yours to revisit:
 

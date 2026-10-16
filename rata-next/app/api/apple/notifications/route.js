@@ -17,9 +17,11 @@ export const dynamic = 'force-dynamic';
    The notification is signed like a transaction, and the transaction and
    renewal info inside it are signed again; all three are verified
    (lib/apple.js), each by the verifier of the notification's environment.
-   What each type changes is appleChange's; every write is ordered by when
-   Apple signed the notification, so one delivered late never undoes a later
-   one. A subscription not seen yet gets its row from the notification.
+   What each type changes is appleChange's; every write is ordered by the
+   period its transaction is for, then by when Apple signed the
+   notification, so one delivered late never undoes a later one, and a
+   renewal delivered after a refund of the period before it still lands. A
+   subscription not seen yet gets its row from the notification.
 
    Apple retries anything not answered 200, for days. So a refusal of the
    signature is a 400 that says nothing more, and a fault at this end (the

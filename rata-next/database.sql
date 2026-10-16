@@ -261,8 +261,10 @@ create trigger pending_subscriptions_touch
 --    Notifications (app/api/apple/notifications) keep up to date,
 --    and what /api/licence/renew reads to renew a licence whose
 --    subject is apple:<original_transaction_id>. Every write is
---    ordered by signed_at, when Apple signed what it says, so a
---    notification delivered late never undoes a later one.
+--    ordered by the period it is for (a later expires_at wins),
+--    then by signed_at, when Apple signed what it says, so a
+--    notification delivered late never undoes a later one
+--    (lib/apple.js, appleWrite).
 --
 --    Live means revoked_at is null and expires_at, or grace_until
 --    (Apple's billing grace period, when a renewal has failed), is

@@ -255,10 +255,9 @@ export default async function run(state) {
        write either yet. */
     const t = { originalTransactionId: '2000000000000001', productId: Object.keys(APPLE_PRODUCTS)[0], expiresDate: Date.now() + 86400e3,
       signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.desktop', environment: 'Production' };
-    const written = [apple.appleRowOf(t, 'Production'), ...apple.APPLE_ACTED.flatMap((type) => {
-      const c = apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production');
-      return c ? [c.patch, c.insert] : [];
-    })];
+    const written = [apple.appleRowOf(t, 'Production'), ...[apple.applePurchase(t, 'Production'), ...apple.APPLE_ACTED.map((type) =>
+      apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production'))]
+      .flatMap((c) => (c ? [c.patch, c.insert, ...(c.later && c.later.values ? [c.later.values] : [])] : []))];
     const keys = new Set(written.flatMap(Object.keys));
     check(written.length > 2 && [...keys].every(k => cols.includes(k) && SAID[k]) && !keys.has('email') && !keys.has('app_account_token'),
       `what the code writes is only what the page names, never an address: ${[...keys].join(', ')}`);
