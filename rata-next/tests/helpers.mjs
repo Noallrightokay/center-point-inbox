@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export function makeChecker(state) {
@@ -106,9 +107,12 @@ export function fakeSupabaseKey(role) {
 
    A browser signs in here too, as the public deletion page does: GoTrue's
    password grant answers a session for `password` and refuses anything
-   else, logout is accepted, and every answer carries CORS headers, since
-   the page is on another origin. A session is believed only if this
-   stand-in issued it, or is the fixed 'a-session' the route tests send. */
+   else, logout ends the sessions its scope names as GoTrue does ('global',
+   the default: every session the person has; 'local': the caller's only;
+   'others': all but the caller's), and every answer carries CORS headers,
+   since the page is on another origin. A session is believed only while it
+   is in `tokens`: issued by this stand-in and not ended, or the fixed
+   'a-session' the route tests send. */
 export async function fakeSupabase() {
   const USER = { id: '0b5c1f7e-8a8b-4b8e-9c55-3f1d2a6b7c80', email: 'Leaver@Example.com', aud: 'authenticated', role: 'authenticated' };
   const fake = { aiUsage: 'rows', sub: null, calls: [], password: 'the right password', tokens: new Set(['a-session']) };
@@ -134,11 +138,20 @@ export async function fakeSupabase() {
           return json(400, { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
         }
         const exp = Math.floor(Date.now() / 1000) + 3600;
-        const token = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: USER.id, email: USER.email.toLowerCase(), role: 'authenticated', aud: 'authenticated', exp })}.sig`;
+        /* Each sign-in its own session, as GoTrue's session_id makes it. */
+        const token = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: USER.id, email: USER.email.toLowerCase(), role: 'authenticated', aud: 'authenticated', exp, session_id: randomUUID() })}.sig`;
         fake.tokens.add(token);
         return json(200, { access_token: token, token_type: 'bearer', expires_in: 3600, expires_at: exp, refresh_token: 'a-refresh-token', user: USER });
       }
-      if (req.method === 'POST' && url.pathname === '/auth/v1/logout') { fake.tokens.delete(bearer); res.writeHead(204, cors); res.end(); return; }
+      if (req.method === 'POST' && url.pathname === '/auth/v1/logout') {
+        if (!fake.tokens.has(bearer)) return json(401, { code: 401, error_code: 'bad_jwt', msg: 'invalid JWT' });
+        const scope = url.searchParams.get('scope') || 'global';
+        if (!['global', 'local', 'others'].includes(scope)) return json(400, { code: 400, error_code: 'validation_failed', msg: 'Unsupported scope' });
+        for (const t of [...fake.tokens]) {
+          if (scope === 'global' || (scope === 'local' ? t === bearer : t !== bearer)) fake.tokens.delete(t);
+        }
+        res.writeHead(204, cors); res.end(); return;
+      }
       if (req.method === 'GET' && url.pathname === '/auth/v1/user') {
         return fake.tokens.has(bearer) ? json(200, USER) : json(401, { code: 401, error_code: 'bad_jwt', msg: 'invalid JWT' });
       }

@@ -8,8 +8,8 @@
    are lib/account.js's, not this page's.
 
    Nothing is kept in the browser: the client holds its session in memory
-   only, Cancel ends it at the sign-in service, and it goes with the page.
-   Every word is drawn with textContent. */
+   only, Cancel ends that one session at the sign-in service, and it goes
+   with the page. Every word is drawn with textContent. */
 (() => {
   'use strict';
   const LIB = '/vendor/supabase-js-2.112.4.js';
@@ -139,8 +139,11 @@
     const c = sb;
     session = null;
     /* Ended at the sign-in service before the form comes back, so the next
-       sign-in is never ended by this one; at most five seconds. */
-    if (c) await Promise.race([c.auth.signOut().catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
+       sign-in is never ended by this one; at most five seconds. Only this
+       page's session: the library's default scope, 'global', would end
+       every sign-in the person has, on mailrata.org and every other device,
+       for backing out of a deletion. */
+    if (c) await Promise.race([c.auth.signOut({ scope: 'local' }).catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
     say('');
     $('del-who').textContent = '';
     ask.hidden = true;

@@ -14,7 +14,8 @@
 /* DESIGN.md: the website's tokens. This page is one a store build opens,
    so it has no site navigation and no link but to the other /in-app/ pages
    (lib/in-app.js, tests/in-app.test.mjs). What it removes and keeps is
-   lib/account.js's, word for word, which the test checks. */
+   lib/account.js's, word for word, and what it says of the backups and
+   where to write is the privacy policy's; the test checks both. */
 :root{
   --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
   --ink:#15171C; --slate:#51565F; --faint:#6B717B;
@@ -102,6 +103,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
     <li>your AI usage record (only what your AI requests cost each month)</li>
     <li>your login</li>
   </ul>
+  <p id="del-backups">Backups of the website’s database are encrypted before they leave the server, and each is deleted 90 days after it is made, so something deleted from the database is gone from every backup within 90 days.</p>
 
   <h2 id="keeps-h">What it cannot reach</h2>
   <ul id="del-keeps">
@@ -126,11 +128,12 @@ button:disabled{opacity:.6;cursor:not-allowed}
       <label for="del-password">Password</label>
       <input type="password" id="del-password" autocomplete="current-password" aria-describedby="del-msg">
       <div class="row"><button class="go" id="del-signin-go" type="submit">Sign in</button></div>
+      <p id="del-write">If you cannot sign in, you can still ask for your account to be deleted: write to [OWNER: contact email] from the address on your account.</p>
     </form>
 
     <div id="del-confirm" hidden>
       <h3 id="del-confirm-h" tabindex="-1">Delete the account for <span id="del-who"></span>?</h3>
-      <p>This cannot be undone. Everything listed under What deleting it removes goes at once.</p>
+      <p>This cannot be undone. Everything listed under What deleting it removes goes at once, apart from the backups, which go within 90 days.</p>
       <div class="row">
         <button class="danger" id="del-go" type="button">Delete my account</button>
         <button class="ghost" id="del-cancel" type="button">Cancel</button>
@@ -141,7 +144,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
     <div id="del-done" hidden>
       <h3 id="del-done-h" tabindex="-1">Your account is deleted</h3>
-      <p>Everything listed under What deleting it removes is gone from mailrata.org. Your mail is untouched at your provider, and the RATA app keeps what it holds on your device until you uninstall it.</p>
+      <p>Everything listed under What deleting it removes is gone from mailrata.org, apart from the backups, which go within 90 days. Your mail is untouched at your provider, and the RATA app keeps what it holds on your device until you uninstall it.</p>
     </div>
   </section>
 </main>
