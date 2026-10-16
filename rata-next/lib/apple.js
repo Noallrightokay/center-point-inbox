@@ -49,8 +49,10 @@ export const APPLE_ROOT_FILES = ['AppleRootCA-G3.cer', 'AppleRootCA-G2.cer', 'Ap
 export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.desktop';
 
 /* What /api/licence/apple takes: the app's current entitlements, at most
-   ten signed transactions of at most 16 KiB each. A real one is about 1.5 KiB
-   with its three certificates. */
+   ten signed transactions of at most 16 KiB each. A real one is roughly 5
+   to 7 KiB: the three certificates in its header's x5c come to about
+   3.5 KB of base64, and the header is base64url-encoded again around
+   them. */
 export const APPLE_MAX_TRANSACTIONS = 10;
 export const APPLE_MAX_JWS = 16 * 1024;
 const APPLE_MAX_BODY = APPLE_MAX_TRANSACTIONS * (APPLE_MAX_JWS + 16) + 1024;
@@ -66,6 +68,13 @@ export const APPLE_SAID = Object.freeze({
   busy: 'mailrata.org could not record this App Store purchase just now. The purchase is safe with Apple, so try again in a few minutes.',
   renewBusy: 'mailrata.org could not check this App Store subscription just now, so RATA keeps the licence it has and tries again later.',
   malformed: 'That was not a list of App Store purchases mailrata.org can read.',
+  /* /api/licence/renew's refusals of a licence from the App Store, which
+     the iPhone app asks there when StoreKit has nothing. A subscription
+     bought in the app has no account at mailrata.org, so these never send
+     anyone to sign in there, as the words for a licence bought on the
+     website do. */
+  tooOld: 'This licence expired too long ago to renew itself. Subscribe again, or press Restore purchases.',
+  unreadable: 'This licence could not be read. Press Restore purchases to get a new one.',
 });
 
 /* The auto-renewal sentence, as the purchase screen in the iPhone app says
@@ -101,6 +110,25 @@ export function appleSub(originalTransactionId) {
 export function appleIdOf(sub) {
   const m = /^apple:(\d{1,40})$/.exec(String(sub || ''));
   return m ? m[1] : null;
+}
+
+/* Whether a licence's subject is the App Store's kind (`apple:…`, well
+   formed or not), as opposed to an address. */
+export function appleSubject(sub) {
+  return String(sub || '').trim().toLowerCase().startsWith('apple:');
+}
+
+/* Whether a licence *says* it is for an App Store subscription, read from
+   its payload without its signature being checked. For choosing the words
+   of a refusal of a licence that did not verify, and nothing else: what it
+   says unlocks nothing and is never looked up. */
+export function appleClaimed(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token || '').split('.')[1] || '', 'base64url').toString('utf8'));
+    return !!payload && typeof payload.sub === 'string' && appleSubject(payload.sub);
+  } catch {
+    return false;
+  }
 }
 
 /* ---- settings and verifiers ----------------------------------------------- */
@@ -172,6 +200,12 @@ export function appleVerifiers(env = process.env) {
   }
   built = { key, value: { settings, verifiers } };
   return built.value;
+}
+
+/* Whether the verifiers can take what the App Store itself signs: Apple's
+   roots were read, and APPLE_APP_ID gave a Production verifier. */
+export function appleTakesProduction(made) {
+  return !!made && !made.off && !!made.verifiers[Environment.PRODUCTION];
 }
 
 /* ---- verifying ------------------------------------------------------------ */
@@ -272,10 +306,18 @@ export function readNotification(raw) {
 
 /* ---- judging a purchase --------------------------------------------------- */
 
-/* Why a verified transaction unlocks nothing, or null when it is live: not
-   RATA's app, not a RATA product, not an auto-renewable subscription,
-   refunded or revoked, or past its expiry. Family Sharing is the owner's
-   choice in App Store Connect, so PURCHASED and FAMILY_SHARED count alike. */
+/* Why a verified transaction unlocks nothing by itself, or null when it is
+   live: not RATA's app, not a RATA product, not an auto-renewable
+   subscription, refunded or revoked, or past its expiry. Family Sharing is
+   the owner's choice in App Store Connect, so PURCHASED and FAMILY_SHARED
+   count alike.
+
+   'expired' is the one a row can still overrule. In a billing grace
+   period StoreKit's current entitlements still list the subscription, by
+   its transaction for the period that has ended, and what says the grace
+   period has not is Apple's DID_FAIL_TO_RENEW notification, recorded in
+   the row as grace_until. So /api/licence/apple asks the row about an
+   expired transaction (appleLive) and writes nothing from it. */
 export function appleIgnored(t, settings, now = Date.now()) {
   if (!t || !appleIdOk(t.originalTransactionId)) return 'id';
   if (t.bundleId !== settings.bundleId) return 'bundle';
@@ -311,10 +353,12 @@ export function appleRowOf(t, environment) {
   };
 }
 
-/* What a notification changes, as { patch, insert }, or null when it
+/* What a notification changes, as { patch, insert, upTo }, or null when it
    changes nothing RATA keeps: another type, another product, or no
    transaction to read. `patch` is what it writes over a row it is newer
-   than; `insert` the whole row, for a subscription not seen yet.
+   than; `insert` the whole row, for a subscription not seen yet; `upTo`,
+   when set, a further condition on the row it writes over: an expiry no
+   later than this.
 
    - SUBSCRIBED, DID_RENEW, DID_CHANGE_RENEWAL_PREF, OFFER_REDEEMED: the
      product, the plan, the expiry and the environment of the transaction
@@ -325,7 +369,13 @@ export function appleRowOf(t, environment) {
      expiry and the end of a billing grace period (gracePeriodExpiresDate,
      which DID_FAIL_TO_RENEW carries with the subtype GRACE_PERIOD). The row
      is simply not live once they have passed.
-   - REFUND, REVOKE: when it was revoked. REFUND_REVERSED: no longer. */
+   - REFUND, REVOKE: when it was revoked. REFUND_REVERSED: no longer. The
+     row is the whole subscription, and a refund can be of a period that
+     has already ended, while the one paid for now goes on. So these write
+     only over a row whose expiry is no later than the refunded
+     transaction's (`upTo`): a row recording that period, or one that has
+     not heard of it yet. A refund of an earlier period changes nothing, and a
+     reversal of one does not undo a refund of the current period. */
 export function appleChange(n, t, r, environment) {
   const type = n && n.notificationType;
   if (!APPLE_ACTED.includes(type)) return null;
@@ -335,6 +385,7 @@ export function appleChange(n, t, r, environment) {
   const grace = r && typeof r.gracePeriodExpiresDate === 'number' ? iso(r.gracePeriodExpiresDate) : null;
   const whole = { ...appleRowOf(t, environment), grace_until: grace, signed_at: at };
   let patch;
+  let upTo = null;
   if (CURRENT.includes(type)) {
     const { product_id, plan, expires_at, revoked_at } = whole;
     patch = { product_id, plan, expires_at, environment, revoked_at, signed_at: at };
@@ -343,10 +394,12 @@ export function appleChange(n, t, r, environment) {
     patch = { expires_at: whole.expires_at, grace_until: inGrace ? grace : null, signed_at: at };
   } else if (REVOKED.includes(type)) {
     patch = { revoked_at: iso(typeof t.revocationDate === 'number' ? t.revocationDate : n.signedDate || Date.now()), signed_at: at };
+    upTo = whole.expires_at;
   } else {
     patch = { revoked_at: null, signed_at: at };
+    upTo = whole.expires_at;
   }
-  return { patch, insert: { ...whole, ...patch } };
+  return { patch, insert: { ...whole, ...patch }, upTo };
 }
 
 /* ---- the row -------------------------------------------------------------- */
@@ -355,13 +408,16 @@ export function appleChange(n, t, r, environment) {
    signed something newer for: the update is guarded by signed_at in the
    database, so two deliveries racing each other cannot both pass a check
    and then both write. A row not there yet is inserted; if another request
-   inserted it in between, the guarded update is tried once more. Answers
-   { row, wrote } with the row as it stands after (the newer one, when this
-   was older), or { error }. */
-export async function appleWrite(sb, id, { patch, insert }) {
+   inserted it in between, the guarded update is tried once more. `upTo`
+   (appleChange) narrows the guard to a row whose expiry is no later than
+   it. Answers { row, wrote } with the row as it stands after (the newer
+   one, when this was older), or { error }. */
+export async function appleWrite(sb, id, { patch, insert, upTo = null }) {
   const table = () => sb.from('apple_subscriptions');
   const guarded = async () => {
-    const { data, error } = await table().update(patch).eq('original_transaction_id', id).lte('signed_at', patch.signed_at).select(COLS);
+    let q = table().update(patch).eq('original_transaction_id', id).lte('signed_at', patch.signed_at);
+    if (upTo) q = q.lte('expires_at', upTo);
+    const { data, error } = await q.select(COLS);
     if (error) throw error;
     return data && data.length ? data[0] : null;
   };

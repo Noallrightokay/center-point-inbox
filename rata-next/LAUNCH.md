@@ -475,9 +475,16 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    a display name and description in every language you sell in (the plan
    blurbs, which name no price, will do), and the review screenshot App
    Review asks for (the purchase screen). Add no free trial. Introductory
-   offers and Family Sharing are your choice and need no code. Turn on
+   offers and Family Sharing are your choice and need no code. With Family
+   Sharing, Apple gives each family member who restores the subscription
+   transactions of their own (up to five besides the buyer), so each gets
+   a licence, and an AI allowance, of their own: one subscription can cost
+   up to six times `AI_MONTHLY_CAP_USD` in AI. Turn on
    **Billing Grace Period** (on the same Subscriptions page): with the
-   notifications of step 5, RATA keeps renewing the licence until it ends.
+   notifications of step 5, RATA keeps renewing the licence until it ends,
+   from the phone and from the record alike. Without them the site never
+   hears of a grace period, so a phone whose renewal has failed gets no new
+   licence until Apple's retry succeeds.
 5. **Server notifications**: the app → App Information → App Store Server
    Notifications. Version 2, the URL
    `https://mailrata.org/api/apple/notifications`, for **both** Production
@@ -509,7 +516,9 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
     month passes quickly.
 
 **How to tell it worked:** `https://mailrata.org/api/apple/notifications`
-in a browser answers `"configured": true`; a TestFlight purchase writes
+in a browser answers `"configured": true` once Apple's root certificates
+are readable and `APPLE_APP_ID` is set (step 7), so the App Store's own
+purchases and notifications can be checked; a TestFlight purchase writes
 its row within seconds; and the iPhone app opens its workspace after
 buying. The server log names the missing step otherwise: `APPLE_APP_ID is
 not set` (a real purchase before step 7), `run section 7 of

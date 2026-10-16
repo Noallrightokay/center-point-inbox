@@ -3,7 +3,7 @@ import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
-import { APPLE_SAID, appleIdOf, appleRow, appleLive, tableMissing } from '../../../../lib/apple';
+import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, tableMissing } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,7 +59,13 @@ async function renew(req) {
        saying which of the two it is helps a support conversation. The app
        keeps the licence it has whatever this says (bridge.js renew()) and
        shows the sentence, so each one is for the customer: a deployment
-       with no public key is our fault, named in the server log only. */
+       with no public key is our fault, named in the server log only.
+
+       Signing in at mailrata.org gives a new licence only for a purchase
+       made there. One that says it is from the App Store (read without its
+       signature, which did not verify, for the wording alone) is told to
+       restore its purchase in the iPhone app instead: it has no account
+       here, and that app must not send anyone to the website that sells. */
     if (seen.reason === 'no-public-key') {
       console.warn('licence/renew: LICENCE_PUBLIC_KEY is not set or cannot be read, so no licence can be renewed; see rata-next/LAUNCH.md section 2');
     }
@@ -68,20 +74,25 @@ async function renew(req) {
       reason: seen.reason,
       message: seen.reason === 'no-public-key'
         ? 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.'
-        : seen.reason === 'bad-signature'
-          ? 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'
-          : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
+        : appleClaimed(presented)
+          ? APPLE_SAID.unreadable
+          : seen.reason === 'bad-signature'
+            ? 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'
+            : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
     }, seen.reason === 'no-public-key' ? { status: 500 } : undefined);
   }
 
   if (!renewable(seen)) {
     /* Genuine, but expired too long ago to renew itself (lib/licence.js):
        asked before the database, like a forgery. The customer still gets a
-       new one by signing in. */
+       new one by signing in, or, for an App Store subscription, by
+       subscribing again or restoring the purchase in the iPhone app. */
     return NextResponse.json({
       licensed: false,
       reason: 'too-old',
-      message: `This licence expired more than ${RENEW_GRACE_DAYS} days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.`,
+      message: appleSubject(licence.sub)
+        ? APPLE_SAID.tooOld
+        : `This licence expired more than ${RENEW_GRACE_DAYS} days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.`,
     });
   }
 
@@ -94,7 +105,7 @@ async function renew(req) {
   /* A licence from a purchase in the iPhone app names the purchase
      (apple:<originalTransactionId>), not an address, and is renewed from
      the App Store's record, never from Stripe's. */
-  if (email.startsWith('apple:')) return renewApple(sb, email);
+  if (appleSubject(email)) return renewApple(sb, email);
 
   const { plan, pending } = await entitlementsForUser(sb, email);
   if (!plan && pending) {

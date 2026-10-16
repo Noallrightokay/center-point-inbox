@@ -273,11 +273,13 @@ export default async function run(state) {
     /* The plans sold in the app are plans on sale here, and the terms say
        Apple bills them, with the App Store's own auto-renewal sentence. */
     const sold = [...new Set(Object.values(APPLE_PRODUCTS))];
-    check(sold.length === 2 && sold.every(p => SELLABLE.includes(p)) && T.includes('Both are also sold in RATA\'s iPhone app, as App Store subscriptions'),
+    check(sold.length === 2 && sold.every(p => SELLABLE.includes(p)) && T.includes('RATA Base and RATA Pro are also sold in RATA\'s iPhone app, as App Store subscriptions'),
       `terms: both plans (${sold.join(', ')}) are also App Store subscriptions`);
     check(T.includes('One bought in the app is billed, renewed, cancelled and refunded by Apple, under Apple\'s terms'),
       'terms: Apple bills, renews, cancels and refunds them, under Apple\'s terms');
     check(T.includes(plain(apple.APPLE_AUTO_RENEWAL)), `terms: the auto-renewal sentence, word for word: "${apple.APPLE_AUTO_RENEWAL.slice(0, 60)}…"`);
     check(T.includes('In the iPhone app there is no key to paste'), 'terms: the iPhone app\'s licence needs no key');
+    check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
+      'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }
 }

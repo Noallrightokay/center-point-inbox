@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
 import {
-  APPLE_ACTED, appleVerifiers, verifyApple, verifyAppleIn, readNotification, appleChange, appleWrite, tableMissing,
+  APPLE_ACTED, appleVerifiers, appleTakesProduction, verifyApple, verifyAppleIn, readNotification, appleChange, appleWrite, tableMissing,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -90,11 +90,15 @@ export async function POST(req) {
   return done(written.wrote);
 }
 
-/* A browser visiting this address gets an explanation. */
+/* A browser visiting this address gets an explanation, and whether it can
+   take what Apple sends from the App Store itself: Apple's roots are
+   readable and APPLE_APP_ID is set, without which every Production
+   purchase and notification is refused. A yes or a no, never the
+   settings themselves. */
 export async function GET() {
   return NextResponse.json({
     endpoint: 'App Store Server Notifications V2',
-    configured: !appleVerifiers().off,
+    configured: appleTakesProduction(appleVerifiers()),
     note: 'POST only, signed by Apple. See rata-next/LAUNCH.md section 11.',
   });
 }

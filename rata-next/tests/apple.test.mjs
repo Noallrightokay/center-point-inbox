@@ -468,6 +468,10 @@ export default async function run(state) {
       const r = await post([signJws(t, chain)]);
       sbx.fake.mode = 'ok';
       check(r.status === 503 && refusal(r.d, 'unavailable') && /try again/i.test(r.d.message), `the database fails: 503, no licence: "${r.d.message}"`);
+      sbx.fake.mode = 'broken';
+      const lapsedDown = await post([signJws(txn({ expiresDate: Date.now() - DAY }), chain)]);
+      sbx.fake.mode = 'ok';
+      check(lapsedDown.status === 503 && refusal(lapsedDown.d, 'unavailable'), `and so does reading the row of an expired one: 503, no licence (${lapsedDown.status})`);
       sbx.fake.mode = 'missing';
       const before = s.log().length;
       const m = await post([signJws(txn(), chain)]);
@@ -524,11 +528,29 @@ export default async function run(state) {
       const lic = issue({ email: apple.appleSub(t.originalTransactionId), plan: 'pro' }, keys.privateKey);
       const inGrace = await renew(lic);
       check(inGrace.d.licensed === true && inGrace.d.plan === 'pro', `renewing while in the grace period: licensed (${inGrace.d.reason || inGrace.d.plan})`);
+      /* In a billing grace period StoreKit's current entitlements still
+         list the subscription, by the transaction that has just expired;
+         the phone asks /api/licence/apple with it, not /renew. The row
+         says the grace period has not ended, so it is live; and a
+         transaction past its expiry writes nothing over the row. */
+      const held = JSON.stringify(rowOf(t));
+      const phone = await post([signJws({ ...lapsed, signedDate: Date.now() }, chain)]);
+      check(phone.status === 200 && phone.d.licensed === true && phone.d.plan === 'pro' && subOf(phone.d).licence.sub === `apple:${t.originalTransactionId}`,
+        `the phone in the grace period, with its expired transaction: a Pro licence (${phone.d.reason || phone.d.plan})`);
+      check(phone.d.expires === new Date(grace).toISOString() && JSON.stringify(rowOf(t)) === held,
+        `which says the subscription runs to the end of the grace period (${phone.d.expires}), and the row is left as Apple's notification wrote it`);
+      const baseLive = txn({ productId: BASE });
+      const both = await post([signJws(baseLive, chain), signJws({ ...lapsed, signedDate: Date.now() }, chain)]);
+      check(both.d.plan === 'pro' && subOf(both.d).licence.sub === `apple:${t.originalTransactionId}`,
+        `a Pro subscription in its grace period still ranks above a live Base one (${both.d.plan})`);
 
       await notify(notification(chain, 'GRACE_PERIOD_EXPIRED', lapsed, { renewal: renewalInfo(lapsed, { gracePeriodExpiresDate: Date.now() - 1000 }), signedDate: Date.now() - 1.5 * DAY }));
       check(rowOf(t).plan === 'pro' && Date.parse(rowOf(t).grace_until) < Date.now(), 'GRACE_PERIOD_EXPIRED changes only the dates');
       const after = await renew(lic);
       check(refusal(after.d, 'no-subscription', NOTHING_LIVE), `and renewing then: no-subscription, "${after.d.message}"`);
+      const ended = await post([signJws({ ...lapsed, signedDate: Date.now() }, chain)]);
+      check(refusal(ended.d, 'no-subscription', NOTHING_LIVE) && Date.parse(rowOf(t).grace_until) < Date.now(),
+        `nor from the phone, once the grace period has ended: "${ended.d.message}"`);
 
       const back = { ...lapsed, transactionId: nextId(), expiresDate: Date.now() + 30 * DAY };
       await notify(notification(chain, 'DID_RENEW', back, { subtype: 'BILLING_RECOVERY', signedDate: Date.now() - DAY }));
@@ -550,6 +572,25 @@ export default async function run(state) {
       await notify(notification(chain, 'EXPIRED', { ...back, expiresDate: Date.now() - 1000 }, { subtype: 'VOLUNTARY', signedDate: Date.now() - 0.2 * DAY }));
       check(Date.parse(rowOf(t).expires_at) < Date.now() && rowOf(t).plan === 'pro' && rowOf(t).revoked_at === null, 'EXPIRED changes only the dates');
       check(refusal((await renew(lic)).d, 'no-subscription'), 'and renewing then: no-subscription');
+
+      /* A refund is of one transaction, and can be of a period that has
+         already ended while the one paid for now goes on: the row, which
+         is the whole subscription, is revoked only by a refund of a period
+         no earlier than the one it records. */
+      const first = txn({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() - 10 * DAY, signedDate: Date.now() - 40 * DAY });
+      await notify(notification(chain, 'SUBSCRIBED', first, { signedDate: Date.now() - 40 * DAY }));
+      const second = { ...first, transactionId: nextId(), purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY };
+      await notify(notification(chain, 'DID_RENEW', second, { signedDate: Date.now() - 10 * DAY }));
+      const paid = issue({ email: apple.appleSub(first.originalTransactionId), plan: 'pro' }, keys.privateKey);
+      const early = await notify(notification(chain, 'REFUND', { ...first, revocationDate: Date.now() - DAY, revocationReason: 0 }, { signedDate: Date.now() - DAY }));
+      check(early.status === 200 && early.d.acted === false && rowOf(first).revoked_at === null && (await renew(paid)).d.licensed === true,
+        'a REFUND of a period that has ended leaves the one paid for now live, and is answered 200');
+      await notify(notification(chain, 'REFUND', { ...second, revocationDate: Date.now() - 0.5 * DAY, revocationReason: 0 }, { signedDate: Date.now() - 0.5 * DAY }));
+      check(!!rowOf(first).revoked_at && refusal((await renew(paid)).d, 'no-subscription'), 'a REFUND of the current period revokes it');
+      const undo = await notify(notification(chain, 'REFUND_REVERSED', first, { signedDate: Date.now() - 0.4 * DAY }));
+      check(undo.d.acted === false && !!rowOf(first).revoked_at, 'and reversing the earlier refund does not undo it');
+      await notify(notification(chain, 'REFUND_REVERSED', second, { signedDate: Date.now() - 0.3 * DAY }));
+      check(rowOf(first).revoked_at === null && (await renew(paid)).d.licensed === true, 'reversing the current period\'s refund does');
 
       const fam = txn({ inAppOwnershipType: 'FAMILY_SHARED' });
       await notify(notification(chain, 'SUBSCRIBED', fam, { signedDate: Date.now() - DAY }));
@@ -619,6 +660,34 @@ export default async function run(state) {
       check(refusal(stripe.d, 'no-subscription') && sbx.fake.calls.at(-1).endsWith('/rest/v1/subscriptions') && stripe.d.email === 'buyer@example.com',
         'a licence for an address still renews from Stripe\'s record, as before');
 
+      /* A licence from the App Store has no account at mailrata.org, so no
+         refusal of one sends anybody to sign in there; inside the iPhone
+         app that would also send them to the website that sells. What
+         decides the words is the subject, read before the age and, when
+         the signature does not verify, from the payload for the words
+         alone. */
+      const otherKeys = generateKeys();
+      const longAgo = Date.now() - (30 + 100) * DAY;
+      const appleLic = issue({ email: 'apple:2000000123456789', plan: 'pro', now: longAgo }, keys.privateKey);
+      const callsBefore = sbx.fake.calls.length;
+      const told = {
+        'too old': await renew(appleLic),
+        'signed by another key': await renew(issue({ email: 'apple:2000000123456789', plan: 'pro' }, otherKeys.privateKey)),
+        'unreadable': await renew(issue({ email: 'apple:2000000123456789', plan: 'pro' }, keys.privateKey).replace(/^v1\./, 'v9.')),
+      };
+      check(told['too old'].status === 200 && refusal(told['too old'].d, 'too-old', apple.APPLE_SAID.tooOld),
+        `an App Store licence that expired over 90 days ago: too-old, "${told['too old'].d.message}"`);
+      check(refusal(told['signed by another key'].d, 'bad-signature', apple.APPLE_SAID.unreadable) && refusal(told.unreadable.d, 'malformed', apple.APPLE_SAID.unreadable),
+        `one that does not verify, or cannot be read: "${told.unreadable.d.message}"`);
+      check(sbx.fake.calls.length === callsBefore, 'each answered before the database, as for an address');
+      const elsewhere = Object.entries(told).filter(([, r]) => /mailrata\.org|sign in/i.test(r.d.message || '')).map(([k]) => k);
+      check(elsewhere.length === 0, `none of them names mailrata.org or a sign-in (${elsewhere.join(', ') || 'none'})`);
+      const oldAddr = await renew(issue({ email: 'buyer@example.com', plan: 'pro', now: longAgo }, keys.privateKey));
+      const forgedAddr = await renew(issue({ email: 'buyer@example.com', plan: 'pro' }, otherKeys.privateKey));
+      check(refusal(oldAddr.d, 'too-old', 'This licence expired more than 90 days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.')
+        && refusal(forgedAddr.d, 'bad-signature', 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'),
+        'a licence for an address is still told to sign in at mailrata.org, word for word as before');
+
       sbx.fake.mode = 'broken';
       const down = await renew(lic);
       sbx.fake.mode = 'missing';
@@ -629,6 +698,8 @@ export default async function run(state) {
       check(down.status === 503 && refusal(down.d, 'unavailable') && /keeps the licence it has/.test(down.d.message), `the database fails: 503, "${down.d.message}"`);
       check(missing.status === 503 && refusal(missing.d, 'not-configured') && missing.d.message === OFF && /run section 7/.test(s.log().slice(before)),
         'apple_subscriptions missing: 503 not-configured, and the log names section 7');
+      const sendsAway = [r, none, odd, down, missing].filter((x) => /sign in|choose a plan|at mailrata\.org|mailrata\.org\//i.test(x.d.message || ''));
+      check(sendsAway.length === 0, 'and no answer to an App Store licence sends anyone to mailrata.org');
     }
 
     console.log('\n— the log —');
@@ -669,6 +740,8 @@ export default async function run(state) {
       const log = local.log();
       check(/APPLE_APP_ID is not set/.test(log) && /APPLE_TEST_ROOT is set/.test(log) && /APPLE_ALLOW_LOCAL=1/.test(log),
         'and the log says why, and that the test-only settings are on');
+      const g = await (await fetch(local.url + '/api/apple/notifications')).json();
+      check(g.configured === false, `and the notifications address says it is not configured, since nothing from the App Store itself would verify: ${JSON.stringify(g.configured)}`);
     } finally { await local.stop(); }
   }
   await sbx.close();

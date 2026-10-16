@@ -5,7 +5,7 @@ import { issue, LICENCE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
 import {
   APPLE_SAID, appleVerifiers, verifyApple, readTransactions, appleIgnored, applePreferred,
-  appleRowOf, appleWrite, appleLive, appleUntil, appleSub, tableMissing,
+  appleRowOf, appleWrite, appleRow, appleLive, appleUntil, appleSub, tableMissing,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -20,11 +20,17 @@ export const dynamic = 'force-dynamic';
 
    Each transaction is verified (lib/apple.js). One for another app, another
    product, something other than an auto-renewable subscription, refunded,
-   revoked or expired unlocks nothing. Of the live ones the higher plan wins,
-   then the later expiry; its row in apple_subscriptions is written, never
+   or revoked unlocks nothing. Of the rest the higher plan wins, then the
+   later expiry; a live one's row in apple_subscriptions is written, never
    over a row Apple signed something newer for, and the licence follows the
    row as it then stands. So a transaction replayed after its refund finds
    the refund already recorded and unlocks nothing.
+
+   One past its expiry writes nothing, and unlocks only what its row says
+   is live. That is a billing grace period: StoreKit still lists the
+   subscription by the transaction that has just expired, and Apple's
+   DID_FAIL_TO_RENEW notification has put when the grace period ends in
+   the row (grace_until). Without the row, it unlocks nothing.
 
    A refusal is { licensed: false, reason, message }, the shape
    /api/licence/renew answers with: the app keeps any licence that still
@@ -56,12 +62,15 @@ async function licenceFor(req) {
 
   const now = Date.now();
   const seen = await Promise.all(asked.list.map((jws) => verifyApple('transaction', jws, made)));
+  /* Each verified transaction worth asking about, with whether it is past
+     its expiry (`lapsed`), so only its row can make it live. */
   const live = [];
   const refused = [];
   let noAppId = false;
   for (const s of seen) {
     if (s.ok) {
-      if (!appleIgnored(s.payload, made.settings, now)) live.push(s);
+      const why = appleIgnored(s.payload, made.settings, now);
+      if (!why || why === 'expired') live.push({ ...s, lapsed: !!why });
     } else if (s.noAppId) {
       noAppId = true;
     } else if (s.status !== 'INVALID_APP_IDENTIFIER') {
@@ -89,16 +98,22 @@ async function licenceFor(req) {
   }
 
   for (const s of applePreferred(live.map((l) => l.payload))) {
-    const env = live.find((l) => l.payload === s).environment;
-    const row = appleRowOf(s, env);
-    const written = await appleWrite(sb, s.originalTransactionId, { patch: row, insert: row });
+    const { environment, lapsed } = live.find((l) => l.payload === s);
+    let written;
+    if (lapsed) {
+      written = await appleRow(sb, s.originalTransactionId);
+    } else {
+      const row = appleRowOf(s, environment);
+      written = await appleWrite(sb, s.originalTransactionId, { patch: row, insert: row });
+    }
     if (written.error) {
-      /* Fail closed: a licence that cannot be recorded is not issued. */
+      /* Fail closed: a licence that cannot be recorded, or checked against
+         its row, is not issued. */
       if (tableMissing(written.error)) {
         console.warn('licence/apple: the database has no apple_subscriptions table; run section 7 of rata-next/database.sql');
         return refuse('not-configured', APPLE_SAID.off, 503);
       }
-      console.warn('licence/apple: could not record an App Store purchase', written.error.code || written.error.message);
+      console.warn(`licence/apple: could not ${lapsed ? 'read' : 'record'} an App Store purchase`, written.error.code || written.error.message);
       return refuse('unavailable', APPLE_SAID.busy, 503);
     }
     if (!appleLive(written.row, now)) continue;
