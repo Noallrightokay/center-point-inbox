@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (993 checks).
+the website's test suites pass with `npm test` after it (994 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -481,7 +481,10 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
 5. **Server notifications**: the app → App Information → App Store Server
    Notifications. Version 2, the URL
    `https://mailrata.org/api/apple/notifications`, for **both** Production
-   and Sandbox.
+   and Sandbox. Types RATA has no use for are answered 200 and change
+   nothing, among them `RESCIND_CONSENT` (a parent withdrew consent under
+   the age laws Apple applies in Texas; Apple then stops the app launching
+   on that child's device by itself).
 6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
    address that is not an Apple Account already.
 7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
@@ -512,6 +515,26 @@ buying. The server log names the missing step otherwise: `APPLE_APP_ID is
 not set` (a real purchase before step 7), `run section 7 of
 rata-next/database.sql`, or a refused signature by Apple's library status
 name, never the purchase itself.
+
+Two choices are made for you, and are yours to revisit:
+
+- **Online revocation checks are off.** Apple's library can also ask
+  Apple's certificate service (OCSP) on each request whether the
+  certificate that signed a purchase has been revoked, and check its dates
+  against today. It keeps a good answer for 15 minutes and a failure not at
+  all, so while that service is slow every licence request would wait up
+  to 30 seconds and call out again, and a flood of requests would become a
+  flood of calls to Apple. A refunded or revoked *purchase* still reaches
+  RATA, as the purchase saying so or as a REFUND or REVOKE notification;
+  only a revoked Apple *signing certificate*, which Apple would announce,
+  goes unchecked. The `false` passed as `enableOnlineChecks` in
+  `lib/apple.js` is the switch.
+- **Sandbox purchases are accepted**, because App Review and TestFlight buy
+  there. A sandbox purchase costs nothing and its licence lasts 30 days like
+  any other, so everyone you let into TestFlight uses RATA free while they
+  test, with an AI allowance per sandbox subscription. Keep TestFlight to
+  people you would give a licence to: a public TestFlight link gives one to
+  anyone who opens it.
 
 ---
 

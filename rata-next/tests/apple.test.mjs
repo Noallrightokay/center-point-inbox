@@ -564,6 +564,18 @@ export default async function run(state) {
       const ignored = txn();
       const price = await notify(notification(chain, 'PRICE_INCREASE', ignored, { subtype: 'PENDING' }));
       check(price.status === 200 && price.d.acted === false && !rowOf(ignored), 'any other type: 200 and left alone');
+      /* RESCIND_CONSENT (a parent or guardian withdrew consent, under the
+         age laws Apple applies in Texas and elsewhere) carries appData, an
+         app transaction, instead of data: no subscription to change, and
+         Apple stops the app launching itself. Answered 200 like any other
+         type, never 400, or Apple would send it again for days. */
+      const unasked = sbx.fake.calls.length;
+      const consent = await notify(signJws({
+        notificationType: 'RESCIND_CONSENT', notificationUUID: randomUUID(), version: '2.0', signedDate: Date.now(),
+        appData: { appAppleId: APP_ID, bundleId: BUNDLE, environment: 'Production', signedAppTransactionInfo: signJws({ bundleId: BUNDLE, appAppleId: APP_ID, receiptType: 'Production', signedDate: Date.now() }, chain) },
+      }, chain));
+      check(consent.status === 200 && consent.d.acted === false && sbx.fake.calls.length === unasked,
+        `RESCIND_CONSENT, which carries appData and no subscription: 200, nothing written (${consent.status})`);
       const notOurs = txn({ productId: 'org.mailrata.lifetime' });
       const no = await notify(notification(chain, 'DID_RENEW', notOurs));
       check(no.status === 200 && no.d.acted === false && !rowOf(notOurs), 'a product RATA does not sell here: 200 and left alone');
