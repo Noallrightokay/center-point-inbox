@@ -139,11 +139,13 @@ echo "- the privacy policy, terms and deletion page (LAUNCH.md, before §6) -"
 # store-safe copies under /in-app/ are made from them, so they say the same,
 # and the deletion page names the privacy policy's contact address for
 # someone who cannot sign in (tests/in-app.test.mjs keeps the two equal).
-for pair in "privacy.html:Privacy policy" "terms.html:Terms of service" "in-app/privacy:Privacy policy" "in-app/terms:Terms of service" "in-app/delete-account:Delete your RATA account"; do
-  p="${pair%%:*}"; want="${pair#*:}"
+for page_of in "privacy.html:Privacy policy:privacy policy" "terms.html:Terms of service:terms of service" \
+  "in-app/privacy:Privacy policy:privacy policy" "in-app/terms:Terms of service:terms of service" \
+  "in-app/delete-account:Delete your RATA account:deletion page"; do
+  p="${page_of%%:*}"; rest="${page_of#*:}"; want="${rest%%:*}"; what="${rest#*:}"
   s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
-  printf '%s' "$page" | grep -q "<h1>$want</h1>"; check $? "/$p is the $want"
+  printf '%s' "$page" | grep -q "<h1>$want</h1>"; check $? "/$p is the $what"
   left=$(printf '%s' "$page" | grep -o '\[OWNER:[^]]*\]' | sort -u | tr '\n' ' ')
   [ -z "$left" ]; check $? "/$p has every [OWNER: ...] filled in${left:+ (still: $left)}"
 done
