@@ -216,22 +216,55 @@ for (const form of FORMS) {
     await page.waitForTimeout(300);
     return id;
   };
+  /* The two hospital mailboxes are undecided: the first AI press from one
+     asks, naming it (Assistant v1). The other three are on. */
+  const LARK = 'riley.carter@larkspurvalleyhealth.example', SALT = 'rcarter@saltmarshregional.example';
+  const asked = async () => {
+    await page.waitForSelector('#aiok-ov.open', { timeout: 5000 }).catch(() => {});
+    return page.evaluate(() => ({ open: $('#aiok-ov').classList.contains('open'), text: $('#aiok-p').textContent }));
+  };
   await open('Action needed: reappointment packet due 31 October');
   await page.click('#md-sum');
+  let q = await asked();
+  check(q.open && q.text.includes(LARK), `Summarize on a hospital mailbox asks first, naming it: ${JSON.stringify(q)}`);
+  await page.click('#aiok-once');
   await page.waitForFunction(() => { const t = document.querySelector('#md-summary .md-ai-text'); return t && t.textContent && t.textContent !== 'Summarizing…'; }, null, { timeout: 10000 }).catch(() => {});
   const sum = await page.evaluate(() => ({ title: $('#md-summary .md-ai-title').textContent, text: $('#md-summary .md-ai-text').textContent }));
-  check(sum.title === 'Summary by AI' && /^Demo summary/.test(sum.text) && /31 October/.test(sum.text), `Summarize answers with the demo’s own summary: ${JSON.stringify(sum)}`);
+  check(sum.title === 'Summary by AI' && /^Demo summary/.test(sum.text) && /31 October/.test(sum.text), `Send this time answers with the demo’s own summary: ${JSON.stringify(sum)}`);
+  const relayed = await page.evaluate(() => (window.__RATA_DEMO_AI || []).at(-1) || {});
+  check(relayed.task === 'summarize' && !/@/.test(relayed.from || '@') && /^\d{4}-\d{2}-\d{2}$/.test(relayed.day || ''),
+    `and what it would have sent names the sender without an address, with the day: ${JSON.stringify({ from: relayed.from, day: relayed.day })}`);
   const id = await open('Shift swap on the 14th?');
   await page.click('#md-translate');
+  q = await asked();
+  check(q.open && q.text.includes(SALT), `Translate on the other hospital mailbox asks first too: ${JSON.stringify(q.text.slice(0, 120))}`);
+  await page.click('#aiok-once');
   await page.waitForFunction((id) => TRANSLATED.has(id), id, { timeout: 10000 }).catch(() => {});
   const tr = await page.evaluate((id) => ({ t: (TRANSLATED.get(id) || {}).text || '', pane: $('#mail-detail').textContent, toast: $('#toast') && $('#toast').textContent }), id);
   check(/^Demo translation/.test(tr.t) && tr.pane.includes('Demo translation') && /take my day shift/.test(tr.t), `Translate answers with the demo’s own translation: ${JSON.stringify(tr.t.slice(0, 160))} ${tr.toast || ''}`);
+  /* Run briefing asks about both hospitals at once; left unticked, their
+     mail stays on this computer, and the rest is flagged. */
   await page.evaluate(() => openAssist());
   await page.click('#as-run');
-  await page.waitForFunction(() => !$('#as-run').disabled, null, { timeout: 10000 }).catch(() => {});
-  const brief = await page.evaluate(() => ({ out: $('#as-out').textContent, flags: S.messages.filter((m) => m.flag).map((m) => m.subj + ': ' + m.flag.task) }));
-  check(brief.flags.length >= 3 && brief.flags.every((f) => /: Demo: /.test(f)) && brief.flags.some((f) => /^Action needed: reappointment/.test(f)) && /need/.test(brief.out),
-    `Run briefing flags sample mail with the demo’s own tasks: ${JSON.stringify(brief.flags)}`);
+  q = await asked();
+  const ticks = await page.evaluate(() => [...document.querySelectorAll('#aiok-boxes input')].map((b) => [b.dataset.aiok, b.checked]));
+  check(q.open && JSON.stringify(ticks.map(([a]) => a).sort()) === JSON.stringify([SALT, LARK].sort()) && ticks.every(([, on]) => !on),
+    `Run briefing asks about the two undecided hospital mailboxes, both unticked: ${JSON.stringify(ticks)}`);
+  await page.click('#aiok-save');
+  await page.waitForFunction(() => !$('#as-run').disabled && (window.__RATA_DEMO_AI || []).some((b) => b.task === 'tasks'), null, { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  const brief = await page.evaluate(() => ({ out: $('#as-out').textContent, flags: S.messages.filter((m) => m.flag).map((m) => m.subj + ': ' + m.flag.task),
+    sent: ((window.__RATA_DEMO_AI || []).filter((b) => b.task === 'tasks').at(-1) || { messages: [] }).messages.map((m) => m.subject), boxes: S.settings.aiBoxes }));
+  const HOSPITAL = /reappointment|November ED|Shift swap|Quality committee|pay statement|sign-in prompt|Grand Rounds/;
+  check(brief.sent.length > 0 && !brief.sent.some((s) => HOSPITAL.test(s)) && brief.boxes[LARK] === 'off' && brief.boxes[SALT] === 'off',
+    `no hospital subject reaches the relay once both are left unticked: ${JSON.stringify(brief.sent)}`);
+  /* A mailing (the newsletter carries List-Unsubscribe) stays on this
+     computer too, as the privacy page says, and the answer says so. */
+  check(!brief.sent.some((s) => /autumn hikes/.test(s)) && /Left out on this computer: \d+ mailings?/.test(brief.out),
+    `the newsletter is left out of the briefing, and the answer says mailings were: ${JSON.stringify(brief.sent)}`);
+  check(brief.flags.length >= 3 && brief.flags.every((f) => /: Demo: /.test(f)) && !brief.flags.some((f) => HOSPITAL.test(f)) && /need/.test(brief.out)
+    && brief.out.includes('Kept from AI') && brief.out.includes(LARK) && brief.out.includes(SALT),
+  `Run briefing flags the rest with the demo’s own tasks and names what it kept from AI: ${JSON.stringify(brief.flags)}`);
   await page.evaluate(() => closeAssist());
   /* A renewal, as bridge.js asks for one (Try again in the licence box). */
   const renewed = await page.evaluate(async () => {
@@ -275,10 +308,13 @@ for (const form of FORMS) {
   at = await inbox();
   check(at.boxes === 2 && (await theirs()) === THEIRS, `the Base switch shows two mailboxes and leaves the rest alone: ${at.boxes} mailboxes, ${await theirs()}`);
   await open('November ED schedule is posted');
+  const relayBefore = await page.evaluate(() => (window.__RATA_DEMO_AI || []).length);
   await page.click('#md-sum');
   await page.waitForFunction(() => { const t = document.querySelector('#md-summary .md-ai-text'); return t && t.textContent && t.textContent !== 'Summarizing…'; }, null, { timeout: 10000 }).catch(() => {});
-  const base2 = await page.evaluate(() => ({ title: $('#md-summary .md-ai-title').textContent, note: $('#md-summary .md-ai-note').textContent }));
-  check(base2.title === 'Quick summary' && /part of RATA Pro/.test(base2.note), `on Base, Summarize says AI is Pro’s, as the relay does: ${JSON.stringify(base2)}`);
+  const base2 = await page.evaluate(() => ({ title: $('#md-summary .md-ai-title').textContent, note: $('#md-summary .md-ai-note').textContent,
+    relayed: (window.__RATA_DEMO_AI || []).length, asked: $('#aiok-ov').classList.contains('open') }));
+  check(base2.title === 'Quick summary' && /RATA Pro/.test(base2.note) && base2.relayed === relayBefore && !base2.asked,
+    `on Base, Summarize makes the quick summary and names RATA Pro, asking and sending nothing: ${JSON.stringify(base2)}`);
   await page.click('[data-plan="pro"]');
   await page.waitForTimeout(800);
   await ready();

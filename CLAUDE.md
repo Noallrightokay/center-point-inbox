@@ -16,10 +16,13 @@ Every decision in this repository follows from that. The owner's two rules
 a breach could leak. So a mail password never reaches a server, and mail
 never does either, with **one** deliberate exception the owner chose: the AI
 relay (`rata-next/app/api/ai`), which passes the text of a message a customer
-asked to summarize or translate to Anthropic and back, stores and logs none
-of it, and costs RATA at most `AI_MONTHLY_CAP_USD` ($2) per customer a month
-on Haiku. Anything else that would put mail on a server is wrong, however
-convenient.
+asked to summarize, ask about, draft a reply to or translate (and, for the
+briefing they ran, the start of their recent mail) to Anthropic and back,
+stores and logs none of it, and costs RATA at most `AI_MONTHLY_CAP_USD` ($2)
+per customer a month on Haiku. Asking about a message and drafting a reply
+(the relay's `ask` and `draft`) are the owner's addition for Assistant v1
+(2026-10-14). Anything else that would put mail on a server is wrong,
+however convenient.
 
 ## Where things are
 
@@ -27,9 +30,9 @@ convenient.
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 917 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (562 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (608 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -846,27 +849,105 @@ screenshot's x by 4/3 before clicking with xdotool; y is unchanged.
 **AI (v0.1.17), through RATA's relay.** Summarize, Translate (reading pane)
 and Run briefing (Assist) call `askAI` → bridge `/api/ai` → `POST
 https://mailrata.org/api/ai` with the licence token as the credential
-(`rata-next/app/api/ai/route.js`, rules in `lib/ai.js`): plan-gated
-(`translate` for Base, `ai` for Pro — `lib/plan.js`), Haiku 4.5, text capped
-(12 000 chars; the briefing sends the start, 1 500 chars, of the 25 most
-recent messages from the last 14 days, each named only by its place,
-`"1"`..`"25"`, never by `m.id`, which carries the mailbox key and so its
-address; I1, v0.1.45, harness check), every prompt fences the email as
-untrusted (`fence` turns any `<` that starts an `email` tag, in any case or
-spacing, opening or closing, into `‹`, so a message cannot close its fence
-early; `clean` strips control and bidi-control characters from what goes in
-and from each task that comes back), the task list is parsed strictly (ids must be ones sent). Each
+(`rata-next/app/api/ai/route.js`, rules in `lib/ai.js`). The relay has five
+tasks (`TASKS`): `summarize`, `ask` (a question about one message, with up
+to `LIMITS.turns` (3) earlier questions and answers sent back, since nothing
+is kept between them; a typed question of 300 characters or one of four
+`PRESETS` whose wording is the relay's), `draft` (a reply body from the
+reader's note of 500 characters and one of four `INTENTS`), `tasks` (the
+briefing) and `translate`; `ask` and `draft` are Assistant v1's, and the
+page's Ask and Draft a reply come in its later stages, and so do the words
+for them: `legal.test` holds the privacy page, the terms, the home page,
+`help.html#ai` and Settings' `AI_SENDS` to name Ask exactly when
+`app.html` has `#md-ask-q`, and Draft a reply exactly when it has
+`#md-draft` (BUG-D), so none promises a button the app lacks and the stage
+that adds the buttons must add the words (as first written in 4ba30c1). Plan-gated
+(`translate` for Base; the other four need `ai`, Pro, with no new flag —
+`lib/plan.js`), Haiku 4.5, text capped (12 000 chars; the briefing sends
+the start, 1 500 chars, of up to 25 recent messages from the last 14
+days, each named only by its place, `"1"`..`"25"`, never by `m.id`, which
+carries the mailbox key and so its address; I1, v0.1.45, harness check).
+**What the briefing leaves out** (`briefPick`), as the privacy page says:
+mailings (`m.unsub`, or what `categorize` files under Updates, a Sort rule
+first), mail answered since (`convoIndex`: one pass joining held mail by
+`convoKeys`, as `conversationOf` links it, and the newest sent message in
+each; a message older than that has had an answer), mailboxes kept from AI,
+and, with the check on, any message it finds something in. It walks newest
+first and reads texts from disk only until 25 pass, so the counts it gives
+under the answer ("Left out on this computer: 2 mailings, 1 you have
+answered.") are of what would otherwise have gone.
+The sender goes by name only: the relay drops anything in angle brackets
+and any word with an `@` (`nameOnly`), whatever an app version sends, and
+the page sends none (`aiName`). The app sends `today` and each message's
+`day` (YYYY-MM-DD, `isDay` on a real calendar day), and the prompt says
+them. Every prompt fences the email as untrusted (`defuse` turns any `<`
+that starts an `email` or `earlier` tag, in any case or spacing, opening or
+closing, into `‹`, so nothing can close a fence early; earlier answers go
+back as `<earlier>` data inside the one user message, never as assistant
+turns, and the reader's question and note sit outside every fence, defused
+too; `clean` strips control and bidi-control characters from what goes in
+and from every answer that comes back, summaries and translations
+included). **Structured outputs:** every task but `translate` asks for a
+fixed JSON shape (`output_config.format`, `type: 'json_schema'`, one schema
+per task, every object `additionalProperties: false` with all its
+properties required, no beta header). The model's structured outputs take
+no `minLength`, `maxLength` or `maxItems`, so the relay enforces lengths itself:
+`readAnswer` keeps a summary's `text` (the field 0.1.x apps read) with
+`quotes` only when each is really in the email, white space aside
+(`keepQuotes`), and `actions` whose `due` is a real day near `today`
+(`realDate`); `parseTasks` takes `{"tasks": [...]}`, keeps ids that were
+sent, once, and a `next` from `NEXT`, else `do`. An answer that does not
+parse, or a refusal (`stop_reason: 'refusal'`), is 502 `reason:
+'unreadable'` ("RATA’s AI gave no answer it could use. Try again.", or "The
+briefing could not be read. Try again."), still settled, never an empty
+answer, and logged by task and stop reason only; a briefing naming only
+ids it was not sent is unreadable too, never "nothing needs doing". Each
 request's worst case (`worstCaseMicro`: every prompt byte as a token, plus
-64, plus `max_tokens` of output) is reserved before the call, settled to
+64, plus the schema's bytes and `FORMAT_TOKENS` (512) when the answer has a
+shape, plus `max_tokens` of output) is reserved before the call, settled to
 Anthropic's reported token use after, and refused at the cap atomically
 (`ai_reserve`/`ai_settle`, `database.sql` §5; v0.1.40, SEC-2): a refused
 reserve is 429, a database error 503 with no model call (it fails closed),
 a missing function 503 "AI is not switched on for RATA yet." with only the
 server log naming section 5, and a settle that fails keeps the whole hold.
-One worst case is about $0.06 (a 12 000-character CJK translation), so
-`AI_MONTHLY_CAP_USD` must stay well above that. Nothing is logged but a
-status. The app asks once before the first AI use (`aiOk`, `AI_NOTICE`),
-never sends anything on its own (opening Assist runs the local briefing), and
+The largest, a 25-message CJK briefing, holds about $0.17, so
+`AI_MONTHLY_CAP_USD` must stay well above that; before a release,
+`FORMAT_TOKENS` is to be measured against `count_tokens` (it takes
+`output_config`). Nothing is logged but a status. **Gates in the page
+(Assistant v1, P1).** Nothing goes without a press, and then only past
+`aiGate`, in order: the plan (`aiPlanHas('ai')`; Translate needs only a
+licence; a licence that has lapsed but can renew, `reason: 'expired'` with
+a token, counts as the plan in its `licence`, so the request goes, the
+relay answers `expired` and the bridge renews and asks once more, BUG-L,
+rather than telling a Pro customer to buy Pro),
+the master switch (`S.settings.aiOff`), and the mailbox
+(`S.settings.aiBoxes`, `'on'`/`'off'` by `mailEmailOf`). A mailbox nobody
+has decided about is asked about in `#aiok-ov` (an alertdialog in
+`DLG_ORDER` and `keyDialog`): one message gets Not from this mailbox, Send
+this time or Always for this mailbox (focus on Not from this mailbox under
+HIPAA; Escape and the backdrop are Not from this mailbox); the briefing
+gets a box per undecided mailbox, unticked, and Save and run records ticked
+as on and unticked as off (Cancel and Escape decide nothing). Then
+`aiScreen` runs the DLP profile over the exact text about to go
+(`S.settings.aiCheck`, on unless turned off); a block-level finding asks:
+Cancel, Leave them out and send (`dlpRedact`, `[removed]`, then the check
+runs again on what is left, and a finding still there, such as one running
+from the subject into the text, sends nothing) or Send as it is, and the
+briefing leaves such a message out. Turning AI off bumps `AI_GEN`, and
+turning a mailbox off bumps its own count in `AI_GEN_BOX`; `askAI(body,
+boxes)` compares both for the mailboxes whose mail it carries, so an answer
+arriving after its mailbox (or AI) was turned off says "Not shown: AI was
+turned off while it was answering.", and one about another mailbox's mail
+is still shown. Settings, under AI
+(`renderAISettings`, app only) holds the switch, a row per mailbox, the
+check, this month's use (`S.settings.aiUsed`, from each answer's `used`),
+what each sends (`AI_SENDS`, the privacy page's words, which `legal.test`
+holds them to), Forget my answers and a link to `help#ai`. All of it stays
+on this computer. The one yes of 0.1.17 to 0.1.51 (`aiOk`, `AI_NOTICE`) is
+gone, and `tidyV6` drops a stored one. The bridge gives up after `AI_WAIT`
+(50 s, above the relay's 45 s; `window.__RATA_AI_WAIT` in the harness) with
+"RATA’s AI service took too long to answer. Try again." The app never
+sends anything on its own (opening Assist runs the local briefing), and
 falls back to the local summary/briefing with the reason when AI cannot be
 used. Flags are stored as `m.flag` and shown in the list. Translations live
 in `TRANSLATED` for the session. **Long mail and long answers (BUG-A,
@@ -879,8 +960,11 @@ a translation still says "only the start of this long message". The
 briefing drops its oldest messages until its JSON is at most 70 000
 characters (`AI_BRIEF_JSON`) and re-flags only what was sent. Before 0.1.43
 an opened message went whole, and anything over the route's raw 80 000
-guard was refused. The relay reads `stop_reason`: a translation or summary
-that stopped at `max_tokens` is `cut: true`; a briefing that did is 502
+guard was refused. The relay reads `stop_reason`: a translation that
+stopped at `max_tokens` is `cut: true`; a summary or an answer to a
+question that did is JSON cut off, which reads as unreadable, so both have
+`max_tokens` 1 000 (`ANSWER_TOKENS`), room for one in Chinese, Japanese or
+Korean with its quotes and actions; a briefing that did is 502
 "The briefing was cut short. Try again." (`reason: 'cut'`, still settled),
 and the page keeps every flag and says "Flags from earlier briefings are
 kept." The briefing's `max_tokens` is 3 000 (was 1 200, which an answer

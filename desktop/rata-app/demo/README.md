@@ -22,11 +22,15 @@ replaces only the Rust side with **`demo-backend.js`**: a plain JavaScript
 file that defines `window.__TAURI__.core.invoke` and answers each command
 with sample data. That file is the demo's whole "backend". It sends
 nothing, opens no mailbox and talks to no server. The two things
-`bridge.js` asks of mailrata.org itself, the AI relay (Summarize,
-Translate, Run briefing) and licence renewal, are answered in the page
-too, with words written for the demo and marked as its own ("Demo
-summary: …"); any other request off the page fails at once. Sign out and
-Delete account start the demo again.
+`bridge.js` asks of mailrata.org itself, the AI relay (Summarize, a
+question about a message, a reply draft, Translate, Run briefing) and
+licence renewal, are answered in the page too, with words written for the
+demo and marked as its own ("Demo summary: …"); any other request off the
+page fails at once, and every AI request the page made is kept in
+`window.__RATA_DEMO_AI`. AI may read the personal mailbox and the two side
+businesses' from the start; the two hospital mailboxes are left undecided,
+so the first AI press from one of them asks first, as RATA does. Sign out
+and Delete account start the demo again.
 
 | File | What it is |
 |---|---|
@@ -132,6 +136,10 @@ All in `demo-backend.js`:
   `connect`).
 - **AI answers**: `SUMMARIES` and `TASKS`, by subject. A message with
   neither gets a summary built from its sender and subject, and no flag.
+  Questions are answered by preset (`DEMO_ASKED`, else `DEMO_TYPED`), and
+  reply drafts by subject and intent (`DRAFTS`, else `DRAFT_BY_INTENT`).
+  Which mailboxes AI may read at the start is `aiBoxes` in the seeded
+  settings.
 - **Cloud folders and Slack**: `SERVICES`, `TREES`, `SLACK`.
 - **Create file**: `MADE` (the files it starts with) and the
   `create_file` case.

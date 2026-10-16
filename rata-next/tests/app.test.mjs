@@ -135,7 +135,9 @@ export default async function run(state) {
     /* ---- nothing leaves for another company's server ---- */
     const offMachine = await page.evaluate(() => ({
       translate: !!document.querySelector('#md-translate, #set-autotrans, #br-lang, #set-lang'),
-      ai: !!document.querySelector('#as-ai, #cfg-akey'),
+      /* Assistant v1's controls live in the app only: the website page reads
+         no mail, so it has nothing to ask about, draft from or brief on. */
+      ai: !!document.querySelector('#as-ai, #cfg-akey, #md-draft, #md-ask-q, #cmp-ai, #ai-list input, #as-scope button'),
       operator: !!document.querySelector('#cfg-gcid, #cfg-sburl, #cfg-sbkey, #set-api'),
       chat: [...document.querySelectorAll('[data-addlink]')].map(b => b.dataset.addlink).filter(t => t !== 'mail'),
       source: [...document.scripts].map(x => x.textContent).join('\n'),
