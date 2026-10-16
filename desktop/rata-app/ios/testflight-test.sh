@@ -11,7 +11,10 @@ set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/testflight.sh"
+# Its real path: macOS's $TMPDIR ends in a slash and lies under /var, a link
+# to /private/var, so the path as made is not the one a tool finds itself in.
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/rata-testflight-test.XXXXXX")"
+tmp="$(cd "$tmp" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 failures=0
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
@@ -45,7 +48,7 @@ for tool in cargo xcrun; do
 seen="$STUB_DIR/$(basename "$0").seen"
 {
   echo "args: $*"
-  echo "cwd: $PWD"
+  echo "cwd: $(pwd -P)"
   for v in APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH APPLE_DEVELOPMENT_TEAM \
     APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8 APPLE_TEAM_ID API_PRIVATE_KEYS_DIR; do
     if printenv "$v" > /dev/null; then echo "env $v=$(printenv "$v")"; fi
