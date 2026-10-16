@@ -82,14 +82,19 @@ a minute, 15 messages each, which is too little to be useful).
    Redirect URL, and treat a `localhost` redirect as a desktop one once
    PKCE is on. Reports from other desktop apps (2026) show the port has to
    match too, and that `127.0.0.1` is refused where `localhost` works, so
-   a bare `http://localhost` is not enough. RATA listens on the first of
-   the three ports no other program is using, so register all three. They
+   a bare `http://localhost` is not enough. A browser may send `localhost`
+   to `127.0.0.1` or to `::1`, so RATA listens on both, at the first of the
+   three ports where no other program holds either; register all three. They
    are fixed in the app (`PORTS` in
    `desktop/rata-app/src-tauri/src/slack.rs`); change both together or not
    at all. If Slack's page says `bad_redirect_uri`, this step is why.
 3. **User Token Scopes** (not Bot Token Scopes): `chat:write`,
-   `files:write`, `im:write`, `channels:read`, `groups:read`, `im:read`,
-   `users:read`.
+   `files:write`, `im:write`, `channels:read`, `groups:read`, `users:read`.
+   These six are what RATA asks for (`USER_SCOPES` in `slack.rs`). Earlier
+   versions of this page also listed `im:read`; RATA no longer lists
+   direct messages, so it no longer asks for it, and an app that already
+   has it registered can take it off (asking for fewer scopes than are
+   registered works either way).
 4. Turn on **PKCE**. It is one-way: once on, the app can no longer use a
    client secret, which RATA would never ship anyway.
    [Using PKCE](https://docs.slack.dev/authentication/using-pkce/).
@@ -111,8 +116,8 @@ build without it shows no Slack anywhere, as before.
 
 **How to tell it worked:** in a build made after the variable was set,
 Connect on the Slack row opens Slack's page, and Share to Slack on a
-message lists the workspace's
-channels.
+message lists the channels you are in and the workspace's people, you
+first.
 
 ## Google Drive (K4)
 
