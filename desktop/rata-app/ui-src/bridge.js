@@ -19,6 +19,15 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return; // Running on the web; leave apiFetch alone.
 
+  /* Which build this is, and the places on the web it sends people, as
+     sync-ui.sh wrote them into config.js (loaded just before this file). A
+     store build ('store') never asks Rust about updates, since the store
+     updates the app, and its licence box links nowhere; the addresses the
+     direct build links to are in its config.js only, never here. */
+  const CONFIG = window.RATA_CONFIG || {};
+  const STORE = CONFIG.distribution === 'store';
+  const PAGES = CONFIG.pages && typeof CONFIG.pages === 'object' ? CONFIG.pages : {};
+
   /* The interface's own vocabulary for a message. The Rust side uses its own
      names, and translating here keeps the mail layer from being shaped by one
      particular screen's field names. */
@@ -951,9 +960,11 @@
        stored here (forget_everything), and the page then clears its own
        store and sign-in. The customer's mailrata.org account and
        subscription are not on this computer and are not deleted from it:
-       the page says so and opens mailrata.org/app, whose Settings
-       holds Delete account and the billing portal. The wording lives
-       here, beside the call that does the work, so the two cannot drift. */
+       the page says so and opens the account page this build's config.js
+       names (`account`: RATA's page on mailrata.org, whose Settings holds
+       Delete account and the billing portal, or in a store build the
+       store-safe page that deletes the account). The wording lives here,
+       beside the call that does the work, so the two cannot drift. */
     async '/api/account'(opts) {
       if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
         try {
@@ -976,10 +987,19 @@
         mailboxes: n,
         removes,
         keeps: ['your mail, which stays at your provider', 'your mailrata.org account and subscription, which you manage and delete at mailrata.org'],
-        account: 'https://mailrata.org/app',
+        account: PAGES.account || '',
       };
     },
   };
+
+  /* A store build is updated by its store and may not update itself (Apple
+     2.5.2, Google Play's Device and Network Abuse policy), so it never asks
+     Rust whether there is a newer RATA or to install one: these two answer
+     as any feature this copy does not have. */
+  if (STORE) {
+    delete ROUTES['/api/update/check'];
+    delete ROUTES['/api/update/install'];
+  }
 
   /* Renewal.
 
@@ -1142,13 +1162,23 @@
         <p class="rata-lic-error" id="rata-licence-error" role="alert"></p>
         <button id="rata-licence-save">Use this licence</button>
         <button id="rata-licence-retry" class="rata-lic-retry" hidden>Try again</button>
-        <p class="rata-lic-note">
-          Sign in at <a href="https://mailrata.org/account">mailrata.org</a>
-          to find your key. RATA keeps working offline for thirty days at a time.
-        </p>
+        <p class="rata-lic-note" id="rata-licence-note"></p>
       </div>`;
     document.body.appendChild(wrap);
     wrap.querySelector('#rata-licence-why').textContent = standing.message;
+    /* Where the key is found: the licence page this build's config.js names,
+       in the browser (the click handler below). A store build names none and
+       links nowhere, since that page sells plans. */
+    const note = wrap.querySelector('#rata-licence-note');
+    const offline = 'RATA keeps working offline for thirty days at a time.';
+    if (!STORE && /^https:\/\//.test(String(PAGES.licence || ''))) {
+      const a = document.createElement('a');
+      a.href = PAGES.licence;
+      a.textContent = 'mailrata.org';
+      note.append('Sign in at ', a, ` to find your key. ${offline}`);
+    } else {
+      note.textContent = `Paste the licence key from your mailrata.org account. ${offline}`;
+    }
 
     const input = wrap.querySelector('#rata-licence-input');
     const err = wrap.querySelector('#rata-licence-error');

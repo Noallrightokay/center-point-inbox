@@ -179,6 +179,24 @@ jobs:
           }
           node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
 
+      # The same checks again over the store build, as desktop-ci.yml does:
+      # nothing that sells, no update, only the store-safe pages.
+      - name: Drive the store build's interface
+        run: |
+          RATA_DISTRIBUTION=store desktop/rata-app/sync-ui.sh "$RUNNER_TEMP/ui-store"
+          python3 -m http.server 3182 --bind 127.0.0.1 --directory "$RUNNER_TEMP/ui-store" \
+            > "$RUNNER_TEMP/http-store.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:3182/app.html && break
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:3182/app.html || {
+            cat "$RUNNER_TEMP/http-store.log"
+            echo "::error::the store build's interface server did not start"
+            exit 1
+          }
+          node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3182 --store
+
       # The rules the publish job below writes the update feed by.
       - name: The update feed's rules
         run: node --test desktop/rata-app/harness/feed.test.cjs

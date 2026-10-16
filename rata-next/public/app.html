@@ -1197,7 +1197,7 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b id="del-head">This cannot be undone</b><span id="del-detail" role="status"></span></div>
             <input type="text" id="del-email" aria-label="Type your email address to confirm" placeholder="type your email address" autocomplete="off" style="min-width:230px">
             <button class="btn danger" id="del-go">Delete permanently</button>
-            <a class="btn" id="del-web" href="https://mailrata.org/app" target="_blank" rel="noopener">Open mailrata.org account</a>
+            <a class="btn" id="del-web" target="_blank" rel="noopener">Open mailrata.org account</a>
             <button class="btn" id="del-cancel">Keep my account</button>
           </div>
         </div>
@@ -1219,8 +1219,9 @@ body.send-counting #toast{bottom:76px}
         <div class="comp-sec">
           <div class="sec-label">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
-          <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
+          <div class="set-row" id="plan-change"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
+          <div class="set-row" id="bill-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
+          <div class="set-row" id="plan-managed" style="display:none"><div class="grow"><b>Billing</b><span>Your plan is managed in your mailrata.org account.</span></div></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">About</div>
@@ -1231,7 +1232,9 @@ body.send-counting #toast{bottom:76px}
           <div class="sec-label">Help &amp; diagnostics</div>
           <div class="set-row diag-row" id="diag-row" style="display:none"><div class="grow"><b>Copy diagnostics</b><span>Your version, your system, and each mailbox's servers and last error, with no addresses, passwords or message text. Paste this into your bug report.</span><textarea id="diag-text" readonly spellcheck="false" aria-label="Diagnostics" style="display:none"></textarea><span class="diag-hint" id="diag-hint" role="status" style="display:none"></span></div><button class="btn" id="diag-copy">Copy diagnostics</button></div>
           <div class="set-row"><div class="grow"><b>Help</b><span>Linking a mailbox, what RATA's messages mean, and how to report a problem, on mailrata.org.</span></div><a class="btn" id="help-link" href="https://mailrata.org/help" target="_blank" rel="noopener">Open help</a></div>
-          <div class="set-row"><div class="grow"><b>Report a bug</b><span>Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
+          <div class="set-row"><div class="grow"><b>Report a bug</b><span id="bug-what">Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
+          <div class="set-row"><div class="grow"><b>Privacy policy</b><span>What RATA keeps, where it keeps it, and what it sends elsewhere, on mailrata.org.</span></div><a class="btn" id="privacy-link" href="https://mailrata.org/privacy.html" target="_blank" rel="noopener">Open privacy policy</a></div>
+          <div class="set-row"><div class="grow"><b>Terms of service</b><span>The terms you use RATA under, on mailrata.org.</span></div><a class="btn" id="terms-link" href="https://mailrata.org/terms.html" target="_blank" rel="noopener">Open terms</a></div>
         </div>
       </div>
     </section>
@@ -1417,6 +1420,18 @@ const LS_KEY='centra_ws_'+(SESSION?SESSION.uid:'anon');
 const CFG_KEY='centra_deploy_cfg';
 const cfg=()=>Object.assign({},window.RATA_CONFIG||{},JSON.parse(localStorage.getItem(CFG_KEY)||'{}'));
 const setCfg=p=>{localStorage.setItem(CFG_KEY,JSON.stringify(Object.assign(cfg(),p)))};
+/* Which build this is, from the build's own config.js (sync-ui.sh), never
+   from the user agent or this computer's storage. A store build (Apple's or
+   Google's store) is updated by the store, sells nothing and links to
+   nothing that does: no prices, buy or billing buttons, no update row or
+   bar, and the store-safe pages under mailrata.org/in-app/. PAGES are the
+   places on the web the build sends people (help, bug, privacy, terms,
+   account, releases); the website's config names none, and its own pages
+   are the defaults in the markup. */
+const BUILD=window.RATA_CONFIG||{};
+const STORE_BUILD=BUILD.distribution==='store';
+const PAGES=BUILD.pages&&typeof BUILD.pages==='object'?BUILD.pages:{};
+const pageOf=k=>typeof PAGES[k]==='string'&&/^https:\/\//.test(PAGES[k])?PAGES[k]:'';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -4295,8 +4310,11 @@ function takeStanding(st){
 addEventListener('rata-standing',e=>takeStanding(e.detail));
 const can=f=>!!(tier()&&tier()[f]);
 /* What to say when something is held back, always naming the plan that has
-   it and what that costs. */
+   it and what that costs. A store build names no price and says nothing of
+   upgrading: the store sells, and nothing in the app may send people to buy
+   anywhere else. */
 function needPlan(feature,what){
+  if(STORE_BUILD)return `${what} is not in your plan.`;
   const up=Object.keys(TIERS).find(k=>TIERS[k][feature]);
   return up?`${what} comes with ${TIERS[up].label}, ${money(TIERS[up].price)} a month. Upgrade in Settings.`
            :`${what} is not part of your plan.`;
@@ -4382,11 +4400,16 @@ function renderConnSettings(){
     const row=document.createElement('div');row.className='set-row';
     const g=document.createElement('div');g.className='grow';
     const b=document.createElement('b');b.textContent=[files.length?'Cloud files':'',...share.map(c=>c.place)].filter(Boolean).join(' and ');
-    const s=document.createElement('span');s.textContent=andList(CONN.list.map(c=>c.place))+(CONN.list.length>1?' come':' comes')+' with '+TIERS.pro.label+'.';
+    /* A store build has no plans to show (renderPlan), so no See plans. */
+    const s=document.createElement('span');s.textContent=andList(CONN.list.map(c=>c.place))+(STORE_BUILD?(CONN.list.length>1?' are':' is')+' not in your plan.':(CONN.list.length>1?' come':' comes')+' with '+TIERS.pro.label+'.');
     g.append(b,s);
-    const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
-    up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
-    row.append(g,up);list.append(row);
+    row.append(g);
+    if(!STORE_BUILD){
+      const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
+      up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
+      row.append(up);
+    }
+    list.append(row);
   }
   for(const c of CONN.list){
     const row=document.createElement('div');row.className='set-row conn-row';row.dataset.conn=c.service;
@@ -5556,7 +5579,9 @@ $('#tamper-demo').onclick=()=>{
    is installed only if its signature checks out, and the app then restarts
    into it. Where this copy cannot update itself — a build without an update
    key, or an install the updater does not handle — the answer says so and
-   offers the download instead. */
+   offers the download instead. A store build is updated by its store and
+   may not update itself or point to the releases page, so it never asks,
+   and the row and the bar never show. */
 let UPD=null,UPD_LATER='';
 /* The feed has nothing for this kind of installation (update.rs,
    not_here_yet): its installer was held back from the last release. That
@@ -5564,7 +5589,7 @@ let UPD=null,UPD_LATER='';
    a manual check claims it is; Install says the same words. */
 const UPD_NOT_HERE='There is no update for this computer yet.';
 async function checkUpdate(manual){
-  if(!window.__RATA_NATIVE__)return;
+  if(!window.__RATA_NATIVE__||STORE_BUILD)return;
   const b=$('#upd-check');if(manual&&b){b.disabled=true;b.textContent='Checking\u2026'}
   let r;try{r=await apiFetch('/api/update/check')}catch(e){r={error:String(e&&e.message||e)}}
   if(b){b.disabled=false;b.textContent='Check for updates'}
@@ -5575,12 +5600,13 @@ async function checkUpdate(manual){
 }
 function renderUpdateRow(){
   const row=$('#upd-row');if(!row)return;
-  row.style.display=window.__RATA_NATIVE__?'':'none';
+  row.style.display=window.__RATA_NATIVE__&&!STORE_BUILD?'':'none';
   if(!UPD){$('#upd-line').textContent='Not checked yet.';return}
   $('#upd-line').textContent='You have RATA '+(UPD.current||'?')+'. '+(UPD.version?'RATA '+UPD.version+' is ready to install.'
     :!UPD.enabled?'This copy updates from the releases page.':UPD.error?UPD.error:UPD.notHere?UPD_NOT_HERE:'It is the newest version.');
 }
 function showUpdateBar(){
+  if(STORE_BUILD)return;
   let bar=$('#upd-bar');
   if(!bar){bar=document.createElement('div');bar.id='upd-bar';document.body.appendChild(bar)}
   bar.hidden=false;
@@ -5590,6 +5616,7 @@ function showUpdateBar(){
   $('#upd-go').onclick=installUpdate;
 }
 async function installUpdate(){
+  if(STORE_BUILD)return;
   const go=$('#upd-go'),later=$('#upd-later');
   if(go){go.disabled=true;go.textContent='Downloading\u2026'}if(later)later.disabled=true;
   /* Anything written is on disk before the program is replaced. */
@@ -5600,7 +5627,7 @@ async function installUpdate(){
   bar.innerHTML=`<span class="upd-text">RATA could not update itself.<span class="upd-why">${esc((r&&r.error)||'No reason was given.')}</span></span>
     <button class="btn primary" id="upd-dl">Download it</button><button class="btn" id="upd-later">Close</button>`;
   $('#upd-later').onclick=()=>{UPD_LATER=UPD&&UPD.version||'';bar.hidden=true};
-  $('#upd-dl').onclick=()=>apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:(UPD&&UPD.releases)||'https://github.com/Noallrightokay/center-point-inbox/releases'})});
+  $('#upd-dl').onclick=()=>apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:(UPD&&UPD.releases)||pageOf('releases')})});
 }
 function renderSettings(){
   $('#set-name').value=S.settings.name;
@@ -5620,8 +5647,16 @@ $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim
    and puts it on the clipboard. The block is shown too, so the customer
    sees what they are about to paste; where the webview will not write the
    clipboard it is shown selected, to copy by hand. The website holds no
-   mailbox to diagnose, so there the section is Help and Report a bug only.
-   Both links go to the browser through open_link in the app (openLink). */
+   mailbox to diagnose, so there the section is Help, Report a bug, Privacy
+   and Terms only. Every link goes to the browser through open_link in the
+   app (openLink), and to a new tab on the website. Where each goes is the
+   build's (PAGES, from config.js) when it names one, else the website's
+   own page in the markup; a store build names the store-safe pages under
+   mailrata.org/in-app/, Report a bug among them, since GitHub leads to the
+   releases. */
+const HELP_LINKS={help:'#help-link',bug:'#bug-link',privacy:'#privacy-link',terms:'#terms-link'};
+for(const [k,id] of Object.entries(HELP_LINKS))if(pageOf(k))$(id).setAttribute('href',pageOf(k));
+if(STORE_BUILD)$('#bug-what').textContent='What to put in a bug report, on mailrata.org. Never paste a password or your licence key into one.';
 function renderHelp(){
   const row=$('#diag-row');if(row)row.style.display=window.__RATA_NATIVE__?'':'none';
 }
@@ -5640,7 +5675,7 @@ async function copyDiagnostics(){
   ta.focus();ta.select();
 }
 $('#diag-copy').addEventListener('click',copyDiagnostics);
-['#help-link','#bug-link'].forEach(id=>$(id).addEventListener('click',e=>{
+Object.values(HELP_LINKS).forEach(id=>$(id).addEventListener('click',e=>{
   if(!window.__RATA_NATIVE__)return;
   e.preventDefault();openLink(e.currentTarget.getAttribute('href'));
 }));
@@ -5769,11 +5804,21 @@ function lfFind(){
     if($('#lf-input').value.trim().toLowerCase()===v&&!LF_WAIT)lfMicrosoft();
   },500);
 }
+/* A store build says a full allowance in its own words, before Rust's
+   refusal names where to upgrade: what is not in the plan, and nothing
+   more. Rust still decides; this only answers first when the allowance is
+   known to be used up and the address is not already linked. */
+function storeFull(email){
+  if(!STORE_BUILD||!QUOTA||!QUOTA.limits||QUOTA.limits.mail===null||!QUOTA.remaining||QUOTA.remaining.mail!==0||linkedFind('mail',email))return false;
+  toast('Another mailbox is not in your plan.');
+  return true;
+}
 /* Sign in with Microsoft: the browser opens Microsoft's page, and the app
    links the mailbox when Microsoft sends it back. Cancel stops it. */
 async function msSignIn(){
   const email=$('#lf-input').value.trim();
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  if(storeFull(email))return;
   if(LF_WAIT)return;
   LF_WAIT=true;lfMicrosoft();
   let res;
@@ -5867,6 +5912,7 @@ async function mailLink(email,pass,host){
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
   if(msAddress(email)){lfMicrosoft();return}
   if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
+  if(storeFull(email))return;
   const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
   try{
     const res=await apiFetch('/api/link/mail',{
@@ -5932,7 +5978,7 @@ async function refreshQuota(){
       ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — no limit`
       : `${q.used.mail} of up to ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
     const full=q.limits.mail!==null&&q.remaining.mail===0;
-    line.textContent=`${q.planLabel}: ${m}.`+(full?' Upgrade in Settings to add another mailbox.':'');
+    line.textContent=`${q.planLabel}: ${m}.`+(full?(STORE_BUILD?' Another mailbox is not in your plan.':' Upgrade in Settings to add another mailbox.'):'');
   }catch(e){
     /* On the website there is nothing to ask any more: plans are enforced by
        the licence the app checks, and saying "could not check just now" would
@@ -5960,12 +6006,26 @@ const PLAN_ONELINE={
 };
 
 function renderPlan(){
-  renderPrices();
   const c=cfg(),t=tier();
   const badge=$('#plan-badge'),line=$('#plan-line');
   badge.textContent=tierLabel();
   badge.className='badge '+(t?'work':'personal');
   const mailboxes=t=>t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes';
+  /* A store build: the plan's own sentence with no price and, in place of
+     prices, buy buttons, Checkout and the billing portal, where the plan is
+     managed, in words alone. The store sells; nothing here may lead to a
+     purchase anywhere else. */
+  $('#plan-change').style.display=$('#bill-row').style.display=STORE_BUILD?'none':'';
+  $('#plan-managed').style.display=STORE_BUILD?'':'none';
+  if(STORE_BUILD){
+    const m=t?mailboxes(t):'';
+    line.textContent=t
+      ? `${LIC&&LIC.message?LIC.message+' ':''}${m.charAt(0).toUpperCase()+m.slice(1)} in one Center Point inbox${t.split?', side by side':''}.`
+      : (LIC&&LIC.message)||'No licence on this computer yet. Paste the licence key from your mailrata.org account.';
+    $('#plan-compare').textContent='';$('#plan-buttons').replaceChildren();
+    return;
+  }
+  renderPrices();
   if(window.__RATA_NATIVE__)line.textContent=t
     ? `${LIC.message} ${money(t.price)} a month · ${mailboxes(t)} in one Center Point inbox${t.split?', side by side':''}.`
     : (LIC&&LIC.message)||'No licence on this computer yet — enter the key from your mailrata.org account.';
@@ -6077,15 +6137,21 @@ $('#pw-change').onclick=async()=>{
    In the app (I7) the endpoint is bridge.js, and the other half is Rust:
    every linked mailbox with its keychain entries, then the licence stored
    here, then this page's store. The mailrata.org account is not on this
-   computer and is not deleted from it; the row says so and opens
-   mailrata.org/app, whose Settings holds Delete account. Delete permanently stays off until the endpoint has
+   computer and is not deleted from it; the row says so and opens the
+   account page the build names (below). Delete permanently stays off until the endpoint has
    said what it would remove. */
 const DEL_HERE='Removes from this computer every linked mailbox, with its password or Microsoft sign-in in the keychain, the licence stored here, and RATA’s mail store, settings and sign-in. Your mail stays at your provider. Your mailrata.org account and subscription are managed and deleted at mailrata.org.';
 if(window.__RATA_NATIVE__)$('#del-what').textContent=DEL_HERE;
+/* Where the mailrata.org account is managed and deleted is the build's
+   (PAGES.account): RATA's page on mailrata.org in the direct build, whose
+   Settings holds Delete account, and in a store build the store-safe page
+   that deletes it, named for what it does. */
+if(pageOf('account'))$('#del-web').setAttribute('href',pageOf('account'));
+if(STORE_BUILD)$('#del-web').textContent='Delete your mailrata.org account';
 async function openDelete(){
   const box=$('#del-confirm'),detail=$('#del-detail'),go=$('#del-go');
   box.style.display='flex';
-  $('#del-web').style.display=window.__RATA_NATIVE__?'':'none';
+  $('#del-web').style.display=window.__RATA_NATIVE__&&pageOf('account')?'':'none';
   go.disabled=true;go.textContent='Delete permanently';
   $('#del-email').value='';$('#del-email').focus();
   detail.textContent='Checking what this would remove…';
@@ -8417,7 +8483,7 @@ function showWelcome(ob){
   save();
   /* A newer RATA is looked for a little after start, and twice a day while
      it stays open. */
-  if(window.__RATA_NATIVE__){setTimeout(()=>checkUpdate(false),4000);setInterval(()=>checkUpdate(false),12*3600e3)}
+  if(window.__RATA_NATIVE__&&!STORE_BUILD){setTimeout(()=>checkUpdate(false),4000);setInterval(()=>checkUpdate(false),12*3600e3)}
 })();
 </script>
 <script>

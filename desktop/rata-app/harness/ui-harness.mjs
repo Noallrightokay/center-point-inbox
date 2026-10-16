@@ -4,13 +4,92 @@
 // Run from the repository root, after ./sync-ui.sh and `npm ci` in rata-next:
 //   (cd desktop/rata-app/ui && python3 -m http.server 3181 --bind 127.0.0.1 &)
 //   node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+// and again over the store build, assembled into a folder of its own
+// (RATA_DISTRIBUTION=store ./sync-ui.sh <folder>) and served the same way:
+//   node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3182 --store
 // Exit status is non-zero when any check fails.
 import pw from '../../../rata-next/node_modules/playwright/index.js';
+import { runInNewContext } from 'node:vm';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 const { chromium } = pw;
 const B = process.argv[2];
+/* Which build this pass drives. Every check runs in both passes; the few
+   about what only one build does (its update row, its plan rows, where its
+   links go, what it says of plans) expect that build's own answer. */
+const STORE = process.argv.slice(3).includes('--store');
 const STORE_SOFT_CAP_JS = 3500000;
 let fails = 0;
 const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
+
+/* The build served must be the one this pass is for, or the pass proves
+   nothing: config.js, as sync-ui.sh wrote it, says which. */
+const BUILT = await (async () => {
+  try {
+    const box = { window: {} };
+    runInNewContext(await (await fetch(B + '/config.js')).text(), box, { timeout: 1000 });
+    return box.window.RATA_CONFIG || {};
+  } catch (e) { return { error: String(e) }; }
+})();
+check(BUILT.distribution === (STORE ? 'store' : 'direct'),
+  `this pass drives the ${STORE ? 'store' : 'direct'} build, and its config.js says so: ${JSON.stringify(BUILT.distribution || BUILT.error || null)}`);
+if (fails) process.exit(1);
+
+/* Whether a web address leads to a purchase or to the releases page, and
+   which: Stripe, GitHub's releases, mailrata.org's home page (the prices),
+   its licence page, its app page or its sign-in, or #pricing anywhere. A
+   store build may link to none of them (Apple 3.1.1, Google Play's
+   Payments policy; RATA updates through the store, so no releases either). */
+const SELLS_SITE = /^\/(?:index\.html)?$|^\/(?:account|app|auth)(?:\.html)?\/?$/i;
+function sells(address) {
+  let u;
+  try { u = new URL(address); } catch { return null; }
+  const h = u.hostname.toLowerCase();
+  if (/^#pricing\b/i.test(u.hash)) return '#pricing';
+  if (h === 'stripe.com' || h.endsWith('.stripe.com')) return 'Stripe';
+  if ((h === 'github.com' || h === 'www.github.com') && /^\/[^/]+\/[^/]+\/releases(?:\/|$)/i.test(u.pathname)) return 'the releases page';
+  if ((h === 'mailrata.org' || h === 'www.mailrata.org') && SELLS_SITE.test(u.pathname)) return 'mailrata.org' + u.pathname;
+  return null;
+}
+/* Every address in a file's text that sells(): written with its scheme or
+   without (a bare "mailrata.org" in a sentence is a name, not a link, and
+   only counts with a path), plus any #pricing at all. A name with no host
+   is one of the app's own files and leads nowhere else. */
+const ADDRESS = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:stripe\.com|github\.com|mailrata\.org)(?::\d+)?(?:[/?#][^\s"'`<>\\)\]]*)?/gi;
+function sellingIn(text) {
+  const out = [];
+  for (const m of text.matchAll(ADDRESS)) {
+    const raw = m[0].replace(/[.,;:!]+$/, '');
+    const schemed = /^https?:\/\//i.test(raw);
+    if (!schemed && !/[/?#]/.test(raw)) continue;
+    const why = sells(schemed ? raw : 'https://' + raw);
+    if (why) out.push(`${raw} (${why})`);
+  }
+  /* A #pricing outside any address above is a relative one. */
+  const rest = text.replace(ADDRESS, ' ');
+  for (const m of rest.matchAll(/#pricing\b/gi)) out.push(`…${rest.slice(Math.max(0, m.index - 30), m.index + 8).replace(/\s+/g, ' ')} (#pricing)`);
+  return out;
+}
+/* Where a store build may send people from a link or open_link: anywhere
+   that sells nothing of RATA's, so never GitHub (its pages lead to the
+   releases) and on mailrata.org only the store-safe pages under /in-app/
+   (and the relay and renewal, which are not pages). */
+const storeSafe = (address) => {
+  let u;
+  try { u = new URL(address); } catch { return true; }
+  if (!/^https?:$/.test(u.protocol)) return true;
+  const h = u.hostname.toLowerCase();
+  if (sells(address)) return false;
+  if (h === 'github.com' || h.endsWith('.github.com')) return false;
+  if (h === 'mailrata.org' || h === 'www.mailrata.org') return /^\/(?:in-app|api)\//.test(u.pathname);
+  return true;
+};
+/* What every page of this pass asked Rust for that matters here: each
+   open_link address, and each update check or install (sent by the mock). */
+const SAW = { open_link: [], check_update: [], install_update: [], pages: 0 };
 
 const MOCK = ({ licensed, ms, old, lic }) => {
   // Playwright injects this into every frame; the app is only the top one.
@@ -86,6 +165,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       : { licensed: false, message: 'Enter your licence key.', token: null, renewSoon: false };
   window.__TAURI__ = { core: { invoke: async (cmd, args) => {
     M.calls.push([cmd, args]);
+    /* What the whole pass keeps (SAW): every address given to open_link, and
+       every update check or install, from every page. */
+    if (['open_link', 'check_update', 'install_update'].includes(cmd) && typeof window.__harnessSaw === 'function') window.__harnessSaw(cmd, String((args && args.url) || ''));
     switch (cmd) {
       case 'licence_status': return standing();
       case 'set_licence':
@@ -403,6 +485,8 @@ async function open(licensed, opts = {}) {
     await route.fulfill({ response: resp, headers: { ...resp.headers(), 'content-security-policy': APP_CSP } });
   });
   page.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  SAW.pages++;
+  await page.exposeFunction('__harnessSaw', (cmd, url) => { SAW[cmd].push(url); });
   /* The browser's own dialogs answer nothing on Apple's webview (WKWebView
      has no panel for confirm or prompt), so the page asks in the page
      (ask, askText) and any native dialog fails here. The one allowance is
@@ -2695,8 +2779,31 @@ console.log('\n— the briefing sends each message by its place, never by its id
   await pg.close();
 }
 
-console.log('\n— a feed with nothing for this computer is not "the newest version" —');
-{
+if (STORE) {
+  console.log('\n— a store build never looks for an update, says nothing of one, and never asks Rust —');
+  /* The store updates a store build, and it may not update itself (Apple
+     2.5.2, Google Play): no row, no bar, no check at start or on the timer,
+     nothing a manual call could start, and bridge.js has no route to Rust
+     for it. Waits past the check the direct build makes 4 s after start. */
+  const pg = await open(true);
+  await pg.waitForTimeout(4600);
+  const r = await pg.evaluate(async () => {
+    __mock.update = { enabled: true, current: '0.1.44', version: '0.1.99', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
+    go('set'); renderSettings();
+    await checkUpdate(true); await checkUpdate(false); showUpdateBar(); await installUpdate();
+    const routes = [await apiFetch('/api/update/check'), await apiFetch('/api/update/install', { method: 'POST' })];
+    const row = document.querySelector('#upd-row');
+    return { row: getComputedStyle(row).display, bar: !!document.querySelector('#upd-bar'), UPD, toasts: window.__toasts.slice(),
+      asked: __mock.calls.filter(([c]) => c === 'check_update' || c === 'install_update').length, routes };
+  });
+  check(r.row === 'none' && !r.bar && r.UPD === null && r.toasts.length === 0 && r.asked === 0,
+    `no Updates row, no bar, nothing said and nothing asked of Rust, at start, on a manual check or an install: ${JSON.stringify({ ...r, routes: undefined })}`);
+  check(r.routes.every((x) => x && typeof x.error === 'string' && !x.version && !x.ok),
+    `bridge.js answers an update check or install as a feature this copy does not have: ${JSON.stringify(r.routes)}`);
+  await pg.close();
+}
+if (!STORE) console.log('\n— a feed with nothing for this computer is not "the newest version" —');
+if (!STORE) {
   /* I1: update.rs answers notHere when the feed has no entry for this kind
      of installation (not_here_yet). That is not "this is the newest", so the
      Settings row and a manual check say what Install says. */
@@ -2784,9 +2891,30 @@ console.log('\n— Settings → Help & diagnostics —');
   await pg.click('#bug-link');
   await pg.waitForFunction(() => (__mock.opened || []).length === 2, null, { timeout: 3000 }).catch(() => {});
   const opened = await pg.evaluate(() => __mock.opened);
-  check(opened[0] === 'https://mailrata.org/help', `Help asks open_link for exactly https://mailrata.org/help: ${JSON.stringify(opened)}`);
-  check(opened[1] === 'https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md' && opened.length === 2,
-    `Report a bug opens the Beta bug template, once: ${JSON.stringify(opened)}`);
+  if (!STORE) {
+    check(opened[0] === 'https://mailrata.org/help', `Help asks open_link for exactly https://mailrata.org/help: ${JSON.stringify(opened)}`);
+    check(opened[1] === 'https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md' && opened.length === 2,
+      `Report a bug opens the Beta bug template, once: ${JSON.stringify(opened)}`);
+  } else {
+    check(opened[0] === 'https://mailrata.org/in-app/help', `in a store build, Help asks open_link for exactly the store-safe https://mailrata.org/in-app/help: ${JSON.stringify(opened)}`);
+    check(opened[1] === 'https://mailrata.org/in-app/help#report' && opened.length === 2,
+      `and Report a bug for that page's Report a bug section, never GitHub (whose pages lead to the releases), once: ${JSON.stringify(opened)}`);
+    const said = await pg.evaluate(() => document.querySelector('#bug-what')?.textContent ?? null);
+    check(said === 'What to put in a bug report, on mailrata.org. Never paste a password or your licence key into one.',
+      `and its row says where it goes, with no GitHub: "${said}"`);
+  }
+  /* Privacy policy and Terms of service, in every build. */
+  await pg.evaluate(() => { __mock.opened = []; });
+  await pg.click('#privacy-link', { timeout: 3000 }).catch(() => {});
+  await pg.waitForFunction(() => (__mock.opened || []).length === 1, null, { timeout: 3000 }).catch(() => {});
+  await pg.click('#terms-link', { timeout: 3000 }).catch(() => {});
+  await pg.waitForFunction(() => (__mock.opened || []).length === 2, null, { timeout: 3000 }).catch(() => {});
+  const legalOpened = await pg.evaluate(() => ({ opened: __mock.opened, at: location.pathname,
+    rows: ['#privacy-link', '#terms-link'].map((s) => { const a = document.querySelector(s); return a && [a.closest('.set-row').querySelector('b').textContent, a.textContent, a.closest('#help-sec') ? 'help' : 'elsewhere']; }) }));
+  const legal = STORE ? ['https://mailrata.org/in-app/privacy', 'https://mailrata.org/in-app/terms'] : ['https://mailrata.org/privacy.html', 'https://mailrata.org/terms.html'];
+  check(JSON.stringify(legalOpened.opened) === JSON.stringify(legal) && /app\.html$/.test(legalOpened.at)
+    && JSON.stringify(legalOpened.rows) === JSON.stringify([['Privacy policy', 'Open privacy policy', 'help'], ['Terms of service', 'Open terms', 'help']]),
+    `Help & diagnostics has Privacy policy and Terms of service, each opened once in the browser through open_link at ${legal.join(' and ')}, and the app stays: ${JSON.stringify(legalOpened)}`);
   await pg.close();
 }
 {
@@ -2800,10 +2928,14 @@ console.log('\n— Settings → Help & diagnostics —');
     go('set'); renderSettings();
     const vis = (s) => { const el = document.querySelector(s); return !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0; };
     return { native: !!window.__RATA_NATIVE__, diag: vis('#diag-row'), help: vis('#help-link'), bug: vis('#bug-link'),
-      helpHref: document.querySelector('#help-link').getAttribute('href') };
+      helpHref: document.querySelector('#help-link').getAttribute('href'),
+      legal: ['#privacy-link', '#terms-link'].map((s) => { const a = document.querySelector(s); return a && { shown: vis(s), href: a.getAttribute('href'), target: a.getAttribute('target'), rel: a.getAttribute('rel') }; }) };
   });
-  check(!web.native && !web.diag && web.help && web.bug && web.helpHref === 'https://mailrata.org/help',
-    `on the website the section shows Help and Report a bug, and no Copy diagnostics: ${JSON.stringify(web)}`);
+  check(!web.native && !web.diag && web.help && web.bug && web.helpHref === (STORE ? 'https://mailrata.org/in-app/help' : 'https://mailrata.org/help'),
+    `on the website the section shows Help and Report a bug, and no Copy diagnostics: ${JSON.stringify({ ...web, legal: undefined })}`);
+  const legal = STORE ? ['https://mailrata.org/in-app/privacy', 'https://mailrata.org/in-app/terms'] : ['https://mailrata.org/privacy.html', 'https://mailrata.org/terms.html'];
+  check(web.legal.every((l, i) => l && l.shown && l.href === legal[i] && l.target === '_blank' && l.rel === 'noopener'),
+    `and Privacy policy and Terms of service, each in a new tab: ${JSON.stringify(web.legal)}`);
   await pg.close();
 }
 
@@ -3972,14 +4104,22 @@ console.log('\n— Delete account in the app removes what is on this computer, a
   const grp = await pg.evaluate(() => { const g = document.querySelector('#del-confirm'); return [g.getAttribute('role'), document.activeElement.id].join(':'); });
   check(grp === 'group:del-email', `it is still a group that takes the focus (H10): ${grp}`);
   /* The mailrata.org account is the website's: opened in the browser, never deleted from here. */
-  const web = await pg.evaluate(() => { const a = document.querySelector('#del-web'); return { shown: getComputedStyle(a).display !== 'none', href: a.getAttribute('href') }; });
+  const web = await pg.evaluate(() => { const a = document.querySelector('#del-web'); return { shown: getComputedStyle(a).display !== 'none', href: a.getAttribute('href'), text: a.textContent }; });
   await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; });
   await pg.click('#del-web');
   await pg.waitForTimeout(150);
   let st = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map((c) => c[0]), url: location.pathname }));
-  check(web.shown && web.href === 'https://mailrata.org/app' && JSON.stringify(st.opened) === '["https://mailrata.org/app"]'
-    && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
-  `Open mailrata.org account goes through open_link and deletes nothing: ${JSON.stringify({ web, st })}`);
+  if (!STORE) {
+    check(web.shown && web.href === 'https://mailrata.org/app' && JSON.stringify(st.opened) === '["https://mailrata.org/app"]'
+      && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
+    `Open mailrata.org account goes through open_link and deletes nothing: ${JSON.stringify({ web, st })}`);
+  } else {
+    /* A store build links straight to the store-safe page that deletes the
+       mailrata.org account (Apple 5.1.1(v)), and says so. */
+    check(web.shown && web.text === 'Delete your mailrata.org account' && web.href === 'https://mailrata.org/in-app/delete-account'
+      && JSON.stringify(st.opened) === '["https://mailrata.org/in-app/delete-account"]' && !st.calls.includes('forget_everything') && /app\.html$/.test(st.url),
+    `in a store build, Delete your mailrata.org account opens https://mailrata.org/in-app/delete-account through open_link and deletes nothing here: ${JSON.stringify({ web, st })}`);
+  }
 
   /* A keychain that refuses: nothing of the page's is cleared, and it can be pressed again. */
   await pg.evaluate(() => { __mock.forgetFails = 'me@example.com could not be removed: This computer’s keychain refused access'; });
@@ -4157,8 +4297,13 @@ console.log('\n— connected accounts: cloud files and Share to Slack, Pro, show
       plans: !!document.querySelector('#conn-plans'),
       text: document.querySelector('#conn-sec').textContent,
     }));
-    check(base.shown && base.rows === 5 && base.connect === 0 && base.plans && /comes with RATA Pro, \$23\.99 a month/.test(base.lead),
+    if (!STORE) check(base.shown && base.rows === 5 && base.connect === 0 && base.plans && /comes with RATA Pro, \$23\.99 a month/.test(base.lead),
       `Base sees the five rows, the plan sentence and See plans, and no Connect: ${JSON.stringify({ ...base, text: undefined })}`);
+    /* A store build names no price, offers no upgrade and has no plans to
+       see: what is not in the plan, and nothing more. */
+    else check(base.shown && base.rows === 5 && base.connect === 0 && !base.plans && base.lead === 'Connecting your cloud files and Slack is not in your plan.'
+      && /OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack are not in your plan\./.test(base.text) && !/\$|Upgrade|RATA Pro|See plans/.test(base.text),
+      `in a store build, Base sees the five rows and that they are not in the plan, with no price, no upgrade and no See plans: ${JSON.stringify({ ...base, text: undefined })}`);
     check(!/[–—]/.test(base.text), 'and the section has no em or en dash');
     /* Connected before a downgrade: it can still be taken away, and is not used. */
     await pg.evaluate(async () => { __mock.conn.on = { microsoft: true, slack: true }; await loadConnections(); go('docs'); });
@@ -5091,13 +5236,17 @@ console.log('\n— Create file: blank files the app makes and opens, Created by 
     btn: !document.querySelector('#create-btn').hidden, plan: document.querySelector('#created-plan').hidden ? '' : document.querySelector('#created-plan').textContent,
     acts: [...document.querySelectorAll('#created-list .created-item')].map((li) => [...li.querySelectorAll('button')].map((b) => b.dataset.act).join()),
   }));
-  check(base.btn && /comes with RATA Pro, \$23\.99 a month/.test(base.plan) && base.acts.every((a) => a === 'forget'), `on Base, Created by you names the plan and offers only Forget: ${JSON.stringify(base)}`);
+  if (!STORE) check(base.btn && /comes with RATA Pro, \$23\.99 a month/.test(base.plan) && base.acts.every((a) => a === 'forget'), `on Base, Created by you names the plan and offers only Forget: ${JSON.stringify(base)}`);
+  else check(base.btn && base.plan === 'Opening and sending the files you made is not in your plan.' && base.acts.every((a) => a === 'forget'),
+    `in a store build, on Base, Created by you says it is not in the plan, with no price, and offers only Forget: ${JSON.stringify(base)}`);
   await pg.click('#create-btn');
   await pg.waitForSelector('#create-ov.open');
   dlg = await pg.evaluate(() => ({ plan: document.querySelector('#create-plan').textContent, go: !document.querySelector('#create-go').hidden && document.querySelector('#create-go').getClientRects().length > 0,
     kinds: document.querySelector('#create-kinds').getClientRects().length, web: document.querySelector('#create-web').getClientRects().length > 0, focus: document.activeElement.id }));
-  check(/^Create file comes with RATA Pro, \$23\.99 a month\. Upgrade in Settings\.$/.test(dlg.plan) && !dlg.go && !dlg.kinds && dlg.web && dlg.focus === 'create-close',
+  if (!STORE) check(/^Create file comes with RATA Pro, \$23\.99 a month\. Upgrade in Settings\.$/.test(dlg.plan) && !dlg.go && !dlg.kinds && dlg.web && dlg.focus === 'create-close',
     `on Base the dialog says which plan has it, offers no Create, and still the browser apps: ${JSON.stringify(dlg)}`);
+  else check(dlg.plan === 'Create file is not in your plan.' && !dlg.go && !dlg.kinds && dlg.web && dlg.focus === 'create-close',
+    `in a store build, on Base the dialog says Create file is not in the plan, with no price or upgrade, offers no Create, and still the browser apps: ${JSON.stringify(dlg)}`);
   await pg.keyboard.press('Escape');
   check((await calls(pg, 'create_file')).length === 8, 'and nothing more was made');
   await pg.close();
@@ -5146,7 +5295,9 @@ console.log('\n— SEC-10: only what this build connects is named, no disguised 
     check(['OneDrive', 'Google Drive', 'iCloud Drive', 'Creative Cloud Files', 'Slack'].every((n) => all.text.includes(n)) && !/never goes to them/.test(all.text) && !/[–—]/.test(all.text),
       `${plan}, with every service: each is named, and nothing says mail never goes to them: ${JSON.stringify(all.lead)}`);
     if (!base) check(/Share to Slack sends only what you choose/.test(all.lead), `Pro says Share to Slack sends only what you choose: ${JSON.stringify(all.lead)}`);
-    else check(/OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack come with RATA Pro\./.test(all.text), 'Base names all five as Pro’s when all five are available');
+    else if (!STORE) check(/OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack come with RATA Pro\./.test(all.text), 'Base names all five as Pro’s when all five are available');
+    else check(/OneDrive, Google Drive, iCloud Drive, Creative Cloud Files and Slack are not in your plan\./.test(all.text) && !/RATA Pro|\$/.test(all.text),
+      'in a store build, Base says all five are not in the plan, naming no plan to buy');
   }
 
   /* 2. A program named as a document from a connected folder never reaches
@@ -5266,6 +5417,215 @@ console.log('\n— SEC-10: only what this build connects is named, no disguised 
   check((await pg3.evaluate(() => __mock.calls.filter(([c]) => c === 'send_mail').length)) === 0, 'and the start after that sends nothing');
   await pg3.close();
   await ctx.close();
+}
+
+if (!STORE) {
+  console.log('\n— sync-ui.sh: which build it makes, and which folders it may empty —');
+  /* RATA_DISTRIBUTION picks the build: unset is direct, store is the
+     stores', and anything else stops it before it writes. A folder named
+     on the command line is emptied, so it must be new, empty or one of its
+     own earlier builds. */
+  const SYNC = fileURLToPath(new URL('../sync-ui.sh', import.meta.url));
+  const tmp = mkdtempSync(joinPath(tmpdir(), 'rata-sync-'));
+  const run = (dist, out) => {
+    const env = { ...process.env };
+    if (dist === undefined) delete env.RATA_DISTRIBUTION; else env.RATA_DISTRIBUTION = dist;
+    return spawnSync('bash', [SYNC, out], { env, encoding: 'utf8' });
+  };
+  const configIn = (dir) => { const box = { window: {} }; runInNewContext(_read(joinPath(dir, 'config.js'), 'utf8'), box); return box.window.RATA_CONFIG; };
+  try {
+    for (const bad of ['', 'Store', 'beta']) {
+      const at = joinPath(tmp, 'bad');
+      const r = run(bad, at);
+      check(r.status !== 0 && /RATA_DISTRIBUTION must be direct or store/.test(r.stderr) && !existsSync(at),
+        `RATA_DISTRIBUTION=${JSON.stringify(bad)} stops sync-ui.sh before it writes anything: ${JSON.stringify(r.stderr.trim())}`);
+    }
+    const store = joinPath(tmp, 'store');
+    let r = run('store', store);
+    let c = r.status === 0 ? configIn(store) : {};
+    check(r.status === 0 && c.distribution === 'store' && c.stripeBase === '' && c.stripePro === '' && c.stripePortal === '' && c.desktop === true
+      && JSON.stringify(c.pages) === JSON.stringify({ help: 'https://mailrata.org/in-app/help', bug: 'https://mailrata.org/in-app/help#report',
+        privacy: 'https://mailrata.org/in-app/privacy', terms: 'https://mailrata.org/in-app/terms', account: 'https://mailrata.org/in-app/delete-account' })
+      && existsSync(joinPath(store, 'app.html')) && existsSync(joinPath(store, 'bridge.js')),
+    `RATA_DISTRIBUTION=store writes a store config.js: no payment links, and only the store-safe pages: ${JSON.stringify(c)}`);
+    r = run('store', store);
+    check(r.status === 0, `and builds again into its own earlier build: ${JSON.stringify(r.stderr.trim())}`);
+    const direct = joinPath(tmp, 'direct');
+    r = run(undefined, direct);
+    c = r.status === 0 ? configIn(direct) : {};
+    check(r.status === 0 && c.distribution === 'direct' && c.stripeBase === 'https://mailrata.org/#pricing' && c.stripePro === 'https://mailrata.org/#pricing'
+      && c.stripePortal === 'https://mailrata.org/app' && c.pages && c.pages.account === 'https://mailrata.org/app' && c.pages.licence === 'https://mailrata.org/account'
+      && c.pages.releases === 'https://github.com/Noallrightokay/center-point-inbox/releases' && !c.pages.help,
+    `unset, it is the direct build, with today's links: ${JSON.stringify(c)}`);
+    const theirs = joinPath(tmp, 'theirs');
+    mkdirSync(theirs); writeFileSync(joinPath(theirs, 'notes.txt'), 'mine');
+    r = run(undefined, theirs);
+    check(r.status !== 0 && /not a folder this script assembled/.test(r.stderr) && _read(joinPath(theirs, 'notes.txt'), 'utf8') === 'mine',
+      `a folder holding someone's file is refused and kept: ${JSON.stringify(r.stderr.trim())}`);
+    const lone = joinPath(tmp, 'lone');
+    mkdirSync(lone); writeFileSync(joinPath(lone, 'config.js'), 'my config');
+    r = run(undefined, lone);
+    check(r.status !== 0 && /no config\.js of this script's/.test(r.stderr) && _read(joinPath(lone, 'config.js'), 'utf8') === 'my config',
+      `so is one holding only a config.js it did not write: ${JSON.stringify(r.stderr.trim())}`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where it sends people —`);
+{
+  /* Statically: every file of the build as served, read for an address that
+     leads to a purchase or the releases page (sellingIn). The pages and the
+     bridge are the same files in both builds, so they hold none; the direct
+     build's own are in its config.js alone, which is how a store build,
+     made from the same pages, carries none at all. */
+  const FILES = ['app.html', 'auth.html', 'index.html', 'bridge.js', 'bridge.css', 'config.js', 'manifest.json'];
+  const found = {};
+  for (const f of FILES) found[f] = sellingIn(await (await fetch(B + '/' + f)).text());
+  const own = FILES.filter((f) => f !== 'config.js');
+  check(own.every((f) => found[f].length === 0),
+    `${own.join(', ')} hold no address to Stripe, the releases page, mailrata.org's prices, licence page, app page or sign-in, or #pricing: ${JSON.stringify(own.filter((f) => found[f].length).map((f) => [f, found[f]]))}`);
+  if (STORE) check(found['config.js'].length === 0, `and nor does the store build's config.js: ${JSON.stringify(found['config.js'])}`);
+  else check(['#pricing', 'mailrata.org/app', 'mailrata.org/account', 'the releases page'].every((w) => found['config.js'].some((x) => x.includes(w))),
+    `the direct build's are in its config.js, where the check finds them: ${JSON.stringify(found['config.js'])}`);
+
+  /* Live: what each screen says, its titles, and where every link on it
+     goes, on Pro, on Base with every mailbox used, without a licence, and
+     on the sign-up page. In a store build none names a price, a plan to buy
+     or an update, and every link is store-safe; the direct build's do, which
+     shows the check can see them. */
+  const SELLING = /\$\s?\d|\ba month\b|\bUpgrade\b|\bCheckout\b|billing portal|\bStripe\b|\bGet (?:Base|Pro|Enterprise)\b|See plans|choose a plan|Check for updates|Restart to update|releases page|ready to install|newest version|update itself|updates from/gi;
+  const harvest = (pg, roots) => pg.evaluate((roots) => ({
+    links: [...new Set([...document.querySelectorAll('a[href], area[href]')].map((a) => a.href).concat([...document.querySelectorAll('form[action]')].map((f) => f.action)))]
+      .filter((u) => !u.startsWith(location.origin + '/') || /#pricing/i.test(u)),
+    text: roots.map((r) => { const el = document.querySelector(r); return el ? el.innerText : ''; }).join('\n'),
+    titles: [...document.querySelectorAll('[title]')].map((e) => e.getAttribute('title')),
+  }), roots);
+  const judged = (h) => ({ unsafe: h.links.filter((u) => !storeSafe(u)), words: [...new Set(h.text.match(SELLING) || [])], titles: h.titles.filter((t) => new RegExp(SELLING.source, 'i').test(t)) });
+  const clean = (j) => !j.unsafe.length && !j.words.length && !j.titles.length;
+
+  /* Pro, Settings, with Delete account's confirmation open. */
+  let pg = await open(true);
+  await pg.evaluate(() => { go('set'); renderSettings(); });
+  await pg.click('#btn-delete');
+  await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent), null, { timeout: 3000 }).catch(() => {});
+  let plan = await pg.evaluate(() => ({ line: $('#plan-line').textContent, badge: $('#plan-badge').textContent,
+    rows: ['#plan-change', '#bill-row', '#plan-managed', '#upd-row'].map((s) => $(s) ? getComputedStyle($(s)).display !== 'none' : null),
+    managed: $('#plan-managed') && $('#plan-managed').innerText.replace(/\s+/g, ' ').trim(), managedControls: $('#plan-managed') && $('#plan-managed').querySelectorAll('a, button').length }));
+  let j = judged(await harvest(pg, ['#view-set']));
+  if (STORE) {
+    check(plan.line === 'Licensed for RATA Pro until 26 October 2026. More than two mailboxes in one Center Point inbox, side by side.' && plan.badge === 'RATA Pro',
+      `Pro: the plan's own sentence, with no price: "${plan.line}"`);
+    check(JSON.stringify(plan.rows) === '[false,false,true,false]' && plan.managed === 'Billing Your plan is managed in your mailrata.org account.' && plan.managedControls === 0,
+      `no Change plan, Manage billing or Updates row; in their place "Your plan is managed in your mailrata.org account.", with no link or button: ${JSON.stringify(plan)}`);
+    check(clean(j), `Settings names no price, purchase, billing portal or update, and links nowhere that sells or to GitHub: ${JSON.stringify(j)}`);
+  } else {
+    check(plan.line === 'Licensed for RATA Pro until 26 October 2026. $23.99 a month · more than two mailboxes in one Center Point inbox, side by side.' && plan.badge === 'RATA Pro',
+      `Pro: the plan's sentence, with its price, as before: "${plan.line}"`);
+    check(JSON.stringify(plan.rows) === '[true,true,false,true]', `Change plan, Manage billing and Updates show, and the store's sentence does not: ${JSON.stringify(plan.rows)}`);
+    check(j.unsafe.some((u) => sells(u)) && j.words.length > 0, `and Settings links to the billing portal and names prices and updates, as it should here: ${JSON.stringify(j)}`);
+  }
+  await pg.close();
+
+  /* Base, every mailbox used: Settings, the inbox's Side by side, Files. */
+  pg = await open(true);
+  const base = await pg.evaluate(async () => {
+    __mock.plan = { key: 'base', label: 'RATA Base', mail: 2, chat: 0, split: false, ai: false, connect: false };
+    __mock.planMessage = 'Licensed for RATA Base until 26 October 2026.';
+    __mock.mailboxes.push({ email: 'two@example.com', host: 'imap.example.com', port: 993, label: 'Two' });
+    __mock.conn = { on: {}, services: [{ service: 'apple', label: 'iCloud Drive', kind: 'folder', account: 'iCloud Drive on this computer' }] };
+    takeStanding(await apiFetch('/api/licence')); await refreshQuota(); await loadConnections();
+    go('inbox'); renderSplitLock(); go('docs'); go('set'); renderSettings(); await loadConnections();
+    return { line: $('#plan-line').textContent, quota: $('#quota-line').textContent, split: needPlan('split', 'Inboxes side by side'),
+      folders: $('#folder-hint').textContent, conn: $('#conn-sec').hidden ? null : $('#conn-sec').innerText.replace(/\s+/g, ' ').trim() };
+  });
+  /* Each view while it is shown, so its words are the ones drawn. */
+  const seen = [];
+  for (const v of ['inbox', 'docs', 'set']) { await pg.evaluate((v) => go(v), v); seen.push(await harvest(pg, ['#view-' + v])); }
+  j = judged({ links: seen.flatMap((h) => h.links), text: seen.map((h) => h.text).join('\n'), titles: seen.flatMap((h) => h.titles) });
+  if (STORE) {
+    check(base.line === 'Licensed for RATA Base until 26 October 2026. Up to 2 mailboxes in one Center Point inbox.' && base.quota === 'RATA Base: 2 of up to 2 email accounts. Another mailbox is not in your plan.',
+      `Base: the plan's sentence, and a full allowance says another mailbox is not in the plan, with no price or upgrade: ${JSON.stringify({ line: base.line, quota: base.quota })}`);
+    check(base.split === 'Inboxes side by side is not in your plan.' && base.folders === 'Folders for your files is not in your plan.' && /iCloud Drive is not in your plan\./.test(base.conn || '') && !/See plans/.test(base.conn || ''),
+      `what Base lacks is "not in your plan", with no price, upgrade or See plans: ${JSON.stringify({ split: base.split, folders: base.folders, conn: base.conn })}`);
+    check(clean(j), `Settings, Files and the inbox on Base name no price, purchase or update, in words or titles, and link nowhere that sells: ${JSON.stringify(j)}`);
+  } else {
+    check(base.quota === 'RATA Base: 2 of up to 2 email accounts. Upgrade in Settings to add another mailbox.' && base.split === 'Inboxes side by side comes with RATA Pro, $23.99 a month. Upgrade in Settings.',
+      `Base: the allowance and what Base lacks name the plan to upgrade to and its price, as before: ${JSON.stringify(base)}`);
+    check(j.titles.length > 0 && j.words.length > 0, `and the check sees those words and titles: ${JSON.stringify(j)}`);
+  }
+  /* Linking one more: a store build answers in its own words first, so
+     Rust's refusal, which says where to upgrade, never shows; the direct
+     build leaves it to Rust, as before. A mailbox already linked can still
+     be linked again (a new app password). */
+  const over = await pg.evaluate(async () => {
+    const asked = () => __mock.calls.filter(([c]) => c === 'link_mailbox').map(([, a]) => a.email);
+    __mock.calls = []; window.__toasts.length = 0;
+    await mailLink('three@example.com', 'abcd efgh ijkl mnop', '');
+    const first = { asked: asked(), toasts: window.__toasts.slice() };
+    __mock.calls = []; window.__toasts.length = 0;
+    await mailLink('me@example.com', 'abcd efgh ijkl mnop', '');
+    return { first, again: asked() };
+  });
+  if (STORE) check(over.first.asked.length === 0 && JSON.stringify(over.first.toasts) === '["Another mailbox is not in your plan."]' && over.again.join() === 'me@example.com',
+    `a mailbox past Base's allowance is "not in your plan", and Rust is not asked; relinking one already here still is: ${JSON.stringify(over)}`);
+  else check(over.first.asked.join() === 'three@example.com', `a mailbox past the allowance is left to Rust to refuse, as before: ${JSON.stringify(over)}`);
+  await pg.close();
+
+  /* No licence: the licence box. */
+  pg = await open(false);
+  await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+  const box = await pg.evaluate(() => {
+    const b = document.querySelector('#rata-licence'), n = document.querySelector('#rata-licence-note');
+    return b && { note: n ? n.textContent : null, links: [...b.querySelectorAll('a')].map((a) => [a.getAttribute('href'), a.textContent]) };
+  });
+  j = judged(await harvest(pg, ['#rata-licence']));
+  if (STORE) {
+    check(box && box.note === 'Paste the licence key from your mailrata.org account. RATA keeps working offline for thirty days at a time.' && box.links.length === 0,
+      `the licence box says where the key is, with no link to mailrata.org: ${JSON.stringify(box)}`);
+    check(clean(j), `and names no price or plan to buy: ${JSON.stringify(j)}`);
+  } else {
+    check(box && box.note === 'Sign in at mailrata.org to find your key. RATA keeps working offline for thirty days at a time.'
+      && JSON.stringify(box.links) === JSON.stringify([['https://mailrata.org/account', 'mailrata.org']]),
+    `the licence box links to the licence page, as before: ${JSON.stringify(box)}`);
+  }
+  await pg.close();
+
+  /* The sign-up page, arriving as from a checkout (?next=account&checkout=success). */
+  const ap = await browser.newPage();
+  ap.on('pageerror', (e) => { console.log('  PAGE ERROR: ' + e.message); fails++; });
+  await ap.goto(B + '/auth.html?mode=signup&next=account&checkout=success');
+  const auth = await ap.evaluate(() => ({ sub: document.querySelector('#s-sub').textContent, paid: !document.querySelector('#paid-note').hidden,
+    legal: [...document.querySelectorAll('#s-agree a')].map((a) => a.href) }));
+  j = judged(await harvest(ap, ['body']));
+  await ap.fill('#s-email', 'new@example.com'); await ap.fill('#s-pw', 'correct horse'); await ap.fill('#s-name', 'New');
+  await Promise.all([ap.waitForURL(/(app|account)\.html/, { timeout: 10000 }).catch(() => {}), ap.click('#s-next')]);
+  const went = new URL(ap.url());
+  if (STORE) {
+    check(auth.sub === 'Takes about ten seconds. Then paste the licence key from your mailrata.org account, and add your mailboxes.' && !auth.paid
+      && JSON.stringify(auth.legal) === JSON.stringify(['https://mailrata.org/in-app/terms', 'https://mailrata.org/in-app/privacy']),
+    `sign-up asks for the key from the mailrata.org account, with no plan to choose, no word of paying, and the store-safe terms and privacy: ${JSON.stringify(auth)}`);
+    check(clean(j), `and the page names no price, purchase or update, and links nowhere that sells: ${JSON.stringify(j)}`);
+    check(went.pathname.endsWith('/app.html') && !went.search, `and goes on to the app, never the licence page a checkout would return to: ${went.pathname}${went.search}`);
+  } else {
+    check(auth.sub === 'Takes about ten seconds. Then paste the licence key from your mailrata.org licence page, and add your mailboxes.' && auth.paid
+      && JSON.stringify(auth.legal) === JSON.stringify(['https://mailrata.org/terms.html', 'https://mailrata.org/privacy.html']),
+    `sign-up, as before: the desktop sentence, the paid note after a checkout, the website's terms and privacy: ${JSON.stringify(auth)}`);
+    check(went.pathname.endsWith('/account.html') && went.search === '?checkout=success', `and a checkout's return goes on to the licence page: ${went.pathname}${went.search}`);
+  }
+  await ap.close();
+}
+
+console.log(`\n— across the whole ${STORE ? 'store' : 'direct'} pass (${SAW.pages} pages) —`);
+if (STORE) {
+  check(SAW.check_update.length === 0 && SAW.install_update.length === 0,
+    `no page ever asked Rust to check for or install an update: ${SAW.check_update.length} checks, ${SAW.install_update.length} installs`);
+  const bad = SAW.open_link.filter((u) => !storeSafe(u));
+  check(SAW.open_link.length > 0 && bad.length === 0, `every one of the ${SAW.open_link.length} addresses given to open_link is store-safe: ${JSON.stringify([...new Set(bad)])}`);
+} else {
+  /* The same tally sees the direct build's, so the store's is not blind. */
+  check(SAW.check_update.length > 0 && SAW.open_link.some((u) => !storeSafe(u)),
+    `the direct build asks Rust about updates and opens pages a store build may not, and the tally sees both: ${SAW.check_update.length} checks, ${SAW.open_link.filter((u) => !storeSafe(u)).length} such pages`);
 }
 
 await browser.close();
