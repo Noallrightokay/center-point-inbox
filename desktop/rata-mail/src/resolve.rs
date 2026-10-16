@@ -607,12 +607,27 @@ async fn found_elsewhere<D: Lookup + Sync>(dns: &D, domain: &str) -> Vec<Candida
     out
 }
 
-/// A DNS that answers from a script, and remembers what it was asked.
+/// A DNS that answers from a script, and remembers what it was asked; and a
+/// [`Resolver`] whose name server answers every address question one way.
+///
+/// The second half points hickory at a name server of its own, so it is
+/// left out of a build that sets `system_dns` (declared in build.rs), which
+/// looks names up through the system's resolver, one that cannot be pointed
+/// anywhere. The tests that use it carry the same gate.
 #[cfg(test)]
 pub(crate) mod scripted {
+    #[cfg(not(system_dns))]
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket};
     use std::sync::Mutex;
 
+    #[cfg(not(system_dns))]
+    use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+    #[cfg(not(system_dns))]
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
+
     use super::Lookup;
+    #[cfg(not(system_dns))]
+    use super::{HickoryResolver, Resolver};
 
     #[derive(Default)]
     pub(crate) struct Dns {
@@ -677,6 +692,62 @@ pub(crate) mod scripted {
                 .find(|(n, _)| n == name)
                 .map(|(_, t)| t.clone())
         }
+    }
+
+    /// A [`Resolver`] whose name server answers every AAAA question with
+    /// `ip` and every other question with nothing: what a hostile name
+    /// server, or DNS64, can say about any name. The server is a real one
+    /// on 127.0.0.1, so the answer reaches the guard through hickory exactly
+    /// as the machine's own resolver's would, on every path that dials.
+    #[cfg(not(system_dns))]
+    pub(crate) fn answering(ip: Ipv6Addr) -> Resolver {
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = sock.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                if let Some(answer) = answer(&buf[..n], ip) {
+                    let _ = sock.send_to(&answer, from);
+                }
+            }
+        });
+        let mut udp = ConnectionConfig::udp();
+        udp.port = port;
+        let server = NameServerConfig::new(IpAddr::V4(Ipv4Addr::LOCALHOST), true, vec![udp]);
+        let inner = HickoryResolver::builder_with_config(
+            ResolverConfig::from_name_servers(vec![server]),
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .unwrap();
+        Resolver { inner }
+    }
+
+    /// The reply to one query: its own header and question back, an AAAA
+    /// question answered with `ip`, any other with no records.
+    #[cfg(not(system_dns))]
+    fn answer(query: &[u8], ip: Ipv6Addr) -> Option<Vec<u8>> {
+        // The name runs from byte 12 to a zero length; type and class follow.
+        let mut end = 12;
+        loop {
+            let len = usize::from(*query.get(end)?);
+            end += 1 + len;
+            if len == 0 {
+                break;
+            }
+        }
+        let aaaa = u16::from_be_bytes([*query.get(end)?, *query.get(end + 1)?]) == 28;
+        let mut out = query.get(..end + 4)?.to_vec();
+        out[2] = 0x80 | (query[2] & 0x79); // a response, same opcode and RD
+        out[3] = 0x80; // recursion available, no error
+        out[6..8].copy_from_slice(&u16::from(aaaa).to_be_bytes());
+        out[8..12].fill(0); // no authority, no additional records
+        if aaaa {
+            // The name by pointer to the question, AAAA, IN, a minute, 16 bytes.
+            out.extend_from_slice(&[0xc0, 12, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
+            out.extend_from_slice(&ip.octets());
+        }
+        Some(out)
     }
 }
 
@@ -852,6 +923,37 @@ mod tests {
             );
             let missing = format!("nx-{}.invalid", std::process::id());
             assert_eq!(check_host(&r, &missing).await, HostVerdict::NotFound);
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_nat64_answer_is_judged_by_the_ipv4_address_inside() {
+        rt().block_on(async {
+            // An IPv4-only mail host seen from an IPv6-only network with
+            // DNS64: the address handed back is the very one judged.
+            let ip: std::net::Ipv6Addr = "64:ff9b::808:808".parse().unwrap();
+            let r = scripted::answering(ip);
+            assert_eq!(
+                resolve_public(&r, "imap.dns64.test").await,
+                Ok(("imap.dns64.test".to_string(), vec![IpAddr::V6(ip)]))
+            );
+            // The same answer wrapping somewhere private.
+            for inside in [
+                "64:ff9b::7f00:1",
+                "64:ff9b::a00:1",
+                "64:ff9b::a9fe:a9fe",
+                "64:ff9b::6440:1",
+                "64:ff9b::c0a8:101",
+                "64:ff9b:1::a00:1",
+            ] {
+                let r = scripted::answering(inside.parse().unwrap());
+                assert_eq!(
+                    resolve_public(&r, "imap.dns64.test").await,
+                    Err(HostVerdict::NotPublic),
+                    "{inside}"
+                );
+            }
         });
     }
 
