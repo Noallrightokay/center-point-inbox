@@ -167,8 +167,11 @@ jobs:
         run: bash desktop/rata-app/ios/testflight.sh project
 
       # Compiled here, before any Apple value is in the environment or the
-      # key on disk, so that the signing below finds the Rust code built and
-      # runs no build script of its own.
+      # key on disk. The signing below finds the dependencies built and
+      # compiles at most RATA's own crate again, and never with an Apple
+      # value in Cargo's environment: the Tauri CLI hands Xcode's Rust build
+      # only HOME, PATH, TERM and its own TAURI*, WRY*, CARGO_* and RUST_*
+      # variables (see licence-key in testflight.sh).
       - name: Build RATA, release and unsigned, for a generic iOS device
         if: steps.config.outputs.build == 'true'
         timeout-minutes: 60

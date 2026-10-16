@@ -39,7 +39,7 @@ printf '{"productName": "RATA", "version": "0.1.99", "identifier": "org.mailrata
 
 # Stand-ins for cargo and xcrun: each writes down how it was called, from
 # where, and which of the Apple variables it was given, then says what
-# STUB_SAY says and ends with STUB_STATUS.
+# STUB_SAY_<tool> says (else STUB_SAY) and ends with STUB_STATUS.
 STUBS="$tmp/stubs"
 mkdir -p "$STUBS"
 for tool in cargo xcrun; do
@@ -59,7 +59,8 @@ seen="$STUB_DIR/$(basename "$0").seen"
   fi
 } > "$seen"
 if [ -n "${STUB_IPA:-}" ]; then mkdir -p "$(dirname "$STUB_IPA")" && echo signed > "$STUB_IPA"; fi
-printf '%b' "${STUB_SAY:-}"
+say="STUB_SAY_$(basename "$0")"
+printf '%b' "${!say:-${STUB_SAY:-}}"
 exit "${STUB_STATUS:-0}"
 STUB
   chmod +x "$STUBS/$tool"
@@ -287,7 +288,8 @@ explains sign 'error: exportArchive: PLA Update available: You need to accept th
 explains sign "error: No profiles for 'org.example.rata' were found" "The bundle id org.example.rata is not registered to this team."
 explains sign 'error: No Account for Team "ABCDE12345".' "APPLE_TEAM_ID is not a team this API key can act for."
 explains sign 'Error Domain=IDEDistributionErrorDomain Code=10 "Failed to log in."' "Apple did not accept the App Store Connect API key."
-explains sign 'error: exportArchive: Communication with Apple failed' "Apple's servers did not answer."
+explains sign 'error: exportArchive: The request timed out.' "Apple's servers did not answer."
+explains sign 'error: exportArchive: Communication with Apple failed' "Xcode could not get what it needed from Apple"
 explains sign 'error: linker command failed' "Signing failed for a reason this job does not recognise."
 explains upload 'ERROR: A required agreement is missing or has expired.' "An Apple agreement is waiting to be accepted."
 explains upload 'No suitable application records were found. Verify your bundle identifier is correct.' "App Store Connect has no app with the bundle id org.example.rata."
@@ -295,7 +297,87 @@ explains upload 'ERROR ITMS-90189: "Redundant Binary Upload."' "App Store Connec
 explains upload 'ERROR ITMS-90186: "Invalid Pre-Release Train. The train version 0.1.99 is closed for new build submissions"' "App Store Connect takes no more builds of version 0.1.99"
 explains upload 'ERROR ITMS-90717: "Invalid large app icon."' "App Store Connect refused the build. The ITMS code above says why"
 explains upload 'status code 401' "Apple did not accept the App Store Connect API key."
+explains upload 'The network connection was lost.' "Apple's servers did not answer."
 explains upload 'ENTITY_ERROR something odd' "The upload failed for a reason this job does not recognise."
+
+# When one cause explains the rest, it is said alone: a refused key, an
+# agreement or a role makes everything else Xcode and altool try fail too,
+# in words that point elsewhere ("No profiles for …", "Cannot determine the
+# Apple ID from Bundle ID", "Communication with Apple failed").
+explains_alone() { # step, the start of the one sentence it must give; the tool's words on stdin
+  cat > "$tmp/said.log"
+  ARGS=(explain "$1" "$tmp/said.log")
+  run RATA_IOS_BUNDLE_ID=org.mailrata.app
+  if [ "$(grep -c '^::error::' "$tmp/log")" -eq 1 ] && grep -qF "::error::$2" "$tmp/log"; then
+    pass "$1: $3 is explained by its cause alone"
+  else
+    fail "$1: $3 must be explained as \"$2\" and nothing else"
+    sed 's/^/    /' "$tmp/log"
+  fi
+}
+# What xcodebuild and altool said, word for word, when the made-up rehearsal
+# on GitHub's Macs signed and uploaded with a key Apple does not know. Read
+# with `read`, not $(cat <<…): the bash 3.2 macOS runs these with misreads a
+# here-document inside $( ) whose text has unmatched quotes or brackets.
+IFS= read -r -d '' SIGN_REFUSED <<'SAID' || true
+2026-10-16 19:38:26.219 xcodebuild[60269:152398]  IDEDistribution: App Store Connect request for store configuration failed for account API Key <identifier: [key id]; issuer: [issuer id]> (Account "API Key <identifier: [key id]; issuer: [issuer id]>": Unable to authenticate with App Store Connect (Error Domain=CDWebService Code=-20101 "Your Apple Account or password was entered incorrectly." UserInfo={NSLocalizedRecoverySuggestion=, NSLocalizedFailureReason=, NSLocalizedDescription=Your Apple Account or password was entered incorrectly.}))
+2026-10-16 19:38:27.903 xcodebuild[60269:152398]  DVTServices: Received response for 0E304227-9420-4625-8A2E-F2B1102C4F9C @ <https://appstoreconnect.apple.com/xcbuild/QH65B2/listTeams.action?clientId=XABBG36SBA>. Error = Error Domain=DVTPortalResponseErrorDomain Code=0 "Communication with Apple failed" UserInfo={NSLocalizedDescription=Communication with Apple failed, NSLocalizedRecoverySuggestion=A non-HTTP 200 response was received (401) for URL https://appstoreconnect.apple.com/xcbuild/QH65B2/listTeams.action?clientId=XABBG36SBA}
+error: exportArchive Communication with Apple failed
+
+error: exportArchive No profiles for 'org.mailrata.app' were found
+
+** EXPORT FAILED **
+
+       Error failed to export iOS app: command ["xcodebuild"] exited with code 70
+SAID
+IFS= read -r -d '' UPLOAD_REFUSED <<'SAID' || true
+Running altool at path '/Applications/Xcode_26.6.app/Contents/SharedFrameworks/ContentDelivery.framework/Resources/altool'...
+
+2026-10-16 19:38:32.054 ERROR: [altool.100EA2DF0] GET APP SETTINGS: failed to authenticate. The server response was: {
+    errors =     (
+                {
+            code = "NOT_AUTHORIZED";
+            detail = "Provide a properly configured and signed bearer token, and make sure that it has not expired. Learn more about Generating Tokens for API Requests https://developer.apple.com/go/?id=api-generating-tokens";
+            status = 401;
+            title = "Authentication credentials are missing or invalid.";
+        }
+    );
+}
+2026-10-16 19:38:32.055 ERROR: [altool.100EA2DF0] GET APP SETTINGS: received status code 401, auth issue.
+2026-10-16 19:38:32.221 ERROR: [altool.B4303C340] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'. (19)
+2026-10-16 19:38:32.222 ERROR: [altool.100EA2DF0] ExitFailure (31)
+SAID
+explains_alone sign "Apple did not accept the App Store Connect API key." "Apple's answer to a key it does not know" <<< "$SIGN_REFUSED"
+explains_alone upload "Apple did not accept the App Store Connect API key." "Apple's answer to a key it does not know" <<< "$UPLOAD_REFUSED"
+explains_alone sign "An Apple agreement is waiting to be accepted." "an agreement with the errors that follow from it" <<'SAID'
+error: exportArchive: PLA Update available: You need to accept the latest Program License Agreement.
+error: exportArchive Communication with Apple failed
+error: exportArchive No profiles for 'org.mailrata.app' were found
+SAID
+explains_alone upload "An Apple agreement is waiting to be accepted." "an agreement with the errors that follow from it" <<'SAID'
+ERROR: [altool] A required agreement is missing or has expired. "code" : "FORBIDDEN_ERROR"
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+SAID
+explains_alone sign "The API key may not sign in Apple's cloud." "a cloud signing refusal with the errors that follow from it" <<'SAID'
+error: exportArchive: Cloud signing permission error
+error: exportArchive: "code" : "FORBIDDEN_ERROR"
+error: exportArchive No profiles for 'org.mailrata.app' were found
+SAID
+explains_alone upload "Apple refused what the API key asked for, because the key's role is too low." "a role too low with the errors that follow from it" <<'SAID'
+ERROR: [altool] "code" : "FORBIDDEN_ERROR", "title" : "This request is forbidden for security reasons"
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+SAID
+explains_alone sign "The bundle id org.mailrata.app is not registered to this team." "no App ID, with Xcode's word for any refusal" <<'SAID'
+error: exportArchive Communication with Apple failed
+error: exportArchive No profiles for 'org.mailrata.app' were found
+SAID
+explains_alone upload "Apple's servers did not answer." "a timeout with the errors that follow from it" <<'SAID'
+ERROR: [altool] APP STORE CONNECT API list-apps: The request timed out.
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+SAID
+explains_alone upload "App Store Connect has no app with the bundle id org.mailrata.app." "no app record, alone" <<'SAID'
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'. (19)
+SAID
 
 # --- redact and forget -------------------------------------------------------
 
@@ -325,6 +407,30 @@ for case in none half made-up; do
   fi
 done
 grep -qx "build=true" "$tmp/out" && pass "the made-up rehearsal goes on to build" || fail "the made-up rehearsal must build"
+
+# The rehearsal with Apple, against stand-ins: it passes when they answer as
+# Apple answered the made-up key on GitHub's Macs, and fails when they sign,
+# or refuse for a reason other than the key.
+mkdir -p "$tmp/runner/rata-testflight/unsigned" && echo unsigned > "$tmp/runner/rata-testflight/unsigned/RATA.ipa"
+ARGS=(override)
+run
+ARGS=(rehearse apple)
+run STUB_STATUS=1 STUB_SAY_cargo="$SIGN_REFUSED" STUB_SAY_xcrun="$UPLOAD_REFUSED"
+if [ $? -eq 0 ] && grep -qF "Signing and uploading with a made-up key failed as they must" "$tmp/log"; then
+  pass "rehearse apple passes on Apple's own answers to a made-up key"
+else
+  fail "rehearse apple must pass on Apple's own answers to a made-up key"
+  sed 's/^/    /' "$tmp/log"
+fi
+run STUB_STATUS=1 STUB_SAY="error: exportArchive No profiles for 'org.mailrata.app' were found\n"
+[ $? -eq 1 ] && grep -qF "::error::sign with a made-up key must say that Apple did not accept the key." "$tmp/log" \
+  && pass "rehearse apple fails when Apple refuses for a reason other than the key" \
+  || { fail "rehearse apple must fail when the key is not what Apple refused"; sed 's/^/    /' "$tmp/log"; }
+run STUB_IPA="$TAURI/gen/apple/build/arm64/RATA.ipa" STUB_SAY="UPLOAD SUCCEEDED with no errors\n"
+[ $? -eq 1 ] && grep -qF "::error::sign with a made-up key must fail, and it passed." "$tmp/log" \
+  && grep -qF "::error::upload with a made-up key must fail, and it passed." "$tmp/log" \
+  && pass "rehearse apple fails when a made-up key signs and uploads" \
+  || { fail "rehearse apple must fail when a made-up key signs and uploads"; sed 's/^/    /' "$tmp/log"; }
 
 echo
 if [ "$failures" -eq 0 ]; then echo "testflight-test.sh: all passed"; else echo "testflight-test.sh: $failures failed"; fi

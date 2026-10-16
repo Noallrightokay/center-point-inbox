@@ -291,6 +291,13 @@ rehearse_apple() {
       echo "::error::$step with a made-up key must say that Apple did not accept the key."
       bad=1
     }
+    # And nothing else: what else Apple refused follows from the key, and an
+    # owner told to register the bundle id or wait for Apple would look in
+    # the wrong place.
+    [ "$(grep -c '^::error::' "$log")" -eq 1 ] || {
+      echo "::error::$step with a made-up key must say only that Apple did not accept the key, and it said $(grep -c '^::error::' "$log") things."
+      bad=1
+    }
     none_of_them_in "$log" || bad=1
   done
   [ "$bad" -eq 0 ] || exit 1
@@ -460,14 +467,33 @@ explain() {
   v="$(version 2>/dev/null || echo "this version")"
   hit() { grep -qiE -- "$1" "$log"; }
   tell() { echo "::error::$*"; said=1; }
+  # The causes that explain everything else come first, and each is said
+  # alone. When Apple refuses the key, an agreement is waiting or the key's
+  # role is too low, every later request Xcode and altool make fails too, in
+  # words that point elsewhere: "No profiles for …", "Cannot determine the
+  # Apple ID from Bundle ID", and Xcode's "Communication with Apple failed",
+  # which it says for a 401 as much as for no answer (the made-up rehearsal
+  # gets all three). Naming those as well would send the owner to fix what is
+  # not broken.
+  if hit 'agreement|PLA Update|have not (yet )?agreed|required contract'; then
+    tell "An Apple agreement is waiting to be accepted. The Account Holder signs in at developer.apple.com/account and accepts the latest Apple Developer Program License Agreement, and in App Store Connect, Business, the Paid Apps agreement. Then run this job again."
+    return 0
+  fi
+  if hit "NOT_AUTHORIZED|Authentication credentials are missing or invalid|Authentication failed|Failed to authenticate|Unable to authenticate|Failed to log in|unauthori[sz]ed|(status|HTTP|code)[^0-9]{0,4}401|invalid (api )?key|Could not (find|load)[^.]*AuthKey|private key[^.]*(invalid|could not|not found)"; then
+    tell "$KEY_REFUSED APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8 must be the same key's: its Key ID, the Issuer ID above the keys table, and the .p8 file downloaded when it was made (App Store Connect, Users and Access > Integrations). A revoked key is refused too: make a new one and replace all three. Any other error above follows from this one."
+    return 0
+  fi
   if hit 'Cloud signing permission error|cloud-managed distribution certificate|No signing certificate'; then
     tell "The API key may not sign in Apple's cloud. xcodebuild signs with a cloud-managed distribution certificate, and Apple lets an API key use one only when the key has the Admin role: a key with App Manager is told \"Cloud signing permission error\". A key's role cannot be changed, so make a new key with the Admin role in App Store Connect, Users and Access > Integrations, and replace APPLE_API_KEY_ID and APPLE_API_KEY_P8."
+    return 0
   fi
   if hit 'FORBIDDEN|forbidden for security reasons|not allowed to perform this operation|does not have (the )?(required )?(role|permission|access)|insufficient (privileges|permissions)'; then
     tell "Apple refused what the API key asked for, because the key's role is too low. Uploading needs App Manager or Admin, and signing in Apple's cloud needs Admin. Make a new key with that role in App Store Connect, Users and Access > Integrations, and replace APPLE_API_KEY_ID and APPLE_API_KEY_P8."
+    return 0
   fi
-  if hit 'agreement|PLA Update|have not (yet )?agreed|required contract'; then
-    tell "An Apple agreement is waiting to be accepted. The Account Holder signs in at developer.apple.com/account and accepts the latest Apple Developer Program License Agreement, and in App Store Connect, Business, the Paid Apps agreement. Then run this job again."
+  if hit 'timed out|network connection was lost|could not connect to|Internet connection appears to be offline'; then
+    tell "Apple's servers did not answer. Nothing needs fixing in RATA or its secrets: run this job again in a while (developer.apple.com/system-status says whether Apple knows)."
+    return 0
   fi
   if [ "$what" = sign ] && hit "No App ID|No profiles for|An App ID with Identifier|(App ID|identifier)[^.]{0,80}(is not available|cannot be registered|unavailable)"; then
     tell "The bundle id $BUNDLE is not registered to this team. In Certificates, Identifiers & Profiles > Identifiers, register an explicit App ID with exactly that bundle id, make the App Store Connect app record with it, and set the repository variable RATA_IOS_BUNDLE_ID to it."
@@ -484,11 +510,10 @@ explain() {
   if [ "$what" = upload ] && hit 'ITMS-90062|ITMS-90186|train[^.]*closed|must contain a higher version'; then
     tell "App Store Connect takes no more builds of version $v: it was approved or released. Raise the version (tauri.conf.json and the other places CLAUDE.md lists) and merge."
   fi
-  if hit "NOT_AUTHORIZED|Authentication credentials are missing or invalid|Authentication failed|Failed to authenticate|Unable to authenticate|Failed to log in|unauthori[sz]ed|(status|HTTP|code)[^0-9]{0,4}401|invalid (api )?key|Could not (find|load)[^.]*AuthKey|private key[^.]*(invalid|could not|not found)"; then
-    tell "$KEY_REFUSED APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8 must be the same key's: its Key ID, the Issuer ID above the keys table, and the .p8 file downloaded when it was made (App Store Connect, Users and Access > Integrations). A revoked key is refused too: make a new one and replace all three."
-  fi
-  if hit 'Communication with Apple failed|could not connect to|network connection was lost|timed out'; then
-    tell "Apple's servers did not answer. Nothing needs fixing in RATA or its secrets: run this job again in a while (developer.apple.com/system-status says whether Apple knows)."
+  # Xcode's word for any refusal from Apple's developer portal, and for no
+  # answer, so it says which only when nothing above did.
+  if [ "$said" -eq 0 ] && hit 'Communication with Apple failed'; then
+    tell "Xcode could not get what it needed from Apple (\"Communication with Apple failed\"), which Xcode says when Apple refuses a request as well as when it does not answer. Check that the agreements are accepted at developer.apple.com/account and that the API key has the Admin role; if both are so, run this job again in a while."
   fi
   if [ "$what" = upload ] && [ "$said" -eq 0 ] && hit 'ITMS-[0-9]+'; then
     tell "App Store Connect refused the build. The ITMS code above says why; Apple lists them at developer.apple.com/help/app-store-connect."
