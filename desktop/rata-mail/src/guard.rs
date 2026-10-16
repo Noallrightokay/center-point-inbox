@@ -147,14 +147,15 @@ fn v6_public(ip: Ipv6Addr) -> bool {
 
 /// Names that never belong to a public mail server, whatever DNS says about
 /// them. Checked before any lookup so a resolver that helpfully answers for
-/// `localhost` cannot get a word in.
+/// `localhost` cannot get a word in. The zones themselves count too, and so
+/// does all of `.arpa` (the reverse zones and `home.arpa`): no mail server is
+/// named there, and on Apple systems the system's resolver answers `local`
+/// and the link-local reverse zones by asking the local network.
 fn is_private_name(host: &str) -> bool {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
-    h == "localhost"
-        || h.ends_with(".localhost")
-        || h.ends_with(".local")
-        || h.ends_with(".internal")
-        || h.ends_with(".home.arpa")
+    ["localhost", "local", "internal", "arpa"]
+        .iter()
+        .any(|zone| h == *zone || h.ends_with(&format!(".{zone}")))
 }
 
 /// Normalise a host as typed, and reject anything that is not a plausible
@@ -432,6 +433,12 @@ mod tests {
             "nas.local",
             "x.home.arpa",
             "a.localhost",
+            "local",
+            "internal",
+            "home.arpa",
+            "1.0.254.169.in-addr.arpa",
+            "b.e.f.ip6.arpa",
+            "arpa",
         ] {
             assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
         }
