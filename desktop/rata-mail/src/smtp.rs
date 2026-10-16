@@ -929,6 +929,30 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn sending_refuses_a_nat64_answer_that_wraps_a_private_address() {
+        rt().block_on(async {
+            // 127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1, 192.168.1.1,
+            // and one in the local-use prefix: every submission host derived
+            // from the IMAP name answers with it, and none is dialled.
+            for inside in [
+                "64:ff9b::7f00:1",
+                "64:ff9b::a00:1",
+                "64:ff9b::a9fe:a9fe",
+                "64:ff9b::6440:1",
+                "64:ff9b::c0a8:101",
+                "64:ff9b:1::a00:1",
+            ] {
+                let r = crate::resolve::scripted::answering(inside.parse().unwrap());
+                match send(&r, &acct("imap.dns64.test"), &msg()).await {
+                    Sent::Host(why) => assert!(why.contains("private network"), "{inside}: {why}"),
+                    other => panic!("{inside}: {other:?}"),
+                }
+            }
+        });
+    }
+
+    #[test]
     fn a_host_that_does_not_exist_is_a_network_failure_not_a_refusal() {
         rt().block_on(async {
             let r = Resolver::system().unwrap();
