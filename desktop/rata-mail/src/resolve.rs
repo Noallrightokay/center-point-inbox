@@ -225,9 +225,10 @@ impl Resolver {
     /// Where a name is an alias for, if it is one: the first CNAME answer,
     /// which is the name's own record. A failed lookup is no alias.
     ///
-    /// Not for a host RATA then connects to: on iOS, where both go to the
-    /// system's resolver, a CNAME question about a name that does not exist
-    /// holds up the address lookup of that name (`crate::dns_sd`).
+    /// Not for a name RATA then connects to or asks anything else about: on
+    /// iOS, where every question goes to the system's resolver, a CNAME
+    /// question about a name with no CNAME record holds up later questions
+    /// that reach that name, its addresses among them (`crate::dns_sd`).
     pub async fn cname(&self, name: &str) -> Option<String> {
         let target = self.cname_answer(name).await?;
         Some(target.trim_end_matches('.').to_string())
@@ -1335,7 +1336,8 @@ mod tests {
     // getaddrinfo, so they need an Apple system and the network. They are
     // ignored by default; .github/workflows/mail-apple.yml runs them on
     // macOS with the `system-dns` feature, under which every other test in
-    // this crate that looks a name up goes the same way too.
+    // this crate that looks a name up goes the same way too, and again in
+    // an iOS Simulator, built for it.
     #[cfg(system_dns)]
     mod through_the_system {
         use std::time::{Duration, Instant};
@@ -1343,7 +1345,7 @@ mod tests {
         use tokio::io::AsyncReadExt;
 
         use super::*;
-        use crate::discover::MS_IMAP;
+        use crate::discover::{MS_IMAP, spf_provider};
         use crate::guard::is_public;
 
         /// Well inside `SYSTEM_WAIT`: an answer that takes longer was waited
@@ -1355,7 +1357,7 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn mx_records_come_from_the_system_lowest_preference_first() {
             rt().block_on(async {
                 let r = system();
@@ -1392,7 +1394,7 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn srv_records_come_from_the_system() {
             rt().block_on(async {
                 let r = system();
@@ -1414,7 +1416,7 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn txt_records_come_from_the_system_whole() {
             rt().block_on(async {
                 let r = system();
@@ -1436,19 +1438,13 @@ mod tests {
                     all.len()
                 );
                 assert_eq!(spf_record(&all), spf_record(&txt));
-                // A 2048-bit DKIM key is longer than a string's 255 bytes, so
-                // it is published as several; they arrive as one record.
-                let dkim = r.txt("google._domainkey.anthropic.com").await;
-                assert!(
-                    dkim.iter()
-                        .any(|t| t.starts_with("v=DKIM1") && t.len() > 255 && !t.contains('"')),
-                    "{dkim:?}"
-                );
+                // A record of several strings arriving as one is
+                // `records::txt`'s, tested with bytes on every system.
             });
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn a_cname_comes_from_the_system() {
             rt().block_on(async {
                 let r = system();
@@ -1465,25 +1461,38 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn an_alias_on_the_way_is_followed_and_not_taken_for_the_answer() {
             rt().block_on(async {
-                let r = system();
-                // Fastmail's DKIM name is an alias for where the key is
-                // kept: the TXT record at the end of it is the answer.
-                let dkim = r.txt("fm1._domainkey.fastmail.com").await;
-                assert!(dkim.iter().any(|t| t.starts_with("v=DKIM1")), "{dkim:?}");
-                // autodiscover.microsoft.com is an alias of an alias of an
-                // alias, with no TXT record at the end: the system hands back
-                // each alias, then says there is none. Nothing, at once.
-                let started = Instant::now();
-                assert!(r.txt("autodiscover.microsoft.com").await.is_empty());
-                assert!(started.elapsed() < QUICK, "{:?}", started.elapsed());
+                // Asked for the TXT records of an alias, the system hands
+                // back each alias it follows on the way, then what is at
+                // the end. Only that is the answer, whatever it holds: an
+                // alias's rdata is a name, which nothing gathered may read
+                // as. Only the chain's start is taken as known:
+                // autodiscover.microsoft.com is an alias
+                // (`a_cname_comes_from_the_system`). The chain is not walked
+                // with CNAME questions first: one about the name at its end
+                // makes the system wait out this question (`crate::dns_sd`).
+                let start = "autodiscover.microsoft.com";
+                let t = Instant::now();
+                let (found, ended) = dns_sd::asked(start, dns_sd::TXT).await;
+                let took = t.elapsed();
+                assert!(
+                    ended == dns_sd::Ended::Answered && took < QUICK,
+                    "TXT {start}: {ended:?} after {took:?}"
+                );
+                assert!(
+                    found
+                        .iter()
+                        .all(|rdata| records::txt(rdata).is_some()
+                            && records::cname(rdata).is_none()),
+                    "TXT {start}: {found:?}"
+                );
             });
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn a_name_that_does_not_exist_answers_nothing_and_at_once() {
             rt().block_on(async {
                 let r = system();
@@ -1529,7 +1538,7 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "real DNS through dns_sd: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn discovery_runs_through_the_system_end_to_end() {
             rt().block_on(async {
                 let r = system();
@@ -1547,30 +1556,130 @@ mod tests {
                     let c = first(discover(&r, addr, None).await);
                     assert_eq!((c.host.as_str(), c.port), (host, IMAP_PORT), "{addr}");
                 }
-                // Domains of theirs the table does not know, found by what
-                // their DNS says: pobox.com's SRV names Fastmail's IMAP, and
-                // anthropic.com's MX is Google's.
-                let c = first(discover(&r, "someone@pobox.com", None).await);
+                // A domain the table does not know is found by what its DNS
+                // says, and in time: the same shape
+                // `a_real_business_domain_resolves_through_its_mx` asks of
+                // hickory (a provider's MX, with its help, and the
+                // conventional names behind it).
+                let t = Instant::now();
+                let found = discover(&r, "someone@anthropic.com", None).await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "anthropic.com: {took:?}");
+                match found {
+                    Discovery::Candidates { hosts, .. } => {
+                        assert_eq!(hosts[0].source, Source::Mx, "{hosts:?}");
+                        assert!(hosts[0].help.is_some(), "{hosts:?}");
+                        assert!(hosts.iter().any(|c| c.source == Source::Guess));
+                    }
+                    other => panic!("{other:?}"),
+                }
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn the_evidence_behind_a_filter_comes_from_the_system_in_time() {
+            // L1's evidence (`found_elsewhere`): a domain's TXT records and
+            // its autodiscover name's CNAME, asked side by side, then at most
+            // one SPF redirect. Both halves have to come back well inside
+            // `SYSTEM_WAIT`. Each domain here is its provider's own, and its
+            // TXT answer fits in one UDP reply: a bigger one, which the
+            // system asks again over TCP (microsoft.com's), is never
+            // answered through the macOS runners' DNS, dig included, so it
+            // cannot be asked here.
+            rt().block_on(async {
+                let r = system();
+                let sources = |found: &[Candidate]| -> Vec<(String, Source)> {
+                    found.iter().map(|c| (c.host.clone(), c.source)).collect()
+                };
+
+                // Microsoft's minecraft.net: the autodiscover alias, and an
+                // SPF record whose one mailbox provider is Microsoft 365 too,
+                // which is the same server, so it is listed once.
+                let t = Instant::now();
+                let found = found_elsewhere(&r, "minecraft.net").await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "minecraft.net: {took:?}");
                 assert_eq!(
-                    (c.host.as_str(), c.port, c.source),
-                    ("imap.fastmail.com", 993, Source::Srv)
+                    sources(&found),
+                    [(MS_IMAP.to_string(), Source::Autodiscover)],
+                    "minecraft.net"
                 );
-                let c = first(discover(&r, "someone@anthropic.com", None).await);
-                assert_eq!((c.host.as_str(), c.source), ("imap.gmail.com", Source::Mx));
-                // L1's evidence, asked side by side: microsoft.com's
-                // autodiscover alias names Microsoft 365.
-                let found = found_elsewhere(&r, "microsoft.com").await;
+                let spf = spf_record(&r.txt("minecraft.net").await)
+                    .and_then(parse_spf)
+                    .expect("minecraft.net's SPF");
+                let named: Vec<&str> = spf
+                    .includes
+                    .iter()
+                    .filter_map(|i| spf_provider(i))
+                    .map(|h| h.host)
+                    .collect();
                 assert!(
-                    found
-                        .iter()
-                        .any(|c| c.host == MS_IMAP && c.source == Source::Autodiscover),
-                    "{found:?}"
+                    !named.is_empty() && named.iter().all(|h| *h == MS_IMAP),
+                    "minecraft.net's SPF: {:?}",
+                    spf.includes
+                );
+
+                // Google's android.com: no autodiscover name at all, and an
+                // SPF record naming Google alone.
+                let t = Instant::now();
+                let found = found_elsewhere(&r, "android.com").await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "android.com: {took:?}");
+                assert_eq!(
+                    sources(&found),
+                    [("imap.gmail.com".to_string(), Source::Spf)],
+                    "android.com"
                 );
             });
         }
 
         #[test]
-        #[ignore = "real DNS and IMAP: run on macOS by mail-apple.yml"]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn a_local_domain_is_never_asked_about() {
+            // `.local` belongs to the local network (multicast DNS): asking
+            // there is what iOS asks the customer's leave for, and it never
+            // says a name does not exist. No public mail server is there,
+            // so none of discovery's questions is asked, each ends at once,
+            // and every server it suggests is refused by the guard without
+            // a lookup.
+            rt().block_on(async {
+                let r = system();
+                let t = Instant::now();
+                for (rrtype, name) in [
+                    (dns_sd::SRV, "_imaps._tcp.printer.local"),
+                    (dns_sd::MX, "printer.local"),
+                    (dns_sd::TXT, "printer.local"),
+                    (dns_sd::CNAME, "autodiscover.printer.local"),
+                ] {
+                    let (found, ended) = dns_sd::asked(name, rrtype).await;
+                    assert!(
+                        found.is_empty() && ended == dns_sd::Ended::NotAsked,
+                        "{name}: {} records, {ended:?}",
+                        found.len()
+                    );
+                }
+                match discover(&r, "someone@printer.local", None).await {
+                    Discovery::Candidates { hosts, .. } => {
+                        assert!(!hosts.is_empty());
+                        for c in &hosts {
+                            assert_eq!(
+                                check_host(&r, &c.host).await,
+                                HostVerdict::NotPublic,
+                                "{}",
+                                c.host
+                            );
+                        }
+                    }
+                    other => panic!("{other:?}"),
+                }
+                let took = t.elapsed();
+                assert!(took < Duration::from_secs(1), "{took:?}");
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS and IMAP: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn a_mail_server_is_reached_at_the_addresses_the_system_gives() {
             // The guarded dial from start to finish, with no password: the
             // system's addresses, each judged by the guard, a socket to one

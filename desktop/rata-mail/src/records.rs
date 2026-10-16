@@ -12,6 +12,7 @@
 //! both alike: a name in text with its final dot (`imap.gmail.com.`, the root
 //! as `.`), and a TXT record's strings joined as RFC 7208 §3.3 says.
 
+use crate::guard::{HostVerdict, check_literal};
 use crate::resolve::Srv;
 
 /// The longest name DNS carries, in wire form with its final zero byte
@@ -26,16 +27,44 @@ const LABEL_MAX: usize = 63;
 /// A name as the system's resolver should be asked it. dns_sd sends a name's
 /// bytes as they are, so an international domain is spelt the way DNS holds
 /// it (`xn--…`), as hickory spells it on the desktop. ammonia already carries
-/// the url crate's IDNA, so nothing new is built for it. `None` for a name
-/// that has no such spelling.
+/// the url crate's IDNA, so nothing new is built for it.
+///
+/// `None` for a name that has no such spelling, and for one under a domain
+/// the outbound guard refuses whatever DNS says (`unasked`).
 pub(crate) fn question(name: &str) -> Option<String> {
-    if name.is_ascii() {
-        return Some(name.to_string());
-    }
-    match ammonia::url::Host::parse(name) {
-        Ok(ammonia::url::Host::Domain(ascii)) => Some(ascii),
-        _ => None,
-    }
+    let ascii = if name.is_ascii() {
+        name.to_string()
+    } else {
+        match ammonia::url::Host::parse(name) {
+            Ok(ammonia::url::Host::Domain(ascii)) => ascii,
+            _ => return None,
+        }
+    };
+    (!unasked(&ascii)).then_some(ascii)
+}
+
+/// Whether `name` is under a domain the outbound guard refuses before any
+/// lookup (`crate::guard::check_literal`: `.local`, `.internal`,
+/// `.home.arpa`, `localhost`, a private address written as a name). No
+/// public mail server is there, so no answer about it could be used, and
+/// every server discovery finds there is refused anyway. On Apple's systems
+/// a `.local` question goes out by multicast DNS to the local network,
+/// which iOS asks the customer's leave for, and which never says a name
+/// does not exist, so each question would wait out all of `SYSTEM_WAIT`. So
+/// these are not asked at all. The desktop, which asks hickory, is
+/// unchanged.
+///
+/// The guard reads host names, which have no `_`, so the labels up to the
+/// last one holding a `_` (`_imaps._tcp.`, `google._domainkey.`) are set
+/// aside and the domain under them is judged.
+fn unasked(name: &str) -> bool {
+    let labels: Vec<&str> = name.split('.').collect();
+    let under = labels
+        .iter()
+        .rposition(|l| l.contains('_'))
+        .map_or(0, |i| i + 1);
+    let domain = labels[under..].join(".");
+    !domain.is_empty() && check_literal(&domain) == Some(HostVerdict::NotPublic)
 }
 
 /// An MX record (RFC 1035 §3.3.9): its preference and its exchange.
@@ -400,5 +429,49 @@ mod tests {
         // A name with no such spelling is not asked at all.
         assert_eq!(question("bü cher.de"), None);
         assert_eq!(question("bücher/de"), None);
+    }
+
+    #[test]
+    fn a_name_the_guard_refuses_is_never_asked() {
+        // Every question discovery could make about an address at a
+        // `.local` domain, which Apple's resolver would send by multicast
+        // DNS, and the guard's other private names.
+        for name in [
+            "acme.local",
+            "ACME.Local.",
+            "_imaps._tcp.acme.local",
+            "autodiscover.acme.local",
+            "google._domainkey.acme.local",
+            "_spf.mail.acme.local",
+            "printer.local",
+            "bücher.local",
+            "_imaps._tcp.bücher.local",
+            "localhost",
+            "mail.localhost",
+            "corp.internal",
+            "_imaps._tcp.corp.internal",
+            "nas.home.arpa",
+            "10.0.0.1",
+            "192.168.1.1",
+        ] {
+            assert_eq!(question(name), None, "{name}");
+        }
+        // A public name is asked as before, `.local` or `_` anywhere in it
+        // or not.
+        for name in [
+            "gmail.com",
+            "_imaps._tcp.gmail.com",
+            "google._domainkey.example.com",
+            "local.example.com",
+            "_imaps._tcp.local.example.com",
+            "mail.localdomain.example",
+            "example.localhost.com",
+            "autodiscover.example.com",
+            "_dmarc.example.com",
+            "_",
+            "",
+        ] {
+            assert_eq!(question(name).as_deref(), Some(name), "{name}");
+        }
     }
 }

@@ -3,9 +3,10 @@ name: Mail on Apple systems
 # The mail engine on Apple's systems, which nothing else tests before a
 # release: its tests on macOS, both as the macOS app has it (hickory) and as
 # an iOS build has it (the system's own resolver, src/dns_sd.rs), the
-# system's resolver against real DNS, and the engine built for iOS and the
-# iOS Simulator. Apple's iOS SDK is only on a Mac, so none of this can run on
-# the Linux runners; a public repository's macOS runners cost nothing.
+# system's resolver against real DNS, the engine's tests linked for iOS, and
+# the same tests run in an iOS Simulator, as an iOS build makes them. Apple's
+# iOS SDK is only on a Mac, so none of this can run on the Linux runners; a
+# public repository's macOS runners cost nothing.
 
 on:
   push:
@@ -26,6 +27,13 @@ concurrency:
 env:
   # The toolchain desktop-ci.yml pins; bump the two together.
   RUST: "1.94.1"
+  # The oldest iOS the engine is built for, as Tauri's iOS build sets it
+  # (bundle.iOS.minimumSystemVersion, 14.0 unless the app says otherwise),
+  # for rustc and for the C that aws-lc-sys compiles alike. Without it a
+  # device build is linked for rustc's own default, iOS 10, while aws-lc's
+  # objects are built for the SDK's version and call ___chkstk_darwin,
+  # which that link cannot find. The Simulator's default is already 14.0.
+  IPHONEOS_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   mail:
@@ -68,10 +76,10 @@ jobs:
         run: cargo test --all-targets --features system-dns
 
       # resolve.rs `through_the_system`: MX, SRV, TXT and CNAME records from
-      # real DNS, a name that does not exist (empty, and at once), discovery
-      # end to end, and a TLS greeting from an IMAP server at the addresses
-      # the system gave. Ignored everywhere else; they need an Apple system
-      # and the network.
+      # real DNS, a name that does not exist (empty, and at once), a `.local`
+      # domain (never asked), discovery and L1's evidence in time, and a TLS
+      # greeting from an IMAP server at the addresses the system gave.
+      # Ignored everywhere else; they need an Apple system and the network.
       - name: The system's resolver against real DNS
         if: ${{ !cancelled() }}
         # One at a time, so that each one's timing is its own.
@@ -107,3 +115,74 @@ jobs:
       - name: Build for the iOS Simulator
         if: ${{ !cancelled() }}
         run: cargo build --target aarch64-apple-ios-sim
+
+      # The engine is a library, so building it for iOS links nothing.
+      # Linking its test programs is what sets dns_sd's functions and poll
+      # (src/dns_sd.rs) against the iOS SDK's libSystem.
+      - name: Link the tests for iOS
+        if: ${{ !cancelled() }}
+        run: cargo test --no-run --target aarch64-apple-ios
+
+      - name: Link the tests for the iOS Simulator
+        id: sim-tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          cargo test --no-run --lib --target aarch64-apple-ios-sim --message-format=json-render-diagnostics \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' \
+            > "$RUNNER_TEMP/sim-tests.txt"
+          bin=$(head -n 1 "$RUNNER_TEMP/sim-tests.txt")
+          test -x "$bin"
+          file "$bin"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      # The engine has no app of its own, so the Simulator runs its test
+      # program directly (`simctl spawn`): the code an iOS build really has
+      # (`system_dns` from the target, not from a feature), asking the
+      # Simulator's own resolver.
+      - name: Start an iOS Simulator
+        id: sim
+        if: ${{ !cancelled() && steps.sim-tests.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          xcrun simctl list runtimes
+          # An iPhone on the newest iOS the runner has.
+          udid=$(xcrun simctl list -j devices available | jq -r '
+            [.devices | to_entries[]
+              | select(.key | test("SimRuntime\\.iOS-[0-9-]+$"))
+              | { v: (.key | capture("iOS-(?<v>[0-9-]+)$").v | split("-") | map(tonumber)),
+                  d: [.value[] | select(.name | startswith("iPhone"))] }
+              | select(.d | length > 0)]
+            | sort_by(.v) | last | .d[0].udid // empty')
+          if [ -z "$udid" ]; then
+            runtime=$(xcrun simctl list -j runtimes | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | last | .identifier // empty')
+            device=$(xcrun simctl list -j devicetypes | jq -r '[.devicetypes[] | select(.productFamily == "iPhone")] | last | .identifier // empty')
+            echo "No iPhone Simulator; making one: $device on $runtime"
+            udid=$(xcrun simctl create rata-mail "$device" "$runtime")
+          fi
+          echo "Simulator $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      # Whether or not `simctl spawn` passes on the program's exit status,
+      # the step passes only on the harness's own "test result: ok".
+      - name: Tests in the iOS Simulator
+        if: ${{ !cancelled() && steps.sim.outcome == 'success' }}
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+          BIN: ${{ steps.sim-tests.outputs.bin }}
+        run: |
+          set -o pipefail
+          xcrun simctl spawn "$UDID" "$BIN" 2>&1 | tee "$RUNNER_TEMP/sim-tests.log"
+          grep -q '^test result: ok\.' "$RUNNER_TEMP/sim-tests.log"
+
+      - name: The system's resolver against real DNS, in the iOS Simulator
+        if: ${{ !cancelled() && steps.sim.outcome == 'success' }}
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+          BIN: ${{ steps.sim-tests.outputs.bin }}
+        run: |
+          set -o pipefail
+          xcrun simctl spawn "$UDID" "$BIN" --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/sim-dns.log"
+          grep -q '^test result: ok\.' "$RUNNER_TEMP/sim-dns.log"
