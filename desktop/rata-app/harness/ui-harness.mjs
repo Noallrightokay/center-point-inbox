@@ -2779,6 +2779,32 @@ console.log('\n— the briefing sends each message by its place, never by its id
   await pg.close();
 }
 
+console.log('\n— a feed with nothing for this computer is not "the newest version" —');
+feed: {
+  /* I1: update.rs answers notHere when the feed has no entry for this kind
+     of installation (not_here_yet). That is not "this is the newest", so the
+     Settings row and a manual check say what Install says. A store build
+     has no update feed; what it does instead is checked just below. */
+  if (STORE) { console.log('  (not in a store build)'); break feed; }
+  const pg = await open(true);
+  const asks = (offer, manual) => pg.evaluate(async ({ offer, manual }) => {
+    __mock.update = offer; window.__toasts.length = 0; UPD_LATER = '';
+    go('set'); await checkUpdate(manual);
+    const bar = document.querySelector('#upd-bar');
+    return { line: document.querySelector('#upd-line').textContent, toasts: window.__toasts.slice(), bar: !!bar && !bar.hidden };
+  }, { offer, manual });
+  const base = { enabled: true, current: '0.1.44', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
+  let r = await asks({ ...base, notHere: true }, true);
+  check(r.line === 'You have RATA 0.1.44. There is no update for this computer yet.' && r.toasts.join('|') === 'There is no update for this computer yet.' && !r.bar,
+    `a manual check says there is no update for this computer yet, in the row and the toast: ${JSON.stringify(r)}`);
+  check(!/newest/.test(r.line + r.toasts.join('')), 'and never that it is the newest version');
+  r = await asks({ ...base, notHere: true }, false);
+  check(r.toasts.length === 0 && !r.bar && /no update for this computer yet/.test(r.line), `the automatic check says nothing, and the row says the same: ${JSON.stringify(r)}`);
+  r = await asks(base, true);
+  check(r.line === 'You have RATA 0.1.44. It is the newest version.' && r.toasts.join('|') === 'RATA 0.1.44 is the newest version.',
+    `a feed that has this computer and nothing newer still says it is the newest: ${JSON.stringify(r)}`);
+  await pg.close();
+}
 if (STORE) {
   console.log('\n— a store build never looks for an update, says nothing of one, and never asks Rust —');
   /* The store updates a store build, and it may not update itself (Apple
@@ -2800,30 +2826,6 @@ if (STORE) {
     `no Updates row, no bar, nothing said and nothing asked of Rust, at start, on a manual check or an install: ${JSON.stringify({ ...r, routes: undefined })}`);
   check(r.routes.every((x) => x && typeof x.error === 'string' && !x.version && !x.ok),
     `bridge.js answers an update check or install as a feature this copy does not have: ${JSON.stringify(r.routes)}`);
-  await pg.close();
-}
-if (!STORE) console.log('\n— a feed with nothing for this computer is not "the newest version" —');
-if (!STORE) {
-  /* I1: update.rs answers notHere when the feed has no entry for this kind
-     of installation (not_here_yet). That is not "this is the newest", so the
-     Settings row and a manual check say what Install says. */
-  const pg = await open(true);
-  const asks = (offer, manual) => pg.evaluate(async ({ offer, manual }) => {
-    __mock.update = offer; window.__toasts.length = 0; UPD_LATER = '';
-    go('set'); await checkUpdate(manual);
-    const bar = document.querySelector('#upd-bar');
-    return { line: document.querySelector('#upd-line').textContent, toasts: window.__toasts.slice(), bar: !!bar && !bar.hidden };
-  }, { offer, manual });
-  const base = { enabled: true, current: '0.1.44', releases: 'https://github.com/Noallrightokay/center-point-inbox/releases' };
-  let r = await asks({ ...base, notHere: true }, true);
-  check(r.line === 'You have RATA 0.1.44. There is no update for this computer yet.' && r.toasts.join('|') === 'There is no update for this computer yet.' && !r.bar,
-    `a manual check says there is no update for this computer yet, in the row and the toast: ${JSON.stringify(r)}`);
-  check(!/newest/.test(r.line + r.toasts.join('')), 'and never that it is the newest version');
-  r = await asks({ ...base, notHere: true }, false);
-  check(r.toasts.length === 0 && !r.bar && /no update for this computer yet/.test(r.line), `the automatic check says nothing, and the row says the same: ${JSON.stringify(r)}`);
-  r = await asks(base, true);
-  check(r.line === 'You have RATA 0.1.44. It is the newest version.' && r.toasts.join('|') === 'RATA 0.1.44 is the newest version.',
-    `a feed that has this computer and nothing newer still says it is the newest: ${JSON.stringify(r)}`);
   await pg.close();
 }
 
@@ -3881,6 +3883,13 @@ console.log('\n— questions asked in the page, never the browser’s own: WKWeb
   check((await closed()) && st.folders === 'Clients' && st.doc === 'Clients', `a press outside it cancels, and the folder and its file stay: ${JSON.stringify(st)}`);
   await pg.click('[data-foldrm="Clients"]');
   await pg.waitForSelector('#ask-ov.open');
+  await pg.keyboard.press('Escape');
+  /* The ✕ is part of the folder's own button, which is what a press focuses. */
+  st = await pg.evaluate(() => ({ folders: S.folders.join(), doc: S.documents.find((d) => d.id === 'dask1').folder, focus: document.activeElement && document.activeElement.dataset.fold }));
+  check((await closed()) && st.folders === 'Clients' && st.doc === 'Clients' && st.focus === 'Clients',
+    `Escape cancels it too: the folder and its file stay, and the focus is back on the folder's button: ${JSON.stringify(st)}`);
+  await pg.click('[data-foldrm="Clients"]');
+  await pg.waitForSelector('#ask-ov.open');
   await pg.click('#ask-ok');
   await pg.waitForTimeout(100);
   st = await pg.evaluate(() => ({ folders: S.folders.join(), doc: S.documents.find((d) => d.id === 'dask1').folder }));
@@ -3926,6 +3935,13 @@ console.log('\n— questions asked in the page, never the browser’s own: WKWeb
   st = await pg.evaluate((id) => ({ linked: S.linked.some((l) => l.id === id), focus: document.activeElement.dataset.lkrm }), lk);
   check((await closed()) && st.linked && st.focus === lk && (await calls('unlink_mailbox')).length === 0,
     `Enter on Cancel cancels: the mailbox stays linked and its keychain entry is not touched: ${JSON.stringify(st)}`);
+  await pg.click(`[data-lkrm="${lk}"]`);
+  await pg.waitForSelector('#ask-ov.open');
+  await pg.keyboard.press('Escape');
+  await pg.waitForTimeout(100);
+  st = await pg.evaluate((id) => ({ linked: S.linked.some((l) => l.id === id), focus: document.activeElement.dataset.lkrm, mail: __mock.mailboxes.map((m) => m.email) }), lk);
+  check((await closed()) && st.linked && st.focus === lk && st.mail.includes('me@example.com') && (await calls('unlink_mailbox')).length === 0,
+    `Escape cancels too: the mailbox stays linked here and in Rust, and the focus is back on its Remove: ${JSON.stringify(st)}`);
   await pg.click(`[data-lkrm="${lk}"]`);
   await pg.waitForSelector('#ask-ov.open');
   await pg.keyboard.press('Tab');
@@ -3983,6 +3999,18 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
       compose: pad('#compose-ov'), acct: parseFloat(cs('#acct-menu').top), overlays: {} };
     for (const s of ['#ask-ov', '#asktext-ov', '#warn-ov', '#link-ov', '#keys-ov', '#pic-ov', '#slack-ov', '#create-ov', '#welcome-ov']) out.overlays[s] = pad(s);
     if (document.querySelector('#rata-licence')) out.licence = pad('#rata-licence');
+    /* What floats over the page: a toast (and where it moves while a send
+       counts), the Undo toast (and where it moves over the composer, where
+       its Undo is the button that matters), and the Assist button. */
+    if (document.querySelector('#assist-fab')) {
+      const px = (s, side) => parseFloat(cs(s)[side]);
+      const ov = document.querySelector('#compose-ov'), was = ov.classList.contains('open');
+      ov.classList.add('open'); const over = px('#send-toast', 'top'); if (!was) ov.classList.remove('open');
+      document.body.classList.add('send-counting'); const counting = px('#toast', 'bottom'); document.body.classList.remove('send-counting');
+      const fab = document.querySelector('#assist-fab').getBoundingClientRect(), nav = document.querySelector('#mnav').getBoundingClientRect();
+      out.floats = { toast: px('#toast', 'bottom'), counting, send: px('#send-toast', 'bottom'), over, fab: [px('#assist-fab', 'right'), px('#assist-fab', 'bottom')],
+        fabClear: !nav.height || fab.bottom <= nav.top };
+    }
     return out;
   });
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -3992,6 +4020,8 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   let m = await measure(pg);
   check(same(m.topbar.pad, [0, 24, 0, 24]) && m.topbar.height === 56 && same(m.app, [0, 0, 0, 0]) && same(m.rail, [22, 14, 16, 14]) && all(m.overlays, [20, 20, 20, 20]) && same(m.compose, [0, 0, 0, 0]) && m.acct === 56,
     `on a computer nothing moves: the top bar 56 px, the rail and every question as before: ${JSON.stringify(m)}`);
+  check(same(m.floats, { toast: 24, counting: 76, send: 24, over: 24, fab: [20, 20], fabClear: true }),
+    `nor do the toasts and the Assist button: ${JSON.stringify(m.floats)}`);
   await ctx.close();
 
   ({ ctx, pg } = await at({ width: 390, height: 844 }, { top: 47, right: 0, bottom: 34, left: 0 }));
@@ -3999,6 +4029,8 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   check(same(m.topbar.pad, [47, 24, 0, 24]) && m.topbar.height === 103 && m.acct === 103, `a phone upright: the top bar reaches under the status bar and keeps its 56 px below it, and the account menu opens below that: ${JSON.stringify(m.topbar)} ${m.acct}`);
   check(all(m.overlays, [47, 20, 34, 20]) && same(m.compose, [47, 0, 0, 0]),
     `every question and sheet keeps clear of the status bar and the home indicator, and the composer of the status bar: ${JSON.stringify({ overlays: m.overlays, compose: m.compose })}`);
+  check(same(m.floats, { toast: 58, counting: 110, send: 58, over: 71, fab: [20, 110], fabClear: true }),
+    `the toasts keep clear of the home indicator, the Undo toast over the composer of the status bar, and the Assist button stays above the bottom bar: ${JSON.stringify(m.floats)}`);
   const pane = await pg.evaluate(() => { go('inbox'); const d = $('#mail-detail'); d.classList.add('open'); const r = d.getBoundingClientRect(); d.classList.remove('open'); return [r.top, r.left]; });
   check(same(pane, [47, 0]), `the reading pane, over the list on a phone, starts below the status bar: ${JSON.stringify(pane)}`);
   /* The shortcut sheet is taller than a phone: it scrolls inside the room
@@ -4018,6 +4050,8 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   const nav = await pg.evaluate(() => { const c = getComputedStyle($('#mnav')); return [parseFloat(c.paddingLeft), parseFloat(c.paddingRight)]; });
   check(same(m.app, [0, 47, 0, 47]) && same(nav, [47, 47]) && all(m.overlays, [20, 47, 21, 47]),
     `a phone on its side: nothing sits under the notch, the page, the bottom bar and every question included: ${JSON.stringify({ app: m.app, nav, overlays: m.overlays['#ask-ov'] })}`);
+  check(same(m.floats, { toast: 45, counting: 97, send: 45, over: 24, fab: [67, 97], fabClear: true }),
+    `and the Assist button keeps clear of the notch and the bottom bar, the toasts of the home indicator: ${JSON.stringify(m.floats)}`);
   await ctx.close();
 
   ({ ctx, pg } = await at({ width: 1024, height: 768 }, { top: 24, right: 0, bottom: 20, left: 0 }));
@@ -4095,6 +4129,25 @@ console.log('\n— Delete account in the app removes what is on this computer, a
   `the Settings row says what it removes on this computer, and that the mailrata.org account is deleted there: "${row}"`);
   const detailNow = () => pg.textContent('#del-detail');
   const goOff = () => pg.evaluate(() => document.querySelector('#del-go').disabled);
+  /* A store build also has a standing row for the mailrata.org account
+     (Apple 5.1.1(v)), found without starting Delete account; the direct
+     build has none, as before. */
+  const standing = await pg.evaluate(() => {
+    const r = document.querySelector('#acct-del-row'), a = document.querySelector('#acct-del-link');
+    return { shown: !!r && getComputedStyle(r).display !== 'none' && r.getBoundingClientRect().height > 0, inHelp: !!(r && r.closest('#help-sec')),
+      text: a && a.textContent, href: a && a.getAttribute('href'), confirm: getComputedStyle(document.querySelector('#del-confirm')).display };
+  });
+  if (STORE) {
+    await pg.evaluate(() => { __mock.opened = []; __mock.calls = []; });
+    await pg.click('#acct-del-link');
+    await pg.waitForTimeout(150);
+    const went = await pg.evaluate(() => ({ opened: __mock.opened, calls: __mock.calls.map((c) => c[0]), url: location.pathname, confirm: getComputedStyle(document.querySelector('#del-confirm')).display }));
+    check(standing.shown && standing.inHelp && standing.confirm === 'none' && standing.text === 'Delete your mailrata.org account' && standing.href === 'https://mailrata.org/in-app/delete-account'
+      && JSON.stringify(went.opened) === '["https://mailrata.org/in-app/delete-account"]' && !went.calls.includes('forget_everything') && /app\.html$/.test(went.url) && went.confirm === 'none',
+    `in a store build, Help & diagnostics has Delete your mailrata.org account standing, which opens the store-safe page through open_link and deletes nothing here: ${JSON.stringify({ standing, went })}`);
+  } else {
+    check(!standing.shown && standing.confirm === 'none', `the direct build has no such row: ${JSON.stringify(standing)}`);
+  }
   await pg.click('#btn-delete');
   await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent));
   let d = await detailNow();
@@ -5536,8 +5589,9 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
     __mock.conn = { on: {}, services: [{ service: 'apple', label: 'iCloud Drive', kind: 'folder', account: 'iCloud Drive on this computer' }] };
     takeStanding(await apiFetch('/api/licence')); await refreshQuota(); await loadConnections();
     go('inbox'); renderSplitLock(); go('docs'); go('set'); renderSettings(); await loadConnections();
+    const sb = document.querySelector('#inbox-mode [data-mode="split"]');
     return { line: $('#plan-line').textContent, quota: $('#quota-line').textContent, split: needPlan('split', 'Inboxes side by side'),
-      folders: $('#folder-hint').textContent, conn: $('#conn-sec').hidden ? null : $('#conn-sec').innerText.replace(/\s+/g, ' ').trim() };
+      splitBtn: [sb.textContent, sb.title, sb.classList.contains('locked')], folders: $('#folder-hint').textContent, conn: $('#conn-sec').hidden ? null : $('#conn-sec').innerText.replace(/\s+/g, ' ').trim() };
   });
   /* Each view while it is shown, so its words are the ones drawn. */
   const seen = [];
@@ -5548,10 +5602,13 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
       `Base: the plan's sentence, and a full allowance says another mailbox is not in the plan, with no price or upgrade: ${JSON.stringify({ line: base.line, quota: base.quota })}`);
     check(base.split === 'Inboxes side by side is not in your plan.' && base.folders === 'Folders for your files is not in your plan.' && /iCloud Drive is not in your plan\./.test(base.conn || '') && !/See plans/.test(base.conn || ''),
       `what Base lacks is "not in your plan", with no price, upgrade or See plans: ${JSON.stringify({ split: base.split, folders: base.folders, conn: base.conn })}`);
+    check(JSON.stringify(base.splitBtn) === JSON.stringify(['Side by side', 'Inboxes side by side is not in your plan.', true]),
+      `the inbox's Side by side keeps its own name, locked, with no plan named on it: ${JSON.stringify(base.splitBtn)}`);
     check(clean(j), `Settings, Files and the inbox on Base name no price, purchase or update, in words or titles, and link nowhere that sells: ${JSON.stringify(j)}`);
   } else {
-    check(base.quota === 'RATA Base: 2 of up to 2 email accounts. Upgrade in Settings to add another mailbox.' && base.split === 'Inboxes side by side comes with RATA Pro, $23.99 a month. Upgrade in Settings.',
-      `Base: the allowance and what Base lacks name the plan to upgrade to and its price, as before: ${JSON.stringify(base)}`);
+    check(base.quota === 'RATA Base: 2 of up to 2 email accounts. Upgrade in Settings to add another mailbox.' && base.split === 'Inboxes side by side comes with RATA Pro, $23.99 a month. Upgrade in Settings.'
+      && base.splitBtn[0] === 'Side by side · Pro' && base.splitBtn[2],
+      `Base: the allowance and what Base lacks name the plan to upgrade to and its price, and Side by side says Pro, as before: ${JSON.stringify(base)}`);
     check(j.titles.length > 0 && j.words.length > 0, `and the check sees those words and titles: ${JSON.stringify(j)}`);
   }
   /* Linking one more: a store build answers in its own words first, so
@@ -5570,6 +5627,46 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
   if (STORE) check(over.first.asked.length === 0 && JSON.stringify(over.first.toasts) === '["Another mailbox is not in your plan."]' && over.again.join() === 'me@example.com',
     `a mailbox past Base's allowance is "not in your plan", and Rust is not asked; relinking one already here still is: ${JSON.stringify(over)}`);
   else check(over.first.asked.join() === 'three@example.com', `a mailbox past the allowance is left to Rust to refuse, as before: ${JSON.stringify(over)}`);
+  /* Remove one, then link another in the same visit to Settings: the
+     allowance is asked afresh, never remembered, so the room Remove made is
+     used, and the line under Add an account says what is in use now. */
+  await pg.evaluate(() => { go('set'); renderLinked(); __mock.calls = []; window.__toasts.length = 0; });
+  const gone = await pg.evaluate(() => S.linked.find((l) => l.label === 'me@example.com').id);
+  await pg.click(`[data-lkrm="${gone}"]`);
+  await pg.waitForSelector('#ask-ov.open', { timeout: 3000 }).catch(() => {});
+  await pg.click('#ask-ok');
+  await pg.waitForFunction(() => /1 of up to 2/.test($('#quota-line').textContent), null, { timeout: 3000 }).catch(() => {});
+  const freed = await pg.evaluate(async () => {
+    const asked = () => __mock.calls.filter(([c]) => c === 'link_mailbox').map(([, a]) => a.email);
+    const out = { left: __mock.mailboxes.map((m) => m.email), quota: $('#quota-line').textContent };
+    window.__toasts.length = 0;
+    await mailLink('three@example.com', 'abcd efgh ijkl mnop', '');
+    Object.assign(out, { asked: asked(), toasts: window.__toasts.filter((t) => /plan/.test(t)) });
+    return out;
+  });
+  check(JSON.stringify(freed.left) === '["two@example.com"]' && freed.quota === `RATA Base: 1 of up to 2 email accounts.` && freed.asked.join() === 'three@example.com' && freed.toasts.length === 0,
+    `after Remove, the line says one of two is in use, and the next mailbox is linked, not refused as "not in your plan": ${JSON.stringify(freed)}`);
+  /* Full again, then a renewal to Pro while RATA is open (the bridge's
+     rata-standing): the next mailbox goes ahead at once, and the line says
+     there is no limit, without leaving Settings. */
+  const raised = await pg.evaluate(async () => {
+    const asked = () => __mock.calls.filter(([c]) => c === 'link_mailbox').map(([, a]) => a.email);
+    __mock.mailboxes.push({ email: 'three@example.com', host: 'imap.example.com', port: 993, label: 'Three' });
+    __mock.calls = []; window.__toasts.length = 0;
+    await mailLink('four@example.com', 'abcd efgh ijkl mnop', '');
+    const full = { asked: asked(), toasts: window.__toasts.filter((t) => /plan/.test(t)) };
+    __mock.plan = undefined; __mock.planMessage = undefined;
+    dispatchEvent(new CustomEvent('rata-standing', { detail: await apiFetch('/api/licence') }));
+    for (let i = 0; i < 40 && !/no limit/.test($('#quota-line').textContent); i++) await new Promise((r) => setTimeout(r, 25));
+    __mock.calls = []; window.__toasts.length = 0;
+    await mailLink('four@example.com', 'abcd efgh ijkl mnop', '');
+    return { full, quota: $('#quota-line').textContent, asked: asked(), toasts: window.__toasts.filter((t) => /plan/.test(t)) };
+  });
+  if (STORE) check(raised.full.asked.length === 0 && JSON.stringify(raised.full.toasts) === '["Another mailbox is not in your plan."]',
+    `with both of Base's mailboxes in use again, the next is "not in your plan" and Rust is not asked: ${JSON.stringify(raised.full)}`);
+  else check(raised.full.asked.join() === 'four@example.com', `with both in use again, the direct build leaves it to Rust, as before: ${JSON.stringify(raised.full)}`);
+  check(raised.quota === 'RATA Pro: 2 email accounts — no limit.' && raised.asked.join() === 'four@example.com' && raised.toasts.length === 0,
+    `a renewal to Pro while Settings is open lifts the limit at once: the line says so, and the next mailbox is linked: ${JSON.stringify(raised)}`);
   await pg.close();
 
   /* No licence: the licence box. */

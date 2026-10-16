@@ -784,7 +784,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .w-dot.live{background:var(--green)}
 .w-dot.soon{background:var(--amber)}
 /* ---------- assist ---------- */
-#assist-fab{position:fixed;right:20px;bottom:20px;width:48px;height:48px;border-radius:var(--r);background:var(--card);display:grid;place-items:center;box-shadow:var(--shadow-lg);z-index:45;transition:var(--lift)}
+#assist-fab{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));bottom:calc(20px + env(safe-area-inset-bottom,0px));width:48px;height:48px;border-radius:var(--r);background:var(--card);display:grid;place-items:center;box-shadow:var(--shadow-lg);z-index:45;transition:var(--lift)}
 #assist-fab:hover{background:var(--fill-2)}
 #assist-ov{position:fixed;inset:0;background:rgba(14,16,20,.32);display:none;z-index:46;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
 #assist-ov.open{display:flex;justify-content:flex-end}
@@ -809,14 +809,14 @@ button.cv-row:hover{background:var(--fill-2)}
 .as-chip.action{background:var(--tint-wash);color:var(--tint-deep)}
 .as-chip.deadline{background:var(--amber-soft);color:var(--amber)}
 .as-ai{white-space:pre-line;font-size:13.5px;line-height:1.6;background:var(--card);border-radius:var(--r);box-shadow:var(--edge);padding:16px 18px}
-@media (max-width:880px){#assist-fab{bottom:76px}}
+@media (max-width:880px){#assist-fab{bottom:calc(76px + env(safe-area-inset-bottom,0px))}}
 /* ---------- toast ---------- */
-#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:var(--bg);padding:10px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw;text-align:center}
+#toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:var(--bg);padding:10px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 /* Undo send (H9): the count before a message goes, with its Undo. Always in
    the accessibility tree (role=status), so what it says is announced; empty
    and out of reach when there is nothing to undo. */
-#send-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:8px 8px 8px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw}
+#send-toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%) translateY(6px);display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:8px 8px 8px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw}
 #send-toast.show{opacity:1;transform:translateX(-50%);pointer-events:auto}
 #send-toast:not(.show){padding:0;box-shadow:none}
 #send-toast:focus{outline:none}
@@ -825,9 +825,9 @@ button.cv-row:hover{background:var(--fill-2)}
 #send-toast button:hover{background:rgba(127,127,127,.28)}
 #send-toast button:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
 .st-say{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-body.send-counting #toast{bottom:76px}
+body.send-counting #toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 /* Over the composer's own buttons it would be in the way: at the top, then. */
-#compose-ov.open~#send-toast{bottom:auto;top:24px}
+#compose-ov.open~#send-toast{bottom:auto;top:calc(24px + env(safe-area-inset-top,0px))}
 /* A newer RATA, ready to install (desktop app). */
 /* Above the licence prompt (bridge.css, 99999): an update may be exactly what a
    copy whose licence check fails needs. */
@@ -1235,6 +1235,7 @@ body.send-counting #toast{bottom:76px}
           <div class="set-row"><div class="grow"><b>Report a bug</b><span id="bug-what">Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
           <div class="set-row"><div class="grow"><b>Privacy policy</b><span>What RATA keeps, where it keeps it, and what it sends elsewhere, on mailrata.org.</span></div><a class="btn" id="privacy-link" href="https://mailrata.org/privacy.html" target="_blank" rel="noopener">Open privacy policy</a></div>
           <div class="set-row"><div class="grow"><b>Terms of service</b><span>The terms you use RATA under, on mailrata.org.</span></div><a class="btn" id="terms-link" href="https://mailrata.org/terms.html" target="_blank" rel="noopener">Open terms</a></div>
+          <div class="set-row" id="acct-del-row" style="display:none"><div class="grow"><b>Your mailrata.org account</b><span>Deleting it is done on mailrata.org. Delete account, under Workspace, removes what RATA keeps on this computer.</span></div><a class="btn" id="acct-del-link" target="_blank" rel="noopener">Delete your mailrata.org account</a></div>
         </div>
       </div>
     </section>
@@ -3011,7 +3012,9 @@ function renderSplitLock(){
   const locked=!can('split');
   btn.classList.toggle('locked',locked);
   btn.title=locked?needPlan('split','Inboxes side by side'):'';
-  btn.textContent=locked?'Side by side · Pro':'Side by side';
+  /* A store build names no plan to buy: the title and the toast say it is
+     not in this plan, and the button keeps its own name. */
+  btn.textContent=locked&&!STORE_BUILD?'Side by side · Pro':'Side by side';
   const one=document.querySelector('#inbox-mode [data-mode="one"]');
   if(one)one.title='Every mailbox in one inbox — this is the Center Point inbox';
 }
@@ -4290,7 +4293,8 @@ const planKey=()=>window.__RATA_NATIVE__?(LIC&&LIC.licensed&&LIC.plan?LIC.plan.k
 const tier=()=>TIERS[planKey()]||null;
 const tierLabel=()=>tier()?tier().label:window.__RATA_NATIVE__?'No licence yet':'No plan yet';
 function takeStanding(st){
-  const was=!!(LIC&&LIC.licensed);
+  const licPlan=()=>LIC&&LIC.licensed&&LIC.plan?LIC.plan.key:null;
+  const was=!!(LIC&&LIC.licensed),planWas=licPlan();
   LIC=st&&typeof st==='object'&&!st.error?st:null;
   /* The bridge can answer before the workspace has loaded; boot asks again. */
   if(!S)return;
@@ -4304,6 +4308,9 @@ function takeStanding(st){
   }
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
+  /* A plan that changed while RATA was open (a renewal to Pro, a lapse)
+     changes the allowance: the line under Add an account says the new one. */
+  if(licPlan()!==planWas)refreshQuota();
   /* What is connected, and whether this plan may use it (K1). */
   loadConnections();
 }
@@ -5654,9 +5661,15 @@ $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim
    own page in the markup; a store build names the store-safe pages under
    mailrata.org/in-app/, Report a bug among them, since GitHub leads to the
    releases. */
-const HELP_LINKS={help:'#help-link',bug:'#bug-link',privacy:'#privacy-link',terms:'#terms-link'};
+const HELP_LINKS={help:'#help-link',bug:'#bug-link',privacy:'#privacy-link',terms:'#terms-link',account:'#acct-del-link'};
 for(const [k,id] of Object.entries(HELP_LINKS))if(pageOf(k))$(id).setAttribute('href',pageOf(k));
 if(STORE_BUILD)$('#bug-what').textContent='What to put in a bug report, on mailrata.org. Never paste a password or your licence key into one.';
+/* A store build also has a row of its own for deleting the mailrata.org
+   account (Apple 5.1.1(v)), so it is found without first starting Delete
+   account, which is about this computer. It opens the store-safe page that
+   does it (PAGES.account); the direct build keeps Open mailrata.org account
+   inside Delete account, as before. */
+if(STORE_BUILD&&pageOf('account'))$('#acct-del-row').style.display='';
 function renderHelp(){
   const row=$('#diag-row');if(row)row.style.display=window.__RATA_NATIVE__?'':'none';
 }
@@ -5807,9 +5820,17 @@ function lfFind(){
 /* A store build says a full allowance in its own words, before Rust's
    refusal names where to upgrade: what is not in the plan, and nothing
    more. Rust still decides; this only answers first when the allowance is
-   known to be used up and the address is not already linked. */
-function storeFull(email){
-  if(!STORE_BUILD||!QUOTA||!QUOTA.limits||QUOTA.limits.mail===null||!QUOTA.remaining||QUOTA.remaining.mail!==0||linkedFind('mail',email))return false;
+   used up now and the address is not already linked. It asks afresh each
+   time (licence_status, on this computer), never a remembered answer: a
+   mailbox removed or a plan renewed since must not be refused. An answer
+   that does not come is no refusal. */
+async function storeFull(email){
+  if(!STORE_BUILD||linkedFind('mail',email))return false;
+  let q;
+  try{q=await apiFetch('/api/links')}catch(e){return false}
+  if(!q||q.error||!q.limits||!q.remaining)return false;
+  QUOTA=q;
+  if(q.limits.mail===null||q.remaining.mail!==0)return false;
   toast('Another mailbox is not in your plan.');
   return true;
 }
@@ -5818,7 +5839,9 @@ function storeFull(email){
 async function msSignIn(){
   const email=$('#lf-input').value.trim();
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
-  if(storeFull(email))return;
+  /* A second press while the store build asks is caught after the await,
+     where LF_WAIT is read and set in one turn. */
+  if(STORE_BUILD&&!LF_WAIT&&await storeFull(email))return;
   if(LF_WAIT)return;
   LF_WAIT=true;lfMicrosoft();
   let res;
@@ -5912,9 +5935,9 @@ async function mailLink(email,pass,host){
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
   if(msAddress(email)){lfMicrosoft();return}
   if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
-  if(storeFull(email))return;
   const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
   try{
+    if(STORE_BUILD&&await storeFull(email))return;
     const res=await apiFetch('/api/link/mail',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({email,appPassword:pass,host:host||undefined})});
@@ -7282,7 +7305,8 @@ async function removeLinked(id){
   /* Its gaps can never be filled now (BUG-C). */
   if(l.type==='mail')S.gaps=(S.gaps||[]).filter(g=>g.email!==String(l.label).toLowerCase());
   save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
-  renderLinked();renderMailFilters();renderMail();
+  /* One fewer in use: the allowance line says so now, not at the next visit. */
+  renderLinked();refreshQuota();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
 }
 
