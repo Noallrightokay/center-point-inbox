@@ -86,3 +86,8 @@ default = ["self-update"]
 # no feed address and no updater key in it (build.rs), and answers the page
 # as a build without the key does.
 self-update = ["dep:tauri-plugin-updater"]
+# A self-test run as RATA starts (src/smoke.rs), for a device nobody can
+# watch: the iOS Simulator job in .github/workflows/ios.yml. Never on by
+# default and never in a release; harness/verify-release.sh fails a
+# published binary that holds its words.
+smoke = []

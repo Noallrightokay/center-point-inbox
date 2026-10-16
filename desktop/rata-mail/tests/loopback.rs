@@ -208,6 +208,18 @@ fn guard_admits_only_the_literal_loopback_address() {
 
 // --------------------------------------------------------------------- link
 
+/// The app's self-test (its `smoke` feature) reads a server's greeting
+/// through the guarded dial and TLS, and sends nothing: Dovecot's own first
+/// line comes back, as one line.
+#[tokio::test]
+async fn a_greeting_comes_back_without_signing_in() {
+    let said = rata_mail::imap::greeting(&resolver(), HOST, 993)
+        .await
+        .expect("Dovecot's greeting");
+    assert!(said.starts_with("* OK"), "{said}");
+    assert!(!said.contains('\n') && !said.contains('\r'), "{said:?}");
+}
+
 #[tokio::test]
 async fn link_by_explicit_host() {
     let r = resolver();

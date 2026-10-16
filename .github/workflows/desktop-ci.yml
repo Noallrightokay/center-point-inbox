@@ -233,6 +233,18 @@ jobs:
         run: cargo test --all-targets --no-default-features
         working-directory: desktop/rata-app/src-tauri
 
+      # The self-test a Simulator build runs as it starts (src/smoke.rs, the
+      # `smoke` feature), built as the iOS job builds it: without
+      # self-update. Never in a release; ios.yml and verify-release.sh see
+      # to that.
+      - name: Clippy, with the smoke self-test
+        run: cargo clippy --all-targets --no-default-features --features smoke -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Tests of the smoke self-test
+        run: cargo test --lib --no-default-features --features smoke -- "smoke::"
+        working-directory: desktop/rata-app/src-tauri
+
   # The keychain on Windows, on Windows. RATA writes its Windows keychain
   # entries itself, CRED_PERSIST_LOCAL_MACHINE, because keyring writes every
   # one to roam with the profile (vault.rs, review R6), and Credential

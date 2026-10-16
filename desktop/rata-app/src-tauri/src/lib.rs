@@ -29,6 +29,8 @@ mod notify;
 mod oauth;
 mod onedrive;
 mod slack;
+#[cfg(feature = "smoke")]
+mod smoke;
 mod store;
 mod update;
 mod vault;
@@ -272,6 +274,14 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // A smoke build's self-test (`smoke`), begun before anything it
+            // checks: the last run's answers go at once.
+            #[cfg(feature = "smoke")]
+            let smoke = {
+                let smoke = smoke::Smoke::begin(app.path().app_data_dir()?, smoke::asked_view());
+                app.manage(smoke.clone());
+                smoke
+            };
             // The app's own folder on this computer — Application Support
             // on macOS, .local/share on Linux, and Local AppData on Windows,
             // which a roaming profile never copies to its share (review
@@ -301,6 +311,8 @@ pub fn run() {
                 store::Hold::Taken => false,
                 store::Hold::Unguarded => false,
             };
+            #[cfg(feature = "smoke")]
+            smoke.record(smoke::store(&local, guarded));
             let store = open_store(&roaming, &local, &Keychain, guarded);
             // Windows only: keychain entries an earlier build wrote to roam
             // stay on this computer from now on, and a mailbox's that Unlink
@@ -315,12 +327,19 @@ pub fn run() {
             let resolver =
                 rata_mail::Resolver::system().map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            app.manage(Arc::new(Rata::new(
+            let rata = Arc::new(Rata::new(
                 store,
                 Box::new(Keychain),
                 resolver,
                 licence::PUBLIC_KEY,
-            )));
+            ));
+            // A licence given to a smoke build at launch, stored as the
+            // licence box stores one, before the page asks for it.
+            #[cfg(feature = "smoke")]
+            if let Some(token) = smoke::given_licence() {
+                smoke.record(smoke::licence(&rata, &token));
+            }
+            app.manage(rata);
             // The window is built here rather than from the config alone
             // (`"create": false` there) so that it can be told where it may
             // go: the app's own pages and nowhere else — see `links`.
@@ -355,6 +374,9 @@ pub fn run() {
                     NewWindowResponse::Deny
                 })
             };
+            #[cfg(feature = "smoke")]
+            let window =
+                window.initialization_script(smoke::script(smoke::asked_view().as_deref()));
             let window = window.build()?;
             #[cfg(desktop)]
             fit_to_screen(&window, (config.width, config.height));
@@ -363,6 +385,8 @@ pub fn run() {
             let live = watch::Watching::default();
             app.manage(live.clone());
             watch::start(app.handle().clone(), live);
+            #[cfg(feature = "smoke")]
+            smoke::start(smoke);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -410,6 +434,8 @@ pub fn run() {
             commands::created_list,
             commands::created_read,
             commands::forget_created,
+            #[cfg(feature = "smoke")]
+            smoke::smoke_page,
         ])
         .build(context)
         .expect("RATA could not start")
@@ -667,6 +693,54 @@ mod tests {
         );
         assert_eq!(config.identifier, "org.mailrata.desktop");
         assert!(config.app.security.csp.is_some());
+    }
+
+    /// What an iOS build is made from: tauri.conf.json with
+    /// tauri.ios.conf.json merged over it, which the CLI and tauri-build do
+    /// for that target alone. The phone's window is still built in setup
+    /// (`create: false`), where it is told where it may go, and shows no
+    /// link previews: a long press on a link in formatted mail would load
+    /// the page in a preview, which nobody asked to open (a link goes to
+    /// the browser, and only once asked). iOS 15 or later. No updater,
+    /// which a store's build must not have. The identifier is the
+    /// desktop's, which is the owner's to change (D9). Each computer's
+    /// config is the committed one, untouched.
+    #[test]
+    fn an_ios_build_merges_its_own_config_and_a_computers_does_not() {
+        use tauri::utils::config::{Config, parse::read_from};
+        use tauri::utils::platform::Target;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |target| -> Config {
+            let (raw, _) = read_from(target, dir).expect("the config reads");
+            serde_json::from_value(raw).expect("a whole config")
+        };
+        let ios = read(Target::Ios);
+        assert_eq!(ios.identifier, "org.mailrata.desktop");
+        assert_eq!(ios.bundle.ios.minimum_system_version, "15.0");
+        assert!(!ios.plugins.0.contains_key("updater"));
+        let [window] = ios.app.windows.as_slice() else {
+            panic!("one window: {:?}", ios.app.windows);
+        };
+        assert_eq!(window.label, "main");
+        assert!(!window.create);
+        assert!(!window.allow_link_preview);
+        assert!(ios.app.security.csp.is_some());
+        assert!(
+            !ios.app
+                .security
+                .dangerous_disable_asset_csp_modification
+                .can_modify("style-src")
+        );
+
+        for computer in [Target::Linux, Target::MacOS, Target::Windows] {
+            let c = read(computer);
+            assert_eq!(c.identifier, ios.identifier);
+            assert!(c.plugins.0.contains_key("updater"), "{computer}");
+            let window = &c.app.windows[0];
+            assert!(window.allow_link_preview, "{computer}");
+            assert_eq!((window.width, window.height), (1280.0, 860.0));
+            assert!(window.title.starts_with("RATA "), "{computer}");
+        }
     }
 
     #[cfg(desktop)]
