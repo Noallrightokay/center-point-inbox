@@ -929,6 +929,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
     fn sending_refuses_a_nat64_answer_that_wraps_a_private_address() {
         rt().block_on(async {
             // 127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1, 192.168.1.1,

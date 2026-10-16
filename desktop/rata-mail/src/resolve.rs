@@ -463,15 +463,25 @@ async fn found_elsewhere<D: Lookup + Sync>(dns: &D, domain: &str) -> Vec<Candida
 
 /// A DNS that answers from a script, and remembers what it was asked; and a
 /// [`Resolver`] whose name server answers every address question one way.
+///
+/// The second half points hickory at a name server of its own, so it is
+/// left out of a build that sets `system_dns` (declared in build.rs), which
+/// looks names up through the system's resolver, one that cannot be pointed
+/// anywhere. The tests that use it carry the same gate.
 #[cfg(test)]
 pub(crate) mod scripted {
+    #[cfg(not(system_dns))]
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket};
     use std::sync::Mutex;
 
+    #[cfg(not(system_dns))]
     use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+    #[cfg(not(system_dns))]
     use hickory_resolver::net::runtime::TokioRuntimeProvider;
 
-    use super::{HickoryResolver, Lookup, Resolver};
+    use super::Lookup;
+    #[cfg(not(system_dns))]
+    use super::{HickoryResolver, Resolver};
 
     #[derive(Default)]
     pub(crate) struct Dns {
@@ -543,6 +553,7 @@ pub(crate) mod scripted {
     /// server, or DNS64, can say about any name. The server is a real one
     /// on 127.0.0.1, so the answer reaches the guard through hickory exactly
     /// as the machine's own resolver's would, on every path that dials.
+    #[cfg(not(system_dns))]
     pub(crate) fn answering(ip: Ipv6Addr) -> Resolver {
         let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = sock.local_addr().unwrap().port();
@@ -568,6 +579,7 @@ pub(crate) mod scripted {
 
     /// The reply to one query: its own header and question back, an AAAA
     /// question answered with `ip`, any other with no records.
+    #[cfg(not(system_dns))]
     fn answer(query: &[u8], ip: Ipv6Addr) -> Option<Vec<u8>> {
         // The name runs from byte 12 to a zero length; type and class follow.
         let mut end = 12;
@@ -769,6 +781,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
     fn a_nat64_answer_is_judged_by_the_ipv4_address_inside() {
         rt().block_on(async {
             // An IPv4-only mail host seen from an IPv6-only network with

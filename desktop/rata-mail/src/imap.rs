@@ -5780,6 +5780,7 @@ mod tests {
 
     /// NAT64 spellings of 127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1
     /// and 192.168.1.1, and one in the local-use prefix.
+    #[cfg(not(system_dns))] // only the tests below use it
     const NAT64_INSIDE: [&str; 6] = [
         "64:ff9b::7f00:1",
         "64:ff9b::a00:1",
@@ -5790,6 +5791,7 @@ mod tests {
     ];
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
     fn linking_refuses_a_nat64_answer_that_wraps_a_private_address() {
         rt().block_on(async {
             for inside in NAT64_INSIDE {
@@ -5808,6 +5810,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
     fn a_refresh_refuses_a_nat64_answer_that_wraps_a_private_address() {
         rt().block_on(async {
             for inside in NAT64_INSIDE {
@@ -5823,6 +5826,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
     fn the_watch_refuses_a_nat64_answer_that_wraps_a_private_address() {
         rt().block_on(async {
             for inside in NAT64_INSIDE {
@@ -5833,6 +5837,35 @@ mod tests {
                     }
                     other => panic!("{inside}: {other:?}"),
                 }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_refresh_dials_a_nat64_answer_that_wraps_a_public_address() {
+        // 8.8.8.8 as DNS64 gives it. The guard lets it by, so the refresh goes
+        // on to the socket: on a machine with no IPv6 route that fails at once
+        // as a network failure, and where there is one the dial may still be
+        // going when the test stops waiting. A refusal would be back at once,
+        // since nothing is dialled before the guard has judged, and the answer
+        // is already in the resolver's cache from the lookup just before.
+        rt().block_on(async {
+            let ip: std::net::Ipv6Addr = "64:ff9b::808:808".parse().unwrap();
+            let r = crate::resolve::scripted::answering(ip);
+            let host = "imap.dns64.test";
+            assert_eq!(
+                resolve_public(&r, host).await,
+                Ok((host.to_string(), vec![IpAddr::V6(ip)]))
+            );
+            let mailbox = acct(host);
+            let refresh = fetch_newest(&r, &mailbox, 15, &[]);
+            match timeout(Duration::from_secs(3), refresh).await {
+                Err(_) => {} // still dialling
+                Ok(Err(Fetched::Net(why))) => {
+                    assert!(!why.contains("No mail server answers"), "{why}")
+                }
+                Ok(other) => panic!("{other:?}"),
             }
         });
     }
