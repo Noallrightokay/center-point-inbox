@@ -30,9 +30,9 @@ however convenient.
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 915 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 917 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (602 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (608 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -856,12 +856,26 @@ is kept between them; a typed question of 300 characters or one of four
 `PRESETS` whose wording is the relay's), `draft` (a reply body from the
 reader's note of 500 characters and one of four `INTENTS`), `tasks` (the
 briefing) and `translate`; `ask` and `draft` are Assistant v1's, and the
-page's Ask and Draft a reply come in its later stages. Plan-gated
+page's Ask and Draft a reply come in its later stages, and so do the words
+for them: `legal.test` holds the privacy page, the terms, the home page,
+`help.html#ai` and Settings' `AI_SENDS` to name Ask exactly when
+`app.html` has `#md-ask-q`, and Draft a reply exactly when it has
+`#md-draft` (BUG-D), so none promises a button the app lacks and the stage
+that adds the buttons must add the words (as first written in 4ba30c1). Plan-gated
 (`translate` for Base; the other four need `ai`, Pro, with no new flag —
 `lib/plan.js`), Haiku 4.5, text capped (12 000 chars; the briefing sends
-the start, 1 500 chars, of the 25 most recent messages from the last 14
+the start, 1 500 chars, of up to 25 recent messages from the last 14
 days, each named only by its place, `"1"`..`"25"`, never by `m.id`, which
 carries the mailbox key and so its address; I1, v0.1.45, harness check).
+**What the briefing leaves out** (`briefPick`), as the privacy page says:
+mailings (`m.unsub`, or what `categorize` files under Updates, a Sort rule
+first), mail answered since (`convoIndex`: one pass joining held mail by
+`convoKeys`, as `conversationOf` links it, and the newest sent message in
+each; a message older than that has had an answer), mailboxes kept from AI,
+and, with the check on, any message it finds something in. It walks newest
+first and reads texts from disk only until 25 pass, so the counts it gives
+under the answer ("Left out on this computer: 2 mailings, 1 you have
+answered.") are of what would otherwise have gone.
 The sender goes by name only: the relay drops anything in angle brackets
 and any word with an `@` (`nameOnly`), whatever an app version sends, and
 the page sends none (`aiName`). The app sends `today` and each message's
@@ -901,7 +915,11 @@ The largest, a 25-message CJK briefing, holds about $0.17, so
 `FORMAT_TOKENS` is to be measured against `count_tokens` (it takes
 `output_config`). Nothing is logged but a status. **Gates in the page
 (Assistant v1, P1).** Nothing goes without a press, and then only past
-`aiGate`, in order: the plan (`can('ai')`; Translate needs only a licence),
+`aiGate`, in order: the plan (`aiPlanHas('ai')`; Translate needs only a
+licence; a licence that has lapsed but can renew, `reason: 'expired'` with
+a token, counts as the plan in its `licence`, so the request goes, the
+relay answers `expired` and the bridge renews and asks once more, BUG-L,
+rather than telling a Pro customer to buy Pro),
 the master switch (`S.settings.aiOff`), and the mailbox
 (`S.settings.aiBoxes`, `'on'`/`'off'` by `mailEmailOf`). A mailbox nobody
 has decided about is asked about in `#aiok-ov` (an alertdialog in
@@ -912,10 +930,15 @@ gets a box per undecided mailbox, unticked, and Save and run records ticked
 as on and unticked as off (Cancel and Escape decide nothing). Then
 `aiScreen` runs the DLP profile over the exact text about to go
 (`S.settings.aiCheck`, on unless turned off); a block-level finding asks:
-Cancel, Leave them out and send (`dlpRedact`, `[removed]`) or Send as it
-is, and the briefing leaves such a message out. Turning AI or a mailbox off
-bumps `AI_GEN`, and an answer arriving after it says "Not shown: AI was
-turned off while it was answering." Settings, under AI
+Cancel, Leave them out and send (`dlpRedact`, `[removed]`, then the check
+runs again on what is left, and a finding still there, such as one running
+from the subject into the text, sends nothing) or Send as it is, and the
+briefing leaves such a message out. Turning AI off bumps `AI_GEN`, and
+turning a mailbox off bumps its own count in `AI_GEN_BOX`; `askAI(body,
+boxes)` compares both for the mailboxes whose mail it carries, so an answer
+arriving after its mailbox (or AI) was turned off says "Not shown: AI was
+turned off while it was answering.", and one about another mailbox's mail
+is still shown. Settings, under AI
 (`renderAISettings`, app only) holds the switch, a row per mailbox, the
 check, this month's use (`S.settings.aiUsed`, from each answer's `used`),
 what each sends (`AI_SENDS`, the privacy page's words, which `legal.test`
@@ -937,8 +960,11 @@ a translation still says "only the start of this long message". The
 briefing drops its oldest messages until its JSON is at most 70 000
 characters (`AI_BRIEF_JSON`) and re-flags only what was sent. Before 0.1.43
 an opened message went whole, and anything over the route's raw 80 000
-guard was refused. The relay reads `stop_reason`: a translation or summary
-that stopped at `max_tokens` is `cut: true`; a briefing that did is 502
+guard was refused. The relay reads `stop_reason`: a translation that
+stopped at `max_tokens` is `cut: true`; a summary or an answer to a
+question that did is JSON cut off, which reads as unreadable, so both have
+`max_tokens` 1 000 (`ANSWER_TOKENS`), room for one in Chinese, Japanese or
+Korean with its quotes and actions; a briefing that did is 502
 "The briefing was cut short. Try again." (`reason: 'cut'`, still settled),
 and the page keeps every flag and says "Flags from earlier briefings are
 kept." The briefing's `max_tokens` is 3 000 (was 1 200, which an answer

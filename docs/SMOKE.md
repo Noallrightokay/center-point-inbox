@@ -398,8 +398,15 @@ and [D5](MVP-PLAN.md#d5).*
 1. Open your own message from row 7. Use your own test mail so no one
    else's words go to the relay.
 2. Press **✦ Summarize**.
-3. The first time, RATA explains that the message text goes to its AI
-   service, run by Anthropic, and is not kept. Press **OK**.
+3. The first time for each mailbox, RATA asks whether to send this
+   message from that mailbox, which it names, to its AI service, run by
+   Anthropic, and says it keeps none of it. Press **Send this time** (or
+   **Always for this mailbox**). Do not press **Not from this mailbox**,
+   Escape or Enter straight away: under the HIPAA privacy-check profile
+   the focus starts on **Not from this mailbox**, and that keeps the
+   mailbox from AI until you turn it back on in **Settings**, under **AI**.
+   If a second question says the privacy check found something, press
+   **Cancel** and use a message without numbers in it.
 
 **Pass:** a box titled **Summary by AI**.
 **Before D4 is deployed:** a box titled **Quick summary**, with a note

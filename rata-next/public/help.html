@@ -481,7 +481,7 @@ footer a:hover{color:var(--ink)}
 
 <section id="ai" aria-labelledby="ai-h">
   <h2 id="ai-h">AI in RATA</h2>
-  <p>RATA&rsquo;s AI is in the desktop app. It sends mail to RATA&rsquo;s AI service, run by Anthropic, only when you press <b>Summarize</b>, <b>Ask</b>, <b>Draft a reply</b>, <b>Translate</b> or <b>Run briefing</b>, and only from a mailbox you let it read. Nothing is sent on its own: not when RATA starts, not when mail arrives, and not on a timer. Translate comes with <b>RATA Base</b> and <b>RATA Pro</b>; the rest comes with <b>RATA Pro</b>. RATA keeps none of what is sent, and neither the text nor the answer is written to any log.</p>
+  <p>RATA&rsquo;s AI is in the desktop app. It sends mail to RATA&rsquo;s AI service, run by Anthropic, only when you press <b>Summarize</b>, <b>Translate</b> or <b>Run briefing</b>, and only from a mailbox you let it read. Nothing is sent on its own: not when RATA starts, not when mail arrives, and not on a timer. Translate comes with <b>RATA Base</b> and <b>RATA Pro</b>; the rest comes with <b>RATA Pro</b>. RATA keeps none of what is sent, and neither the text nor the answer is written to any log.</p>
 
   <h3 id="ai-mailboxes">Which mailboxes AI may read</h3>
   <p>The first time you use AI on a message from a mailbox, RATA asks, naming the mailbox: <b>Send this time</b>, <b>Always for this mailbox</b>, or <b>Not from this mailbox</b>. Run briefing asks about every mailbox it has not asked about yet, with a box to tick for each, and leaves out the ones you do not tick.</p>
@@ -495,9 +495,7 @@ footer a:hover{color:var(--ink)}
   <ul>
     <li><b>Translate</b>: the message&rsquo;s subject and its text, up to the first 12,000 characters.</li>
     <li><b>Summarize</b>: the sender&rsquo;s name (never the address), the subject, the day the message was sent, today&rsquo;s date, and the text, up to the first 12,000 characters.</li>
-    <li><b>Ask</b>: what Summarize sends, your question of up to 300 characters, and up to 3 earlier questions and answers about that message, since RATA keeps nothing between questions.</li>
-    <li><b>Draft a reply</b>: the sender&rsquo;s name, the subject, the message&rsquo;s own words without the earlier mail quoted under them, and the note you type. Never your signature or anyone&rsquo;s address. The draft lands in the composer for you to read and change, and nothing is sent until you press Send.</li>
-    <li><b>Run briefing</b>: the start of up to 25 recent messages in your inbox from the last 14 days, each with its sender&rsquo;s name, subject and the day it arrived.</li>
+    <li><b>Run briefing</b>: the start of up to 25 recent messages in your inbox from the last 14 days, each with its sender&rsquo;s name, subject and the day it arrived. It leaves out mailings, mail you have already answered and any mailbox you keep from AI, and says under its answer what it left out.</li>
   </ul>
   <p>The <a href="privacy.html#ai">privacy policy</a> says the same in full.</p>
 

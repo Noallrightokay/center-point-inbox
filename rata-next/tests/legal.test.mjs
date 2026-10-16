@@ -71,6 +71,17 @@ export default async function run(state) {
   } finally { await s.stop(); }
   if (!privacy || !terms) return;
   const P = visible(privacy), T = visible(terms);
+  /* Ask and Draft a reply (Assistant v1, P4 and P5). The relay answers both
+     already, but the page's controls come later, and the website and
+     Settings name each one only once the page has it, and then must (BUG-D:
+     sell nothing the app does not do). */
+  const APP = readFileSync(join(SITE, 'public', 'app.html'), 'utf8');
+  const HAS = { ask: /['"#]md-ask-q['"]/.test(APP), draft: /['"#]md-draft['"]/.test(APP) };
+  /* "a, b and c" or "a, b or c", leaving out what the app does not have. */
+  const listed = (items, last) => {
+    const xs = items.filter(Boolean);
+    return xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} ${last} ${xs.at(-1)}`;
+  };
 
   console.log('\n— linked from the three places a customer meets them —');
   {
@@ -174,9 +185,12 @@ export default async function run(state) {
     const proOnly = Object.entries(asks).filter(([, b]) => validate(b, PLANS.base).status === 403 && !!validate(b, PLANS.pro).task).map(([t]) => t);
     check(!!validate({ task: 'translate', text: 'x', to: 'fr' }, PLANS.base).task && proOnly.length === 4,
       `the relay allows translation on Base, and summaries, questions, drafts and the briefing only on Pro: ${proOnly.join(', ')}`);
-    check(T.includes('Translation is on Base and Pro; summaries, questions about a message, reply drafts and the briefing are on Pro. They run only when you press Translate, Summarize, Ask, Draft a reply or Run briefing, and RATA asks before the first time for each mailbox.'),
-      'and the terms say the same, and that RATA asks first for each mailbox');
-    check(T.includes('A reply draft is yours to read and change; RATA never sends it until you press Send.'), 'the terms say a reply draft is never sent until you press Send');
+    const proWords = listed(['summaries', HAS.ask && 'questions about a message', HAS.draft && 'reply drafts', 'the briefing'], 'and');
+    const buttons = listed(['Translate', 'Summarize', HAS.ask && 'Ask', HAS.draft && 'Draft a reply', 'Run briefing'], 'or');
+    check(T.includes(`Translation is on Base and Pro; ${proWords} are on Pro. They run only when you press ${buttons}, and RATA asks before the first time for each mailbox.`),
+      `and the terms say the same of what the app has (${buttons}), and that RATA asks first for each mailbox`);
+    check(T.includes('A reply draft is yours to read and change; RATA never sends it until you press Send.') === HAS.draft,
+      HAS.draft ? 'the terms say a reply draft is never sent until you press Send' : 'and say nothing of reply drafts until the app makes them');
   }
 
   console.log('\n— what the AI relay is sent, as lib/ai.js and app.html send it —');
@@ -195,27 +209,48 @@ export default async function run(state) {
     const qa = app.match(/const AI_Q=(\d+),AI_TURNS=(\d+),AI_ANSWER=(\d+),AI_NOTE=(\d+);/);
     check(!!qa && Number(qa[1]) === LIMITS.question && Number(qa[2]) === LIMITS.turns && Number(qa[3]) === LIMITS.answer && Number(qa[4]) === LIMITS.note,
       `the page asks within the relay's limits: a question of ${LIMITS.question}, ${LIMITS.turns} earlier turns, an answer of ${LIMITS.answer}, a note of ${LIMITS.note} (${qa && qa.slice(1).join(', ')})`);
-    check(P.includes(`your question of up to ${LIMITS.question} characters`) && P.includes(`up to ${LIMITS.turns} earlier questions and answers`)
-      && P.includes(`the note you type, up to ${thousands(LIMITS.note)} characters`),
-      `and the privacy page says them: up to ${LIMITS.question} characters, up to ${LIMITS.turns} earlier questions, up to ${LIMITS.note} characters`);
+    if (HAS.ask) {
+      check(P.includes(`your question of up to ${LIMITS.question} characters`) && P.includes(`up to ${LIMITS.turns} earlier questions and answers`),
+        `and the privacy page says them for Ask: up to ${LIMITS.question} characters, up to ${LIMITS.turns} earlier questions`);
+    }
+    if (HAS.draft) {
+      check(P.includes(`the note you type, up to ${thousands(LIMITS.note)} characters`), `and for Draft a reply: a note of up to ${LIMITS.note} characters`);
+    }
     const sumLine = (P.match(/Summarize \(Pro\) sends[^.]*\./) || [''])[0];
     check(!!sumLine && !/address/.test(sumLine) && sumLine.includes("the sender's name, the subject, the day the message was sent, today's date, and the text"),
       `Summarize sends the sender's name, never the address: "${sumLine}"`);
     check(P.includes('not for patient information') && T.includes('not for patient information'), 'both pages say RATA’s AI is not for patient information');
-    check(P.includes('mail from a mailbox you keep from AI is never sent') && P.includes('If you never press Summarize, Ask, Draft a reply, Translate or Run briefing'),
-      'the privacy page says a mailbox kept from AI is never sent, and names every AI button');
+    const every = listed(['Summarize', HAS.ask && 'Ask', HAS.draft && 'Draft a reply', 'Translate', 'Run briefing'], 'or');
+    check(P.includes('mail from a mailbox you keep from AI is never sent') && P.includes(`If you never press ${every}, none of your mail leaves your computer`),
+      `the privacy page says a mailbox kept from AI is never sent, and names every AI button the app has: ${every}`);
     /* Settings, under AI, says what each one sends in the privacy page's own
        words (AI_SENDS in app.html), so the two cannot drift apart. */
     const sends = app.match(/const AI_SENDS=\[([\s\S]*?)\];/);
     const lines = sends ? [...sends[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)].map(m => plain(m[1].replace(/\\u2019/g, '’'))) : [];
     const strays = lines.filter(l => !P.includes(l));
-    check(lines.length === 5 && strays.length === 0, `Settings says what each of the five sends in the privacy page's words: ${strays.length ? 'not on the page: ' + JSON.stringify(strays) : lines.length + ' lines'}`);
+    check(lines.length === 3 + HAS.ask + HAS.draft && strays.length === 0,
+      `Settings says what each AI button the app has sends, in the privacy page's words: ${strays.length ? 'not on the page: ' + JSON.stringify(strays) : lines.length + ' lines'}`);
     /* The home page's privacy column says the same, in fewer words (BUG-D:
        it once said only one message ever reached the relay, and that the
        site kept only an email, a plan and a key). */
     const home = visible(readFileSync(join(SITE, 'public', 'index.html'), 'utf8'));
     check(home.includes(`the first ${thousands(LIMITS.briefingEach)} characters of up to ${max} recent messages in your inbox from the last ${days} days`),
       'the home page gives the briefing the same numbers');
+    /* Ask and Draft a reply are named wherever RATA's AI is listed exactly
+       when the app has them: the privacy page, the terms, the home page,
+       the help page's AI section and Settings (AI_SENDS). */
+    const helpHtml = readFileSync(join(SITE, 'public', 'help.html'), 'utf8');
+    const helpAt = helpHtml.indexOf('<section id="ai"');
+    const H = helpAt < 0 ? '' : visible(helpHtml.slice(helpAt, helpHtml.indexOf('</section>', helpAt)));
+    const named = {
+      'Ask': [HAS.ask, { privacy: /\bAsk \(Pro\)/.test(P), terms: /\bAsk\b/.test(T), home: /question about a message/.test(home), help: /\bAsk\b/.test(H), settings: lines.some(l => /^Ask\b/.test(l)) }],
+      'Draft a reply': [HAS.draft, { privacy: /\bDraft a reply \(Pro\)/.test(P), terms: /Draft a reply|reply draft/.test(T), home: /reply draft/.test(home), help: /Draft a reply/.test(H), settings: lines.some(l => /^Draft a reply\b/.test(l)) }],
+    };
+    for (const [name, [has, where]] of Object.entries(named)) {
+      const wrong = Object.entries(where).filter(([, said]) => said !== has).map(([w]) => w);
+      check(helpAt >= 0 && !wrong.length,
+        `${name} is ${has ? '' : 'not yet '}in the app, and ${has ? 'every' : 'no'} page that lists RATA's AI names it${wrong.length ? `: ${has ? 'missing from' : 'named on'} ${wrong.join(', ')}` : ''}`);
+    }
     check(home.includes("Your preferences, if you use RATA's page here") && home.includes('The desktop app uploads none of this'),
       'and names the synced preferences, which the desktop app does not upload');
     check(home.includes('Cancel any time in the billing portal, which you reach from Settings when signed in at mailrata.org')

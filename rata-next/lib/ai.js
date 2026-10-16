@@ -115,9 +115,9 @@ export function languageName(tag) {
 
 /* Control characters go (tab and line breaks stay), and so do the bidi
    controls (LRM, RLM, the embeddings and overrides, the isolates), which can
-   make a task read differently from what it says: "Pay ‮KCABDNUFER"
+   make a task read differently from what it says: "Pay \u202eKCABDNUFER"
    shows as "Pay REFUNDBACK". Every answer passes through this too. */
-const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f‎‏‪-‮⁦-⁩]/g, '').slice(0, max);
+const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, max);
 const str = v => (typeof v === 'string' ? v : '');
 const own = (o, k) => typeof k === 'string' && Object.hasOwn(o, k);
 
@@ -244,10 +244,19 @@ const json = schema => ({ type: 'json_schema', schema });
 /* The request for one task: { max_tokens, system, user, format }. There is
    exactly one user message, and anything said earlier goes back fenced
    inside it as data, never as an assistant turn. */
+/* max_tokens for a summary and for an answer to a question. Each is JSON
+   now, with up to three quotes copied in the email's own script and up to
+   eight actions, and an answer that runs into max_tokens is broken JSON,
+   which reads as "no answer it could use". Mail in Chinese, Japanese or
+   Korean takes about one to one and a half tokens a character, so a full
+   answer can pass 700; 1 000 leaves room, and adds 400 x $5/M, $0.002, to
+   the hold. */
+const ANSWER_TOKENS = 1000;
+
 export function prompt(task, input) {
   if (task === 'summarize') {
     return {
-      max_tokens: 600,
+      max_tokens: ANSWER_TOKENS,
       system: `You summarise one email for the person who received it. ${UNTRUSTED} ${when(input)}Reply in ${input.lang}. "summary": plain text, no headings or bullet symbols, at most three short sentences saying what it is about, and what the reader is asked to do and by when, if anything. "quotes": up to three short passages, each copied exactly from the email, that the summary rests on. "actions": each thing the reader is asked to do, in at most 12 words, with "due" as YYYY-MM-DD when a date is given or clearly implied, else null; empty when nothing is asked.`,
       user: emailOf(input),
       format: json(SUMMARY_SCHEMA),
@@ -256,7 +265,7 @@ export function prompt(task, input) {
   if (task === 'ask') {
     const earlier = (input.turns || []).map(t => '\n' + fence('earlier', `Question: ${t.q}\nAnswer: ${t.a}`)).join('');
     return {
-      max_tokens: 600,
+      max_tokens: ANSWER_TOKENS,
       system: `You answer the reader's question about one email they received, using only that email. ${UNTRUSTED} ${EARLIER} ${when(input)}Reply in ${input.lang}, plain text, at most 120 words. If the email does not answer the question, set "said" to false and say so in one sentence. "quotes": up to three short passages, each copied exactly from the email, that the answer rests on. "actions": each thing the reader is asked to do that the answer mentions, as for a summary; empty when none.`,
       user: `${emailOf(input)}${earlier}\n\nThe reader's question: ${defuse(input.question || PRESETS[input.preset])}`,
       format: json(ASK_SCHEMA),

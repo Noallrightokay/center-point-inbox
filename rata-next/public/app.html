@@ -8032,7 +8032,7 @@ async function summarizeMessage(id){
   if(!box.isConnected)return;
   if(!goes){quick(AI_KEPT);return}
   title.textContent='Summary';text.textContent='Summarizing\u2026';
-  const r=await askAI({task:'summarize',subject:goes.subject,from:aiName(m),text:goes.text,day:isoDay(m.ts),today:isoDay(Date.now()),lang:userLang()});
+  const r=await askAI({task:'summarize',subject:goes.subject,from:aiName(m),text:goes.text,day:isoDay(m.ts),today:isoDay(Date.now()),lang:userLang()},gate.allowed);
   if(!box.isConnected)return;
   if(r.error){quick(r.error+' This one was made on this computer, without AI.');return}
   title.textContent='Summary by AI';text.textContent=r.text||'';note.textContent=allowanceNote(r.used);
@@ -8062,10 +8062,14 @@ async function summarizeMessage(id){
      aiBoxes {address: 'on'|'off'}, by mailEmailOf (absent is undecided)
      aiCheck false when the privacy check is off (absent is on)
      aiUsed  {month, used, at}: the allowance used, from the last answer
-   Turning AI or a mailbox off moves AI_GEN, and an answer that arrives after
-   that is not shown. */
+   Turning AI off moves AI_GEN, and turning one mailbox off moves that
+   mailbox's count in AI_GEN_BOX; an answer that arrives after either moved
+   is not shown, so an answer about one mailbox's mail outlives another
+   mailbox being turned off. A licence that has lapsed but can renew itself
+   is judged by its own plan (aiPlanHas). */
 const AI_Q=300,AI_TURNS=3,AI_ANSWER=600,AI_NOTE=500;
 let AI_GEN=0,AIOK_DONE=null,AIOK_ESC='cancel';
+const AI_GEN_BOX=new Map();
 const AI_OFF='AI is off. Turn it on in Settings, under AI.';
 const AI_BOX_OFF='AI is off for this mailbox. Turn it on in Settings, under AI.';
 const AI_BOXES_OFF='AI is off for these mailboxes. Turn it on in Settings, under AI.';
@@ -8073,12 +8077,13 @@ const AI_KEPT='Nothing was sent. This one was made on this computer, without AI.
 /* What each AI task is called where the plan does not have it. */
 const AI_WHAT={summarize:'Summarizing with AI',ask:'Asking about a message with AI',draft:'Drafting a reply with AI',tasks:'The AI briefing'};
 /* What each sends, in the privacy page's own words (legal.test checks that
-   each line is on the page). Shown in Settings, under AI. */
+   each line is on the page). Shown in Settings, under AI. Only what this
+   page can do is listed: Ask and Draft a reply join, here and on the
+   website, with their buttons (Assistant v1, P4 and P5), and legal.test
+   fails while the buttons and the words disagree (BUG-D). */
 const AI_SENDS=[
   'Translate (Base and Pro) sends the message’s subject and its text, up to the first 12,000 characters.',
   'Summarize (Pro) sends the sender’s name, the subject, the day the message was sent, today’s date, and the text, up to the first 12,000 characters.',
-  'Ask (Pro), a question about a message after its summary, sends what Summarize sends, your question of up to 300 characters, and up to 3 earlier questions and answers about that message, since RATA keeps nothing between questions.',
-  'Draft a reply (Pro) sends the sender’s name, the subject, the message’s own words without the earlier mail quoted under them, up to the first 12,000 characters, and the note you type, up to 500 characters. It never sends your signature or anyone’s address.',
   'Run briefing (Pro) sends, for each of up to 25 recent messages in your inbox from the last 14 days, leaving out mailings, mail you have already answered and any mailbox you keep from AI, the sender’s name, the subject, the day it arrived, the first 1,500 characters of its own text, and a number standing for the message, which RATA matches back to it on this computer.',
 ];
 /* What one message's question says goes, by task. */
@@ -8098,8 +8103,21 @@ function setAIBox(addr,v){
   const b=Object.assign({},S.settings.aiBoxes&&typeof S.settings.aiBoxes==='object'?S.settings.aiBoxes:{});
   if(v==='on'||v==='off')b[k]=v;else delete b[k];
   S.settings.aiBoxes=b;
-  if(v==='off')AI_GEN++;
+  if(v==='off')AI_GEN_BOX.set(k,(AI_GEN_BOX.get(k)||0)+1);
   save();
+}
+/* Whether the plan has an AI feature. A licence that has lapsed but can
+   still renew itself (BUG-L: this computer was offline over its expiry, or
+   the six-hourly renewal has not run yet) is judged by the plan it was
+   issued for: the request goes, the relay answers 'expired', and the bridge
+   renews the licence and asks once more. Asking can('ai') alone told a Pro
+   customer whose licence ran out overnight to buy Pro. The relay still
+   decides; this only keeps the page from deciding wrongly first. */
+function aiPlanHas(f){
+  if(can(f))return true;
+  const l=window.__RATA_NATIVE__&&LIC&&!LIC.licensed&&LIC.reason==='expired'&&LIC.token&&LIC.licence;
+  const k=l?String(l.plan||'').trim().toLowerCase():'';
+  return !!(k&&Object.prototype.hasOwnProperty.call(TIERS,k)&&TIERS[k][f]);
 }
 /* A linked mailbox's name, which is its address. */
 function boxName(addr){
@@ -8132,7 +8150,7 @@ const aiName=m=>aiCut(String(msgFrom(m)).replace(/<[^>]*>?/g,' ').replace(/\S*@\
 async function aiGate(task,msgs){
   const no=reason=>({ok:false,allowed:new Set(),reason:reason||''});
   if(!window.__RATA_NATIVE__)return no('');
-  if(task!=='translate'&&!can('ai'))return no(needPlan('ai',AI_WHAT[task]||'AI'));
+  if(task!=='translate'&&!aiPlanHas('ai'))return no(needPlan('ai',AI_WHAT[task]||'AI'));
   if(!aiOn())return no(AI_OFF);
   const addrs=[...new Set((msgs||[]).map(mailEmailOf).filter(Boolean))];
   if(!addrs.length)return no('RATA cannot tell which mailbox this came from, so it sent nothing.');
@@ -8205,7 +8223,8 @@ window.addEventListener('keydown',e=>{
 /* The privacy check, on the exact text about to go: `fields` is the
    request's free text by name ({subject, text}). Answers the fields to send
    (with every block-level finding replaced by [removed] when the customer
-   says Leave them out and send), or null when nothing should go.
+   says Leave them out and send), null when the customer said not to send,
+   or false when what it found could not be left out (it says so itself).
    Warn-level findings never stop a request. */
 async function aiScreen(fields){
   if(S.settings.aiCheck===false)return fields;
@@ -8220,6 +8239,14 @@ async function aiScreen(fields){
   if(said.choice==='asis')return fields;
   if(said.choice!=='redact')return null;
   const out={};for(const [k,v] of Object.entries(fields))out[k]=dlpRedact(v,prof);
+  /* What is left is checked as the whole was. A finding that runs from one
+     field into the next (a subject ending "MRN" over a text starting with
+     the number) is in neither field alone, so leaving them out took nothing
+     out of it; then nothing goes. */
+  if(runDLP(Object.values(out).join('\n'),prof).some(f=>f.sev==='block')){
+    toast('RATA could not leave out everything its check found, so nothing was sent.');
+    return false;
+  }
   return out;
 }
 /* Every match of a block-level rule of the profile, as RULES finds it
@@ -8298,10 +8325,13 @@ const AI_DROP=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\
 function aiCut(s,max){return String(s??'').replace(AI_DROP,'').slice(0,max)}
 function aiLonger(s,max){return String(s??'').replace(AI_DROP,'').length>max}
 /* One request to the relay, as the page wrote it. Every answer that says
-   how much of the month is used updates the meter in Settings; an answer
-   that arrives after AI or a mailbox was turned off is not shown. */
-async function askAI(body){
-  const gen=AI_GEN;
+   how much of the month is used updates the meter in Settings. `boxes` are
+   the mailboxes whose mail it carries: an answer that arrives after AI, or
+   one of those mailboxes, was turned off is not shown. */
+async function askAI(body,boxes){
+  const mine=[...(boxes||[])].map(a=>String(a).toLowerCase());
+  const genNow=()=>AI_GEN+'|'+mine.map(a=>AI_GEN_BOX.get(a)||0).join(',');
+  const gen=genNow();
   let r;
   try{r=await apiFetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
   catch(e){r={error:String(e&&e.message||e)}}
@@ -8311,7 +8341,7 @@ async function askAI(body){
     save();
     if($('#ai-used'))$('#ai-used').textContent=aiUsedText();
   }
-  if(gen!==AI_GEN)return {error:'Not shown: AI was turned off while it was answering.',reason:'off'};
+  if(gen!==genNow())return {error:'Not shown: AI was turned off while it was answering.',reason:'off'};
   return r;
 }
 /* The language RATA reads in, as a two-letter code the relay understands.
@@ -8336,9 +8366,9 @@ async function translateMessage(id){
   const whole=OPENED.get(id),to=userLang();
   const src=(whole&&!whole.error&&whole.text)||(await bodyOf(m))||m.prev;
   const goes=await aiScreen({subject:aiCut(m.subj,AI_SUBJ),text:aiCut(src,AI_TEXT)});
-  if(!goes){toast('Nothing was sent.');return}
+  if(!goes){if(goes===null)toast('Nothing was sent.');return}
   const btn=$('#md-translate');if(btn){btn.disabled=true;btn.textContent='Translating\u2026'}
-  const r=await askAI({task:'translate',subject:goes.subject,text:goes.text,to});
+  const r=await askAI({task:'translate',subject:goes.subject,text:goes.text,to},gate.allowed);
   if(r.error){toast(r.error);if(btn&&btn.isConnected){btn.disabled=false;btn.textContent='\u21c4 Translate'}return}
   TRANSLATED.set(id,{text:r.text||'',cut:!!r.cut||aiLonger(src,AI_TEXT),to,hidden:false,used:r.used});
   VIEWMODE.set(id,'text');
@@ -8404,13 +8434,64 @@ async function runLocalBrief(){
    important ones first. The panel opens on the quick version made on this
    computer; only pressing Run briefing sends anything. */
 const BRIEF_MAX=25,BRIEF_DAYS=14;
+/* Conversations, in one pass over what is held: messages linked by ids
+   alone (convoKeys, as conversationOf links them, with no cap), and the
+   newest message sent from here in each. comp(m) names m's conversation,
+   lastSent(c) is when the customer last wrote in it (0 for never). */
+function convoIndex(){
+  const up=new Map(),at=new Map();
+  const root=k=>{let r=k;while(up.get(r)!==r)r=up.get(r);while(up.get(k)!==r){const n=up.get(k);up.set(k,r);k=n}return r};
+  for(const m of S.messages){
+    if(!convoJoins(m))continue;
+    const ks=convoKeys(m);if(!ks.length)continue;
+    for(const k of ks)if(!up.has(k))up.set(k,k);
+    for(const k of ks.slice(1)){const a=root(ks[0]),b=root(k);if(a!==b)up.set(b,a)}
+    at.set(m,ks[0]);
+  }
+  const sent=new Map();
+  for(const [m,k] of at){if(!m.sent)continue;const c=root(k);if((m.ts||0)>(sent.get(c)||0))sent.set(c,m.ts||0)}
+  return {comp:m=>at.has(m)?root(at.get(m)):null,lastSent:c=>c==null?0:sent.get(c)||0};
+}
+/* A mailing: a list's unsubscribe address, or what Sort files under Updates
+   (a Sort rule the customer made wins, since categorize reads it first). */
+const briefMailing=m=>!!(m.unsub&&typeof m.unsub==='object'&&(m.unsub.https||m.unsub.mailto))||categorize(m)==='updates';
+/* What the briefing may send, from `list` (newest first): never a mailing,
+   never mail the customer has answered since (a message sent from here,
+   newer, in the same conversation), and, with the privacy check on, never
+   a message it finds something in, as the privacy page says. Texts are read
+   from disk only as far as it takes to find BRIEF_MAX, so what is counted as
+   left out is what would otherwise have gone. */
+async function briefPick(list){
+  const ix=convoIndex(),check=S.settings.aiCheck!==false;
+  const send=[],own=new Map(),left={mailings:0,answered:0,screened:0};
+  let i=0;
+  while(send.length<BRIEF_MAX&&i<list.length){
+    const batch=[];
+    for(;i<list.length&&batch.length<BRIEF_MAX-send.length;i++){
+      const m=list[i];
+      if(briefMailing(m)){left.mailings++;continue}
+      if(ix.lastSent(ix.comp(m))>(m.ts||0)){left.answered++;continue}
+      batch.push(m);
+    }
+    if(!batch.length)break;
+    const texts=await bodiesOf(batch);
+    for(const m of batch){
+      /* Each message's own words (not the mail quoted under them), the start
+         of them, as the privacy page says. */
+      const words=aiCut(newWords(texts.get(m.id)||'')||m.prev,AI_BRIEF_EACH);
+      if(check&&runDLP((m.subj||'')+'\n'+words,S.settings.profile).some(f=>f.sev==='block')){left.screened++;continue}
+      send.push(m);own.set(m.id,words);
+    }
+  }
+  return {send,own,left};
+}
 async function runAIBrief(){
   if(!window.__RATA_NATIVE__){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   /* Where AI cannot be used, the quick version made on this computer, and
      why. Nothing is sent. */
-  const local=async why=>{await runLocalBrief();if(why)out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(why)} Below is the quick version, made on this computer.</p>`)};
-  if(!can('ai')){await local(needPlan('ai','The AI briefing'));return}
+  const local=async(why,also)=>{await runLocalBrief();if(why)out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(why)} Below is the quick version, made on this computer.</p>`+(also||''))};
+  if(!aiPlanHas('ai')){await local(needPlan('ai','The AI briefing'));return}
   const cutoff=Date.now()-BRIEF_DAYS*864e5;
   const recent=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts);
   if(!recent.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
@@ -8420,37 +8501,27 @@ async function runAIBrief(){
   const gate=await aiGate('tasks',recent);
   if(gate.cancelled)return;
   if(!gate.ok){await local(gate.reason);return}
-  let pool=recent.filter(m=>gate.allowed.has(mailEmailOf(m)));
   const keptFrom=[...new Set(recent.map(mailEmailOf).filter(a=>a&&!gate.allowed.has(a)))].map(boxName);
-  btn.disabled=true;btn.textContent='Reading\u2026';
-  const texts=await bodiesOf(pool);
-  /* Each message's own words (not the mail quoted under them), the start
-     of them, as the privacy page says. A message the privacy check finds
-     something in is left out rather than asked about one by one. */
-  const own=m=>aiCut(newWords(texts.get(m.id)||'')||m.prev,AI_BRIEF_EACH);
-  let screened=0;
-  if(S.settings.aiCheck!==false){
-    const n=pool.length;
-    pool=pool.filter(m=>!runDLP((m.subj||'')+'\n'+own(m),S.settings.profile).some(f=>f.sev==='block'));
-    screened=n-pool.length;
-  }
-  pool=pool.slice(0,BRIEF_MAX);
-  if(!pool.length){btn.disabled=false;btn.textContent='Run briefing';await local('There is no recent mail RATA\u2019s AI may read.');return}
+  btn.disabled=true;btn.textContent='Reading…';
+  let {send:pool,own,left}=await briefPick(recent.filter(m=>gate.allowed.has(mailEmailOf(m))));
+  /* What was left out on this computer, said under the answer. */
+  const skipped=[left.mailings&&`${left.mailings} mailing${left.mailings===1?'':'s'}`,left.answered&&`${left.answered} you have answered`].filter(Boolean);
+  const leftOut=(keptFrom.length?`<p class="as-sum">Kept from AI: ${esc(keptFrom.join(', '))}.</p>`:'')
+    +(skipped.length?`<p class="as-sum">Left out on this computer: ${skipped.join(', ')}.</p>`:'')
+    +(left.screened?`<p class="as-sum">${left.screened} message${left.screened===1?' was':'s were'} left out because the privacy check found details in ${left.screened===1?'it':'them'}.</p>`:'');
+  if(!pool.length){btn.disabled=false;btn.textContent='Run briefing';await local('There is no recent mail RATA’s AI may read.',leftOut);return}
   /* Each message goes by its place in this list ("1" to "25"), never by
      m.id: an id is built from the mailbox's key, which comes from its
      address, and what is sent here reaches Anthropic. The relay takes any
      id string and answers only with ids it was sent (lib/ai.js). */
-  const sent=pool.map((m,i)=>({id:String(i+1),day:isoDay(m.ts),from:aiName(m),subject:aiCut(m.subj,AI_SUBJ),text:own(m)}));
+  const sent=pool.map((m,i)=>({id:String(i+1),day:isoDay(m.ts),from:aiName(m),subject:aiCut(m.subj,AI_SUBJ),text:own.get(m.id)}));
   /* Mail full of quotes or line breaks grows as JSON; the oldest go until
      the request is well under what the relay takes, and only what was sent
      is re-flagged below. */
   while(sent.length>1&&JSON.stringify(sent).length>AI_BRIEF_JSON)sent.pop();
   pool=pool.slice(0,sent.length);
-  const r=await askAI({task:'tasks',today:isoDay(Date.now()),messages:sent});
+  const r=await askAI({task:'tasks',today:isoDay(Date.now()),messages:sent},new Set(pool.map(mailEmailOf)));
   btn.disabled=false;btn.textContent='Run briefing';
-  /* What was left out on this computer, said under the answer. */
-  const leftOut=(keptFrom.length?`<p class="as-sum">Kept from AI: ${esc(keptFrom.join(', '))}.</p>`:'')
-    +(screened?`<p class="as-sum">${screened} message${screened===1?' was':'s were'} left out because the privacy check found details in ${screened===1?'it':'them'}.</p>`:'');
   /* A briefing that failed, or was cut short, says nothing about what needs
      doing: every flag stays as it was. */
   if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}

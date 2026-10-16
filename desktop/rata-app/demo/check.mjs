@@ -258,6 +258,10 @@ for (const form of FORMS) {
   const HOSPITAL = /reappointment|November ED|Shift swap|Quality committee|pay statement|sign-in prompt|Grand Rounds/;
   check(brief.sent.length > 0 && !brief.sent.some((s) => HOSPITAL.test(s)) && brief.boxes[LARK] === 'off' && brief.boxes[SALT] === 'off',
     `no hospital subject reaches the relay once both are left unticked: ${JSON.stringify(brief.sent)}`);
+  /* A mailing (the newsletter carries List-Unsubscribe) stays on this
+     computer too, as the privacy page says, and the answer says so. */
+  check(!brief.sent.some((s) => /autumn hikes/.test(s)) && /Left out on this computer: \d+ mailings?/.test(brief.out),
+    `the newsletter is left out of the briefing, and the answer says mailings were: ${JSON.stringify(brief.sent)}`);
   check(brief.flags.length >= 3 && brief.flags.every((f) => /: Demo: /.test(f)) && !brief.flags.some((f) => HOSPITAL.test(f)) && /need/.test(brief.out)
     && brief.out.includes('Kept from AI') && brief.out.includes(LARK) && brief.out.includes(SALT),
   `Run briefing flags the rest with the demo’s own tasks and names what it kept from AI: ${JSON.stringify(brief.flags)}`);

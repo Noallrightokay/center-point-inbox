@@ -60,6 +60,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
     if (j.ok) return { licensed: true, message: 'Licensed for RATA Pro until day ' + j.exp + '.', plan: { key: 'pro', label: 'RATA Pro', mail: null, chat: 3, split: true, ai: true },
       used: M.mailboxes.length, limit: null, renewSoon: j.exp - M.lic.now < 7 * 86400, token: M.lic.token, reason: null, epoch: M.epoch };
     return { licensed: false, plan: null, token: M.lic.token || null, reason: j.reason, renewSoon: j.reason === 'expired', used: M.mailboxes.length, limit: 0, epoch: M.epoch,
+      /* As core.rs: an expired licence is genuine, so the standing says whose
+         it is and the plan it was issued for (`lic.plan`, Pro unless set). */
+      licence: j.reason === 'expired' ? { sub: 'me@example.com', plan: M.lic.plan || 'pro', iat: j.exp - 30 * 86400, exp: j.exp } : null,
       message: j.reason === 'expired' ? 'This licence needs refreshing. Open RATA while online and it will renew itself.'
         : j.reason === 'missing' ? 'Enter your licence key to use RATA on this computer. Sign in at mailrata.org to find it.'
         : 'This licence could not be read. Sign in at mailrata.org to get a new one.' };
@@ -2570,6 +2573,43 @@ console.log('\n— the licence renews while RATA is open (BUG-L) —');
   asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
   check(asked.join(',') === 'v1.second.sig,v1.third.sig', `and only once: ${JSON.stringify(asked)}`);
   await pg.close();
+
+  /* A Pro licence that lapsed while this computer was offline is still Pro
+     to the page: Summarize goes, the relay says "expired", and the bridge
+     renews the licence and asks again. Judging it by can('ai') alone told a
+     Pro customer to buy Pro and never reached the renewal. */
+  aiExpired = (b) => b.licence === 'v1.first.sig';
+  pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine() }, renew: renewal,
+    ai: (b) => aiExpired(b) ? { status: 401, body: { error: 'Your licence needs renewing — RATA does this itself when it is online.', reason: 'expired' } }
+      : { body: { text: 'A short summary.', quotes: [], actions: [], cut: false, used: 0.1 } } });
+  const lapsed = await pg.evaluate(async (m) => {
+    S.settings.aiBoxes = { 'me@example.com': 'on' };
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true); __mock.refresh = null;
+    go('inbox'); openMail(m.id);
+    await new Promise((r) => setTimeout(r, 300));
+    __mock.lic.now = __mock.lic.genuine['v1.first.sig'] + 3600;
+    takeStanding(await __TAURI__.core.invoke('licence_status'));
+    const was = { licensed: LIC.licensed, plan: LIC.licence && LIC.licence.plan, can: can('ai') };
+    await summarizeMessage(m.id);
+    return { was, title: document.querySelector('#md-summary .md-ai-title')?.textContent, text: document.querySelector('#md-summary .md-ai-text')?.textContent,
+      note: document.querySelector('#md-summary .md-ai-note')?.textContent, licensed: LIC.licensed };
+  }, mk(8));
+  asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
+  check(!lapsed.was.licensed && lapsed.was.plan === 'pro' && !lapsed.was.can && asked.join(',') === 'v1.first.sig,v1.second.sig' && pg.__renewals === 1
+    && lapsed.title === 'Summary by AI' && lapsed.text === 'A short summary.' && lapsed.licensed && !/comes with RATA Pro/.test(lapsed.note || ''),
+  `a lapsed Pro licence is renewed through the relay's "expired", not told to buy Pro: ${JSON.stringify({ ...lapsed, asked, renewals: pg.__renewals })}`);
+  /* A lapsed Base licence is still Base: nothing goes, and the plan is named. */
+  const lapsedBase = await pg.evaluate(async () => {
+    __mock.lic.plan = 'base';
+    __mock.lic.now = __mock.lic.genuine['v1.second.sig'] + 3600;
+    takeStanding(await __TAURI__.core.invoke('licence_status'));
+    await summarizeMessage('me@example.com_8');
+    return { licensed: LIC.licensed, note: document.querySelector('#md-summary .md-ai-note')?.textContent };
+  });
+  check(!lapsedBase.licensed && pg.__ai.length === 2 && /^Summarizing with AI comes with RATA Pro/.test(lapsedBase.note || ''),
+    `and a lapsed Base licence sends nothing and names the plan: ${JSON.stringify({ ...lapsedBase, sent: pg.__ai.length })}`);
+  await pg.close();
 }
 
 console.log('\n— the AI relay is sent the start of a long message, never all of it —');
@@ -2709,7 +2749,8 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
     await autoSync();
   }, [mk('me@example.com', 1, { from_name: 'Ann Lee (ann@example.org)', subject: 'Lunch on Friday', body: 'Can you make lunch on Friday?\n\nOn Mon, Ann wrote:\n> old words' }),
     mk('work@example.net', 2, { from_name: 'Bo Li', subject: 'Contract', body: 'Please sign the contract by Monday.' }),
-    mk('me@example.com', 3, { subject: 'Call back', body: 'Please call about MRN 1234567 today.' })]);
+    mk('me@example.com', 3, { subject: 'Call back', body: 'Please call about MRN 1234567 today.' }),
+    mk('me@example.com', 4, { subject: 'Call back re MRN', body: '1234567 is the chart to pull.', ts: Date.now() - 20 * 86400e3 })]);
   check(pg.__ai.length === 0 && (await pg.evaluate(() => !S.settings.aiBoxes && !('aiOk' in S.settings))),
     `starting, opening a message, opening Assist and a refresh send nothing, and nothing is decided for anyone: ${pg.__ai.length} requests`);
   check(await pg.evaluate(() => { const m = migrate({ v: 6, settings: { name: 'x', aiOk: true }, linked: [], rules: [], folders: [], contacts: [], messages: [], documents: [], audit: [], counters: {} }); return !('aiOk' in m.settings); }),
@@ -2731,6 +2772,19 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
   const baseBrief = await pg.evaluate(async () => { openAssist(); await runAIBrief(); const t = document.querySelector('#as-out').textContent; closeAssist(); return t; });
   check(/The AI briefing comes with RATA Pro/.test(baseBrief) && pg.__ai.length === 0 && !(await pg.evaluate(() => document.querySelector('#aiok-ov').classList.contains('open'))),
     `and Run briefing makes the quick briefing and says the AI one is Pro's: ${JSON.stringify(baseBrief.slice(0, 120))}`);
+  /* Translate needs only a licence (§4): on Base it reaches the question
+     about the mailbox and, once the customer says so, the relay. */
+  await show(ME);
+  await pg.evaluate(() => { window.__p = translateMessage('me@example.com_1'); });
+  await pg.waitForSelector('#aiok-ov.open', { timeout: 3000 }).catch(() => {});
+  const baseTr = await pg.evaluate(() => ({ open: document.querySelector('#aiok-ov').classList.contains('open'), text: document.querySelector('#aiok-p').textContent }));
+  if (baseTr.open) await pg.click('#aiok-once');
+  await pg.evaluate(() => window.__p);
+  const tr = sent().at(-1) || {};
+  check(baseTr.open && /the subject and the text/.test(baseTr.text) && pg.__ai.length === 1 && tr.task === 'translate' && (await pg.evaluate(() => !S.settings.aiBoxes)),
+    `on Base, Translate still asks about the mailbox and goes: ${JSON.stringify({ asked: baseTr.open, sent: pg.__ai.length, task: tr.task })}`);
+  pg.__ai.length = 0;
+  await pg.evaluate(() => { TRANSLATED.clear(); VIEWMODE.delete('me@example.com_1'); });
   await pg.evaluate(async () => { __mock.plan = undefined; takeStanding(await apiFetch('/api/licence')); });
   void BASE;
 
@@ -2844,6 +2898,16 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
   await settle();
   s = sent().at(-1) || {};
   check(pg.__ai.length === 5 && /\[removed\]/.test(s.text) && !/1234567/.test(JSON.stringify(s)), `Leave them out sends [removed] in its place: ${JSON.stringify(s.text)}`);
+  /* A finding that runs from the subject into the text is in neither alone,
+     so leaving them out would take nothing out of it: then nothing goes. */
+  q = await ask('me@example.com_4');
+  const across = await pg.evaluate(() => document.querySelector('#aiok-dlp').textContent);
+  await pg.click('#aiok-redact');
+  await settle();
+  n = await note();
+  check(q.open && /Medical record number/.test(across) && pg.__ai.length === 5 && n.note === 'Nothing was sent. This one was made on this computer, without AI.'
+    && (await pg.evaluate(() => window.__toasts.includes('RATA could not leave out everything its check found, so nothing was sent.'))),
+  `Leave them out sends nothing when what it found spans the subject and the text: ${JSON.stringify({ found: across.slice(0, 60), sent: pg.__ai.length, note: n.note })}`);
   await pg.evaluate(async () => { S.settings.aiCheck = false; await summarizeMessage('me@example.com_3'); S.settings.aiCheck = true; });
   s = sent().at(-1) || {};
   check(pg.__ai.length === 6 && /1234567/.test(s.text), 'with the check off, nothing is asked');
@@ -2851,6 +2915,17 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
   /* The briefing: a box to tick per mailbox nobody has decided about. Cancel
      records and sends nothing; Save and run keeps the unticked ones from AI
      and sends only the ticked ones' mail, with the day of each. */
+  /* A mailing, and a message answered from here since, as the privacy page
+     says the briefing leaves out. */
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true);
+    __mock.refresh = null;
+  }, [mk('me@example.com', 5, { from_name: 'Trail News', from_addr: 'news@example.org', subject: 'Five autumn hikes', body: 'Five autumn hikes under two hours.',
+    unsubscribe: { https: 'https://example.org/leave' } }),
+  mk('me@example.com', 6, { from_name: 'Cy Park', from_addr: 'cy@example.org', subject: 'Room for Thursday', body: 'Can you book the room for Thursday?' }),
+  mk('me@example.com', 7, { id: 'me@example.com_sent_7', folder: 'sent', from_name: 'Me', from_addr: 'me@example.com', to_name: 'Cy Park', to_addr: 'cy@example.org',
+    subject: 'Re: Room for Thursday', body: 'Booked.', ts: Date.now() - 30_000, message_id: 'steer7@example.org', in_reply_to: 'steer6@example.org' })]);
   await pg.evaluate(() => { delete S.settings.aiBoxes; openAssist(); window.__p = runAIBrief(); });
   await pg.waitForSelector('#aiok-ov.open', { timeout: 3000 }).catch(() => {});
   const form = await pg.evaluate(() => ({ boxes: [...document.querySelectorAll('#aiok-boxes input')].map((b) => [b.dataset.aiok, b.checked, b.parentElement.textContent]),
@@ -2874,6 +2949,8 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
     `with today, the day of each, no address, and a message's own words without the mail quoted under them: ${JSON.stringify(s.messages && s.messages[0])}`);
   check(/Kept from AI: work@example\.net\./.test(brief.out) && /left out because the privacy check found details in it/.test(brief.out),
     `and the answer says what was kept from AI: ${JSON.stringify(brief.out.slice(-200))}`);
+  check(!JSON.stringify(s).includes('hikes') && !JSON.stringify(s).includes('Room for Thursday') && /Left out on this computer: 1 mailing, 1 you have answered\./.test(brief.out),
+    `a mailing and mail answered since are left out, and the answer says so: ${JSON.stringify(brief.out.slice(-260))}`);
   await pg.evaluate(() => closeAssist());
 
   /* Settings, under AI: each mailbox, the check, this month, what each
@@ -2882,28 +2959,44 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
   const set = await pg.evaluate(() => ({
     rows: [...document.querySelectorAll('#ai-list [data-aibox]')].map((c) => [c.dataset.aibox, c.checked, c.getAttribute('aria-label')]),
     check: document.querySelector('#set-aicheck').checked, used: document.querySelector('#ai-used').textContent,
-    sends: document.querySelectorAll('#ai-list .ai-sends li').length, help: document.querySelector('#ai-list a.ai-help')?.getAttribute('href'),
+    sends: [...document.querySelectorAll('#ai-list .ai-sends li')].map((li) => li.textContent).join('\n') === AI_SENDS.join('\n') ? AI_SENDS.length : -1,
+    help: document.querySelector('#ai-list a.ai-help')?.getAttribute('href'),
     text: document.querySelector('#ai-sec').textContent,
   }));
   check(JSON.stringify(set.rows) === JSON.stringify([['me@example.com', true, 'AI may read mail from me@example.com'], ['work@example.net', false, 'AI may read mail from work@example.net']]) && set.check,
     `a row per mailbox, named, as decided, and the check on: ${JSON.stringify(set.rows)}`);
-  check(/^About 20% of this month’s AI allowance used, as of .+\. It starts again on the 1st\.$/.test(set.used) && set.sends === 5 && set.help === 'https://mailrata.org/help#ai',
-    `this month's use, what each of the five sends, and the help page: ${JSON.stringify({ used: set.used, sends: set.sends, help: set.help })}`);
+  check(/^About 20% of this month’s AI allowance used, as of .+\. It starts again on the 1st\.$/.test(set.used) && set.sends >= 3 && set.help === 'https://mailrata.org/help#ai',
+    `this month's use, what each AI button sends, and the help page: ${JSON.stringify({ used: set.used, sends: set.sends, help: set.help })}`);
   await pg.click('#ai-forget');
   const after = await pg.evaluate(() => ({ boxes: S.settings.aiBoxes, words: [...document.querySelectorAll('#ai-list .set-row')].map((r) => r.textContent).filter((t) => /example/.test(t)) }));
   check(!after.boxes && after.words.length === 2 && after.words.every((t) => /Not decided yet/.test(t)), `Forget my answers makes every mailbox undecided again: ${JSON.stringify(after)}`);
-  /* Turning a mailbox off in Settings drops an answer still on its way. */
-  await pg.evaluate(() => { S.settings.aiBoxes = { 'me@example.com': 'on' }; renderAISettings(); });
+  /* Turning another mailbox off leaves an answer about this one alone: each
+     mailbox has its own count (AI_GEN_BOX). */
+  await pg.evaluate(() => { S.settings.aiBoxes = { 'me@example.com': 'on', 'work@example.net': 'on' }; renderAISettings(); });
+  let was = pg.__ai.length;
   hold = new Promise((r) => { release = r; });
   await show(ME);
   await pg.evaluate(() => { window.__p = summarizeMessage('me@example.com_1'); });
-  for (let k = 0; k < 50 && pg.__ai.length < 8; k++) await pg.waitForTimeout(50);
+  for (let k = 0; k < 50 && pg.__ai.length < was + 1; k++) await pg.waitForTimeout(50);
+  await pg.evaluate(() => go('set'));
+  await pg.click('#ai-list [data-aibox="work@example.net"]');
+  release(); hold = null;
+  await settle();
+  n = await note();
+  check(pg.__ai.length === was + 1 && n.text === 'A short summary.' && (await pg.evaluate(() => S.settings.aiBoxes['work@example.net'])) === 'off',
+    `turning another mailbox off leaves an answer about this one: ${JSON.stringify(n)}`);
+  /* Turning this mailbox off in Settings drops an answer still on its way. */
+  was = pg.__ai.length;
+  hold = new Promise((r) => { release = r; });
+  await show(ME);
+  await pg.evaluate(() => { window.__p = summarizeMessage('me@example.com_1'); });
+  for (let k = 0; k < 50 && pg.__ai.length < was + 1; k++) await pg.waitForTimeout(50);
   await pg.evaluate(() => go('set'));
   await pg.click('#ai-list [data-aibox="me@example.com"]');
   release(); hold = null;
   await settle();
   n = await note();
-  check(pg.__ai.length === 8 && /^Not shown/.test(n.note) && (await pg.evaluate(() => S.settings.aiBoxes['me@example.com'])) === 'off',
+  check(pg.__ai.length === was + 1 && /^Not shown/.test(n.note) && (await pg.evaluate(() => S.settings.aiBoxes['me@example.com'])) === 'off',
     `turning a mailbox off drops an answer still on its way: ${JSON.stringify(n)}`);
   await pg.close();
 }
