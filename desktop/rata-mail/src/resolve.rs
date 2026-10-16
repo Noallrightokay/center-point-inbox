@@ -225,9 +225,10 @@ impl Resolver {
     /// Where a name is an alias for, if it is one: the first CNAME answer,
     /// which is the name's own record. A failed lookup is no alias.
     ///
-    /// Not for a host RATA then connects to: on iOS, where both go to the
-    /// system's resolver, a CNAME question about a name that does not exist
-    /// holds up the address lookup of that name (`crate::dns_sd`).
+    /// Not for a name RATA then connects to or asks anything else about: on
+    /// iOS, where every question goes to the system's resolver, a CNAME
+    /// question about a name with no CNAME record holds up later questions
+    /// that reach that name, its addresses among them (`crate::dns_sd`).
     pub async fn cname(&self, name: &str) -> Option<String> {
         let target = self.cname_answer(name).await?;
         Some(target.trim_end_matches('.').to_string())
@@ -1463,40 +1464,29 @@ mod tests {
         #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
         fn an_alias_on_the_way_is_followed_and_not_taken_for_the_answer() {
             rt().block_on(async {
-                let r = system();
                 // Asked for the TXT records of an alias, the system hands
                 // back each alias it follows on the way, then what is at
-                // the end. Only that is the answer: the alias's TXT records
-                // are exactly those at the end of its chain, whatever they
-                // are, never an alias read as text. Only the chain's start
-                // is taken as known: autodiscover.microsoft.com is an alias
-                // (`a_cname_comes_from_the_system`).
+                // the end. Only that is the answer, whatever it holds: an
+                // alias's rdata is a name, which nothing gathered may read
+                // as. Only the chain's start is taken as known:
+                // autodiscover.microsoft.com is an alias
+                // (`a_cname_comes_from_the_system`). The chain is not walked
+                // with CNAME questions first: one about the name at its end
+                // makes the system wait out this question (`crate::dns_sd`).
                 let start = "autodiscover.microsoft.com";
-                let mut end = start.to_string();
-                let mut hops = 0;
-                while let Some(next) = r.cname(&end).await {
-                    hops += 1;
-                    assert!(hops <= 8, "{start}: more than 8 aliases, at {next}");
-                    end = next;
-                }
-                assert!(hops >= 1, "{start} is no alias");
-                let sorted = |mut found: Vec<Vec<u8>>| {
-                    found.sort();
-                    found
-                };
                 let t = Instant::now();
-                let (at_alias, ended) = dns_sd::asked(start, dns_sd::TXT).await;
+                let (found, ended) = dns_sd::asked(start, dns_sd::TXT).await;
                 let took = t.elapsed();
                 assert!(
                     ended == dns_sd::Ended::Answered && took < QUICK,
                     "TXT {start}: {ended:?} after {took:?}"
                 );
-                let (at_end, ended) = dns_sd::asked(&end, dns_sd::TXT).await;
-                assert_eq!(ended, dns_sd::Ended::Answered, "TXT {end}");
-                assert_eq!(
-                    sorted(at_alias),
-                    sorted(at_end),
-                    "{start} ({hops} aliases to {end})"
+                assert!(
+                    found
+                        .iter()
+                        .all(|rdata| records::txt(rdata).is_some()
+                            && records::cname(rdata).is_none()),
+                    "TXT {start}: {found:?}"
                 );
             });
         }
