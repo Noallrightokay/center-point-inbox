@@ -234,7 +234,7 @@ export default async function run(state) {
     const sql = readFileSync(join(SITE, 'database.sql'), 'utf8');
     const table = (sql.match(/create table if not exists public\.apple_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
     const cols = [...table.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz|uuid)/gm)].map(m => m[1]);
-    check(JSON.stringify(cols) === JSON.stringify(['original_transaction_id', 'product_id', 'plan', 'environment', 'expires_at',
+    check(JSON.stringify(cols) === JSON.stringify(['original_transaction_id', 'product_id', 'plan', 'environment', 'period_from', 'expires_at',
       'grace_until', 'revoked_at', 'signed_at', 'app_account_token', 'email', 'updated_at']),
       `an App Store subscription is kept as Apple's number, a product, a plan, an environment and dates: ${cols.join(', ')}`);
     const SAID = {
@@ -242,6 +242,7 @@ export default async function run(state) {
       product_id: 'the product and its plan',
       plan: 'the product and its plan',
       environment: 'whether it was bought in Apple\'s test environment',
+      period_from: 'when its current period began',
       expires_at: 'when it expires',
       grace_until: 'when a billing grace period ends if a renewal fails',
       revoked_at: 'when it was refunded or revoked',
@@ -257,7 +258,7 @@ export default async function run(state) {
       signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.desktop', environment: 'Production' };
     const written = [apple.appleRowOf(t, 'Production'), ...[apple.applePurchase(t, 'Production'), ...apple.APPLE_ACTED.map((type) =>
       apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production'))]
-      .flatMap((c) => (c ? [c.patch, c.insert, ...(c.later && c.later.values ? [c.later.values] : [])] : []))];
+      .flatMap((c) => (c ? [c.patch, c.insert, ...(c.fresh ? [c.fresh] : [])] : []))];
     const keys = new Set(written.flatMap(Object.keys));
     check(written.length > 2 && [...keys].every(k => cols.includes(k) && SAID[k]) && !keys.has('email') && !keys.has('app_account_token'),
       `what the code writes is only what the page names, never an address: ${[...keys].join(', ')}`);

@@ -89,7 +89,7 @@ const REVOKED = ['REFUND', 'REVOKE'];
 export const APPLE_ACTED = Object.freeze([...CURRENT, ...DATES, ...REVOKED, 'REFUND_REVERSED']);
 
 const AUTO_RENEWABLE = 'Auto-Renewable Subscription';
-const COLS = 'original_transaction_id,product_id,plan,environment,expires_at,grace_until,revoked_at,signed_at';
+const COLS = 'original_transaction_id,product_id,plan,environment,period_from,expires_at,grace_until,revoked_at,signed_at';
 
 /* ---- the licence's subject ------------------------------------------------ */
 
@@ -339,10 +339,14 @@ export function applePreferred(list) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
-/* When Apple signed it, which orders every write to a row. Apple always
-   says; something that does not is treated as the oldest there is, so it
-   never overwrites anything. */
+/* When Apple signed it, which orders the writes about one period of a
+   subscription (appleWrite). Apple always says; something that does not is
+   treated as the oldest there is, so it never overwrites anything. */
 const signedAt = (o) => iso(o && typeof o.signedDate === 'number' && Number.isFinite(o.signedDate) ? o.signedDate : 0);
+/* When the period a transaction pays for began, its purchaseDate, which
+   orders the periods of a subscription (appleWrite). Treated as the
+   earliest there is when missing, as signedAt is. */
+const periodFrom = (t) => iso(t && typeof t.purchaseDate === 'number' && Number.isFinite(t.purchaseDate) ? t.purchaseDate : 0);
 
 /* A row as a transaction describes it. */
 export function appleRowOf(t, environment) {
@@ -350,120 +354,124 @@ export function appleRowOf(t, environment) {
     product_id: t.productId,
     plan: APPLE_PRODUCTS[t.productId],
     environment,
+    period_from: periodFrom(t),
     expires_at: iso(t.expiresDate),
     revoked_at: typeof t.revocationDate === 'number' ? iso(t.revocationDate) : null,
     signed_at: signedAt(t),
   };
 }
 
-/* What a notification changes, as { patch, insert, upTo, later }, or null
-   when it changes nothing RATA keeps: another type, another product, or no
-   transaction to read. `patch` is what it writes over a row it is newer
-   than; `insert` the whole row, for a subscription not seen yet; `upTo`,
-   when set, a further condition on the row it writes over: an expiry no
-   later than this; `later`, what it writes over a row that records an
-   earlier period than its transaction's (appleWrite).
-
-   A row records one period of the subscription, the one its expiry ends,
-   and a transaction for a later period supersedes it whenever Apple signed
-   it: Apple's notifications can arrive in any order (one answered 500 comes
-   back hours later), so a refund of the period before, signed after the
-   renewal, may be recorded first, and the renewal must still land. So
-   `later` is { before, values }: over a row whose expiry is earlier than
-   `before`, this transaction's, write `values` (the patch when omitted)
-   whatever Apple signed for that row. For the types that carry the
-   subscription's latest transaction that is the patch, which already says
-   whether the transaction is revoked; for the rest the whole row, so the
-   row records the later period as Apple describes it: a refund of a
-   period it had not heard of yet is recorded as that period's (and a
-   transaction for it signed before the refund then finds it), and a
-   transaction that is not revoked clears a refund of an earlier one. An
-   upgraded transaction has no `later`: the subscription it was upgraded
-   to supersedes it, whatever their expiries. For the same period, or an
-   earlier one, signed_at orders the writes as before.
+/* What a notification changes, as { patch, insert, fresh }, or null when it
+   changes nothing RATA keeps: another type, another product, no
+   transaction to read, or a transaction the customer upgraded from
+   (`isUpgraded`). The subscription it was upgraded to has a transaction of
+   its own, which writes the row, and Apple refunding what was left of the
+   old one is no refund of the new one. `insert` is the whole row, for a
+   subscription not seen yet; `patch` what it writes over a row recording
+   the same period (appleWrite); `fresh`, when set, what it writes over a
+   row recording an earlier period, and the patch otherwise.
 
    - SUBSCRIBED, DID_RENEW, DID_CHANGE_RENEWAL_PREF, OFFER_REDEEMED: the
-     product, the plan, the expiry and the environment of the transaction
-     it carries, which is the subscription's latest. And whether that
-     transaction is revoked, so a customer who resubscribes after a refund
-     is live again (its new transaction carries no revocationDate).
+     product, the plan, the period, the expiry and the environment of the
+     transaction it carries, which is the subscription's latest. And whether
+     that transaction is revoked, so a customer who resubscribes after a
+     refund is live again (its new transaction carries no revocationDate).
    - DID_FAIL_TO_RENEW, EXPIRED, GRACE_PERIOD_EXPIRED: only the dates, the
      expiry and the end of a billing grace period (gracePeriodExpiresDate,
      which DID_FAIL_TO_RENEW carries with the subtype GRACE_PERIOD). The row
      is simply not live once they have passed.
-   - REFUND, REVOKE: when it was revoked. REFUND_REVERSED: no longer. The
-     row is the whole subscription, and a refund can be of a period that
-     has already ended, while the one paid for now goes on. So these write
-     only over a row whose expiry is no later than the refunded
-     transaction's (`upTo`): a row recording that period, or one that has
-     not heard of it yet. A refund of an earlier period changes nothing, and a
-     reversal of one does not undo a refund of the current period. */
+   - REFUND, REVOKE: when it was revoked. REFUND_REVERSED: no longer. A
+     refund is of one period, and can be of one that has already ended
+     while the one paid for now goes on, so these change only the period
+     their transaction is for: a refund of an earlier period than the row
+     records changes nothing, and a reversal of one does not undo a refund
+     of the current period.
+
+   For the last two groups a row recording an earlier period gets the whole
+   row as the transaction describes it (`fresh`), not only the dates or the
+   revocation: a refund of a period the row has not heard of yet is
+   recorded as that period's, so the period's own transaction from before
+   the refund then finds it, and a later period that is not revoked
+   replaces an earlier one that was. */
 export function appleChange(n, t, r, environment) {
   const type = n && n.notificationType;
   if (!APPLE_ACTED.includes(type)) return null;
   if (!t || !appleIdOk(t.originalTransactionId) || !Object.hasOwn(APPLE_PRODUCTS, String(t.productId))) return null;
   if (typeof t.expiresDate !== 'number') return null;
+  if (t.isUpgraded === true) return null;
   const at = signedAt(n);
   const grace = r && typeof r.gracePeriodExpiresDate === 'number' ? iso(r.gracePeriodExpiresDate) : null;
   const whole = { ...appleRowOf(t, environment), grace_until: grace, signed_at: at };
-  let patch;
-  let upTo = null;
   if (CURRENT.includes(type)) {
-    const { product_id, plan, expires_at, revoked_at } = whole;
-    patch = { product_id, plan, expires_at, environment, revoked_at, signed_at: at };
-  } else if (DATES.includes(type)) {
+    const { product_id, plan, period_from, expires_at, revoked_at } = whole;
+    const patch = { product_id, plan, environment, period_from, expires_at, revoked_at, signed_at: at };
+    return { patch, insert: { ...whole, ...patch }, fresh: null };
+  }
+  let patch;
+  if (DATES.includes(type)) {
     const inGrace = type !== 'DID_FAIL_TO_RENEW' || n.subtype === 'GRACE_PERIOD';
     patch = { expires_at: whole.expires_at, grace_until: inGrace ? grace : null, signed_at: at };
   } else if (REVOKED.includes(type)) {
     patch = { revoked_at: iso(typeof t.revocationDate === 'number' ? t.revocationDate : n.signedDate || Date.now()), signed_at: at };
-    upTo = whole.expires_at;
   } else {
     patch = { revoked_at: null, signed_at: at };
-    upTo = whole.expires_at;
   }
   const insert = { ...whole, ...patch };
-  const later = t.isUpgraded === true ? null
-    : CURRENT.includes(type) ? { before: whole.expires_at } : { before: whole.expires_at, values: insert };
-  return { patch, insert, upTo, later };
+  return { patch, insert, fresh: insert };
 }
 
 /* What a live transaction the app sent changes (/api/licence/apple): the
-   whole row as it describes it, over a row Apple signed nothing newer for,
-   or one that records an earlier period (appleChange's `later`). */
+   row as it describes it, over a row recording the same period or an
+   earlier one (appleWrite). An upgraded transaction never gets here, since
+   appleIgnored refuses it. */
 export function applePurchase(t, environment) {
   const row = appleRowOf(t, environment);
-  return { patch: row, insert: row, later: t.isUpgraded === true ? null : { before: row.expires_at } };
+  return { patch: row, insert: row, fresh: null };
 }
 
 /* ---- the row -------------------------------------------------------------- */
 
-/* Write what a transaction or notification says, never over a row Apple
-   signed something newer for, unless that row records an earlier period:
-   the update is guarded in the database, so two deliveries racing each
-   other cannot both pass a check and then both write. A row not there yet
-   is inserted; if another request inserted it in between, the guarded
-   update is tried once more. `upTo` (appleChange) narrows the signed_at
-   guard to a row whose expiry is no later than it. `later` (appleChange,
-   applePurchase) writes over a row whose expiry is earlier than
-   `later.before` whatever its signed_at: in one update with the signed_at
-   guard when it writes the patch itself, else first, so a row recording
-   an earlier period takes `later.values` rather than the patch. Answers
-   { row, wrote } with the row as it stands after (the newer one, when
-   this was older), or { error }. */
-export async function appleWrite(sb, id, { patch, insert, upTo = null, later = null }) {
+/* Write what a transaction or notification says, in the order of the
+   subscription's periods and, within one period, of when Apple signed it.
+   A row records one period, the one that began at its period_from: the
+   transaction's purchaseDate. Renewals, upgrades, downgrades,
+   resubscriptions and offers each begin a period later than the one
+   before, however long each lasts; the expiry would not do, since a
+   period paid for in advance (an introductory offer of several months, an
+   offer code) can end after the one that replaced it.
+
+   So a row's key is (period_from, signed_at), and a write goes through
+   only when its own key is no lower: over a row recording an earlier
+   period, or the same period with what Apple signed no later. The key
+   never goes down. Apple's notifications can arrive in any order (one
+   answered 500 comes back hours later) and end as if they had come in
+   order: a renewal delivered after a refund of the period before it still
+   lands, and nothing about an earlier period, whenever Apple signed it,
+   changes a row recording a later one. A transaction replayed after its
+   refund finds the refund. The guard is in the database, so two deliveries
+   racing each other cannot both pass a check and then both write.
+
+   Without `fresh` it is one update. With it, a row recording an earlier
+   period takes `fresh` and one recording the same period the patch, in two
+   updates whose guards cannot both hold. A row not there yet is inserted;
+   if another request inserted it in between, the guarded update is tried
+   once more. Answers { row, wrote } with the row as it stands after (the
+   newer one, when this was older), or { error }. */
+export async function appleWrite(sb, id, { patch, insert, fresh = null }) {
   const table = () => sb.from('apple_subscriptions');
   const update = async (values, guard) => {
     const { data, error } = await guard(table().update(values).eq('original_transaction_id', id)).select(COLS);
     if (error) throw error;
     return data && data.length ? data[0] : null;
   };
-  const newer = (q) => (upTo ? q.lte('signed_at', patch.signed_at).lte('expires_at', upTo) : q.lte('signed_at', patch.signed_at));
+  const from = insert.period_from;
+  const signed = insert.signed_at;
   /* An ISO time holds no comma or parenthesis, so it needs no quoting in
      PostgREST's or=(...), as the Stripe webhook's orderGuard relies on. */
   const guarded = async () => {
-    if (!later) return update(patch, newer);
-    if (!later.values && !upTo) return update(patch, (q) => q.or(`signed_at.lte.${patch.signed_at},expires_at.lt.${later.before}`));
-    return (await update(later.values || patch, (q) => q.lt('expires_at', later.before))) || update(patch, newer);
+    if (!fresh) return update(patch, (q) => q.or(`period_from.lt.${from},and(period_from.eq.${from},signed_at.lte.${signed})`));
+    return (await update(fresh, (q) => q.lt('period_from', from)))
+      || update(patch, (q) => q.eq('period_from', from).lte('signed_at', signed));
   };
   try {
     let row = await guarded();

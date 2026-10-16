@@ -3,10 +3,11 @@
    App Store Server Notifications.
 
    What is worth proving is that only Apple's signature unlocks anything,
-   and only for a live RATA subscription; that nothing older Apple signed
-   ever undoes something newer; that a fault at this end issues nothing it
-   cannot record; and that an `apple:` subject is never taken for an
-   address. Apple is played by a certificate chain made in the test
+   and only for a live RATA subscription; that nothing about an earlier
+   period of a subscription, nor older news of the same one, ever undoes
+   something newer, in whatever order it arrives; that a fault at this end
+   issues nothing it cannot record; and that an `apple:` subject is never
+   taken for an address. Apple is played by a certificate chain made in the test
    (apple-chain.mjs), with Apple's marker extensions, which the servers here
    are told to trust instead of Apple's roots (APPLE_TEST_ROOT); Supabase by
    a stand-in that keeps apple_subscriptions in memory and applies
@@ -21,6 +22,7 @@ import { makeChain, signJws, unsignedJws } from './apple-chain.mjs';
 import { generateKeys, issue, check as checkLicence } from '../lib/licence.js';
 import { APPLE_PRODUCTS, PLANS, ORDER } from '../lib/plan.js';
 import * as apple from '../lib/apple.js';
+import { createClient } from '@supabase/supabase-js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE = join(HERE, '..');
@@ -106,26 +108,76 @@ function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(
   }, signer || chain);
 }
 
+/* PostgREST's filters, read and applied as PostgREST and Postgres do, for
+   the stand-in below. A query parameter is `col=op.value`, or `or=(...)`
+   and `and=(...)` holding a comma-separated list of `col.op.value`,
+   `and(...)` and `or(...)`, nested to any depth; the top-level parameters
+   all hold at once. A comparison with NULL is unknown, so no match, and
+   `is.null` asks for one. Times compare as times. Values here are ids and
+   ISO times, which hold no comma or parenthesis, so a quoted value is not
+   read; anything this does not know (an operator, `not.`, a quote) throws,
+   and the stand-in answers 400, so a test can never pass on a filter it
+   ignored. */
+const PG_OPS = ['eq', 'lt', 'lte', 'gt', 'gte', 'is'];
+function pgLeaf(col, rest) {
+  const i = rest.indexOf('.');
+  const op = i > 0 ? rest.slice(0, i) : '';
+  const val = rest.slice(i + 1);
+  if (!/^[a-z_]+$/.test(col) || !PG_OPS.includes(op) || /["()]/.test(val) || (op === 'is' && val !== 'null')) {
+    throw new Error(`the stand-in does not read ${col}=${rest}`);
+  }
+  return { col, op, val };
+}
+function pgList(text) {
+  const parts = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of text) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (depth < 0) throw new Error(`unbalanced: ${text}`);
+    if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; } else cur += ch;
+  }
+  if (depth !== 0) throw new Error(`unbalanced: ${text}`);
+  parts.push(cur);
+  return parts.map((f) => {
+    const m = /^(and|or)\((.*)\)$/.exec(f);
+    if (m) return { op: m[1], all: pgList(m[2]) };
+    const i = f.indexOf('.');
+    if (i < 1) throw new Error(`the stand-in does not read ${f}`);
+    return pgLeaf(f.slice(0, i), f.slice(i + 1));
+  });
+}
+function pgFilters(params) {
+  return [...params].filter(([k]) => !['select', 'on_conflict', 'columns'].includes(k)).map(([k, v]) => {
+    if (k === 'or' || k === 'and') {
+      const m = /^\((.*)\)$/.exec(v);
+      if (!m) throw new Error(`the stand-in does not read ${k}=${v}`);
+      return { op: k, all: pgList(m[1]) };
+    }
+    return pgLeaf(k, v);
+  });
+}
+const pgTime = (v) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT/.test(v) ? Date.parse(v) : NaN);
+function pgHolds(row, f) {
+  if (f.op === 'or') return f.all.some((g) => pgHolds(row, g));
+  if (f.op === 'and') return f.all.every((g) => pgHolds(row, g));
+  const have = row[f.col];
+  if (f.op === 'is') return have === null || have === undefined;
+  if (have === null || have === undefined) return false;
+  const a = pgTime(String(have));
+  const b = pgTime(f.val);
+  const [x, y] = Number.isNaN(a) || Number.isNaN(b) ? [String(have), f.val] : [a, b];
+  return { eq: x === y, lt: x < y, lte: x <= y, gt: x > y, gte: x >= y }[f.op];
+}
+
 /* Supabase, for apple_subscriptions (and subscriptions, which only a
    Stripe licence's renewal may ask). `mode`: 'ok', 'missing' (database.sql
-   section 7 never ran: PostgREST's PGRST205) or 'broken'. */
+   section 7 never ran: PostgREST's PGRST205) or 'broken'. `queries` keeps
+   each request's method and query string. */
 async function fakeSupabase() {
-  const fake = { rows: new Map(), mode: 'ok', calls: [] };
-  const filter = (col, v) => { const i = v.indexOf('.'); return { col, op: v.slice(0, i), val: v.slice(i + 1) }; };
-  /* or=(a.op.v,b.op.v), as supabase-js writes .or(): any one of them. No
-     value here holds a comma (they are ids and ISO times). */
-  const filtersOf = (url) => [...url.searchParams].filter(([k]) => !['select', 'on_conflict'].includes(k))
-    .map(([k, v]) => (k === 'or'
-      ? { op: 'or', any: v.replace(/^\(|\)$/g, '').split(',').map((f) => { const i = f.indexOf('.'); return filter(f.slice(0, i), f.slice(i + 1)); }) }
-      : filter(k, v)));
-  const holds = (row, { col, op, val, any }) => {
-    if (op === 'or') return any.some((f) => holds(row, f));
-    if (op === 'eq') return String(row[col]) === val;
-    if (op === 'lte') return row[col] != null && Date.parse(row[col]) <= Date.parse(val);
-    if (op === 'lt') return row[col] != null && Date.parse(row[col]) < Date.parse(val);
-    return false;
-  };
-  const matches = (row, fs) => fs.every((f) => holds(row, f));
+  const fake = { rows: new Map(), mode: 'ok', calls: [], queries: [] };
+  const matches = (row, fs) => fs.every((f) => pgHolds(row, f));
   const srv = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     let raw = '';
@@ -133,11 +185,13 @@ async function fakeSupabase() {
     req.on('end', () => {
       const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
       fake.calls.push(`${req.method} ${url.pathname}`);
+      fake.queries.push(`${req.method} ${url.pathname}?${decodeURIComponent(url.search.slice(1))}`);
       if (url.pathname === '/rest/v1/subscriptions') return json(200, []);
       if (url.pathname !== '/rest/v1/apple_subscriptions') return json(404, { message: 'not in the stand-in' });
       if (fake.mode === 'missing') return json(404, { code: 'PGRST205', details: null, hint: null, message: "Could not find the table 'public.apple_subscriptions' in the schema cache" });
       if (fake.mode === 'broken') return json(500, { code: 'XX000', details: null, hint: null, message: 'disk on fire' });
-      const fs = filtersOf(url);
+      let fs;
+      try { fs = pgFilters(url.searchParams); } catch (e) { return json(400, { code: 'PGRST100', message: e.message }); }
       if (req.method === 'GET') return json(200, [...fake.rows.values()].filter((r) => matches(r, fs)));
       if (req.method === 'PATCH') {
         const patch = JSON.parse(raw);
@@ -333,8 +387,67 @@ export default async function run(state) {
     check(threw, 'a subject is made only from Apple\'s kind of number');
   }
 
+  console.log('\n— the stand-in for Supabase reads PostgREST\'s filters as PostgREST does —');
+  {
+    const P = '2026-01-10T00:00:00.000Z';
+    const S = '2026-01-12T00:00:00.000Z';
+    const q = new URLSearchParams();
+    q.append('original_transaction_id', 'eq.7');
+    q.append('or', `(period_from.lt.${P},and(period_from.eq.${P},signed_at.lte.${S}))`);
+    const fs = pgFilters(q);
+    const row = (from, signed, id = '7') => ({ original_transaction_id: id, period_from: from, signed_at: signed });
+    const cases = [
+      ['an earlier period, signed later', row('2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z'), true],
+      ['the same period, signed earlier', row(P, '2026-01-11T00:00:00.000Z'), true],
+      ['the same period, signed at the same moment', row(P, S), true],
+      ['the same period, the time written as Postgres writes it', row('2026-01-10T00:00:00+00:00', S), true],
+      ['the same period, signed later', row(P, '2026-01-13T00:00:00.000Z'), false],
+      ['a later period, signed earlier', row('2026-01-11T00:00:00.000Z', '2026-01-01T00:00:00.000Z'), false],
+      ['no period (NULL)', row(null, '2026-01-01T00:00:00.000Z'), false],
+      ['another subscription', row('2026-01-01T00:00:00.000Z', S, '8'), false],
+    ];
+    const wrong = cases.filter(([, r, want]) => fs.every((f) => pgHolds(r, f)) !== want).map(([w]) => w);
+    check(wrong.length === 0, `or=(lt, and(eq, lte)) holds where Postgres would, and only there: ${wrong.join('; ') || `${cases.length} cases`}`);
+    const isNull = pgFilters(new URLSearchParams('period_from=is.null'))[0];
+    check(pgHolds(row(null, S), isNull) && !pgHolds(row(P, S), isNull), 'is.null asks for NULL');
+    const nested = pgFilters(new URLSearchParams('or=(and(a.eq.1,or(b.eq.2,c.eq.3)),d.eq.4)'));
+    const nests = [[{ a: '1', b: '2' }, true], [{ a: '1', c: '3' }, true], [{ a: '1' }, false], [{ d: '4' }, true], [{ b: '2', c: '3' }, false]];
+    check(nests.every(([r, want]) => nested.every((f) => pgHolds(r, f)) === want), 'and() and or() nest to any depth');
+    const unread = ['a=not.eq.1', 'a=like.x*', 'or=(a.eq.1', 'or=a.eq.1', 'a=eq."1,2"', 'a=is.true', 'or=(a.eq.1,b)'].filter((bad) => {
+      try { pgFilters(new URLSearchParams(bad)); return true; } catch { return false; }
+    });
+    check(unread.length === 0, `and whatever it does not read is refused, not ignored: ${unread.join(', ') || 'all seven'}`);
+  }
+
   /* The servers. Each case that changes a setting needs its own. */
   const sbx = await fakeSupabase();
+
+  console.log('\n— what appleWrite asks the database —');
+  {
+    /* Through supabase-js itself, so the stand-in is shown the query
+       PostgREST would be. */
+    const sb = createClient(sbx.url, fakeSupabaseKey('service_role'), { auth: { persistSession: false } });
+    const t = txn();
+    const id = t.originalTransactionId;
+    const from = new Date(t.purchaseDate).toISOString();
+    const signed = new Date(t.signedDate).toISOString();
+    const first = await apple.appleWrite(sb, id, apple.applePurchase(t, 'Production'));
+    const n = sbx.fake.queries.length;
+    const again = await apple.appleWrite(sb, id, apple.applePurchase(t, 'Production'));
+    const asked = sbx.fake.queries.slice(n);
+    check(first.wrote && again.wrote && asked.length === 1 && asked[0].startsWith('PATCH /rest/v1/apple_subscriptions?')
+      && asked[0].includes(`original_transaction_id=eq.${id}`) && asked[0].includes(`or=(period_from.lt.${from},and(period_from.eq.${from},signed_at.lte.${signed}))`),
+      `a purchase is one update, over a row of an earlier period or of the same one signed no later: ${asked[0] || 'nothing asked'}`);
+    const at = Date.now() + 1000;
+    const refund = apple.appleChange({ notificationType: 'REFUND', signedDate: at }, { ...t, revocationDate: at }, null, 'Production');
+    const m = sbx.fake.queries.length;
+    const r = await apple.appleWrite(sb, id, refund);
+    const two = sbx.fake.queries.slice(m);
+    const stamp = new Date(at).toISOString();
+    check(r.wrote && !!r.row.revoked_at && two.length === 2 && two[0].includes(`period_from=lt.${from}`) && two[1].includes(`period_from=eq.${from}`) && two[1].includes(`signed_at=lte.${stamp}`),
+      `a refund is two: the whole row over an earlier period, else the revocation over the same period: ${two.map((x) => x.split('?')[1].replace(/&select=.*/, '')).join(' | ')}`);
+    check(r.row.period_from === from && r.row.expires_at === new Date(t.expiresDate).toISOString(), 'and the row still records the period it did');
+  }
   const base = {
     SUPABASE_URL: sbx.url, SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
     LICENCE_PRIVATE_KEY: keys.privateKey, LICENCE_PUBLIC_KEY: keys.publicKey,
@@ -469,27 +582,27 @@ export default async function run(state) {
       const t = txn({ signedDate: Date.now() - 10 * DAY });
       sbx.fake.rows.set(t.originalTransactionId, {
         original_transaction_id: t.originalTransactionId, product_id: PRO, plan: 'pro', environment: 'Production',
-        expires_at: new Date(t.expiresDate).toISOString(), grace_until: null, revoked_at: new Date(Date.now() - DAY).toISOString(),
+        period_from: new Date(t.purchaseDate).toISOString(), expires_at: new Date(t.expiresDate).toISOString(), grace_until: null, revoked_at: new Date(Date.now() - DAY).toISOString(),
         signed_at: new Date(Date.now() - DAY).toISOString(), app_account_token: null, email: null,
       });
       const replay = await post([signJws(t, chain)]);
       check(refusal(replay.d, 'no-subscription', NOTHING_LIVE) && !!rowOf(t).revoked_at,
         'a transaction Apple signed before the refund that is recorded unlocks nothing, and the refund stays');
-      const again = txn({ originalTransactionId: t.originalTransactionId, signedDate: Date.now() });
+      const again = txn({ originalTransactionId: t.originalTransactionId, purchaseDate: Date.now() - 1000, signedDate: Date.now() });
       const back = await post([signJws(again, chain)]);
       check(back.d.licensed === true && rowOf(t).revoked_at === null && rowOf(t).signed_at === new Date(again.signedDate).toISOString(),
         'one signed after it, with no revocation (a new subscription), unlocks again and is recorded');
 
       const b = txn({ productId: BASE });
       await post([signJws(b, chain)]);
-      const older = txn({ originalTransactionId: b.originalTransactionId, productId: PRO, expiresDate: b.expiresDate, signedDate: b.signedDate - DAY });
+      const older = txn({ originalTransactionId: b.originalTransactionId, productId: PRO, purchaseDate: b.purchaseDate, expiresDate: b.expiresDate, signedDate: b.signedDate - DAY });
       const o = await post([signJws(older, chain)]);
       check(o.d.licensed === true && o.d.plan === 'base' && rowOf(b).plan === 'base' && rowOf(b).product_id === BASE,
         `an older Pro transaction for the same period never raises a newer Base row, and the licence follows the row (${o.d.plan})`);
-      const earlier = txn({ originalTransactionId: b.originalTransactionId, productId: PRO, expiresDate: b.expiresDate - DAY, signedDate: b.signedDate - DAY });
+      const earlier = txn({ originalTransactionId: b.originalTransactionId, productId: PRO, purchaseDate: b.purchaseDate - DAY, expiresDate: b.expiresDate + 60 * DAY, signedDate: b.signedDate + DAY });
       const e = await post([signJws(earlier, chain)]);
       check(e.d.plan === 'base' && rowOf(b).plan === 'base' && rowOf(b).expires_at === new Date(b.expiresDate).toISOString(),
-        'nor one for an earlier period');
+        'nor one for an earlier period, though Apple signed it later and it runs longer');
     }
 
     console.log('\n— a fault at this end issues nothing —');
@@ -623,6 +736,20 @@ export default async function run(state) {
       await notify(notification(chain, 'REFUND_REVERSED', second, { signedDate: Date.now() - 0.3 * DAY }));
       check(rowOf(first).revoked_at === null && (await renew(paid)).d.licensed === true, 'reversing the current period\'s refund does');
 
+      /* The order of a subscription's periods is when each began (its
+         transaction's purchaseDate), never when each ends: a period paid
+         for in advance (an introductory offer of several months, an offer
+         code) can end after the one that replaced it, as can one upgraded
+         from. Within one period, when Apple signed it. Each sequence below
+         is one Apple can produce; `later` is a further transaction of the
+         same subscription, `upFront` a three-month introductory offer paid
+         in advance. */
+      const later = (t, over) => ({ ...t, transactionId: nextId(), offerType: undefined, offerDiscountType: undefined, ...over });
+      const upFront = (over) => txn({ offerType: 1, offerDiscountType: 'PAY_UP_FRONT', ...over });
+      const licOf = (t) => issue({ email: apple.appleSub(t.originalTransactionId), plan: 'pro' }, keys.privateKey);
+      const at = (ms) => new Date(ms).toISOString();
+      const records = (t, p) => rowOf(t).period_from === at(p.purchaseDate) && rowOf(t).expires_at === at(p.expiresDate) && rowOf(t).plan === APPLE_PRODUCTS[p.productId];
+
       /* Notifications out of order. Apple signs the renewal for the next
          period (P2), then a refund of the period before it (P1). The
          renewal is answered 500 (the database was down) and Apple sends it
@@ -630,50 +757,199 @@ export default async function run(state) {
          recording P1 and revokes it. The renewal, though Apple signed it
          first, is for a later period, so it still lands; and so does the
          phone's own transaction for P2, signed before the refund. Either
-         way the customer who paid for P2 is live until P2 ends. */
-      for (const via of ['the late renewal', 'the phone']) {
-        const p1 = txn({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() - 10 * DAY, signedDate: Date.now() - 40 * DAY });
+         way the customer who paid for P2 is live until P2 ends; and so
+         when P2 is an upgrade that ends before P1, paid for in advance,
+         would have. */
+      for (const via of ['the late renewal', 'the phone', 'an upgrade, late']) {
+        const upgrade = via === 'an upgrade, late';
+        const p1 = upgrade
+          ? upFront({ productId: BASE, purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() + 50 * DAY, signedDate: Date.now() - 40 * DAY })
+          : txn({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() - 10 * DAY, signedDate: Date.now() - 40 * DAY });
         await notify(notification(chain, 'SUBSCRIBED', p1, { signedDate: p1.signedDate }));
-        const p2 = { ...p1, transactionId: nextId(), purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY, signedDate: Date.now() - 10 * DAY };
-        const renewal = notification(chain, 'DID_RENEW', p2, { signedDate: p2.signedDate });
+        const p2 = later(p1, { productId: PRO, purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY, signedDate: Date.now() - 10 * DAY });
+        const renewal = upgrade
+          ? notification(chain, 'DID_CHANGE_RENEWAL_PREF', p2, { subtype: 'UPGRADE', signedDate: p2.signedDate })
+          : notification(chain, 'DID_RENEW', p2, { signedDate: p2.signedDate });
         sbx.fake.mode = 'broken';
         const lost = await notify(renewal);
         sbx.fake.mode = 'ok';
         const refundAt = Date.now() - DAY;
         const refund = notification(chain, 'REFUND', { ...p1, revocationDate: refundAt, revocationReason: 0 }, { signedDate: refundAt });
         const refunded = await notify(refund);
-        const lic = issue({ email: apple.appleSub(p1.originalTransactionId), plan: 'pro' }, keys.privateKey);
+        const lic = licOf(p1);
         check(lost.status === 500 && refunded.d.acted === true && !!rowOf(p1).revoked_at && refusal((await renew(lic)).d, 'no-subscription'),
-          `(${via}) P2's renewal answered 500, then P1's refund, signed after it, revokes the row still recording P1`);
-        let answer;
-        if (via === 'the late renewal') {
-          const again = await notify(renewal);
-          check(again.status === 200 && again.d.acted === true, `Apple sends P2's renewal again: 200, recorded (${again.status})`);
-        } else {
-          answer = await post([signJws({ ...p2, signedDate: refundAt - DAY }, chain)]);
-          check(answer.status === 200 && answer.d.licensed === true && answer.d.plan === 'pro' && answer.d.expires === new Date(p2.expiresDate).toISOString()
+          `(${via}) P2's ${upgrade ? 'upgrade' : 'renewal'} answered 500, then P1's refund, signed after it, revokes the row still recording P1`);
+        if (via === 'the phone') {
+          const answer = await post([signJws({ ...p2, signedDate: refundAt - DAY }, chain)]);
+          check(answer.status === 200 && answer.d.licensed === true && answer.d.plan === 'pro' && answer.d.expires === at(p2.expiresDate)
             && subOf(answer.d).licence.sub === `apple:${p1.originalTransactionId}`,
             `the phone sends P2's transaction, signed before the refund: a Pro licence, to P2's end (${answer.d.reason || answer.d.expires})`);
+        } else {
+          const again = await notify(renewal);
+          check(again.status === 200 && again.d.acted === true, `(${via}) Apple sends it again: 200, recorded (${again.status})`);
         }
-        const row = rowOf(p1);
-        check(row.revoked_at === null && row.expires_at === new Date(p2.expiresDate).toISOString() && row.plan === 'pro',
-          `(${via}) the row records P2, not revoked, with P2's expiry`);
+        check(rowOf(p1).revoked_at === null && records(p1, p2), `(${via}) the row records P2, not revoked, with P2's start and expiry`);
         const renewed = await renew(lic);
         check(renewed.d.licensed === true && renewed.d.plan === 'pro', `(${via}) and /api/licence/renew renews it (${renewed.d.reason || renewed.d.plan})`);
-        if (via === 'the late renewal') {
+        if (via !== 'the phone') {
           const phone = await post([signJws(p2, chain)]);
-          check(phone.d.licensed === true && phone.d.expires === new Date(p2.expiresDate).toISOString(), `(${via}) as does the phone, with P2's transaction`);
+          check(phone.d.licensed === true && phone.d.expires === at(p2.expiresDate), `(${via}) as does the phone, with P2's transaction`);
         }
         /* News of the earlier period, delivered again, still changes
            nothing. */
         const replayed = [await notify(refund), await notify(notification(chain, 'SUBSCRIBED', p1, { signedDate: p1.signedDate }))];
-        check(replayed.every((r) => r.status === 200 && r.d.acted === false) && rowOf(p1).revoked_at === null && rowOf(p1).expires_at === new Date(p2.expiresDate).toISOString(),
+        check(replayed.every((r) => r.status === 200 && r.d.acted === false) && rowOf(p1).revoked_at === null && records(p1, p2),
           `(${via}) P1's refund and P1's purchase delivered again: each answered 200, neither changes the row`);
         if (via === 'the phone') {
           const old = await notify(renewal);
-          check(old.d.acted === false && rowOf(p1).signed_at === new Date(refundAt - DAY).toISOString(),
+          check(old.d.acted === false && rowOf(p1).signed_at === at(refundAt - DAY),
             `(${via}) nor does P2's renewal, signed before the transaction the phone sent`);
         }
+        if (upgrade) {
+          const before = await post([signJws(p1, chain)]);
+          check(before.d.plan === 'pro' && records(p1, p2), `(${via}) nor P1's own transaction from before the refund, though it would run longer (${before.d.plan})`);
+        }
+      }
+
+      {
+        /* The key (period start, then when Apple signed it) never goes
+           down. P2's renewal lands after P1's refund with its own
+           signedDate, older than the refund's; news of P1 that Apple
+           signed in between, here a change of renewal preference carrying
+           P1's refunded transaction, is still about an earlier period and
+           changes nothing. */
+        const p1 = txn({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() - 10 * DAY, signedDate: Date.now() - 40 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', p1, { signedDate: p1.signedDate }));
+        const p2 = later(p1, { purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY, signedDate: Date.now() - 10 * DAY });
+        const renewal = notification(chain, 'DID_RENEW', p2, { signedDate: p2.signedDate });
+        sbx.fake.mode = 'broken';
+        await notify(renewal);
+        sbx.fake.mode = 'ok';
+        await notify(notification(chain, 'REFUND', { ...p1, revocationDate: Date.now() - DAY, revocationReason: 0 }, { signedDate: Date.now() - DAY }));
+        await notify(renewal);
+        const gap = await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', { ...p1, revocationDate: Date.now() - 6 * DAY, revocationReason: 0 }, { subtype: 'DOWNGRADE', signedDate: Date.now() - 5 * DAY }));
+        check(gap.status === 200 && gap.d.acted === false && rowOf(p1).revoked_at === null && records(p1, p2) && (await renew(licOf(p1))).d.licensed === true,
+          'the signed_at gap: news of P1 signed between P2\'s renewal and P1\'s refund does not lower the row back to P1, refunded');
+      }
+
+      {
+        /* S1. Pro bought with three months paid in advance; the phone
+           records it; Apple refunds it; the customer resubscribes to Base
+           for a month, which then expires. Replaying the first purchase's
+           own transaction, from before the refund, ends later than
+           anything since, and still unlocks nothing: it is an earlier
+           period. */
+        const t1 = upFront({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() + 50 * DAY, signedDate: Date.now() - 40 * DAY });
+        const jws1 = signJws(t1, chain);
+        const first = await post([jws1]);
+        await notify(notification(chain, 'REFUND', { ...t1, revocationDate: Date.now() - 39 * DAY, revocationReason: 1 }, { signedDate: Date.now() - 39 * DAY }));
+        const t2 = later(t1, { productId: BASE, purchaseDate: Date.now() - 38 * DAY, expiresDate: Date.now() - 8 * DAY, signedDate: Date.now() - 38 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', t2, { subtype: 'RESUBSCRIBE', signedDate: t2.signedDate }));
+        await notify(notification(chain, 'EXPIRED', t2, { subtype: 'VOLUNTARY', signedDate: t2.expiresDate }));
+        const lapsed = await renew(licOf(t1));
+        const replay = await post([jws1]);
+        check(first.d.licensed === true && refusal(lapsed.d, 'no-subscription') && refusal(replay.d, 'no-subscription', NOTHING_LIVE) && records(t1, t2) && rowOf(t1).revoked_at === null,
+          `S1: a refunded purchase paid in advance, replayed after a resubscription has expired, unlocks nothing (${replay.d.reason || replay.d.plan})`);
+      }
+
+      {
+        /* S2. Base bought with three months in advance, upgraded to Pro
+           monthly, Apple refunds what was left of Base, and Pro is
+           cancelled and expires. The Base transaction from before the
+           upgrade, which does not say it was upgraded from, ends later
+           than Pro did, and unlocks nothing. */
+        const tb = upFront({ productId: BASE, purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() + 50 * DAY, signedDate: Date.now() - 40 * DAY });
+        const jwsB = signJws(tb, chain);
+        await post([jwsB]);
+        const tp = later(tb, { productId: PRO, purchaseDate: Date.now() - 35 * DAY, expiresDate: Date.now() - 5 * DAY, signedDate: Date.now() - 35 * DAY });
+        await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', tp, { subtype: 'UPGRADE', signedDate: tp.signedDate }));
+        const refundB = await notify(notification(chain, 'REFUND', { ...tb, isUpgraded: true, revocationDate: tp.signedDate + 3600e3, revocationReason: 0 }, { signedDate: tp.signedDate + 3600e3 }));
+        await notify(notification(chain, 'EXPIRED', tp, { subtype: 'VOLUNTARY', signedDate: tp.expiresDate }));
+        const replay = await post([jwsB]);
+        check(refundB.d.acted === false && refusal(replay.d, 'no-subscription', NOTHING_LIVE) && records(tb, tp) && rowOf(tb).revoked_at === null,
+          `S2: the transaction upgraded from, replayed after the upgrade has expired, unlocks nothing (${replay.d.reason || replay.d.plan})`);
+      }
+
+      {
+        /* S5, with no one replaying anything. The first purchase, three
+           months in advance, is answered 500; Apple refunds it; the
+           customer resubscribes to Base for a month; then Apple's retry of
+           the first purchase arrives. It is an earlier period, and changes
+           nothing. */
+        const t1 = upFront({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() + 50 * DAY, signedDate: Date.now() - 40 * DAY });
+        const subscribed = notification(chain, 'SUBSCRIBED', t1, { subtype: 'INITIAL_BUY', signedDate: t1.signedDate });
+        sbx.fake.mode = 'broken';
+        const lost = await notify(subscribed);
+        sbx.fake.mode = 'ok';
+        await notify(notification(chain, 'REFUND', { ...t1, revocationDate: Date.now() - 39 * DAY, revocationReason: 1 }, { signedDate: Date.now() - 39 * DAY }));
+        const t2 = later(t1, { productId: BASE, purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY, signedDate: Date.now() - 10 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', t2, { subtype: 'RESUBSCRIBE', signedDate: t2.signedDate }));
+        const retry = await notify(subscribed);
+        const r = await renew(licOf(t1));
+        check(lost.status === 500 && retry.status === 200 && retry.d.acted === false && records(t1, t2) && rowOf(t1).revoked_at === null && r.d.licensed === true && r.d.plan === 'base',
+          `S5: Apple's retry of a first purchase paid in advance, after its refund and a resubscription, changes nothing (${r.d.plan || r.d.reason})`);
+      }
+
+      for (const marked of [true, false]) {
+        /* A refund of the period someone upgraded from. Base, three months
+           in advance, upgraded to Pro monthly, which is paid for; then
+           Apple refunds the Base transaction. Pro is a later period, so
+           the refund changes nothing, whether or not the refunded
+           transaction says it was upgraded from. */
+        const tb = upFront({ productId: BASE, purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 80 * DAY, signedDate: Date.now() - 10 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', tb, { signedDate: tb.signedDate }));
+        const tp = later(tb, { productId: PRO, purchaseDate: Date.now() - 5 * DAY, expiresDate: Date.now() + 25 * DAY, signedDate: Date.now() - 5 * DAY });
+        await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', tp, { subtype: 'UPGRADE', signedDate: tp.signedDate }));
+        const refund = await notify(notification(chain, 'REFUND', { ...tb, ...(marked ? { isUpgraded: true } : {}), revocationDate: Date.now() - 4 * DAY, revocationReason: 0 }, { signedDate: Date.now() - 4 * DAY }));
+        const r = await renew(licOf(tb));
+        const phone = await post([signJws(tp, chain)]);
+        check(refund.d.acted === false && rowOf(tb).revoked_at === null && records(tb, tp) && r.d.licensed === true && r.d.plan === 'pro' && phone.d.licensed === true && phone.d.plan === 'pro',
+          `a REFUND of the Base period upgraded from (${marked ? 'marked' : 'not marked'} isUpgraded) leaves the Pro subscription live (${r.d.plan || r.d.reason})`);
+      }
+
+      {
+        /* A notification carrying the transaction upgraded from changes
+           nothing, even before the row has heard of the upgrade: the
+           upgrade's own transaction writes the row when it arrives. */
+        const tb = upFront({ productId: BASE, purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 80 * DAY, signedDate: Date.now() - 10 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', tb, { signedDate: tb.signedDate }));
+        const tp = later(tb, { productId: PRO, purchaseDate: Date.now() - 5 * DAY, expiresDate: Date.now() + 25 * DAY, signedDate: Date.now() - 5 * DAY });
+        const upgrade = notification(chain, 'DID_CHANGE_RENEWAL_PREF', tp, { subtype: 'UPGRADE', signedDate: tp.signedDate });
+        sbx.fake.mode = 'broken';
+        await notify(upgrade);
+        sbx.fake.mode = 'ok';
+        const early = await notify(notification(chain, 'REFUND', { ...tb, isUpgraded: true, revocationDate: Date.now() - 4 * DAY, revocationReason: 0 }, { signedDate: Date.now() - 4 * DAY }));
+        check(early.d.acted === false && rowOf(tb).revoked_at === null && records(tb, tb) && (await renew(licOf(tb))).d.licensed === true,
+          'a REFUND of the transaction upgraded from, before the upgrade is recorded, changes nothing');
+        const landed = await notify(upgrade);
+        const stale = await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', { ...tb, isUpgraded: true }, { subtype: 'DOWNGRADE', signedDate: Date.now() - 3 * DAY }));
+        check(landed.d.acted === true && stale.d.acted === false && records(tb, tp) && rowOf(tb).revoked_at === null,
+          'the upgrade then lands, and a later notification carrying the transaction upgraded from changes nothing');
+      }
+
+      for (const lostRefund of [false, true]) {
+        /* REFUND_REVERSED of a later period than the row records. P1, paid
+           in advance, is refunded; the customer resubscribes to Base (P2),
+           whose purchase is never recorded; P2 is refunded and the refund
+           reversed. Whether or not the refund of P2 was recorded, the
+           reversal leaves the row recording P2, paid for. */
+        const p1 = upFront({ purchaseDate: Date.now() - 40 * DAY, expiresDate: Date.now() + 50 * DAY, signedDate: Date.now() - 40 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', p1, { signedDate: p1.signedDate }));
+        await notify(notification(chain, 'REFUND', { ...p1, revocationDate: Date.now() - 39 * DAY, revocationReason: 1 }, { signedDate: Date.now() - 39 * DAY }));
+        const p2 = later(p1, { productId: BASE, purchaseDate: Date.now() - 10 * DAY, expiresDate: Date.now() + 20 * DAY, signedDate: Date.now() - 10 * DAY });
+        const refund2 = notification(chain, 'REFUND', { ...p2, revocationDate: Date.now() - 5 * DAY, revocationReason: 0 }, { signedDate: Date.now() - 5 * DAY });
+        if (lostRefund) sbx.fake.mode = 'broken';
+        const refunded = await notify(refund2);
+        sbx.fake.mode = 'ok';
+        if (!lostRefund) {
+          check(refunded.d.acted === true && !!rowOf(p1).revoked_at && records(p1, p2),
+            'a REFUND of a later period the row has not heard of records that period (its start and expiry), revoked');
+        }
+        const reversed = await notify(notification(chain, 'REFUND_REVERSED', p2, { signedDate: Date.now() - 4 * DAY }));
+        const retried = lostRefund ? await notify(refund2) : null;
+        const r = await renew(licOf(p1));
+        check(reversed.d.acted === true && (!retried || retried.d.acted === false) && rowOf(p1).revoked_at === null && records(p1, p2) && r.d.licensed === true && r.d.plan === 'base',
+          `REFUND_REVERSED of a later period${lostRefund ? ', its refund lost and retried after' : ''}: the row records it, live (${r.d.plan || r.d.reason})`);
       }
       {
         /* A refund of a period the row has not heard of yet is recorded as

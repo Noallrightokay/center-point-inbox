@@ -22,11 +22,11 @@ export const dynamic = 'force-dynamic';
    product, something other than an auto-renewable subscription, refunded,
    revoked or upgraded from unlocks nothing. Of the rest the higher plan
    wins, then the later expiry; a live one's row in apple_subscriptions is
-   written, never over a row Apple signed something newer for unless that
-   row records an earlier period, and the licence follows the row as it
-   then stands. So a transaction replayed after its refund finds the refund
-   already recorded and unlocks nothing, and one for the period after a
-   refunded one is recorded whenever Apple signed it.
+   written in the order of the subscription's periods, then of when Apple
+   signed it (lib/apple.js, appleWrite), and the licence follows the row as
+   it then stands. So a transaction replayed after its refund, or one for a
+   period that a later one has replaced, unlocks nothing, and one for the
+   period after a refunded one is recorded whenever Apple signed it.
 
    One past its expiry writes nothing, and unlocks only what its row says
    is live. That is a billing grace period: StoreKit still lists the

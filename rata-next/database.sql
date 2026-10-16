@@ -260,11 +260,14 @@ create trigger pending_subscriptions_touch
 --    sends the purchases StoreKit holds, what App Store Server
 --    Notifications (app/api/apple/notifications) keep up to date,
 --    and what /api/licence/renew reads to renew a licence whose
---    subject is apple:<original_transaction_id>. Every write is
---    ordered by the period it is for (a later expires_at wins),
---    then by signed_at, when Apple signed what it says, so a
---    notification delivered late never undoes a later one
---    (lib/apple.js, appleWrite).
+--    subject is apple:<original_transaction_id>. A row records one
+--    period of the subscription, the one that began at period_from
+--    (the transaction's purchaseDate), and every write is ordered
+--    by period_from and then by signed_at, when Apple signed what
+--    it says, so a notification delivered late never undoes a
+--    later one (lib/apple.js, appleWrite). Not by expires_at: a
+--    period paid for in advance can end after the one that
+--    replaced it.
 --
 --    Live means revoked_at is null and expires_at, or grace_until
 --    (Apple's billing grace period, when a renewal has failed), is
@@ -285,6 +288,7 @@ create table if not exists public.apple_subscriptions (
   product_id text not null,                 -- APPLE_PRODUCTS in lib/plan.js
   plan text not null,                       -- 'base' | 'pro'
   environment text not null,                -- 'Production' | 'Sandbox'
+  period_from timestamptz not null,         -- when the period it records began
   expires_at timestamptz not null,
   grace_until timestamptz,                  -- null unless Apple reported a grace period
   revoked_at timestamptz,                   -- refunded or revoked; null when not
@@ -293,6 +297,12 @@ create table if not exists public.apple_subscriptions (
   email text,                               -- unused yet
   updated_at timestamptz not null default now()
 );
+
+-- A table made before period_from existed gets it here. Its rows, if
+-- any, count as recording the earliest period there is, so the next
+-- thing Apple says about each subscription replaces what it holds.
+alter table public.apple_subscriptions
+  add column if not exists period_from timestamptz not null default 'epoch';
 
 alter table public.apple_subscriptions enable row level security;
 

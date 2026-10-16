@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1040 checks).
+the website's test suites pass with `npm test` after it (1065 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -63,7 +63,9 @@ subscription bought in the iPhone app (§11). Nothing reads it until the
 iPhone app is out, and nothing breaks without it, but `/api/licence/apple`
 answers 503 "App Store purchases are not switched on for RATA yet." and
 the server log says to run section 7. Run it before the first TestFlight
-purchase.
+purchase. Each row records one period of a subscription, from when it
+began (`period_from`); run again over a table made before that column,
+section 7 adds it.
 
 **Check:** Table Editor → `subscriptions` shows both new columns, and
 `ai_usage`, `pending_subscriptions` and `apple_subscriptions` exist;
