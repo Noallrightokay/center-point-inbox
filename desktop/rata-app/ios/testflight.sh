@@ -1,0 +1,624 @@
+#!/usr/bin/env bash
+# testflight.sh STEP — RATA for iOS, signed for the App Store and sent to
+# TestFlight, so the owner can install it on a real iPhone. Each step of
+# .github/workflows/ios-testflight.yml is one STEP here, so that the
+# rehearsal with made-up values, which runs on every pull request, goes
+# through the very code a real upload does. Tests: testflight-test.sh.
+#
+# Four repository secrets go together, all or none, like the release
+# workflow's signing secrets:
+#
+#   APPLE_API_KEY_ID     the App Store Connect API key's Key ID
+#   APPLE_API_ISSUER_ID  the Issuer ID shown above the keys table
+#   APPLE_API_KEY_P8     the key's .p8 file, whole
+#   APPLE_TEAM_ID        the developer team's Team ID
+#
+# and the repository variable RATA_IOS_BUNDLE_ID, the bundle id of the App
+# Store Connect app record (org.mailrata.app when unset). The desktop's
+# identifier, org.mailrata.desktop, stays in tauri.conf.json: this build is
+# given the store's through Tauri's --config, never by editing the config.
+# The real RATA_LICENCE_PUBLIC_KEY is required too, since a build without it
+# refuses every licence.
+#
+# Steps, in the order the workflow runs them:
+#
+#   check          Is TestFlight set up? None of the four: say so and stop,
+#                  green. Some: fail, naming the missing ones, before
+#                  anything is built. All: check each one's shape. Never
+#                  prints a value. Writes `build` (true or false) and
+#                  `bundle_id` to $GITHUB_OUTPUT; on a pull request
+#                  (RATA_CHECK_ONLY=1) `build` stays false.
+#   rehearse CASE  The same with made-up values, for CI: `none`, `half` and
+#                  `made-up` run `check` and assert what it must say;
+#                  `apple` runs `sign` and `upload` with a made-up key,
+#                  which Apple must refuse, and asserts that the job says
+#                  plainly what to fix and prints none of the values.
+#   xcode          Selects the newest Xcode on the runner; App Store Connect
+#                  takes only builds made with Xcode 26 and its iOS 26 SDK.
+#   licence-key    Hands RATA_LICENCE_PUBLIC_KEY to the Rust build.
+#   project        Makes the Xcode project (tauri ios init, prepare.sh)
+#                  with the store's bundle id and this run's build number.
+#   archive        Builds RATA, release, unsigned, for a generic iOS device,
+#                  and checks the app: no Apple value is in the environment
+#                  while the Rust code and its build scripts compile.
+#   sign           Writes the .p8 to a file only this job can read and
+#                  builds again with tauri ios build --export-method
+#                  app-store-connect, which signs through the API key.
+#   inspect        Checks the signed .ipa before it goes anywhere.
+#   upload         xcrun altool --upload-app --type ios, with the API key.
+#   forget         Deletes the .p8 from the runner (always run last).
+#
+# Two helpers, for the steps above and the tests: `redact` (a filter that
+# replaces the key's, issuer's and team's ids and the key itself) and
+# `explain sign|upload LOG` (says what the owner must fix after a failure).
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+self="$here/$(basename "${BASH_SOURCE[0]}")"
+# The shell project; the tests point it at a stand-in.
+TAURI_DIR="${RATA_TAURI_DIR:-$here/../src-tauri}"
+WORK="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/rata-testflight"
+# The key's folder. altool looks for AuthKey_<Key ID>.p8 in ./private_keys,
+# so it runs from here; xcodebuild is given the file's path.
+ASC="$WORK/asc"
+OVERRIDE="$WORK/override.json"
+
+DEFAULT_BUNDLE="org.mailrata.app"
+XCODE_MIN=26
+SECRETS="APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8 APPLE_TEAM_ID"
+SETUP="docs/APP-STORES.md"
+
+die() { echo "::error::$*"; exit 1; }
+put() { echo "$1=$2" >> "${GITHUB_OUTPUT:-/dev/null}"; }
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# The three ids and the bundle id, without the blank space a pasted secret
+# can carry. The .p8 is never copied: it is read where it is written out.
+load() {
+  KEY_ID="$(trim "${APPLE_API_KEY_ID:-}")"
+  ISSUER="$(trim "${APPLE_API_ISSUER_ID:-}")"
+  TEAM="$(trim "${APPLE_TEAM_ID:-}")"
+  BUNDLE="$(trim "${RATA_IOS_BUNDLE_ID:-}")"
+  [ -n "$BUNDLE" ] || BUNDLE="$DEFAULT_BUNDLE"
+}
+
+ok_key_id() { local re='^[A-Z0-9]{10}$'; [[ $1 =~ $re ]]; }
+ok_issuer() { local re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; [[ $1 =~ $re ]]; }
+ok_team() { local re='^[A-Z0-9]{10}$'; [[ $1 =~ $re ]]; }
+ok_bundle() { local re='^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$'; [[ $1 =~ $re ]] && [ "${#1}" -le 155 ]; }
+ok_p8() {
+  case "$1" in *"-----BEGIN PRIVATE KEY-----"*"-----END PRIVATE KEY-----"*) return 0 ;; esac
+  return 1
+}
+ok_licence() {
+  case "$1" in *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"*) return 0 ;; esac
+  return 1
+}
+
+check() {
+  load
+  local name set=0 missing="" bad=0
+  for name in $SECRETS; do
+    if [ -n "$(trim "${!name:-}")" ]; then
+      set=$((set + 1))
+    else
+      missing="${missing:+$missing, }$name"
+    fi
+  done
+  put bundle_id "$BUNDLE"
+  if [ "$set" -eq 0 ]; then
+    echo "::notice::TestFlight is not set up yet: $SETUP"
+    echo "None of $SECRETS is set, so this job builds nothing and uploads nothing."
+    put build false
+    return 0
+  fi
+  if [ -n "$missing" ]; then
+    echo "::error::TestFlight is half set up. Missing: $missing. The four secrets APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_API_KEY_P8 and APPLE_TEAM_ID go together: add the missing ones in the repository's Settings > Secrets and variables > Actions, or delete the others to switch TestFlight off ($SETUP)."
+    put build false
+    return 1
+  fi
+  ok_key_id "$KEY_ID" || {
+    echo "::error::APPLE_API_KEY_ID is not a Key ID. It is the 10 capital letters and digits in the Key ID column of App Store Connect, Users and Access > Integrations > App Store Connect API."
+    bad=1
+  }
+  ok_issuer "$ISSUER" || {
+    echo "::error::APPLE_API_ISSUER_ID is not an Issuer ID. It is the long id with dashes shown above the keys table in App Store Connect, Users and Access > Integrations > App Store Connect API."
+    bad=1
+  }
+  ok_p8 "${APPLE_API_KEY_P8:-}" || {
+    echo "::error::APPLE_API_KEY_P8 is not a .p8 key. Paste the whole AuthKey_<Key ID>.p8 file Apple let you download once, from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----."
+    bad=1
+  }
+  ok_team "$TEAM" || {
+    echo "::error::APPLE_TEAM_ID is not a Team ID. It is the 10 capital letters and digits under Membership details at developer.apple.com/account."
+    bad=1
+  }
+  ok_bundle "$BUNDLE" || {
+    echo "::error::The repository variable RATA_IOS_BUNDLE_ID is \"$BUNDLE\", which is not a bundle id: letters, digits and hyphens between full stops, such as $DEFAULT_BUNDLE, exactly as on the App Store Connect app record."
+    bad=1
+  }
+  if [ -z "${RATA_LICENCE_PUBLIC_KEY:-}" ]; then
+    echo "::error::RATA_LICENCE_PUBLIC_KEY is not set. A TestFlight build without it refuses every licence. It is the repository secret the release workflow uses (rata-next/LICENSING.md)."
+    bad=1
+  elif ! ok_licence "$RATA_LICENCE_PUBLIC_KEY"; then
+    echo "::error::RATA_LICENCE_PUBLIC_KEY does not look like a PEM public key."
+    bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then
+    put build false
+    return 1
+  fi
+  echo "TestFlight is set up: the four App Store Connect secrets are present and each has the right shape. Bundle id: $BUNDLE."
+  if [ "${RATA_CHECK_ONLY:-}" = 1 ]; then
+    echo "::notice::On a pull request this job stops after the configuration check; it builds, signs and uploads only from main or when started by hand."
+    put build false
+  else
+    put build true
+  fi
+}
+
+# --- Made-up values, for the rehearsals --------------------------------------
+
+# A Key ID, an Issuer ID and a Team ID of the right shapes, and a real P-256
+# key in the .p8's format, none of them anybody's. Masked like secrets, so
+# the log reads as a real run's would.
+made_up() {
+  local dir="$WORK/made-up" line
+  rm -rf "$dir"
+  (umask 077 && mkdir -p "$dir")
+  MU_KEY_ID="$(python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(10)))')"
+  MU_TEAM="$(python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(10)))')"
+  MU_ISSUER="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  openssl ecparam -name prime256v1 -genkey -noout -out "$dir/ec.pem" 2>/dev/null
+  openssl pkcs8 -topk8 -nocrypt -in "$dir/ec.pem" -out "$dir/made-up.p8"
+  rm -f "$dir/ec.pem"
+  MU_P8="$(cat "$dir/made-up.p8")"
+  echo "::add-mask::$MU_KEY_ID"
+  echo "::add-mask::$MU_TEAM"
+  echo "::add-mask::$MU_ISSUER"
+  while IFS= read -r line; do
+    case "$line" in -----*|"") ;; *) echo "::add-mask::$line" ;; esac
+  done < "$dir/made-up.p8"
+}
+
+# Fails, naming which, when any made-up value is in one of the files.
+none_of_them_in() {
+  local f v line found=""
+  for f in "$@"; do
+    for v in "$MU_KEY_ID" "$MU_TEAM" "$MU_ISSUER"; do
+      if grep -qiF -- "$v" "$f"; then found="$found $(basename "$f")"; fi
+    done
+    while IFS= read -r line; do
+      case "$line" in -----*|"") continue ;; esac
+      if grep -qF -- "$line" "$f"; then found="$found $(basename "$f")(key)"; fi
+    done <<< "$MU_P8"
+  done
+  [ -z "$found" ] || { echo "::error::A made-up value was printed in:$found"; return 1; }
+}
+
+# What a step printed, shown under the rehearsal with each line indented, so
+# that its ::error:: and ::notice:: lines read as text and are not taken
+# for this job's own.
+show() {
+  echo "--- what the owner would see (${2:-}) ---"
+  sed 's/^/  | /' "$1"
+  echo "--- end ---"
+}
+
+rehearse() {
+  case "${1:-}" in
+    none | half | made-up) rehearse_check "$1" ;;
+    apple) rehearse_apple ;;
+    *) die "rehearse what? none, half, made-up or apple" ;;
+  esac
+}
+
+rehearse_check() {
+  local case="$1" log="$WORK/rehearsal-$1.log" outputs="$WORK/rehearsal-$1.out" status
+  mkdir -p "$WORK"
+  : > "$outputs"
+  made_up
+  set +e
+  (
+    # shellcheck disable=SC2086 # the four names, split on purpose
+    unset $SECRETS RATA_CHECK_ONLY
+    export GITHUB_OUTPUT="$outputs"
+    case "$case" in
+      half) export APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_KEY_P8="$MU_P8" ;;
+      made-up)
+        export APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_ISSUER_ID="$MU_ISSUER" \
+          APPLE_API_KEY_P8="$MU_P8" APPLE_TEAM_ID="$MU_TEAM"
+        ;;
+    esac
+    exec bash "$self" check
+  ) > "$log" 2>&1
+  status=$?
+  set -e
+  show "$log" "check, $case"
+  local bad=0
+  case "$case" in
+    none)
+      [ "$status" -eq 0 ] || { echo "::error::With nothing set the check must pass, and it said $status."; bad=1; }
+      grep -qxF "::notice::TestFlight is not set up yet: $SETUP" "$log" || { echo "::error::With nothing set the check must say \"TestFlight is not set up yet: $SETUP\"."; bad=1; }
+      grep -qx 'build=false' "$outputs" || { echo "::error::With nothing set the check must not build."; bad=1; }
+      ;;
+    half)
+      [ "$status" -eq 1 ] || { echo "::error::Half set up, the check must fail, and it said $status."; bad=1; }
+      grep -qF "Missing: APPLE_API_ISSUER_ID, APPLE_TEAM_ID." "$log" || { echo "::error::Half set up, the check must name exactly the two missing secrets."; bad=1; }
+      grep -qx 'build=false' "$outputs" || { echo "::error::Half set up, the check must not build."; bad=1; }
+      ;;
+    made-up)
+      [ "$status" -eq 0 ] || { echo "::error::With all four set the check must pass, and it said $status."; bad=1; }
+      grep -qx 'build=true' "$outputs" || { echo "::error::With all four set the check must build."; bad=1; }
+      ;;
+  esac
+  none_of_them_in "$log" "$outputs" || bad=1
+  [ "$bad" -eq 0 ] || exit 1
+  echo "The check said what it must with $case values, and printed none of them."
+  put bundle_id "$(sed -n 's/^bundle_id=//p' "$outputs" | tail -n 1)"
+  # The made-up rehearsal goes on to build, sign and upload; the other two
+  # end here, as a real run would.
+  if [ "$case" = made-up ]; then put build true; else put build false; fi
+}
+
+# Signing and uploading with a made-up key: both reach Apple, which refuses
+# the key. The job must say so in words the owner can act on, and print none
+# of the values.
+rehearse_apple() {
+  local bad=0 status log
+  [ -f "$OVERRIDE" ] || die "rehearse apple runs after project and archive"
+  [ -f "$WORK/unsigned/RATA.ipa" ] || die "rehearse apple needs the unsigned .ipa archive makes"
+  made_up
+  for step in sign upload; do
+    log="$WORK/rehearsal-$step.log"
+    set +e
+    (
+      export APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_ISSUER_ID="$MU_ISSUER" \
+        APPLE_API_KEY_P8="$MU_P8" APPLE_TEAM_ID="$MU_TEAM" \
+        IPA="$WORK/unsigned/RATA.ipa" GITHUB_ENV=/dev/null
+      exec bash "$self" "$step"
+    ) > "$log" 2>&1
+    status=$?
+    set -e
+    show "$log" "$step, with a made-up key"
+    [ "$status" -ne 0 ] || { echo "::error::$step with a made-up key must fail, and it passed."; bad=1; }
+    grep -qF "::error::$KEY_REFUSED" "$log" || {
+      echo "::error::$step with a made-up key must say that Apple did not accept the key."
+      bad=1
+    }
+    none_of_them_in "$log" || bad=1
+  done
+  [ "$bad" -eq 0 ] || exit 1
+  echo "Signing and uploading with a made-up key failed as they must, said why, and printed none of the values."
+}
+
+# --- The build ---------------------------------------------------------------
+
+xcode() {
+  local xcode version sdk
+  xcode="$(python3 "$here/newest-xcode.py")"
+  sudo xcode-select -s "$xcode/Contents/Developer"
+  xcodebuild -version
+  version="$(xcodebuild -version | sed -n 's/^Xcode \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+  sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+  echo "iOS SDK $sdk"
+  case "${version%%.*}" in '' | *[!0-9]*) die "Could not read the Xcode version from xcodebuild -version." ;; esac
+  case "${sdk%%.*}" in '' | *[!0-9]*) die "Could not read the iOS SDK version." ;; esac
+  if [ "${version%%.*}" -lt "$XCODE_MIN" ] || [ "${sdk%%.*}" -lt "$XCODE_MIN" ]; then
+    die "App Store Connect takes only apps built with Xcode $XCODE_MIN or later and its iOS $XCODE_MIN SDK, and the newest Xcode this runner can use is $version (iOS SDK $sdk). That is GitHub's macOS image, not RATA: wait until macos-latest carries Xcode $XCODE_MIN, or name an image that does in runs-on."
+  fi
+}
+
+# The licence's public key, for licence.rs's option_env!. Xcode compiles the
+# Rust code through `tauri ios xcode-script`, and the Tauri CLI hands that
+# build only TAURI*, WRY*, CARGO_*, RUST_*, PATH and TMPDIR, so the variable
+# in the environment alone never arrives (ios.yml does the same for its
+# throwaway key). Cargo's own [env], in the runner's Cargo home, does.
+licence_key() {
+  local config="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+  [ -n "${RATA_LICENCE_PUBLIC_KEY:-}" ] || die "RATA_LICENCE_PUBLIC_KEY is not set: a build without it refuses every licence."
+  ok_licence "$RATA_LICENCE_PUBLIC_KEY" || die "RATA_LICENCE_PUBLIC_KEY does not look like a PEM public key."
+  if grep -qs '^\[env\]' "$config"; then die "$config already has an [env] table"; fi
+  mkdir -p "$(dirname "$config")"
+  # A JSON string is a TOML basic string too.
+  python3 -c 'import json, os; print("\n[env]\nRATA_LICENCE_PUBLIC_KEY = " + json.dumps(os.environ["RATA_LICENCE_PUBLIC_KEY"]))' >> "$config"
+  echo "The licence's public key is handed to the Rust build."
+}
+
+version() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$TAURI_DIR/tauri.conf.json"
+}
+
+# CFBundleVersion: this workflow's run number, so every upload is new (App
+# Store Connect refuses a number it has seen for the same version). A plain
+# integer, since Apple takes at most three numbers there and the Tauri CLI's
+# --build-number would append a fourth to the version.
+build_number() {
+  local n="${RATA_BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-}}" re='^[1-9][0-9]{0,8}$'
+  [[ $n =~ $re ]] || die "The build number must be a whole number above 0 (RATA_BUILD_NUMBER, or GitHub's run number), not \"$n\"."
+  printf '%s' "$n"
+}
+
+# What the store's build differs in from the committed config, for Tauri's
+# --config: the bundle id and the build number. The marketing version stays
+# tauri.conf.json's.
+write_override() {
+  load
+  ok_bundle "$BUNDLE" || die "RATA_IOS_BUNDLE_ID \"$BUNDLE\" is not a bundle id."
+  local n
+  n="$(build_number)"
+  mkdir -p "$WORK"
+  BUNDLE="$BUNDLE" N="$n" python3 -c 'import json, os; print(json.dumps({"identifier": os.environ["BUNDLE"], "bundle": {"iOS": {"bundleVersion": os.environ["N"]}}}))' > "$OVERRIDE"
+  echo "$OVERRIDE: $(cat "$OVERRIDE")"
+}
+
+project() {
+  write_override
+  (cd "$TAURI_DIR" && cargo tauri ios init --ci --skip-targets-install --config "$OVERRIDE")
+  bash "$here/prepare.sh"
+}
+
+# What every iOS build of RATA for the store must be, signed or not.
+judge() {
+  local app="$1" n v got bad=0 b64
+  n="$(build_number)"
+  v="$(version)"
+  load
+  bash "$here/check-app.sh" "$app" "$BUNDLE" || bad=1
+  got="$(plutil -extract CFBundleVersion raw -o - "$app/Info.plist" 2>/dev/null || true)"
+  echo "CFBundleVersion = $got"
+  [ "$got" = "$n" ] || { echo "::error::CFBundleVersion is \"$got\", not this run's number $n"; bad=1; }
+  got="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Info.plist" 2>/dev/null || true)"
+  echo "CFBundleShortVersionString = $got"
+  [ "$got" = "$v" ] || { echo "::error::CFBundleShortVersionString is \"$got\", not tauri.conf.json's $v"; bad=1; }
+  # The key's own line of base64, as licence.rs holds the PEM.
+  b64="$(printf '%s\n' "${RATA_LICENCE_PUBLIC_KEY:-}" | sed -n 2p)"
+  if [ -n "$b64" ] && grep -qaF -- "$b64" "$app/RATA"; then
+    echo "The licence's public key is compiled in."
+  else
+    echo "::error::The app has no licence key compiled in: it would refuse every licence."
+    bad=1
+  fi
+  bash "$here/../harness/verify-release.sh" --no-updater "$app/RATA" || bad=1
+  bash "$here/../harness/verify-release.sh" --no-smoke "$app/RATA" || bad=1
+  return "$bad"
+}
+
+archive() {
+  local found arc ipa
+  if grep -qs "distribution: 'store'" "$here/../ui/config.js"; then
+    echo "The interface is the store build's (sync-ui.sh, RATA_DISTRIBUTION=store)."
+  else
+    echo "The interface is the direct build's: this branch's sync-ui.sh has no store build yet."
+  fi
+  rm -rf "$TAURI_DIR/gen/apple/build"
+  (cd "$TAURI_DIR" && cargo tauri ios build --target aarch64 --no-sign --ci --config "$OVERRIDE" -- --no-default-features)
+  found="$(find "$TAURI_DIR/gen/apple/build" -maxdepth 1 -type d -name '*.xcarchive' | head -n 1)"
+  [ -n "$found" ] || die "no .xcarchive under gen/apple/build"
+  arc="$found/Products/Applications/RATA.app"
+  [ -d "$arc" ] || die "no RATA.app in $found"
+  ipa="$(find "$TAURI_DIR/gen/apple/build/arm64" -maxdepth 1 -type f -name '*.ipa' | head -n 1)"
+  [ -n "$ipa" ] || die "no .ipa under gen/apple/build/arm64"
+  mkdir -p "$WORK/unsigned"
+  mv "$ipa" "$WORK/unsigned/RATA.ipa"
+  echo "Archived for a generic iOS device: $found"
+  lipo -info "$arc/RATA"
+  judge "$arc"
+}
+
+# The .p8, in a folder only this job's user can read, under the name altool
+# looks for. Its contents never pass through a command line or the log.
+write_key() {
+  KEY_FILE="$ASC/private_keys/AuthKey_$KEY_ID.p8"
+  (umask 077 && mkdir -p "$ASC/private_keys")
+  chmod 700 "$ASC" "$ASC/private_keys"
+  (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" | tr -d '\r' > "$KEY_FILE")
+  chmod 600 "$KEY_FILE"
+}
+
+# Replaces, in what a tool prints, the three ids and any line of the key with
+# a label. GitHub hides its secrets in the log already; this keeps them out
+# of the copies saved here too, and holds for the rehearsal's made-up values,
+# which are no secrets of GitHub's.
+redact() {
+  perl -e '
+    $| = 1;
+    my %label = (APPLE_API_KEY => "[key id]", APPLE_API_ISSUER => "[issuer id]", APPLE_DEVELOPMENT_TEAM => "[team id]");
+    my @subs;
+    for my $name (sort keys %label) {
+      my $v = $ENV{$name} // "";
+      $v =~ s/^\s+|\s+$//g;
+      push @subs, [qr/\Q$v\E/i, $label{$name}] if length $v >= 4;
+    }
+    if (my $path = $ENV{APPLE_API_KEY_PATH}) {
+      if (open my $fh, "<", $path) {
+        while (my $l = <$fh>) {
+          $l =~ s/\s+//g;
+          next if $l =~ /^-----/ || length $l < 16;
+          push @subs, [qr/\Q$l\E/, "[private key]"];
+        }
+      }
+    }
+    while (my $line = <STDIN>) {
+      $line =~ s/$_->[0]/$_->[1]/g for @subs;
+      print $line;
+    }
+  '
+}
+
+# --- Saying what to fix ------------------------------------------------------
+
+KEY_REFUSED="Apple did not accept the App Store Connect API key."
+explain() {
+  local what="${1:?sign or upload}" log="${2:?a log}" said=0 v
+  load
+  v="$(version 2>/dev/null || echo "this version")"
+  hit() { grep -qiE -- "$1" "$log"; }
+  tell() { echo "::error::$*"; said=1; }
+  if hit 'Cloud signing permission error|cloud-managed distribution certificate|No signing certificate'; then
+    tell "The API key may not sign in Apple's cloud. xcodebuild signs with a cloud-managed distribution certificate, and Apple lets an API key use one only when the key has the Admin role: a key with App Manager is told \"Cloud signing permission error\". A key's role cannot be changed, so make a new key with the Admin role in App Store Connect, Users and Access > Integrations, and replace APPLE_API_KEY_ID and APPLE_API_KEY_P8."
+  fi
+  if hit 'FORBIDDEN|forbidden for security reasons|not allowed to perform this operation|does not have (the )?(required )?(role|permission|access)|insufficient (privileges|permissions)'; then
+    tell "Apple refused what the API key asked for, because the key's role is too low. Uploading needs App Manager or Admin, and signing in Apple's cloud needs Admin. Make a new key with that role in App Store Connect, Users and Access > Integrations, and replace APPLE_API_KEY_ID and APPLE_API_KEY_P8."
+  fi
+  if hit 'agreement|PLA Update|have not (yet )?agreed|required contract'; then
+    tell "An Apple agreement is waiting to be accepted. The Account Holder signs in at developer.apple.com/account and accepts the latest Apple Developer Program License Agreement, and in App Store Connect, Business, the Paid Apps agreement. Then run this job again."
+  fi
+  if [ "$what" = sign ] && hit "No App ID|No profiles for|An App ID with Identifier|(App ID|identifier)[^.]{0,80}(is not available|cannot be registered|unavailable)"; then
+    tell "The bundle id $BUNDLE is not registered to this team. In Certificates, Identifiers & Profiles > Identifiers, register an explicit App ID with exactly that bundle id, make the App Store Connect app record with it, and set the repository variable RATA_IOS_BUNDLE_ID to it."
+  fi
+  if [ "$what" = sign ] && hit 'No Account for Team|No team (was )?found|team[^.]*(does not exist|not found)'; then
+    tell "APPLE_TEAM_ID is not a team this API key can act for. It is the 10-character Team ID under Membership details at developer.apple.com/account, of the team the key was made in."
+  fi
+  if [ "$what" = upload ] && hit 'No suitable application records|Cannot determine the Apple ID from Bundle ID|could not find (an|the) app|no app (record )?(was )?found'; then
+    tell "App Store Connect has no app with the bundle id $BUNDLE. Make one in App Store Connect, Apps, + > New App, with that bundle id (registered first as an App ID), or set the repository variable RATA_IOS_BUNDLE_ID to the bundle id of the app record that exists."
+  fi
+  if [ "$what" = upload ] && hit 'bundle version must be higher|has already been used|Redundant Binary Upload|ITMS-90189|ITMS-4238'; then
+    tell "App Store Connect already has a build with this number. The number is this workflow's run number, so re-running an earlier run repeats it: start a new run instead (a merge to main, or Run workflow on the Actions tab)."
+  fi
+  if [ "$what" = upload ] && hit 'ITMS-90062|ITMS-90186|train[^.]*closed|must contain a higher version'; then
+    tell "App Store Connect takes no more builds of version $v: it was approved or released. Raise the version (tauri.conf.json and the other places CLAUDE.md lists) and merge."
+  fi
+  if hit "NOT_AUTHORIZED|Authentication credentials are missing or invalid|Authentication failed|Failed to authenticate|Unable to authenticate|Failed to log in|unauthori[sz]ed|(status|HTTP|code)[^0-9]{0,4}401|invalid (api )?key|Could not (find|load)[^.]*AuthKey|private key[^.]*(invalid|could not|not found)"; then
+    tell "$KEY_REFUSED APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8 must be the same key's: its Key ID, the Issuer ID above the keys table, and the .p8 file downloaded when it was made (App Store Connect, Users and Access > Integrations). A revoked key is refused too: make a new one and replace all three."
+  fi
+  if hit 'Communication with Apple failed|could not connect to|network connection was lost|timed out'; then
+    tell "Apple's servers did not answer. Nothing needs fixing in RATA or its secrets: run this job again in a while (developer.apple.com/system-status says whether Apple knows)."
+  fi
+  if [ "$what" = upload ] && [ "$said" -eq 0 ] && hit 'ITMS-[0-9]+'; then
+    tell "App Store Connect refused the build. The ITMS code above says why; Apple lists them at developer.apple.com/help/app-store-connect."
+  fi
+  if [ "$said" -eq 0 ]; then
+    if [ "$what" = sign ]; then
+      tell "Signing failed for a reason this job does not recognise. The lines above are xcodebuild's own: the first one with \"error:\" is what Xcode or Apple answered."
+    else
+      tell "The upload failed for a reason this job does not recognise. The lines above are altool's own."
+    fi
+  fi
+}
+
+# --- Signing and uploading ---------------------------------------------------
+
+sign() {
+  local n v status log="$WORK/sign.log" ipa
+  load
+  [ -n "$KEY_ID" ] && [ -n "$ISSUER" ] && [ -n "$TEAM" ] && [ -n "${APPLE_API_KEY_P8:-}" ] \
+    || die "sign needs all four of $SECRETS"
+  [ -f "$OVERRIDE" ] || die "sign runs after project"
+  n="$(build_number)"
+  v="$(version)"
+  write_key
+  # From here on only the file holds the key, and the ids reach the Tauri
+  # CLI under the names its documentation gives (v2.tauri.app/distribute/
+  # sign/ios: APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH), which
+  # it passes to xcodebuild as -authenticationKeyID, -authenticationKeyIssuerID
+  # and -authenticationKeyPath with -allowProvisioningUpdates. The team is
+  # APPLE_DEVELOPMENT_TEAM, which the CLI writes into the project.
+  unset APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_TEAM_ID
+  export APPLE_API_KEY="$KEY_ID" APPLE_API_ISSUER="$ISSUER" APPLE_API_KEY_PATH="$KEY_FILE" \
+    APPLE_DEVELOPMENT_TEAM="$TEAM"
+  # The unsigned build's .ipa must not be taken for this one.
+  rm -f "$TAURI_DIR"/gen/apple/build/arm64/*.ipa
+  set +e
+  (cd "$TAURI_DIR" && cargo tauri ios build --target aarch64 --export-method app-store-connect --ci \
+    --config "$OVERRIDE" -- --no-default-features) 2>&1 | redact | tee "$log"
+  status="${PIPESTATUS[0]}"
+  set -e
+  if [ "$status" -ne 0 ]; then
+    explain sign "$log"
+    return 1
+  fi
+  ipa="$(find "$TAURI_DIR/gen/apple/build/arm64" -maxdepth 1 -type f -name '*.ipa' 2>/dev/null | head -n 1)"
+  [ -n "$ipa" ] || die "The build said it was signed, but there is no .ipa under gen/apple/build/arm64."
+  mkdir -p "$WORK/out"
+  cp "$ipa" "$WORK/out/RATA-$v-$n.ipa"
+  echo "IPA=$WORK/out/RATA-$v-$n.ipa" >> "${GITHUB_ENV:-/dev/null}"
+  echo "Signed for App Store Connect: RATA-$v-$n.ipa"
+}
+
+inspect() {
+  local ipa="${IPA:-}" dir="$WORK/signed" app authority profile="$WORK/profile.plist" bad=0
+  [ -f "$ipa" ] || die "no signed .ipa to inspect"
+  load
+  rm -rf "$dir" && mkdir -p "$dir"
+  ditto -x -k "$ipa" "$dir"
+  app="$(find "$dir/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+  [ -n "$app" ] || die "no .app in the signed .ipa"
+  judge "$app" || bad=1
+  if codesign --verify --deep --strict "$app"; then echo "The signature verifies."; else echo "::error::The app's signature does not verify."; bad=1; fi
+  # Printed as the kind of certificate only: the line also names the team.
+  authority="$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)"
+  case "$authority" in
+    "Apple Distribution"* | "iPhone Distribution"*) echo "Signed with a distribution certificate." ;;
+    *) echo "::error::The app is not signed with an Apple Distribution certificate."; bad=1 ;;
+  esac
+  security cms -D -i "$app/embedded.mobileprovision" > "$profile"
+  if [ "$(plutil -extract Entitlements.get-task-allow raw -o - "$profile" 2>/dev/null)" = false ]; then
+    echo "The provisioning profile is a distribution one (get-task-allow false)."
+  else
+    echo "::error::The provisioning profile allows debugging: it is not an App Store one."; bad=1
+  fi
+  if plutil -extract ProvisionedDevices xml1 -o - "$profile" >/dev/null 2>&1; then
+    echo "::error::The provisioning profile lists devices: it is an ad hoc or development one, not an App Store one."; bad=1
+  fi
+  case "$(plutil -extract Entitlements.application-identifier raw -o - "$profile" 2>/dev/null)" in
+    *".$BUNDLE") echo "The profile is for $BUNDLE." ;;
+    *) echo "::error::The provisioning profile is not for $BUNDLE."; bad=1 ;;
+  esac
+  return "$bad"
+}
+
+upload() {
+  local ipa="${IPA:-}" status log="$WORK/upload.log" key n v
+  load
+  [ -n "$KEY_ID" ] && [ -n "$ISSUER" ] || die "upload needs APPLE_API_KEY_ID and APPLE_API_ISSUER_ID"
+  [ -f "$ipa" ] || die "no .ipa to upload"
+  key="$ASC/private_keys/AuthKey_$KEY_ID.p8"
+  [ -f "$key" ] || die "no key file: the signing step writes it"
+  export APPLE_API_KEY="$KEY_ID" APPLE_API_ISSUER="$ISSUER" APPLE_API_KEY_PATH="$key"
+  [ -z "$TEAM" ] || export APPLE_DEVELOPMENT_TEAM="$TEAM"
+  set +e
+  (cd "$ASC" && API_PRIVATE_KEYS_DIR="$ASC/private_keys" xcrun altool --upload-app --type ios \
+    --file "$ipa" --apiKey "$KEY_ID" --apiIssuer "$ISSUER") 2>&1 | redact | tee "$log"
+  status="${PIPESTATUS[0]}"
+  set -e
+  # altool has said FAILED with a status of 0 before now, so its words count
+  # as much as its status.
+  if [ "$status" -ne 0 ] || grep -qiE 'UPLOAD FAILED|ERROR ITMS-|\*\*\* Error' "$log"; then
+    explain upload "$log"
+    return 1
+  fi
+  n="$(build_number)"
+  v="$(version)"
+  echo "::notice::RATA $v ($n) is uploaded to App Store Connect as $BUNDLE. Apple processes it, usually within half an hour, and then it is in TestFlight for the internal testers ($SETUP)."
+}
+
+forget() {
+  rm -rf "$ASC" "$WORK/made-up"
+  echo "No App Store Connect key is left on this runner."
+}
+
+case "${1:-}" in
+  check) check ;;
+  rehearse) shift; rehearse ${1+"$@"} ;;
+  xcode) xcode ;;
+  licence-key) licence_key ;;
+  override) write_override ;;
+  project) project ;;
+  archive) archive ;;
+  sign) sign ;;
+  inspect) inspect ;;
+  upload) upload ;;
+  forget) forget ;;
+  redact) redact ;;
+  explain) shift; explain ${1+"$@"} ;;
+  *)
+    echo "usage: testflight.sh check|rehearse CASE|xcode|licence-key|override|project|archive|sign|inspect|upload|forget|redact|explain sign|upload LOG" >&2
+    exit 2
+    ;;
+esac
