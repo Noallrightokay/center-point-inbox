@@ -29,8 +29,8 @@ const LABEL_MAX: usize = 63;
 /// it (`xn--…`), as hickory spells it on the desktop. ammonia already carries
 /// the url crate's IDNA, so nothing new is built for it.
 ///
-/// `None` for a name that has no such spelling, and for one under a domain
-/// the outbound guard refuses whatever DNS says (`unasked`).
+/// `None` for a name that has no such spelling, and for one that is not to
+/// be asked at all (`unasked`).
 pub(crate) fn question(name: &str) -> Option<String> {
     let ascii = if name.is_ascii() {
         name.to_string()
@@ -43,28 +43,70 @@ pub(crate) fn question(name: &str) -> Option<String> {
     (!unasked(&ascii)).then_some(ascii)
 }
 
-/// Whether `name` is under a domain the outbound guard refuses before any
-/// lookup (`crate::guard::check_literal`: `.local`, `.internal`,
-/// `.home.arpa`, `localhost`, a private address written as a name). No
-/// public mail server is there, so no answer about it could be used, and
-/// every server discovery finds there is refused anyway. On Apple's systems
-/// a `.local` question goes out by multicast DNS to the local network,
-/// which iOS asks the customer's leave for, and which never says a name
-/// does not exist, so each question would wait out all of `SYSTEM_WAIT`. So
-/// these are not asked at all. The desktop, which asks hickory, is
-/// unchanged.
+/// The domains that are never asked about, each with everything under it:
+/// the outbound guard's private names (`crate::guard::check_literal`), and
+/// every domain Apple's resolver answers by multicast DNS on the local
+/// network rather than by asking DNS (`local`, and the link-local reverse
+/// zones 169.254/16 and fe80::/10).
+const UNASKED: [&str; 9] = [
+    "local",
+    "localhost",
+    "internal",
+    "home.arpa",
+    "254.169.in-addr.arpa",
+    "8.e.f.ip6.arpa",
+    "9.e.f.ip6.arpa",
+    "a.e.f.ip6.arpa",
+    "b.e.f.ip6.arpa",
+];
+
+/// Whether `name` is not to be asked at all.
 ///
-/// The guard reads host names, which have no `_`, so the labels up to the
-/// last one holding a `_` (`_imaps._tcp.`, `google._domainkey.`) are set
-/// aside and the domain under them is judged.
+/// No public mail server is under any of `UNASKED`, so no answer about one
+/// could be used, and every server discovery finds there is refused by the
+/// guard anyway. And on Apple's systems a question there goes out by
+/// multicast DNS to the local network, which iOS asks the customer's leave
+/// for, and which never says a name does not exist, so each question would
+/// wait out all of `SYSTEM_WAIT`. Nor is a name with anything in it but
+/// letters, digits, `.`, `-` and `_`: dns_sd reads a `\` in a name as an
+/// escape (`loca\l` is `local`, and so is `loca\108`), and no mail server's
+/// name has anything else. The desktop, which asks hickory, is unchanged.
+///
+/// The whole name is judged, so a name that is only a service label over a
+/// suffix (`_spf.local`) is caught. Then the guard judges it as a host name
+/// too, and the domain under its service labels (`_imaps._tcp.`), which
+/// catches a private address written as a name (`10.0.0.1`,
+/// `_imaps._tcp.192.168.1.1`). The guard reads host names, which have no
+/// `_`, so for it a label holding one (`_imaps`, `a_b`) is a plain label.
 fn unasked(name: &str) -> bool {
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        return true;
+    }
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    let under = |domain: &str| {
+        name == domain
+            || name
+                .strip_suffix(domain)
+                .is_some_and(|start| start.ends_with('.'))
+    };
+    if UNASKED.iter().any(|d| under(d)) {
+        return true;
+    }
+    // A name to look up (`None`), or a public address written as one.
+    let refused = |host: &str| !matches!(check_literal(host), None | Some(HostVerdict::Allowed));
     let labels: Vec<&str> = name.split('.').collect();
-    let under = labels
+    let host: Vec<&str> = labels
         .iter()
-        .rposition(|l| l.contains('_'))
-        .map_or(0, |i| i + 1);
-    let domain = labels[under..].join(".");
-    !domain.is_empty() && check_literal(&domain) == Some(HostVerdict::NotPublic)
+        .map(|label| if label.contains('_') { "x" } else { label })
+        .collect();
+    if refused(&host.join(".")) {
+        return true;
+    }
+    let service = labels.iter().rposition(|l| l.contains('_'));
+    service.is_some_and(|last| last + 1 < labels.len() && refused(&labels[last + 1..].join(".")))
 }
 
 /// An MX record (RFC 1035 §3.3.9): its preference and its exchange.
@@ -453,6 +495,50 @@ mod tests {
             "nas.home.arpa",
             "10.0.0.1",
             "192.168.1.1",
+            // A service label straight over the suffix, and a host label
+            // with `_` in it: the whole name is judged, not what is under
+            // the last `_`.
+            "_spf.local",
+            "_dmarc.internal",
+            "_dmarc.localhost",
+            "_x.home.arpa",
+            "a_b.local",
+            "acme_corp.local",
+            "_imaps._tcp.a_b.local",
+            "a_b.home.arpa",
+            "corp_x.internal",
+            "_spf.10.0.0.1",
+            "_imaps._tcp.192.168.1.1",
+            // The suffixes alone, in any case, with or without a final dot.
+            "local",
+            "LOCAL.",
+            "internal",
+            "home.arpa",
+            "localhost.",
+            // The link-local reverse zones, answered by multicast DNS too.
+            "1.0.254.169.in-addr.arpa",
+            "254.169.in-addr.arpa",
+            "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa",
+            "b.e.f.ip6.arpa",
+            // What dns_sd would read as an escape: `\l` is `l`, `\108` is
+            // `l`, `\046` is a dot inside a label.
+            "acme.loca\\l",
+            "_spf.acme.loca\\108",
+            "acme\\046local",
+            "acme.local\\",
+            // Nothing a host name could have.
+            "*.local",
+            "*.example.com",
+            "x+y.local",
+            "x+y.example.com",
+            "acme.local:993",
+            "[::1]",
+            "a b.example.com",
+            "a\u{0}b.example.com",
+            "a/b.example.com",
+            // Nothing at all.
+            "",
+            ".",
         ] {
             assert_eq!(question(name), None, "{name}");
         }
@@ -466,10 +552,17 @@ mod tests {
             "_imaps._tcp.local.example.com",
             "mail.localdomain.example",
             "example.localhost.com",
+            "notlocal",
+            "mylocal.com",
+            "acme.nolocal",
             "autodiscover.example.com",
             "_dmarc.example.com",
+            "_spf.example.com",
+            "a_b.example.com",
+            "Autodiscover.Example.COM.",
+            "254.169.in-addr.arpa.example.com",
+            "1.2.0.192.in-addr.arpa",
             "_",
-            "",
         ] {
             assert_eq!(question(name).as_deref(), Some(name), "{name}");
         }
