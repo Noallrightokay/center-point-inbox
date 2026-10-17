@@ -62,7 +62,7 @@ final class StoreTests: XCTestCase {
       return window
     }
     return await store.purchase(id) { product in
-      if #available(macOS 15.0, *) {
+      if #available(macOS 15.2, *) {
         return try await product.purchase(confirmIn: window)
       }
       return try await product.purchase()

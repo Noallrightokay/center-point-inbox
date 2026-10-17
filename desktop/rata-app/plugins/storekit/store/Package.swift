@@ -3,9 +3,12 @@
 // RATAStore: RATA's purchases through StoreKit 2, and nothing else. It
 // imports no Tauri, UIKit or AppKit, so the same code serves the iPhone
 // app's Tauri plugin (../ios, which depends on this package) and a later
-// Mac App Store build: StoreKit 2 is one API on iOS 15 and macOS 12. What
-// needs a window, the purchase sheet over RATA's own window and Apple's
-// subscriptions sheet, is the wrapper's.
+// Mac App Store build: StoreKit 2 is one API on iOS 15 and macOS 12. The
+// two store builds share the bundle id org.mailrata.mail (Universal
+// Purchase), so one subscription covers both; the direct download keeps
+// org.mailrata.desktop and buys through mailrata.org. What needs a window,
+// the purchase sheet over RATA's own window and Apple's subscriptions
+// sheet, is the wrapper's.
 //
 // ../testing runs it against ios/RATA.storekit, in a host app.
 
