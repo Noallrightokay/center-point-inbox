@@ -60,7 +60,9 @@ jobs:
   # The same for the smoke self-test (src-tauri/src/smoke.rs), which only
   # the Simulator's build has: a build with --features smoke must hold every
   # word verify-release.sh looks for in a published binary, and neither
-  # build above may hold one (--no-smoke).
+  # build above may hold one (--no-smoke). That build is a debug one, as
+  # the Simulator's is: build.rs refuses the self-test in any release
+  # build, which the job proves too.
   no-updater:
     name: Without self-update, no updater
     runs-on: ubuntu-latest
@@ -108,12 +110,23 @@ jobs:
           cp target/release/rata-app "$RUNNER_TEMP/rata-app-without-self-update"
         working-directory: desktop/rata-app/src-tauri
 
-      # Only RATA's own crate builds again: the feature changes nothing
-      # it depends on.
+      # Debug, as the Simulator's is: build.rs refuses the self-test in a
+      # release build (the step below). Its words are the same either way.
       - name: Build with the smoke self-test, as the Simulator's is
         run: |
-          cargo build --release --no-default-features --features smoke
-          cp target/release/rata-app "$RUNNER_TEMP/rata-app-with-smoke"
+          cargo build --no-default-features --features smoke
+          cp target/debug/rata-app "$RUNNER_TEMP/rata-app-with-smoke"
+        working-directory: desktop/rata-app/src-tauri
+
+      # What a store's workflow could ask by mistake: build.rs stops it
+      # before RATA's own code compiles (everything it depends on is built
+      # for release already, above).
+      - name: The smoke self-test is refused in a release build
+        run: |
+          if cargo build --release --no-default-features --features smoke 2> "$RUNNER_TEMP/smoke-release.log"; then
+            echo "::error::a release build with the smoke self-test was not refused"; exit 1
+          fi
+          grep -F "never built for release" "$RUNNER_TEMP/smoke-release.log"
         working-directory: desktop/rata-app/src-tauri
 
       - name: Build with it, as the desktop installers are
@@ -148,7 +161,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST }}
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -164,9 +177,19 @@ jobs:
         run: cargo clippy --lib --target aarch64-apple-ios --no-default-features -- -D warnings
         working-directory: desktop/rata-app/src-tauri
 
-      # The Simulator's build, with its self-test, for a device.
-      - name: Clippy for iOS, with the smoke self-test
-        run: cargo clippy --lib --target aarch64-apple-ios --no-default-features --features smoke -- -D warnings
+      # The Simulator's build, with its self-test, for the Simulator: the
+      # only target build.rs builds it for.
+      - name: Clippy for the iOS Simulator, with the smoke self-test
+        run: cargo clippy --lib --target aarch64-apple-ios-sim --no-default-features --features smoke -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      # And refused for a phone, which only a phone could install.
+      - name: The smoke self-test is refused for a phone
+        run: |
+          if cargo check --lib --target aarch64-apple-ios --no-default-features --features smoke 2> "$RUNNER_TEMP/smoke-phone.log"; then
+            echo "::error::a phone build with the smoke self-test was not refused"; exit 1
+          fi
+          grep -F "for the iOS Simulator only" "$RUNNER_TEMP/smoke-phone.log"
         working-directory: desktop/rata-app/src-tauri
 
       - name: The desktop shell still compiles for macOS
@@ -223,9 +246,12 @@ jobs:
   # ios/prepare.sh, which adds the Info.plist keys and the privacy manifest)
   # and the app built for the Simulator with its self-test (the `smoke`
   # feature, src-tauri/src/smoke.rs), which writes smoke.json: the
-  # keychain, the app's folder and the list's lock, name lookups through
-  # the system's resolver, discovery, a TLS greeting through the guard, and
-  # the page. It runs three times, each with a screenshot: the first screen;
+  # keychain and that its entries stay on the phone, the app's folder (made
+  # private by the list) and the list's lock, name lookups through the
+  # system's resolver, discovery, a TLS greeting through the guard, what a
+  # phone answers where a computer has more, where saves go, the page, and
+  # that the list and the mail are kept out of the phone's backups. It runs
+  # three times, each with a screenshot: the first screen;
   # the workspace, signed up on the first screen's own form and licensed
   # with a Pro licence from a throwaway key made here (never the real one:
   # the build trusts only that key's public half); and Settings. The job
@@ -305,6 +331,11 @@ jobs:
           cargo tauri --version
           cargo tauri ios init --ci --skip-targets-install
         working-directory: desktop/rata-app/src-tauri
+
+      # The icon prepare.sh puts in is the one make-icon.py makes from the
+      # desktop's artwork, by its pixels.
+      - name: The app icon is made from RATA's artwork
+        run: python3 desktop/rata-app/ios/make-icon.py --check
 
       - name: RATA's changes to it
         run: bash desktop/rata-app/ios/prepare.sh

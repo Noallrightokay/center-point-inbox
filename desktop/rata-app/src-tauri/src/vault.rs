@@ -7,10 +7,15 @@
 //! laptop is easier to steal than a row in a hardened database.
 //!
 //! So passwords go to the operating system's own credential store: Keychain on
-//! macOS, Credential Manager on Windows, the Secret Service on Linux. Those are
-//! encrypted at rest, unlocked with the login session, and already trusted with
-//! the same customer's other mail passwords by every mail client they have used
-//! before this one.
+//! macOS and iOS, Credential Manager on Windows, the Secret Service on Linux.
+//! Those are encrypted at rest, unlocked with the login session, and already
+//! trusted with the same customer's other mail passwords by every mail client
+//! they have used before this one.
+//!
+//! And they stay on the machine that uses them. On Windows and iOS that takes
+//! RATA writing its own entries (`put_in`), because `keyring` writes them to
+//! travel: with a roaming profile on Windows (review R6), and on iOS into
+//! iCloud Backup and computer backups, restorable onto another phone.
 //!
 //! **There is no fallback to a file, and that is deliberate.** When the
 //! credential store cannot be reached, linking fails and says so. The tempting
@@ -179,11 +184,32 @@ impl Keychain {
         keyring::Entry::new(service, &name.trim().to_ascii_lowercase()).map_err(explain)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "ios")))]
     fn put_in(service: &str, name: &str, secret: &str) -> Result<(), String> {
         Self::entry(service, name)?
             .set_password(secret)
             .map_err(explain)
+    }
+
+    /// On iOS RATA writes the entry itself too. `keyring`'s iOS writer
+    /// (security-framework's `set_generic_password`) sends no accessibility
+    /// class, so iOS files the item `kSecAttrAccessibleWhenUnlocked`: copied
+    /// into iCloud Backup and computer backups in a form that restores onto
+    /// another phone, and unreadable while the phone is locked. RATA's
+    /// entries are `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` and
+    /// not synchronized: when a backup copies one at all, it is wrapped with
+    /// this phone's own hardware key and is useless anywhere else (Apple
+    /// Platform Security, "Keychain data protection classes"), and it can be
+    /// read after the first unlock, which the background refresh to come
+    /// needs (STAGE 3 item 8). Everything else is as `keyring` writes it — a
+    /// generic password, the service, the name as the account, the secret's
+    /// bytes — so `keyring` still reads and deletes it. One that is there
+    /// already (an earlier write) is changed in place, its class included.
+    /// Refused is refused: never written the old way.
+    #[cfg(target_os = "ios")]
+    fn put_in(service: &str, name: &str, secret: &str) -> Result<(), String> {
+        let name = name.trim().to_ascii_lowercase();
+        ios::write_here(service, &name, secret.as_bytes()).map_err(explain)
     }
 
     /// On Windows RATA writes the entry itself: `keyring` files every one
@@ -242,6 +268,92 @@ impl Keychain {
     pub fn forget_smoke(name: &str) -> Result<(), String> {
         Self::forget_in(SMOKE_SERVICE, name)
     }
+    /// Written as `keyring` writes an entry, which is how one written to
+    /// travel comes to be there, for RATA's own writer to write over.
+    pub fn put_smoke_as_keyring(name: &str, secret: &str) -> Result<(), String> {
+        Self::entry(SMOKE_SERVICE, name)?
+            .set_password(secret)
+            .map_err(explain)
+    }
+    /// How the iOS keychain holds the entry, read back from it.
+    #[cfg(target_os = "ios")]
+    pub fn held_smoke(name: &str) -> Result<Held, String> {
+        ios::held(SMOKE_SERVICE, &name.trim().to_ascii_lowercase())
+    }
+    #[cfg(not(target_os = "ios"))]
+    pub fn held_smoke(_name: &str) -> Result<Held, String> {
+        Err("Only iOS says how a keychain entry is kept.".into())
+    }
+}
+
+/// How the iOS keychain holds an entry, read back from it: for the smoke
+/// self-test, which proves on the device that RATA's entries stay there.
+#[cfg(feature = "smoke")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Held {
+    /// How many items have that service and account.
+    pub entries: usize,
+    /// Each one's accessibility class, as the keychain spells it.
+    pub classes: Vec<String>,
+    /// There is one at least, and every one is
+    /// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
+    pub here: bool,
+    /// Any one is synchronized (iCloud Keychain).
+    pub synchronized: bool,
+}
+
+/// One attribute of a keychain item RATA writes on iOS (`ios::write_here`),
+/// by what it means: what is sent is one list, which a test reads on any
+/// system, and the iOS module only spells each in the keychain's own words.
+#[cfg(any(target_os = "ios", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemAttr<'a> {
+    /// `kSecClass`: `kSecClassGenericPassword`, `keyring`'s kind of item.
+    GenericPassword,
+    /// `kSecAttrService`.
+    Service(&'a str),
+    /// `kSecAttrAccount`: the name, as `keyring` names it.
+    Account(&'a str),
+    /// `kSecAttrAccessible`: `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
+    ThisDeviceOnly,
+    /// `kSecAttrSynchronizable`: false, never iCloud Keychain.
+    NotSynchronized,
+    /// `kSecValueData`: the secret's bytes.
+    Secret(&'a [u8]),
+}
+
+/// How an entry is found: `keyring`'s own query on iOS (the class, the
+/// service, the account), so that what RATA writes `keyring` reads and
+/// deletes, and what `keyring` wrote RATA finds and writes over.
+#[cfg(any(target_os = "ios", test))]
+fn ios_entry<'a>(service: &'a str, account: &'a str) -> [ItemAttr<'a>; 3] {
+    [
+        ItemAttr::GenericPassword,
+        ItemAttr::Service(service),
+        ItemAttr::Account(account),
+    ]
+}
+
+/// A new entry: found as `keyring` finds one, kept on this phone alone,
+/// never synchronized, holding the secret.
+#[cfg(any(target_os = "ios", test))]
+fn ios_new<'a>(service: &'a str, account: &'a str, secret: &'a [u8]) -> [ItemAttr<'a>; 6] {
+    let [class, service, account] = ios_entry(service, account);
+    [
+        class,
+        service,
+        account,
+        ItemAttr::ThisDeviceOnly,
+        ItemAttr::NotSynchronized,
+        ItemAttr::Secret(secret),
+    ]
+}
+
+/// What an entry already there is changed to: this secret, and kept on
+/// this phone alone, whatever class it had.
+#[cfg(any(target_os = "ios", test))]
+fn ios_change(secret: &[u8]) -> [ItemAttr<'_>; 2] {
+    [ItemAttr::ThisDeviceOnly, ItemAttr::Secret(secret)]
 }
 
 impl Vault for Keychain {
@@ -923,6 +1035,213 @@ mod windows {
         // SAFETY: the one buffer CredEnumerateW allocated, freed once.
         unsafe { CredFree(list as *const core::ffi::c_void) };
         found
+    }
+}
+
+/// The iOS keychain, called directly for what `keyring` will not do: write
+/// an entry that stays on this phone, and (for the smoke self-test) say how
+/// one is kept. The attributes are [`ItemAttr`]'s lists, spelt here in the
+/// keychain's own constants.
+#[cfg(target_os = "ios")]
+mod ios {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::data::CFData;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use core_foundation_sys::base::OSStatus;
+    use core_foundation_sys::string::CFStringRef;
+    use security_framework_sys::access_control::kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+    use security_framework_sys::base::{errSecDuplicateItem, errSecItemNotFound, errSecSuccess};
+    use security_framework_sys::item::{
+        kSecAttrAccount, kSecAttrService, kSecAttrSynchronizable, kSecClass,
+        kSecClassGenericPassword, kSecValueData,
+    };
+    use security_framework_sys::keychain_item::{SecItemAdd, SecItemUpdate};
+
+    use super::{ItemAttr, ios_change, ios_entry, ios_new};
+
+    // The key of an item's accessibility class, which security-framework-sys
+    // does not declare. In Security.framework, which it links.
+    #[cfg_attr(target_vendor = "apple", link(name = "Security", kind = "framework"))]
+    unsafe extern "C" {
+        static kSecAttrAccessible: CFStringRef;
+    }
+
+    fn key(k: CFStringRef) -> CFString {
+        // SAFETY: one of Security.framework's constant strings, which live
+        // as long as the program.
+        unsafe { CFString::wrap_under_get_rule(k) }
+    }
+
+    /// Each attribute as the keychain names it.
+    fn pair(attr: &ItemAttr<'_>) -> (CFString, CFType) {
+        // SAFETY (each `unsafe` below): reading one of Security.framework's
+        // constant keys, set before the program starts.
+        match *attr {
+            ItemAttr::GenericPassword => (
+                key(unsafe { kSecClass }),
+                key(unsafe { kSecClassGenericPassword }).into_CFType(),
+            ),
+            ItemAttr::Service(s) => (
+                key(unsafe { kSecAttrService }),
+                CFString::new(s).into_CFType(),
+            ),
+            ItemAttr::Account(a) => (
+                key(unsafe { kSecAttrAccount }),
+                CFString::new(a).into_CFType(),
+            ),
+            ItemAttr::ThisDeviceOnly => (
+                key(unsafe { kSecAttrAccessible }),
+                key(unsafe { kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }).into_CFType(),
+            ),
+            ItemAttr::NotSynchronized => (
+                key(unsafe { kSecAttrSynchronizable }),
+                CFBoolean::false_value().into_CFType(),
+            ),
+            ItemAttr::Secret(bytes) => (
+                key(unsafe { kSecValueData }),
+                CFData::from_buffer(bytes).into_CFType(),
+            ),
+        }
+    }
+
+    fn dictionary(attrs: &[ItemAttr<'_>]) -> CFDictionary<CFString, CFType> {
+        let pairs: Vec<(CFString, CFType)> = attrs.iter().map(pair).collect();
+        CFDictionary::from_CFType_pairs(&pairs)
+    }
+
+    /// An `OSStatus` the keychain answered with.
+    #[derive(Debug)]
+    struct Status(OSStatus);
+
+    impl std::fmt::Display for Status {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "the iOS keychain answered {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Status {}
+
+    /// As `keyring` reads an iOS answer: not available or read-only is no
+    /// access to the store, not found is no entry, anything else a failure.
+    fn checked(status: OSStatus) -> Result<(), keyring::Error> {
+        match status {
+            s if s == errSecSuccess => Ok(()),
+            -25291 | -25292 => Err(keyring::Error::NoStorageAccess(Box::new(Status(status)))),
+            s if s == errSecItemNotFound => Err(keyring::Error::NoEntry),
+            _ => Err(keyring::Error::PlatformFailure(Box::new(Status(status)))),
+        }
+    }
+
+    /// Write an entry that stays on this phone: added new, or, where one of
+    /// that service and account is there already (an earlier write, or one
+    /// `keyring` made), changed to this secret and this class.
+    pub fn write_here(service: &str, account: &str, secret: &[u8]) -> Result<(), keyring::Error> {
+        let new = dictionary(&ios_new(service, account, secret));
+        // SAFETY: a dictionary made above, alive across the call; no result
+        // is asked for.
+        let mut status = unsafe { SecItemAdd(new.as_concrete_TypeRef(), std::ptr::null_mut()) };
+        if status == errSecDuplicateItem {
+            let entry = dictionary(&ios_entry(service, account));
+            let change = dictionary(&ios_change(secret));
+            // SAFETY: two dictionaries made above, alive across the call.
+            status =
+                unsafe { SecItemUpdate(entry.as_concrete_TypeRef(), change.as_concrete_TypeRef()) };
+        }
+        checked(status)
+    }
+
+    /// How the keychain holds the entries of a service and account, read
+    /// back with their attributes.
+    #[cfg(feature = "smoke")]
+    pub fn held(service: &str, account: &str) -> Result<super::Held, String> {
+        use core_foundation_sys::array::{
+            CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex,
+        };
+        use core_foundation_sys::base::{CFEqual, CFGetTypeID, CFTypeRef};
+        use core_foundation_sys::dictionary::{
+            CFDictionaryGetTypeID, CFDictionaryGetValue, CFDictionaryRef,
+        };
+        use core_foundation_sys::number::{
+            CFBooleanGetTypeID, CFBooleanGetValue, CFNumberGetTypeID, CFNumberGetValue,
+            kCFNumberSInt64Type,
+        };
+        use core_foundation_sys::string::CFStringGetTypeID;
+        use security_framework_sys::item::{
+            kSecMatchLimit, kSecMatchLimitAll, kSecReturnAttributes,
+        };
+        use security_framework_sys::keychain_item::SecItemCopyMatching;
+
+        let mut pairs: Vec<(CFString, CFType)> =
+            ios_entry(service, account).iter().map(pair).collect();
+        // SAFETY: Security.framework's constant keys and values.
+        unsafe {
+            pairs.push((
+                key(kSecReturnAttributes),
+                CFBoolean::true_value().into_CFType(),
+            ));
+            pairs.push((key(kSecMatchLimit), key(kSecMatchLimitAll).into_CFType()));
+        }
+        let query = CFDictionary::from_CFType_pairs(&pairs);
+        let mut found: CFTypeRef = std::ptr::null();
+        // SAFETY: the query made above; `found` is ours to release.
+        let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut found) };
+        if status == errSecItemNotFound {
+            return Ok(super::Held::default());
+        }
+        if status != errSecSuccess || found.is_null() {
+            return Err(Status(status).to_string());
+        }
+        // SAFETY: a Copy call's result, released once when this goes.
+        let found = unsafe { CFType::wrap_under_create_rule(found) };
+        let list = found.as_CFTypeRef();
+        // SAFETY: CoreFoundation's own type check, on a valid object.
+        if unsafe { CFGetTypeID(list) != CFArrayGetTypeID() } {
+            return Err("the keychain answered with something other than a list".into());
+        }
+        let mut held = super::Held {
+            here: true,
+            ..super::Held::default()
+        };
+        // SAFETY: `list` is an array, and each item is read only while it
+        // lives; nothing here is retained or released but `found`.
+        unsafe {
+            let n = CFArrayGetCount(list as _);
+            for i in 0..n {
+                let item = CFArrayGetValueAtIndex(list as _, i);
+                if item.is_null() || CFGetTypeID(item) != CFDictionaryGetTypeID() {
+                    continue;
+                }
+                let item = item as CFDictionaryRef;
+                held.entries += 1;
+                let class = CFDictionaryGetValue(item, kSecAttrAccessible as *const _);
+                if !class.is_null() && CFGetTypeID(class) == CFStringGetTypeID() {
+                    held.classes
+                        .push(CFString::wrap_under_get_rule(class as CFStringRef).to_string());
+                }
+                let mine = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as CFTypeRef;
+                held.here &= !class.is_null() && CFEqual(class, mine) != 0;
+                let sync = CFDictionaryGetValue(item, kSecAttrSynchronizable as *const _);
+                if !sync.is_null() {
+                    let on = if CFGetTypeID(sync) == CFBooleanGetTypeID() {
+                        CFBooleanGetValue(sync as _)
+                    } else if CFGetTypeID(sync) == CFNumberGetTypeID() {
+                        let mut n: i64 = 0;
+                        CFNumberGetValue(
+                            sync as _,
+                            kCFNumberSInt64Type,
+                            &mut n as *mut i64 as *mut _,
+                        ) && n != 0
+                    } else {
+                        false
+                    };
+                    held.synchronized |= on;
+                }
+            }
+        }
+        held.here &= held.entries > 0;
+        Ok(held)
     }
 }
 
@@ -1633,6 +1952,44 @@ mod tests {
             Keychain::forget_in(service, name).unwrap();
         }
         assert!(!held(ENTRY, &kept) && !held(ENTRY, &gone) && !held(PIECE, &kept_piece));
+    }
+
+    /// What RATA sends the iOS keychain (`ios::write_here`): a new entry is
+    /// found exactly as `keyring` finds one (so `keyring` reads and deletes
+    /// it), stays on this phone and is never synchronized; one already
+    /// there, which `keyring` may have written to travel, is changed to the
+    /// new secret and to staying here, and its identity is not touched.
+    #[test]
+    fn on_ios_an_entry_is_written_to_stay_on_this_phone() {
+        use ItemAttr::*;
+        let entry = ios_entry(SERVICE, "owner@example.com");
+        assert_eq!(
+            entry,
+            [
+                GenericPassword,
+                Service(SERVICE),
+                Account("owner@example.com")
+            ]
+        );
+        let new = ios_new(SERVICE, "owner@example.com", b"hunter2");
+        assert_eq!(new[..3], entry, "found as keyring finds it");
+        assert_eq!(
+            new[3..],
+            [
+                ThisDeviceOnly,
+                NotSynchronized,
+                Secret(b"hunter2".as_slice())
+            ]
+        );
+        assert_eq!(
+            ios_change(b"hunter3"),
+            [ThisDeviceOnly, Secret(b"hunter3".as_slice())]
+        );
+        // Every service RATA keeps anything under goes the same way, the
+        // pieces of a long token included.
+        for service in SERVICES {
+            assert!(ios_new(service, "x", b"s").contains(&ThisDeviceOnly));
+        }
     }
 
     #[test]

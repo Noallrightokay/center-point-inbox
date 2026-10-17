@@ -29,7 +29,9 @@ running() {
 xcrun simctl terminate "$sim" "$bundle" >/dev/null 2>&1 || true
 container="$(xcrun simctl get_app_container "$sim" "$bundle" data)" \
   || { echo "$name: RATA is not installed on $sim"; exit 1; }
-smoke="$container/Library/Application Support/$bundle/smoke.json"
+# In the app's cache folder: its data folder is the mailbox list's, which
+# the list must be the first to make (src-tauri/src/smoke.rs).
+smoke="$container/Library/Caches/$bundle/smoke.json"
 rm -f "$smoke"
 
 echo "$name: launching RATA"

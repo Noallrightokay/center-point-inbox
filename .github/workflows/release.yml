@@ -140,6 +140,18 @@ jobs:
         run: cargo test --all-targets
         working-directory: desktop/rata-app/src-tauri
 
+      # desktop-ci.yml's two further test steps of the shell: without
+      # self-update (the store's and the phone's build), and the smoke
+      # self-test's own tests. Its clippy steps stay there, like the one for
+      # the default build: the gate runs tests only.
+      - name: Desktop shell tests, without self-update
+        run: cargo test --all-targets --no-default-features
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Tests of the smoke self-test
+        run: cargo test --lib --no-default-features --features smoke -- "smoke::"
+        working-directory: desktop/rata-app/src-tauri
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -738,7 +750,7 @@ jobs:
       # licence box). It must stay up 15 s and show "RATA <version> beta" as
       # its window title, which is how testers report their build, so a title
       # left behind at the last version fails here. The window is built in
-      # setup (main.rs) and a failed setup ends the process, so staying up
+      # setup (lib.rs) and a failed setup ends the process, so staying up
       # also means the window was made; a panic in the log fails as well.
       # After the signature check, so a signed build is tested as signed; the
       # smoke itself is the same either way. Before the installers are kept
@@ -757,7 +769,7 @@ jobs:
       # warning says so, and what is asserted is that the app stays up with
       # a clean log.
       # Everywhere, each one is then launched a second time while the first
-      # is up, and must find the first (main.rs, review R5) and exit 0 with
+      # is up, and must find the first (lib.rs, review R5) and exit 0 with
       # the first still running. On Linux single instance hands over through
       # a D-Bus name, so the script runs inside a session bus of its own
       # (dbus-run-session, from the dbus package installed below).

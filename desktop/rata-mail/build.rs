@@ -23,6 +23,11 @@ fn main() {
         );
         std::process::exit(1);
     }
+    // `system_dns` names a build that looks names up through the system's own
+    // resolver rather than hickory (iOS). Declared here so that the tests
+    // needing hickory can say so (resolve.rs, `scripted`) whether or not this
+    // script sets it; declaring it twice is harmless.
+    println!("cargo:rustc-check-cfg=cfg(system_dns)");
 }
 
 /// Whether names are looked up through the system's own resolver
