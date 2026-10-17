@@ -713,8 +713,10 @@ mod tests {
     /// the page in a preview, which nobody asked to open (a link goes to
     /// the browser, and only once asked). iOS 15 or later. No updater,
     /// which a store's build must not have. The identifier is the
-    /// desktop's, which is the owner's to change (D9). Each computer's
-    /// config is the committed one, untouched.
+    /// desktop's: a store's build (the iPhone's, later the Mac App
+    /// Store's) is `org.mailrata.mail`, set with `--config` when it is
+    /// built (D9), never here. Each computer's config is the committed
+    /// one, untouched.
     #[test]
     fn an_ios_build_merges_its_own_config_and_a_computers_does_not() {
         use tauri::utils::config::{Config, parse::read_from};

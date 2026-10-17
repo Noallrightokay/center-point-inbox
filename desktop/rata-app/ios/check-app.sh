@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# check-app.sh RATA.app — what a built iOS app must carry from tauri.ios.conf.json
-# and prepare.sh: RATA's identifier, iOS 15 as its minimum, iPhone only, the
-# Info.plist keys prepare.sh adds, the committed privacy manifest at the top
-# of the bundle, where iOS reads it, and RATA's own icon, not Tauri's. Exit 1
-# on anything missing. For .github/workflows/ios.yml.
+# check-app.sh RATA.app — what a built iOS app must carry from
+# tauri.ios.conf.json and prepare.sh: RATA's identifier (RATA_BUNDLE, else
+# org.mailrata.desktop), iOS 15 as its minimum, iPhone only, the Info.plist
+# keys prepare.sh adds, the committed privacy manifest at the top of the
+# bundle, where iOS reads it, and RATA's own icon, not Tauri's. Exit 1 on
+# anything missing. For .github/workflows/ios.yml.
 set -uo pipefail
 app="${1:?give the built .app}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +17,9 @@ want() {
   echo "$1 = $got"
   [ "$got" = "$2" ] || { echo "::error::$1 is \"$got\", not \"$2\""; bad=1; }
 }
-want CFBundleIdentifier org.mailrata.desktop
+# The committed identifier, or RATA_BUNDLE: a store's build sets
+# org.mailrata.mail with --config (D9).
+want CFBundleIdentifier "${RATA_BUNDLE:-org.mailrata.desktop}"
 want MinimumOSVersion 15.0
 want UIFileSharingEnabled true
 want LSSupportsOpeningDocumentsInPlace true
