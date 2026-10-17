@@ -163,7 +163,7 @@ input:focus{box-shadow:inset 0 0 0 1px var(--tint),0 0 0 3px var(--tint-soft)}
     <!-- Whole addresses on purpose: sync-ui.sh copies this page into the
          desktop app, which has neither page. There a mailrata.org link opens
          in the browser (links::navigation); a relative one would go nowhere. -->
-    <p class="agree" id="s-agree">By creating an account you agree to the <a href="https://mailrata.org/terms.html">terms of service</a> and the <a href="https://mailrata.org/privacy.html">privacy policy</a>.</p>
+    <p class="agree" id="s-agree">By creating an account you agree to the <a id="s-terms" href="https://mailrata.org/terms.html">terms of service</a> and the <a id="s-privacy" href="https://mailrata.org/privacy.html">privacy policy</a>.</p>
   </div>
 
   <div class="foot" id="foot">
@@ -226,12 +226,18 @@ function hideMsgs(){['#l-err','#l-ok','#s-err','#s-ok'].forEach(x=>{const n=$(x)
    somebody here to log in and get them back afterwards — but it is matched
    against a list rather than followed, because a redirect target taken from the
    query string is an open redirect, and an open redirect on the page that
-   handles passwords is the one you least want. */
-const NEXT={account:'account.html',app:'app.html'};
+   handles passwords is the one you least want.
+   A store build (config.js's distribution, written by sync-ui.sh, never the
+   user agent) sells nothing and links to nothing that does: no licence page
+   to go on to, no word of paying or of a plan to choose, and the store-safe
+   terms and privacy pages its config names. */
+const STORE_BUILD=(window.RATA_CONFIG||{}).distribution==='store';
+const PAGES=(window.RATA_CONFIG||{}).pages||{};
+const NEXT=STORE_BUILD?{app:'app.html'}:{account:'account.html',app:'app.html'};
 /* Straight from Stripe, the licence page waits for the webhook only when it
    sees ?checkout=success, so that one flag is carried back to it, and only
    to it; nothing else from the query string goes anywhere. */
-const PAID=new URLSearchParams(location.search).get('checkout')==='success';
+const PAID=!STORE_BUILD&&new URLSearchParams(location.search).get('checkout')==='success';
 function nextPage(){
   try{
     const page=NEXT[new URLSearchParams(location.search).get('next')]||'app.html';
@@ -241,7 +247,9 @@ function nextPage(){
 if(PAID&&new URLSearchParams(location.search).get('next')==='account')$('#paid-note').hidden=false;
 /* The desktop app opens this page for its own device account, where the key
    is pasted in the app itself. */
-if(CFG.desktop)$('#s-sub').textContent='Takes about ten seconds. Then paste the licence key from your mailrata.org licence page, and add your mailboxes.';
+if(STORE_BUILD)$('#s-sub').textContent='Takes about ten seconds. Then paste the licence key from your mailrata.org account, and add your mailboxes.';
+else if(CFG.desktop)$('#s-sub').textContent='Takes about ten seconds. Then paste the licence key from your mailrata.org licence page, and add your mailboxes.';
+for(const [k,id] of [['terms','#s-terms'],['privacy','#s-privacy']])if(typeof PAGES[k]==='string'&&/^https:\/\//.test(PAGES[k]))$(id).setAttribute('href',PAGES[k]);
 function session(s){localStorage.setItem('centra_session',JSON.stringify(s));try{localStorage.setItem(RETURNING,'1')}catch(e){}location.replace(nextPage())}
 
 $('#login-form').addEventListener('submit',async e=>{

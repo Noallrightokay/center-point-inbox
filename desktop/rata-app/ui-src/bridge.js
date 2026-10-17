@@ -19,6 +19,15 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return; // Running on the web; leave apiFetch alone.
 
+  /* Which build this is, and the places on the web it sends people, as
+     sync-ui.sh wrote them into config.js (loaded just before this file). A
+     store build ('store') never asks Rust about updates, since the store
+     updates the app, and its licence box links nowhere; the addresses the
+     direct build links to are in its config.js only, never here. */
+  const CONFIG = window.RATA_CONFIG || {};
+  const STORE = CONFIG.distribution === 'store';
+  const PAGES = CONFIG.pages && typeof CONFIG.pages === 'object' ? CONFIG.pages : {};
+
   /* The interface's own vocabulary for a message. The Rust side uses its own
      names, and translating here keeps the mail layer from being shaped by one
      particular screen's field names. */
@@ -954,9 +963,11 @@
        stored here (forget_everything), and the page then clears its own
        store and sign-in. The customer's mailrata.org account and
        subscription are not on this computer and are not deleted from it:
-       the page says so and opens mailrata.org/app, whose Settings
-       holds Delete account and the billing portal. The wording lives
-       here, beside the call that does the work, so the two cannot drift. */
+       the page says so and opens the account page this build's config.js
+       names (`account`: RATA's page on mailrata.org, whose Settings holds
+       Delete account and the billing portal, or in a store build the
+       store-safe page that deletes the account). The wording lives here,
+       beside the call that does the work, so the two cannot drift. */
     async '/api/account'(opts) {
       if ((opts?.method || 'GET').toUpperCase() === 'DELETE') {
         try {
@@ -979,10 +990,19 @@
         mailboxes: n,
         removes,
         keeps: ['your mail, which stays at your provider', 'your mailrata.org account and subscription, which you manage and delete at mailrata.org'],
-        account: 'https://mailrata.org/app',
+        account: PAGES.account || '',
       };
     },
   };
+
+  /* A store build is updated by its store and may not update itself (Apple
+     2.5.2, Google Play's Device and Network Abuse policy), so it never asks
+     Rust whether there is a newer RATA or to install one: these two answer
+     as any feature this copy does not have. */
+  if (STORE) {
+    delete ROUTES['/api/update/check'];
+    delete ROUTES['/api/update/install'];
+  }
 
   /* Renewal.
 
@@ -1004,6 +1024,27 @@
   const RENEW_EVERY = Number(window.__RATA_RENEW_EVERY) > 0 ? Number(window.__RATA_RENEW_EVERY) : 6 * 3600e3;
   /* How long a renewal may take before it counts as unreachable. */
   const RENEW_WAIT = 20e3;
+
+  /* What a store build says when mailrata.org refuses a renewal. The site's
+     own sentences are written for the direct build and the website: a
+     cancelled subscription is told to "Choose a plan at mailrata.org", a
+     purchase being set up is spoken of as a payment, and the rest send the
+     customer to sign in there. A store build may lead to no purchase outside
+     the store, so it never shows the site's sentence: each reason has its
+     own words here, naming the mailrata.org account as the licence box does,
+     with no link, price or plan to choose, and a reason this build does not
+     know gets the last one. Whether the licence is kept is unchanged. */
+  const STORE_REFUSALS = {
+    'no-subscription': 'This licence has ended. Your plan is managed in your mailrata.org account.',
+    'too-old': 'This licence expired too long ago to renew itself. Paste a new licence key from your mailrata.org account.',
+    pending: 'Your licence is being set up. RATA keeps the licence it has and tries again later.',
+    malformed: 'That licence could not be read. Paste a new licence key from your mailrata.org account.',
+    'bad-signature': 'mailrata.org did not recognise the signature on this licence. Paste a new licence key from your mailrata.org account.',
+    'no-public-key': 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.',
+    'not-configured': 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+  };
+  const storeRefusal = (reason) => (Object.prototype.hasOwnProperty.call(STORE_REFUSALS, reason) ? STORE_REFUSALS[reason]
+    : 'mailrata.org did not renew this licence. Your plan is managed in your mailrata.org account.');
 
   /* Ask mailrata.org for a fresh licence. Answers the standing after a
      renewal that worked, `{ licensed: false, reason, message }` when
@@ -1042,7 +1083,7 @@
          that cannot sign one (not-configured, its own fault too). Each is
          asked again at the next renewal. */
       if (d && d.licensed !== true && typeof d.reason === 'string' && typeof d.message === 'string' && d.message.trim()) {
-        return { licensed: false, reason: d.reason, message: d.message };
+        return { licensed: false, reason: d.reason, message: STORE ? storeRefusal(d.reason) : d.message };
       }
       if (d.licensed && d.licence) {
         /* Rust keeps the new token only if it verifies (set_licence): one
@@ -1087,7 +1128,8 @@
         standing = after && after.licensed ? after : await invoke('licence_status');
         /* Still not licensed after a real refusal: the licence box says why in
            the server's words ("Sign in at mailrata.org to get a new one"),
-           not only that the licence has expired. */
+           or a store build's own (storeRefusal), not only that the licence
+           has expired. Settings' plan line shows the same sentence. */
         if (after && !after.licensed && !standing.licensed && after.message) {
           standing = Object.assign({}, standing, { message: after.message });
         }
@@ -1145,13 +1187,23 @@
         <p class="rata-lic-error" id="rata-licence-error" role="alert"></p>
         <button id="rata-licence-save">Use this licence</button>
         <button id="rata-licence-retry" class="rata-lic-retry" hidden>Try again</button>
-        <p class="rata-lic-note">
-          Sign in at <a href="https://mailrata.org/account">mailrata.org</a>
-          to find your key. RATA keeps working offline for thirty days at a time.
-        </p>
+        <p class="rata-lic-note" id="rata-licence-note"></p>
       </div>`;
     document.body.appendChild(wrap);
     wrap.querySelector('#rata-licence-why').textContent = standing.message;
+    /* Where the key is found: the licence page this build's config.js names,
+       in the browser (the click handler below). A store build names none and
+       links nowhere, since that page sells plans. */
+    const note = wrap.querySelector('#rata-licence-note');
+    const offline = 'RATA keeps working offline for thirty days at a time.';
+    if (!STORE && /^https:\/\//.test(String(PAGES.licence || ''))) {
+      const a = document.createElement('a');
+      a.href = PAGES.licence;
+      a.textContent = 'mailrata.org';
+      note.append('Sign in at ', a, ` to find your key. ${offline}`);
+    } else {
+      note.textContent = `Paste the licence key from your mailrata.org account. ${offline}`;
+    }
 
     const input = wrap.querySelector('#rata-licence-input');
     const err = wrap.querySelector('#rata-licence-error');

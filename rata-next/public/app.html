@@ -99,8 +99,12 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 .vh{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
 
 /* ---------- shell ---------- */
-#app{display:flex;height:100%;overflow:hidden}
-#rail{width:232px;flex-shrink:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-right:1px solid var(--hair-2);display:flex;flex-direction:column;padding:22px 14px 16px;overflow-y:auto}
+/* A phone's own edges (viewport-fit=cover): the status bar or the camera at
+   the top, the notch and the rounded corners at the sides in landscape. The
+   rail and the top bar reach under the status bar and keep what is in them
+   below it; nothing sits under the notch. Every inset is 0 on a computer. */
+#app{display:flex;height:100%;overflow:hidden;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+#rail{width:232px;flex-shrink:0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-right:1px solid var(--hair-2);display:flex;flex-direction:column;padding:calc(22px + env(safe-area-inset-top,0px)) 14px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto}
 .brand{display:flex;align-items:center;gap:11px;padding:0 8px 20px}
 .brand-mark{width:38px;height:38px;flex-shrink:0;display:grid;place-items:center}
 .brand-name{font-family:'Fredoka',var(--sans);font-weight:600;font-size:20px;letter-spacing:.04em;line-height:1.1}
@@ -121,7 +125,7 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 #compose-btn:hover{background:var(--tint-btn-hover)}
 
 #main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.topbar{height:56px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 24px;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
+.topbar{height:calc(56px + env(safe-area-inset-top,0px));flex-shrink:0;display:flex;align-items:center;gap:14px;padding:env(safe-area-inset-top,0px) 24px 0;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
 .topbar h1{font-size:20px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
 .topbar .eyebrow{font-size:11px;color:var(--faint);display:block;font-weight:500}
 .top-search{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);box-shadow:var(--edge);border-radius:var(--r-sm);padding:7px 12px;width:min(320px,30vw);color:var(--faint);transition:background .15s}
@@ -484,7 +488,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .srv-all{margin-top:6px}
 
 /* ---------- compose ---------- */
-#compose-ov{position:fixed;inset:0;background:rgba(14,16,20,.38);display:none;z-index:50}
+#compose-ov{position:fixed;inset:0;background:rgba(14,16,20,.38);display:none;z-index:50;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
 #compose-ov.open{display:flex;align-items:flex-end;justify-content:center}
 #compose{width:min(680px,100%);max-height:92vh;background:var(--card);border-radius:var(--r) var(--r) 0 0;display:flex;flex-direction:column;animation:up .16s ease-out;box-shadow:var(--shadow-lg)}
 @keyframes up{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
@@ -591,7 +595,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .src-meta{font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
 /* ---------- account menu ---------- */
 #acct-btn{width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:13px;display:grid;place-items:center;margin-left:12px;flex-shrink:0;box-shadow:var(--edge)}
-#acct-menu{position:absolute;top:56px;right:18px;width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
+#acct-menu{position:absolute;top:calc(56px + env(safe-area-inset-top,0px));right:calc(18px + env(safe-area-inset-right,0px));width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
 #acct-menu.open{display:block;animation:pop .16s ease-out}
 /* Menus and dialog cards fade and rise 4 px in 160 ms (DESIGN.md, Motion):
    no scale, no overshoot. Five rules use it (the account menu and the link,
@@ -624,7 +628,7 @@ button.att-card:disabled{opacity:.6;cursor:progress}
    list, outlined as focus is (DESIGN.md), and only once a key has moved it. */
 #keys-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:62;align-items:center;justify-content:center;padding:20px}
 #keys-ov.open{display:flex}
-#keys-card{width:min(660px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#keys-card{width:min(660px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 .keys-head{display:flex;align-items:center;margin-bottom:12px}
 .keys-head h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
 .keys-head .cmp-close{margin-left:auto}
@@ -668,7 +672,7 @@ button.cv-row:hover{background:var(--fill-2)}
 /* Share to Slack (K1): a dialog like the link question, a little wider. */
 #slack-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
 #slack-ov.open{display:flex}
-#slack-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#slack-card{width:min(540px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 #slack-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
 #slack-card legend,#slack-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
 #slack-card fieldset legend{margin-top:0}
@@ -686,7 +690,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .slack-err:empty{display:none}
 #create-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:20px}
 #create-ov.open{display:flex}
-#create-card{width:min(540px,100%);max-height:calc(100vh - 40px);overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
+#create-card{width:min(540px,100%);max-height:100%;overflow-y:auto;background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:22px 24px 20px;animation:pop .16s ease-out}
 #create-card fieldset{border:0;padding:0;margin:14px 0 0;min-width:0}
 #create-card legend,#create-card .slack-lbl{display:block;padding:0;margin:14px 0 6px;font-size:13px;font-weight:600;color:var(--slate)}
 #create-card fieldset legend{margin-top:0}
@@ -757,6 +761,19 @@ button.cv-row:hover{background:var(--fill-2)}
 .saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
 .saveto-menu button:hover{background:var(--fill-2)}
 @media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu{animation:none}}
+/* A question asked in the page (ask, askText), never through the browser's
+   own confirm() or prompt(), which the webview on Apple's systems answers
+   with Cancel and with nothing. Above the Undo toast, so nothing under a
+   question can change while it waits. */
+#ask-ov,#asktext-ov{position:fixed;inset:0;background:rgba(14,16,20,.45);display:none;z-index:100;align-items:center;justify-content:center;padding:20px}
+#ask-ov.open,#asktext-ov.open{display:flex}
+#ask-card,#asktext-card{width:min(440px,100%);background:var(--card);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);padding:24px;animation:pop .16s ease-out}
+#ask-card h2,#asktext-card h2{font-size:17px;font-weight:600;margin-bottom:10px;line-height:1.35;overflow-wrap:anywhere}
+#asktext-card label{display:block;font-size:13px;font-weight:500;margin:4px 0 6px}
+@media (prefers-reduced-motion:reduce){#ask-card,#asktext-card{animation:none}}
+/* Every question and sheet keeps its 20 px from a phone's edges, or the
+   status bar, notch or home indicator where that is more. */
+#pic-ov,#welcome-ov,#link-ov,#warn-ov,#keys-ov,#slack-ov,#create-ov,#ask-ov,#asktext-ov{padding:max(20px,env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) max(20px,env(safe-area-inset-bottom,0px)) max(20px,env(safe-area-inset-left,0px))}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -767,9 +784,9 @@ button.cv-row:hover{background:var(--fill-2)}
 .w-dot.live{background:var(--green)}
 .w-dot.soon{background:var(--amber)}
 /* ---------- assist ---------- */
-#assist-fab{position:fixed;right:20px;bottom:20px;width:48px;height:48px;border-radius:var(--r);background:var(--card);display:grid;place-items:center;box-shadow:var(--shadow-lg);z-index:45;transition:var(--lift)}
+#assist-fab{position:fixed;right:calc(20px + env(safe-area-inset-right,0px));bottom:calc(20px + env(safe-area-inset-bottom,0px));width:48px;height:48px;border-radius:var(--r);background:var(--card);display:grid;place-items:center;box-shadow:var(--shadow-lg);z-index:45;transition:var(--lift)}
 #assist-fab:hover{background:var(--fill-2)}
-#assist-ov{position:fixed;inset:0;background:rgba(14,16,20,.32);display:none;z-index:46}
+#assist-ov{position:fixed;inset:0;background:rgba(14,16,20,.32);display:none;z-index:46;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
 #assist-ov.open{display:flex;justify-content:flex-end}
 #assist{width:min(420px,100%);height:100%;background:var(--card);display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:slidein .16s ease-out}
 @keyframes slidein{from{transform:translateX(12px);opacity:0}to{transform:none;opacity:1}}
@@ -777,7 +794,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .as-head{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--hair-2)}
 .as-head b{font-size:15px;font-weight:600}
 .as-actions{display:flex;gap:8px;padding:14px 18px 6px}
-.as-out{flex:1;overflow-y:auto;padding:12px 18px 24px}
+.as-out{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
 .as-sum{font-size:14px;color:var(--slate);margin:6px 0 14px}
 .as-sum b{color:var(--ink);font-weight:600}
 .as-item{background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:var(--lift)}
@@ -792,14 +809,14 @@ button.cv-row:hover{background:var(--fill-2)}
 .as-chip.action{background:var(--tint-wash);color:var(--tint-deep)}
 .as-chip.deadline{background:var(--amber-soft);color:var(--amber)}
 .as-ai{white-space:pre-line;font-size:13.5px;line-height:1.6;background:var(--card);border-radius:var(--r);box-shadow:var(--edge);padding:16px 18px}
-@media (max-width:880px){#assist-fab{bottom:76px}}
+@media (max-width:880px){#assist-fab{bottom:calc(76px + env(safe-area-inset-bottom,0px))}}
 /* ---------- toast ---------- */
-#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:var(--bg);padding:10px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw;text-align:center}
+#toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%) translateY(6px);background:var(--ink);color:var(--bg);padding:10px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%)}
 /* Undo send (H9): the count before a message goes, with its Undo. Always in
    the accessibility tree (role=status), so what it says is announced; empty
    and out of reach when there is nothing to undo. */
-#send-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(6px);display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:8px 8px 8px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw}
+#send-toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%) translateY(6px);display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);padding:8px 8px 8px 16px;font-size:13px;font-weight:500;border-radius:var(--r-sm);box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:99;max-width:90vw}
 #send-toast.show{opacity:1;transform:translateX(-50%);pointer-events:auto}
 #send-toast:not(.show){padding:0;box-shadow:none}
 #send-toast:focus{outline:none}
@@ -808,13 +825,13 @@ button.cv-row:hover{background:var(--fill-2)}
 #send-toast button:hover{background:rgba(127,127,127,.28)}
 #send-toast button:focus-visible{outline:2px solid var(--tint);outline-offset:2px}
 .st-say{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-body.send-counting #toast{bottom:76px}
+body.send-counting #toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 /* Over the composer's own buttons it would be in the way: at the top, then. */
-#compose-ov.open~#send-toast{bottom:auto;top:24px}
+#compose-ov.open~#send-toast{bottom:auto;top:calc(24px + env(safe-area-inset-top,0px))}
 /* A newer RATA, ready to install (desktop app). */
 /* Above the licence prompt (bridge.css, 99999): an update may be exactly what a
    copy whose licence check fails needs. */
-#upd-bar{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:100000;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px);padding:10px 12px 10px 16px;border-radius:var(--r);background:var(--card);box-shadow:var(--shadow-lg);font-size:13.5px}
+#upd-bar{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:100000;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px);padding:10px 12px 10px 16px;border-radius:var(--r);background:var(--card);box-shadow:var(--shadow-lg);font-size:13.5px}
 #upd-bar[hidden]{display:none}
 #upd-bar .upd-text{font-weight:600}
 #upd-bar .upd-why{display:block;font-weight:400;color:var(--faint);font-size:12.5px;max-width:520px}
@@ -868,14 +885,14 @@ body.send-counting #toast{bottom:76px}
    bottom where a thumb is. */
 @media (max-width:900px){
   #rail{display:none}
-  #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--hair-2);z-index:40}
+  #mnav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--hair-2);z-index:40;padding:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
   #mnav button{flex:1;padding:8px 0 max(8px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--faint)}
   #mnav button.active{color:var(--tint)}
   #mnav svg{width:22px;height:22px}
   #mnav button:active{transform:none}
   #main{padding-bottom:60px}
   .side-list{width:100%;border-right:none}
-  .detail-pane{display:none;position:fixed;inset:0;bottom:60px;z-index:30;background:var(--bg)}
+  .detail-pane{display:none;position:fixed;inset:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) 60px env(safe-area-inset-left,0px);z-index:30;background:var(--bg)}
   .detail-pane.open{display:flex}
   .md-inner{padding:18px 14px 60px}
   .md-back{display:inline-flex!important;align-items:center;gap:6px;color:var(--tint);font-weight:600;font-size:15px;padding:12px 16px 0}
@@ -921,7 +938,7 @@ body.send-counting #toast{bottom:76px}
 /* Tablet landscape and small laptops: both panes fit, but 232px of rail is
    232px not being read in. Icons only until there is room for words. */
 @media (min-width:901px) and (max-width:1200px){
-  #rail{width:72px;padding:18px 10px 14px;align-items:center}
+  #rail{width:72px;padding:calc(18px + env(safe-area-inset-top,0px)) 10px calc(14px + env(safe-area-inset-bottom,0px));align-items:center}
   #rail .brand-text,#rail .rail-profile,#rail .sec-label{display:none}
   /* Icons only, and still named: the label is there for a screen reader. */
   #rail .nav-label{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
@@ -1180,7 +1197,7 @@ body.send-counting #toast{bottom:76px}
             <div class="grow"><b id="del-head">This cannot be undone</b><span id="del-detail" role="status"></span></div>
             <input type="text" id="del-email" aria-label="Type your email address to confirm" placeholder="type your email address" autocomplete="off" style="min-width:230px">
             <button class="btn danger" id="del-go">Delete permanently</button>
-            <a class="btn" id="del-web" href="https://mailrata.org/app" target="_blank" rel="noopener">Open mailrata.org account</a>
+            <a class="btn" id="del-web" target="_blank" rel="noopener">Open mailrata.org account</a>
             <button class="btn" id="del-cancel">Keep my account</button>
           </div>
         </div>
@@ -1200,10 +1217,11 @@ body.send-counting #toast{bottom:76px}
           <div id="conn-list"></div>
         </div>
         <div class="comp-sec">
-          <div class="sec-label">Plan &amp; billing</div>
+          <div class="sec-label" id="plan-sec">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
-          <div class="set-row"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
-          <div class="set-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
+          <div class="set-row" id="plan-change"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
+          <div class="set-row" id="bill-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
+          <div class="set-row" id="plan-managed" style="display:none"><div class="grow"><b>Managing your plan</b><span>Your plan is managed in your mailrata.org account.</span></div></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">About</div>
@@ -1214,7 +1232,10 @@ body.send-counting #toast{bottom:76px}
           <div class="sec-label">Help &amp; diagnostics</div>
           <div class="set-row diag-row" id="diag-row" style="display:none"><div class="grow"><b>Copy diagnostics</b><span>Your version, your system, and each mailbox's servers and last error, with no addresses, passwords or message text. Paste this into your bug report.</span><textarea id="diag-text" readonly spellcheck="false" aria-label="Diagnostics" style="display:none"></textarea><span class="diag-hint" id="diag-hint" role="status" style="display:none"></span></div><button class="btn" id="diag-copy">Copy diagnostics</button></div>
           <div class="set-row"><div class="grow"><b>Help</b><span>Linking a mailbox, what RATA's messages mean, and how to report a problem, on mailrata.org.</span></div><a class="btn" id="help-link" href="https://mailrata.org/help" target="_blank" rel="noopener">Open help</a></div>
-          <div class="set-row"><div class="grow"><b>Report a bug</b><span>Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
+          <div class="set-row"><div class="grow"><b>Report a bug</b><span id="bug-what">Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.</span></div><a class="btn" id="bug-link" href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md" target="_blank" rel="noopener">Report a bug</a></div>
+          <div class="set-row"><div class="grow"><b>Privacy policy</b><span>What RATA keeps, where it keeps it, and what it sends elsewhere, on mailrata.org.</span></div><a class="btn" id="privacy-link" href="https://mailrata.org/privacy.html" target="_blank" rel="noopener">Open privacy policy</a></div>
+          <div class="set-row"><div class="grow"><b>Terms of service</b><span>The terms you use RATA under, on mailrata.org.</span></div><a class="btn" id="terms-link" href="https://mailrata.org/terms.html" target="_blank" rel="noopener">Open terms</a></div>
+          <div class="set-row" id="acct-del-row" style="display:none"><div class="grow"><b>Your mailrata.org account</b><span>Deleting it is done on mailrata.org. Delete account, under Workspace, removes what RATA keeps on this computer.</span></div><a class="btn" id="acct-del-link" target="_blank" rel="noopener">Delete your mailrata.org account</a></div>
         </div>
       </div>
     </section>
@@ -1238,6 +1259,25 @@ body.send-counting #toast{bottom:76px}
     <p id="w-sub">Your account is ready. Let's bring your inboxes over.</p>
     <div id="w-rows"></div>
     <button class="btn primary" id="w-enter" style="width:100%;margin-top:16px;justify-content:center">Enter RATA</button>
+  </div>
+</div>
+
+<!-- A question RATA asks before it does something (ask), and a name it asks
+     for (askText), in place of the browser's confirm() and prompt() -->
+<div id="ask-ov" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-text">
+  <div id="ask-card">
+    <h2 id="ask-title"></h2>
+    <p class="link-lead" id="ask-text"></p>
+    <div class="link-btns"><button class="btn" id="ask-cancel">Cancel</button><button class="btn danger" id="ask-ok"></button></div>
+  </div>
+</div>
+<div id="asktext-ov" role="dialog" aria-modal="true" aria-labelledby="asktext-title" aria-describedby="asktext-text">
+  <div id="asktext-card">
+    <h2 id="asktext-title"></h2>
+    <label for="asktext-in" id="asktext-label"></label>
+    <input class="txt" id="asktext-in" type="text" autocomplete="off">
+    <p class="link-lead" id="asktext-text"></p>
+    <div class="link-btns"><button class="btn" id="asktext-cancel">Cancel</button><button class="btn primary" id="asktext-ok"></button></div>
   </div>
 </div>
 
@@ -1381,6 +1421,18 @@ const LS_KEY='centra_ws_'+(SESSION?SESSION.uid:'anon');
 const CFG_KEY='centra_deploy_cfg';
 const cfg=()=>Object.assign({},window.RATA_CONFIG||{},JSON.parse(localStorage.getItem(CFG_KEY)||'{}'));
 const setCfg=p=>{localStorage.setItem(CFG_KEY,JSON.stringify(Object.assign(cfg(),p)))};
+/* Which build this is, from the build's own config.js (sync-ui.sh), never
+   from the user agent or this computer's storage. A store build (Apple's or
+   Google's store) is updated by the store, sells nothing and links to
+   nothing that does: no prices, buy or billing buttons, no update row or
+   bar, and the store-safe pages under mailrata.org/in-app/. PAGES are the
+   places on the web the build sends people (help, bug, privacy, terms,
+   account, releases); the website's config names none, and its own pages
+   are the defaults in the markup. */
+const BUILD=window.RATA_CONFIG||{};
+const STORE_BUILD=BUILD.distribution==='store';
+const PAGES=BUILD.pages&&typeof BUILD.pages==='object'?BUILD.pages:{};
+const pageOf=k=>typeof PAGES[k]==='string'&&/^https:\/\//.test(PAGES[k])?PAGES[k]:'';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -2015,6 +2067,74 @@ window.addEventListener('keydown',e=>{
   if(!WARN_DONE)return;
   if(e.key==='Escape'||(e.key==='Enter'&&document.activeElement!==$('#warn-go'))){e.preventDefault();e.stopPropagation();closeWarn(false)}
 },true);
+/* A question in the page (ask: yes or no; askText: a name), never the
+   browser's own. The webview on Apple's systems has no panel for
+   window.confirm() or prompt(): WKWebView answers the one with Cancel and
+   the other with nothing, so on an iPhone or a Mac a question asked that way
+   could never be answered yes. Built as the disguised-program question is:
+   the safe choice has the focus (Cancel, for anything that cannot be taken
+   back), Escape and the backdrop cancel, the keyboard stays inside
+   (DLG_ORDER), keyDialog keeps message keys away, and the focus goes back to
+   what asked. One question at a time: a new one answers the one waiting as
+   cancelled. Every word goes in as text. */
+let ASK=null,ASK_DOWN=null;
+function askEnd(v){
+  const a=ASK;if(!a)return;
+  ASK=null;a.el.classList.remove('open');dlgClose(a.el);a.res(v);
+}
+function askShow(el,first,no){
+  dlgOpen(el);el.classList.add('open');first.focus();
+  return new Promise(res=>{ASK={el,res,no}});
+}
+function ask({title,text,ok,cancel,danger}={}){
+  if(ASK)askEnd(ASK.no);
+  $('#ask-title').textContent=title||'';
+  $('#ask-text').textContent=text||'';
+  const go=$('#ask-ok');go.textContent=ok||'OK';go.className='btn '+(danger?'danger':'primary');
+  $('#ask-cancel').textContent=cancel||'Cancel';
+  return askShow($('#ask-ov'),danger?$('#ask-cancel'):go,false);
+}
+/* Answers the name typed, trimmed and at most `max` characters, or null
+   when nothing was typed or the question was cancelled. */
+function askText({title,label,value,max,ok,text}={}){
+  if(ASK)askEnd(ASK.no);
+  const n=max||200,inp=$('#asktext-in');
+  $('#asktext-title').textContent=title||'';
+  $('#asktext-label').textContent=label||'';
+  $('#asktext-text').textContent=text||'At most '+n+' characters.';
+  $('#asktext-ok').textContent=ok||'OK';
+  inp.maxLength=n;inp.value=String(value||'').slice(0,n);
+  const p=askShow($('#asktext-ov'),inp,null);
+  ASK.max=n;inp.select();
+  return p;
+}
+function askTextSay(){
+  if(!ASK||ASK.el.id!=='asktext-ov')return;
+  askEnd($('#asktext-in').value.trim().slice(0,ASK.max)||null);
+}
+$('#ask-cancel').onclick=()=>askEnd(false);
+$('#ask-ok').onclick=()=>{if(ASK&&ASK.el.id==='ask-ov')askEnd(true)};
+$('#asktext-cancel').onclick=()=>askEnd(null);
+$('#asktext-ok').onclick=askTextSay;
+/* The backdrop cancels, when the press began on it too (not a selection
+   dragged out of the field). */
+['#ask-ov','#asktext-ov'].forEach(s=>{
+  const el=$(s);
+  el.addEventListener('pointerdown',e=>{ASK_DOWN=e.target});
+  el.addEventListener('click',e=>{if(e.target===el&&ASK_DOWN===el&&ASK)askEnd(ASK.no)});
+});
+/* Escape cancels. Enter answers yes only on the confirming button (or, for
+   a name, in the field); anywhere else it cancels. Nothing behind the
+   question hears either key. */
+window.addEventListener('keydown',e=>{
+  if(!ASK||e.isComposing||e.keyCode===229||(e.key!=='Escape'&&e.key!=='Enter')||topDialog()!==ASK.el)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  const at=document.activeElement;
+  if(e.key==='Escape')askEnd(ASK.no);
+  else if(ASK.el.id==='ask-ov')askEnd(at===$('#ask-ok'));
+  else if(at===$('#asktext-cancel'))askEnd(null);
+  else askTextSay();
+},true);
 /* An attachment goes to the Downloads folder and is never opened by RATA:
    it is a stranger's file, and running it is the customer's decision. */
 async function saveAttachment(m,a,btn,confirmed){
@@ -2404,7 +2524,7 @@ const glide=()=>matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'s
    Undo toast, say). The disguised-program question's own keys (Escape and
    Enter cancel) are unchanged; the picture and the shortcut sheet keep
    their own return. Topmost first, as their z-index stacks them. */
-const DLG_ORDER=['#rata-licence','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
+const DLG_ORDER=['#rata-licence','#ask-ov','#asktext-ov','#keys-ov','#warn-ov','#pic-ov','#link-ov','#slack-ov','#create-ov','#compose-ov','#welcome-ov','#assist-ov'];
 const DLG_FROM=new Map();
 function topDialog(){
   for(const s of DLG_ORDER){const el=document.querySelector(s);if(el&&(s==='#rata-licence'||el.classList.contains('open')))return el}
@@ -2547,8 +2667,14 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async e=>{
   }
   const n=SEL.size;
   if(act==='del'){
-    if(!confirm('Delete '+n+' message'+(n===1?'':'s')+' from your workspace?'))return;
-    const list=chosen(),out=await takeOff(list,'trash',()=>{SEL.clear();drawList()});
+    /* What is deleted is what the question named: the messages selected
+       when it was asked, as many of them as are still here once it is
+       answered. */
+    const ids=new Set(SEL);
+    if(!await ask({title:'Delete '+n+' message'+(n===1?'':'s')+' from your workspace?',
+      text:'Mail in a linked mailbox goes to that mailbox\u2019s Trash.',ok:'Delete',danger:true}))return;
+    const list=S.messages.filter(m=>ids.has(m.id));if(!list.length)return;
+    const out=await takeOff(list,'trash',()=>{SEL.clear();drawList()});
     if(out.back)drawList();
     if(list.length>out.back)await audit('mail.bulk','del \u00d7 '+(list.length-out.back));
     toast(leftSaying('Deleted',list.length,out,0));
@@ -2886,7 +3012,9 @@ function renderSplitLock(){
   const locked=!can('split');
   btn.classList.toggle('locked',locked);
   btn.title=locked?needPlan('split','Inboxes side by side'):'';
-  btn.textContent=locked?'Side by side · Pro':'Side by side';
+  /* A store build names no plan to buy: the title and the toast say it is
+     not in this plan, and the button keeps its own name. */
+  btn.textContent=locked&&!STORE_BUILD?'Side by side · Pro':'Side by side';
   const one=document.querySelector('#inbox-mode [data-mode="one"]');
   if(one)one.title='Every mailbox in one inbox — this is the Center Point inbox';
 }
@@ -4075,7 +4203,7 @@ function keyTyping(el){
    a disguised program, deleting the account, the licence box, the welcome,
    a picture shown large. */
 function keyDialog(){
-  return !!(LINK_PENDING||WARN_DONE||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
+  return !!(LINK_PENDING||WARN_DONE||ASK||SAVETO||['#link-ov','#warn-ov','#welcome-ov','#pic-ov','#slack-ov','#create-ov'].some(s=>$(s).classList.contains('open'))
     ||document.getElementById('rata-licence')||keyShown('#del-confirm'));
 }
 function keyCaps(k){
@@ -4159,13 +4287,16 @@ const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
    signed token Rust checks, which is what actually decides what the app
    will do; the app never reads the website's record, and asking it left
    every paying tester on "No plan yet" with Side by side locked. LIC is the
-   licence's standing as Rust reports it (licence_status). */
-let LIC=null;
+   licence's standing as Rust reports it (licence_status), or as the bridge
+   last settled it (rata-standing), which may carry mailrata.org's reason
+   for refusing a renewal. LIC_HEARD counts the bridge's word. */
+let LIC=null,LIC_HEARD=0;
 const planKey=()=>window.__RATA_NATIVE__?(LIC&&LIC.licensed&&LIC.plan?LIC.plan.key:null):S.settings.plan;
 const tier=()=>TIERS[planKey()]||null;
 const tierLabel=()=>tier()?tier().label:window.__RATA_NATIVE__?'No licence yet':'No plan yet';
 function takeStanding(st){
-  const was=!!(LIC&&LIC.licensed);
+  const licPlan=()=>LIC&&LIC.licensed&&LIC.plan?LIC.plan.key:null;
+  const was=!!(LIC&&LIC.licensed),planWas=licPlan();
   LIC=st&&typeof st==='object'&&!st.error?st:null;
   /* The bridge can answer before the workspace has loaded; boot asks again. */
   if(!S)return;
@@ -4179,14 +4310,20 @@ function takeStanding(st){
   }
   renderSplitLock();
   if($('#plan-badge'))renderPlan();
+  /* A plan that changed while RATA was open (a renewal to Pro, a lapse)
+     changes the allowance: the line under Add an account says the new one. */
+  if(licPlan()!==planWas)refreshQuota();
   /* What is connected, and whether this plan may use it (K1). */
   loadConnections();
 }
-addEventListener('rata-standing',e=>takeStanding(e.detail));
+addEventListener('rata-standing',e=>{LIC_HEARD++;takeStanding(e.detail)});
 const can=f=>!!(tier()&&tier()[f]);
 /* What to say when something is held back, always naming the plan that has
-   it and what that costs. */
+   it and what that costs. A store build names no price and says nothing of
+   upgrading: the store sells, and nothing in the app may send people to buy
+   anywhere else. */
 function needPlan(feature,what){
+  if(STORE_BUILD)return `${what} is not in your plan.`;
   const up=Object.keys(TIERS).find(k=>TIERS[k][feature]);
   return up?`${what} comes with ${TIERS[up].label}, ${money(TIERS[up].price)} a month. Upgrade in Settings.`
            :`${what} is not part of your plan.`;
@@ -4272,11 +4409,16 @@ function renderConnSettings(){
     const row=document.createElement('div');row.className='set-row';
     const g=document.createElement('div');g.className='grow';
     const b=document.createElement('b');b.textContent=[files.length?'Cloud files':'',...share.map(c=>c.place)].filter(Boolean).join(' and ');
-    const s=document.createElement('span');s.textContent=andList(CONN.list.map(c=>c.place))+(CONN.list.length>1?' come':' comes')+' with '+TIERS.pro.label+'.';
+    /* A store build has no plans to show (renderPlan), so no See plans. */
+    const s=document.createElement('span');s.textContent=andList(CONN.list.map(c=>c.place))+(STORE_BUILD?(CONN.list.length>1?' are':' is')+' not in your plan.':(CONN.list.length>1?' come':' comes')+' with '+TIERS.pro.label+'.');
     g.append(b,s);
-    const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
-    up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
-    row.append(g,up);list.append(row);
+    row.append(g);
+    if(!STORE_BUILD){
+      const up=document.createElement('button');up.className='btn';up.id='conn-plans';up.textContent='See plans';
+      up.onclick=()=>{const sec=$('#plan-line').closest('.comp-sec');sec.scrollIntoView({behavior:glide(),block:'start'});const f=sec.querySelector('#plan-buttons a,#plan-buttons button,a.btn,button');if(f)f.focus({preventScroll:true})};
+      row.append(up);
+    }
+    list.append(row);
   }
   for(const c of CONN.list){
     const row=document.createElement('div');row.className='set-row conn-row';row.dataset.conn=c.service;
@@ -5315,10 +5457,11 @@ function renderFolders(){
       e.preventDefault();fileInto(id,name);
     };
   });
-  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=e=>{
+  chips.querySelectorAll('[data-foldrm]').forEach(x=>x.onclick=async e=>{
     e.stopPropagation();
     const f=x.dataset.foldrm;
-    if(!confirm(`Delete the folder "${f}"? The files in it stay — they go back to Unfiled.`))return;
+    if(!await ask({title:`Delete the folder "${f}"?`,text:'The files in it stay. They go back to Unfiled.',ok:'Delete folder',danger:true}))return;
+    if(!S.folders.includes(f))return;
     S.folders=S.folders.filter(n=>n!==f);
     S.documents.forEach(d=>{if(d.folder===f)delete d.folder});
     if(folderFilter===f)folderFilter='all';
@@ -5455,7 +5598,9 @@ $('#tamper-demo').onclick=()=>{
    is installed only if its signature checks out, and the app then restarts
    into it. Where this copy cannot update itself — a build without an update
    key, or an install the updater does not handle — the answer says so and
-   offers the download instead. */
+   offers the download instead. A store build is updated by its store and
+   may not update itself or point to the releases page, so it never asks,
+   and the row and the bar never show. */
 let UPD=null,UPD_LATER='';
 /* The feed has nothing for this kind of installation (update.rs,
    not_here_yet): its installer was held back from the last release. That
@@ -5463,7 +5608,7 @@ let UPD=null,UPD_LATER='';
    a manual check claims it is; Install says the same words. */
 const UPD_NOT_HERE='There is no update for this computer yet.';
 async function checkUpdate(manual){
-  if(!window.__RATA_NATIVE__)return;
+  if(!window.__RATA_NATIVE__||STORE_BUILD)return;
   const b=$('#upd-check');if(manual&&b){b.disabled=true;b.textContent='Checking\u2026'}
   let r;try{r=await apiFetch('/api/update/check')}catch(e){r={error:String(e&&e.message||e)}}
   if(b){b.disabled=false;b.textContent='Check for updates'}
@@ -5474,12 +5619,13 @@ async function checkUpdate(manual){
 }
 function renderUpdateRow(){
   const row=$('#upd-row');if(!row)return;
-  row.style.display=window.__RATA_NATIVE__?'':'none';
+  row.style.display=window.__RATA_NATIVE__&&!STORE_BUILD?'':'none';
   if(!UPD){$('#upd-line').textContent='Not checked yet.';return}
   $('#upd-line').textContent='You have RATA '+(UPD.current||'?')+'. '+(UPD.version?'RATA '+UPD.version+' is ready to install.'
     :!UPD.enabled?'This copy updates from the releases page.':UPD.error?UPD.error:UPD.notHere?UPD_NOT_HERE:'It is the newest version.');
 }
 function showUpdateBar(){
+  if(STORE_BUILD)return;
   let bar=$('#upd-bar');
   if(!bar){bar=document.createElement('div');bar.id='upd-bar';document.body.appendChild(bar)}
   bar.hidden=false;
@@ -5489,6 +5635,7 @@ function showUpdateBar(){
   $('#upd-go').onclick=installUpdate;
 }
 async function installUpdate(){
+  if(STORE_BUILD)return;
   const go=$('#upd-go'),later=$('#upd-later');
   if(go){go.disabled=true;go.textContent='Downloading\u2026'}if(later)later.disabled=true;
   /* Anything written is on disk before the program is replaced. */
@@ -5499,7 +5646,7 @@ async function installUpdate(){
   bar.innerHTML=`<span class="upd-text">RATA could not update itself.<span class="upd-why">${esc((r&&r.error)||'No reason was given.')}</span></span>
     <button class="btn primary" id="upd-dl">Download it</button><button class="btn" id="upd-later">Close</button>`;
   $('#upd-later').onclick=()=>{UPD_LATER=UPD&&UPD.version||'';bar.hidden=true};
-  $('#upd-dl').onclick=()=>apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:(UPD&&UPD.releases)||'https://github.com/Noallrightokay/center-point-inbox/releases'})});
+  $('#upd-dl').onclick=()=>apiFetch('/api/link/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:(UPD&&UPD.releases)||pageOf('releases')})});
 }
 function renderSettings(){
   $('#set-name').value=S.settings.name;
@@ -5519,8 +5666,22 @@ $('#set-name').addEventListener('change',e=>{S.settings.name=e.target.value.trim
    and puts it on the clipboard. The block is shown too, so the customer
    sees what they are about to paste; where the webview will not write the
    clipboard it is shown selected, to copy by hand. The website holds no
-   mailbox to diagnose, so there the section is Help and Report a bug only.
-   Both links go to the browser through open_link in the app (openLink). */
+   mailbox to diagnose, so there the section is Help, Report a bug, Privacy
+   and Terms only. Every link goes to the browser through open_link in the
+   app (openLink), and to a new tab on the website. Where each goes is the
+   build's (PAGES, from config.js) when it names one, else the website's
+   own page in the markup; a store build names the store-safe pages under
+   mailrata.org/in-app/, Report a bug among them, since GitHub leads to the
+   releases. */
+const HELP_LINKS={help:'#help-link',bug:'#bug-link',privacy:'#privacy-link',terms:'#terms-link',account:'#acct-del-link'};
+for(const [k,id] of Object.entries(HELP_LINKS))if(pageOf(k))$(id).setAttribute('href',pageOf(k));
+if(STORE_BUILD)$('#bug-what').textContent='What to put in a bug report, on mailrata.org. Never paste a password or your licence key into one.';
+/* A store build also has a row of its own for deleting the mailrata.org
+   account (Apple 5.1.1(v)), so it is found without first starting Delete
+   account, which is about this computer. It opens the store-safe page that
+   does it (PAGES.account); the direct build keeps Open mailrata.org account
+   inside Delete account, as before. */
+if(STORE_BUILD&&pageOf('account'))$('#acct-del-row').style.display='';
 function renderHelp(){
   const row=$('#diag-row');if(row)row.style.display=window.__RATA_NATIVE__?'':'none';
 }
@@ -5539,7 +5700,7 @@ async function copyDiagnostics(){
   ta.focus();ta.select();
 }
 $('#diag-copy').addEventListener('click',copyDiagnostics);
-['#help-link','#bug-link'].forEach(id=>$(id).addEventListener('click',e=>{
+Object.values(HELP_LINKS).forEach(id=>$(id).addEventListener('click',e=>{
   if(!window.__RATA_NATIVE__)return;
   e.preventDefault();openLink(e.currentTarget.getAttribute('href'));
 }));
@@ -5668,11 +5829,31 @@ function lfFind(){
     if($('#lf-input').value.trim().toLowerCase()===v&&!LF_WAIT)lfMicrosoft();
   },500);
 }
+/* A store build says a full allowance in its own words, before Rust's
+   refusal names where to upgrade: what is not in the plan, and nothing
+   more. Rust still decides; this only answers first when the allowance is
+   used up now and the address is not already linked. It asks afresh each
+   time (licence_status, on this computer), never a remembered answer: a
+   mailbox removed or a plan renewed since must not be refused. An answer
+   that does not come is no refusal. */
+async function storeFull(email){
+  if(!STORE_BUILD||linkedFind('mail',email))return false;
+  let q;
+  try{q=await apiFetch('/api/links')}catch(e){return false}
+  if(!q||q.error||!q.limits||!q.remaining)return false;
+  QUOTA=q;
+  if(q.limits.mail===null||q.remaining.mail!==0)return false;
+  toast('Another mailbox is not in your plan.');
+  return true;
+}
 /* Sign in with Microsoft: the browser opens Microsoft's page, and the app
    links the mailbox when Microsoft sends it back. Cancel stops it. */
 async function msSignIn(){
   const email=$('#lf-input').value.trim();
   if(!/.+@.+\..+/.test(email)){toast('Enter the full email address');return}
+  /* A second press while the store build asks is caught after the await,
+     where LF_WAIT is read and set in one turn. */
+  if(STORE_BUILD&&!LF_WAIT&&await storeFull(email))return;
   if(LF_WAIT)return;
   LF_WAIT=true;lfMicrosoft();
   let res;
@@ -5768,6 +5949,7 @@ async function mailLink(email,pass,host){
   if(pass.replace(/\s+/g,'').length<8){toast('Enter the app password for that address');return}
   const btn=$('#lf-save');btn.disabled=true;btn.textContent='Checking…';
   try{
+    if(STORE_BUILD&&await storeFull(email))return;
     const res=await apiFetch('/api/link/mail',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({email,appPassword:pass,host:host||undefined})});
@@ -5831,7 +6013,7 @@ async function refreshQuota(){
       ? `${q.used.mail} email account${q.used.mail===1?'':'s'} — no limit`
       : `${q.used.mail} of up to ${q.limits.mail} email account${q.limits.mail===1?'':'s'}`;
     const full=q.limits.mail!==null&&q.remaining.mail===0;
-    line.textContent=`${q.planLabel}: ${m}.`+(full?' Upgrade in Settings to add another mailbox.':'');
+    line.textContent=`${q.planLabel}: ${m}.`+(full?(STORE_BUILD?' Another mailbox is not in your plan.':' Upgrade in Settings to add another mailbox.'):'');
   }catch(e){
     /* On the website there is nothing to ask any more: plans are enforced by
        the licence the app checks, and saying "could not check just now" would
@@ -5859,12 +6041,28 @@ const PLAN_ONELINE={
 };
 
 function renderPlan(){
-  renderPrices();
   const c=cfg(),t=tier();
   const badge=$('#plan-badge'),line=$('#plan-line');
   badge.textContent=tierLabel();
   badge.className='badge '+(t?'work':'personal');
   const mailboxes=t=>t.mail===null?'more than two mailboxes':'up to '+t.mail+' mailboxes';
+  /* A store build: the plan's own sentence with no price and, in place of
+     prices, buy buttons, Checkout and the billing portal, where the plan is
+     managed, in words alone. The store sells; nothing here may lead to a
+     purchase anywhere else, so the section is named for the plan, not for
+     billing. */
+  $('#plan-change').style.display=$('#bill-row').style.display=STORE_BUILD?'none':'';
+  $('#plan-managed').style.display=STORE_BUILD?'':'none';
+  $('#plan-sec').textContent=STORE_BUILD?'Plan':'Plan & billing';
+  if(STORE_BUILD){
+    const m=t?mailboxes(t):'';
+    line.textContent=t
+      ? `${LIC&&LIC.message?LIC.message+' ':''}${m.charAt(0).toUpperCase()+m.slice(1)} in one Center Point inbox${t.split?', side by side':''}.`
+      : (LIC&&LIC.message)||'No licence on this computer yet. Paste the licence key from your mailrata.org account.';
+    $('#plan-compare').textContent='';$('#plan-buttons').replaceChildren();
+    return;
+  }
+  renderPrices();
   if(window.__RATA_NATIVE__)line.textContent=t
     ? `${LIC.message} ${money(t.price)} a month · ${mailboxes(t)} in one Center Point inbox${t.split?', side by side':''}.`
     : (LIC&&LIC.message)||'No licence on this computer yet — enter the key from your mailrata.org account.';
@@ -5976,15 +6174,21 @@ $('#pw-change').onclick=async()=>{
    In the app (I7) the endpoint is bridge.js, and the other half is Rust:
    every linked mailbox with its keychain entries, then the licence stored
    here, then this page's store. The mailrata.org account is not on this
-   computer and is not deleted from it; the row says so and opens
-   mailrata.org/app, whose Settings holds Delete account. Delete permanently stays off until the endpoint has
+   computer and is not deleted from it; the row says so and opens the
+   account page the build names (below). Delete permanently stays off until the endpoint has
    said what it would remove. */
 const DEL_HERE='Removes from this computer every linked mailbox, with its password or Microsoft sign-in in the keychain, the licence stored here, and RATA’s mail store, settings and sign-in. Your mail stays at your provider. Your mailrata.org account and subscription are managed and deleted at mailrata.org.';
 if(window.__RATA_NATIVE__)$('#del-what').textContent=DEL_HERE;
+/* Where the mailrata.org account is managed and deleted is the build's
+   (PAGES.account): RATA's page on mailrata.org in the direct build, whose
+   Settings holds Delete account, and in a store build the store-safe page
+   that deletes it, named for what it does. */
+if(pageOf('account'))$('#del-web').setAttribute('href',pageOf('account'));
+if(STORE_BUILD)$('#del-web').textContent='Delete your mailrata.org account';
 async function openDelete(){
   const box=$('#del-confirm'),detail=$('#del-detail'),go=$('#del-go');
   box.style.display='flex';
-  $('#del-web').style.display=window.__RATA_NATIVE__?'':'none';
+  $('#del-web').style.display=window.__RATA_NATIVE__&&pageOf('account')?'':'none';
   go.disabled=true;go.textContent='Delete permanently';
   $('#del-email').value='';$('#del-email').focus();
   detail.textContent='Checking what this would remove…';
@@ -6074,8 +6278,8 @@ $('#del-confirm').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventD
 $('#del-go').onclick=deleteAccount;
 $('#del-email').addEventListener('keydown',e=>{if(e.key==='Enter')deleteAccount()});
 
-$('#btn-reset').onclick=()=>{
-  if(!confirm('Wipe this workspace back to a blank slate? This cannot be undone.'))return;
+$('#btn-reset').onclick=async()=>{
+  if(!await ask({title:'Wipe this workspace back to a blank slate?',text:'This cannot be undone.',ok:'Wipe workspace',danger:true}))return;
   S=seed();save();
   audit('workspace.reset','Workspace wiped to blank slate');
   $('#rail-prof').textContent=S.settings.profile;
@@ -6143,7 +6347,7 @@ const sigForReply=acctId=>S.settings.sigReplies===false?'':sigOf(acctId);
    folder keeps its drafts here, as before, and is not asked again this
    session. CMP_SRV is one draft's side of this: a save that ends after the
    composer has moved on still files its copy under the draft it was for. */
-const newSrv=()=>({draftId:null,ref:null,rec:null,rev:0,edits:0,saved:0,other:null,discarded:false});
+const newSrv=()=>({draftId:null,ref:null,rec:null,rev:0,edits:0,saved:0,other:null,discarded:false,asking:0});
 let CMP_SRV=newSrv();
 let DRAFT_SAVING=Promise.resolve(),SENDING=false,DRAFT_TIMER=null;
 const DRAFT_NOPLACE=new Set();
@@ -6218,7 +6422,14 @@ async function saveDraft(d,email,why){
     messageId:'',replyTo:'',bodyV:2,truncated:nFiles>0,html:false,draftId:r.draftId,ownDraft:true,savedAt:Date.now()});
   S.messages=S.messages.filter(m=>m.id!==rec.id);S.messages.push(rec);
   srv.ref={email,uid:r.uid,uidvalidity:r.uidvalidity,draftId:r.draftId};srv.rec=rec;
-  const replaced=[srv.other,moved].filter(Boolean);srv.other=null;
+  /* The draft from another device being finished stays in Drafts while
+     Discard asks about it (srv.asking), and for good once Stop finishing
+     has been chosen (srv.discarded): a save already on its way when
+     Discard was pressed must not move it to the Trash, since "Stop
+     finishing" promises it stays. Discard's handler sends it once the
+     answer is Keep writing. */
+  const other=srv.asking||srv.discarded?null:srv.other;
+  const replaced=[other,moved].filter(Boolean);if(other)srv.other=null;
   if(CMP_SRV===srv){
     CMP_DRAFT=rec;
     /* Files carried from a copy in Drafts are in the one just saved now,
@@ -6234,9 +6445,12 @@ async function saveDraft(d,email,why){
   if(why==='close')toast('Saved to Drafts');
   if(replaced.length)await serverAct(replaced,'trash');
 }
+/* Never while a question is open over the composer (Discard's, above all):
+   a save then could move the draft being finished to the Trash before the
+   customer has answered whether to keep it. The next tick saves instead. */
 function startDraftTimer(){
   if(!window.__RATA_NATIVE__||DRAFT_TIMER)return;
-  DRAFT_TIMER=setInterval(()=>{if(ov.classList.contains('open'))queueDraftSave('timer')},draftEvery());
+  DRAFT_TIMER=setInterval(()=>{if(ov.classList.contains('open')&&!ASK)queueDraftSave('timer')},draftEvery());
 }
 function stopDraftTimer(){clearInterval(DRAFT_TIMER);DRAFT_TIMER=null}
 /* Everyone a draft is for, To and Cc together, for showing. */
@@ -6374,9 +6588,29 @@ function renderDraftHead(){
    Drafts, as before. */
 $('#cmp-discard').onclick=async()=>{
   const srv=CMP_SRV,saved=!!srv.rec;
-  if(!confirm(saved?'Discard this draft? It will be moved to the Trash, with anything attached to it.'
-    :CMP_DRAFT?'Stop finishing this draft? Your changes here will be gone; the draft stays in your Drafts folder.'
-    :'Discard this draft? What you have written, and anything attached to it, will be gone.'))return;
+  /* Nothing saves over the question (the timer waits, and a save already
+     on its way leaves the draft being finished in Drafts: saveDraft). */
+  srv.asking++;
+  let yes;
+  try{
+    yes=await ask(saved?{title:'Discard this draft?',text:'It will be moved to the Trash, with anything attached to it.',ok:'Discard',cancel:'Keep writing',danger:true}
+      :CMP_DRAFT?{title:'Stop finishing this draft?',text:'Your changes here will be gone; the draft stays in your Drafts folder.',ok:'Stop finishing',cancel:'Keep writing',danger:true}
+      :{title:'Discard this draft?',text:'What you have written, and anything attached to it, will be gone.',ok:'Discard',cancel:'Keep writing',danger:true});
+  }finally{srv.asking--}
+  if(!yes){
+    /* Keep writing. A save that landed while the question was open has
+       replaced the draft being finished, which goes to the Trash now, as
+       the save would have sent it (unless a later save already has). */
+    await DRAFT_SAVING;
+    const o=srv.other;
+    if(o&&srv.rec&&!srv.discarded&&!srv.asking){
+      srv.other=null;dropMessages([o]);save();renderMailFilters();renderMail();
+      await serverAct([o],'trash');
+    }
+    return;
+  }
+  /* Only the draft the question was about, still open. */
+  if(CMP_SRV!==srv||!ov.classList.contains('open'))return;
   srv.discarded=true;
   newDraft();composeNew();
   /* A save of it may still be on its way; its copy goes too. */
@@ -6431,8 +6665,8 @@ $$('#inbox-mode button').forEach(b=>b.onclick=()=>{
 $('#main-acct').onchange=e=>{panes[0]=e.target.value;renderMail()};
 
 
-$('#folder-new').onclick=()=>{
-  const name=(prompt('Name this folder — a client, a project, a quarter:')||'').trim().slice(0,40);
+$('#folder-new').onclick=async()=>{
+  const name=await askText({title:'New folder',label:'Name this folder: a client, a project, a quarter',max:40,ok:'Create folder'});
   if(!name)return;
   if(S.folders.includes(name)){toast('You already have a folder with that name');return}
   S.folders.push(name);save();audit('folder.create',name);
@@ -7096,7 +7330,8 @@ function addLinked(type,label,extra){
 }
 async function removeLinked(id){
   const l=S.linked.find(x=>x.id===id);if(!l)return;
-  if(!confirm(`Remove ${l.label}? Messages already in your workspace stay; live sync for this account stops.`))return;
+  if(!await ask({title:`Remove ${l.label}?`,text:'Messages already in your workspace stay; live sync for this account stops.',ok:'Remove',danger:true}))return;
+  if(!S.linked.some(x=>x.id===id))return;
   /* In the desktop app a mailbox's password lives in this computer's keychain,
      and Remove has to take it out of there — not just off the screen. Asked
      first, so a failure leaves the row in place instead of showing a mailbox
@@ -7112,7 +7347,8 @@ async function removeLinked(id){
   /* Its gaps can never be filled now (BUG-C). */
   if(l.type==='mail')S.gaps=(S.gaps||[]).filter(g=>g.email!==String(l.label).toLowerCase());
   save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
-  renderLinked();renderMailFilters();renderMail();
+  /* One fewer in use: the allowance line says so now, not at the next visit. */
+  renderLinked();refreshQuota();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
 }
 
@@ -8302,8 +8538,13 @@ function showWelcome(ob){
      anyone runs into it. */
   refreshQuota();
   webNote();
-  /* In the app, what the licence allows. */
-  if(window.__RATA_NATIVE__){try{takeStanding(await apiFetch('/api/licence'))}catch(e){}}
+  /* In the app, what the licence allows. The bridge's word, once it has
+     spoken, is the latest: its renewal at launch may have been refused with
+     a sentence that licence_status does not hold, which the licence box
+     shows and the plan line must not contradict. So Rust is asked only
+     while the bridge has said nothing, and an answer overtaken by the
+     bridge's is not used. */
+  if(window.__RATA_NATIVE__){try{const heard=LIC_HEARD,st=heard?LIC:await apiFetch('/api/licence');takeStanding(LIC_HEARD!==heard?LIC:st)}catch(e){}}
   renderSplitLock();
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
@@ -8313,21 +8554,26 @@ function showWelcome(ob){
   save();
   /* A newer RATA is looked for a little after start, and twice a day while
      it stays open. */
-  if(window.__RATA_NATIVE__){setTimeout(()=>checkUpdate(false),4000);setInterval(()=>checkUpdate(false),12*3600e3)}
+  if(window.__RATA_NATIVE__&&!STORE_BUILD){setTimeout(()=>checkUpdate(false),4000);setInterval(()=>checkUpdate(false),12*3600e3)}
 })();
 </script>
 <script>
-if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
+/* Installing this page as an app is the website's. Inside RATA's own app
+   (window.__RATA_NATIVE__, which bridge.js sets before this runs) there is
+   nothing to install: no Install button, and no service worker. */
+const __native=!!window.__RATA_NATIVE__;
+if('serviceWorker' in navigator){if(!__native)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
 let __dp=null;
 const __isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
 const __standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
-addEventListener('beforeinstallprompt',e=>{e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
-if(__isIOS&&!__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
-if(__standalone)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
+addEventListener('beforeinstallprompt',e=>{if(__native)return;e.preventDefault();__dp=e;document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex')});
+if(__isIOS&&!__standalone&&!__native)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='inline-flex'));
+if(__standalone||__native)document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.style.display='none'));
 function installApp(){
+  if(__native)return;
   if(__dp){__dp.prompt();__dp.userChoice.then(()=>{__dp=null});return}
-  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:typeof glide==='function'?glide():'smooth',block:'center'})}else if(typeof toast==='function')toast('iPhone/iPad: open in Safari → Share → Add to Home Screen');else alert('On iPhone/iPad: open this site in Safari, tap Share, then "Add to Home Screen".')}
-  else if(typeof toast==='function')toast('In Chrome or Edge: menu → Install Rata');else alert('In Chrome or Edge: browser menu → "Install Rata".');
+  if(__isIOS){const el=document.getElementById('ios-hint');if(el){el.style.display='block';el.scrollIntoView({behavior:typeof glide==='function'?glide():'smooth',block:'center'})}else toast('iPhone/iPad: open in Safari → Share → Add to Home Screen')}
+  else toast('In Chrome or Edge: menu → Install Rata');
 }
 document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('.js-install').forEach(b=>b.onclick=installApp));
 </script>

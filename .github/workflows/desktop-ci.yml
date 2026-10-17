@@ -260,11 +260,12 @@ jobs:
   # Tauri backend, and clicks through what the bridge promises. Until this job
   # it ran only when someone remembered to, so an app.html change that broke
   # the desktop app's behaviour could merge green. No Rust here: the harness
-  # needs the assembled pages, Node and a browser, nothing compiled.
+  # needs the assembled pages, Node and a browser, nothing compiled. It drives
+  # two builds, the direct one and the store one, about four minutes each.
   harness:
     name: Desktop interface, driven
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -317,6 +318,28 @@ jobs:
             exit 1
           }
           node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3181
+
+      # The same checks again over the store build (sync-ui.sh with
+      # RATA_DISTRIBUTION=store, into a folder of its own, served on its own
+      # port): no price, buy or billing button, no update row or bar, no link,
+      # address or open_link to Stripe, #pricing, mailrata.org's licence or
+      # app pages or the releases, the store-safe pages under /in-app/, and
+      # bridge.js never asking Rust about an update.
+      - name: Drive the store build's interface
+        run: |
+          RATA_DISTRIBUTION=store desktop/rata-app/sync-ui.sh "$RUNNER_TEMP/ui-store"
+          python3 -m http.server 3182 --bind 127.0.0.1 --directory "$RUNNER_TEMP/ui-store" \
+            > "$RUNNER_TEMP/http-store.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:3182/app.html && break
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null http://127.0.0.1:3182/app.html || {
+            cat "$RUNNER_TEMP/http-store.log"
+            echo "::error::the store build's interface server did not start"
+            exit 1
+          }
+          node desktop/rata-app/harness/ui-harness.mjs http://127.0.0.1:3182 --store
 
       # The rules release.yml writes the update feed by (feed.cjs): a platform
       # missing from a release keeps its own feed, nothing moves backwards.

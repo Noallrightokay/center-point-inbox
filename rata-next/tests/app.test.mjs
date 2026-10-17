@@ -283,6 +283,30 @@ export default async function run(state) {
     /* These blocks share one page: leave it where the next one expects it. */
     await page.evaluate(() => go('inbox'));
 
+    /* ---- the privacy policy and the terms, from Settings ---- */
+    console.log('\n— Settings links the privacy policy and the terms —');
+    {
+      const legal = await page.evaluate(() => {
+        go('set'); renderSettings();
+        return ['#privacy-link', '#terms-link'].map(s => {
+          const a = document.querySelector(s);
+          return a && { label: a.closest('.set-row').querySelector('b').textContent, href: a.getAttribute('href'), target: a.getAttribute('target'),
+            rel: a.getAttribute('rel'), shown: a.getClientRects().length > 0, inHelp: !!a.closest('#help-sec') };
+        });
+      });
+      check(legal.every(Boolean) && legal.map(l => l.label).join() === 'Privacy policy,Terms of service' && legal.every(l => l.shown && l.inHelp && l.target === '_blank' && l.rel === 'noopener'),
+        `Help & diagnostics has Privacy policy and Terms of service, each opening in a new tab: ${JSON.stringify(legal)}`);
+      /* Pages this site really serves: /privacy and /terms are no route of
+         its own, the .html names are. */
+      const served = [];
+      for (const l of legal.filter(Boolean)) {
+        const u = new URL(l.href);
+        served.push([l.href, u.origin === 'https://mailrata.org' ? (await fetch(s.url + u.pathname, { redirect: 'manual' })).status : 'not mailrata.org']);
+      }
+      check(served.length === 2 && served.every(([, status]) => status === 200), `and each is a page mailrata.org serves: ${JSON.stringify(served)}`);
+      await page.evaluate(() => go('inbox'));
+    }
+
     /* ---- what may leave the device ---- */
     console.log('\n— the device keeps the mail —');
     const privacy = await page.evaluate(() => {
