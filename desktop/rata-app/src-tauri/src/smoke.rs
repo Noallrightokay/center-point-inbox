@@ -983,6 +983,9 @@ mod tests {
     /// the iOS keychain would say: `ak` (when unlocked, and into backups) as
     /// `keyring` writes one, `cku` (after first unlock, this device only) as
     /// RATA's own writer does, unless the fake writes as `keyring` does.
+    /// With `synchronized_twin`, iCloud Keychain also holds one of that
+    /// service and account, which a read-back asking for synchronized
+    /// items too (`vault::ios_every`) finds.
     #[derive(Default)]
     struct Fake {
         held: Mutex<Option<String>>,
@@ -990,6 +993,7 @@ mod tests {
         reads_wrong: bool,
         keeps_on_forget: bool,
         writes_as_keyring: bool,
+        synchronized_twin: bool,
     }
 
     impl Slot for Fake {
@@ -1021,11 +1025,15 @@ mod tests {
         fn held(&self) -> Result<Held, String> {
             let class = *self.class.lock().unwrap();
             let there = self.held.lock().unwrap().is_some();
+            let mut classes = vec![class.to_string()];
+            if self.synchronized_twin {
+                classes.push("ak".into());
+            }
             Ok(Held {
-                entries: usize::from(there),
-                classes: vec![class.to_string()],
-                here: there && class == "cku",
-                synchronized: false,
+                entries: usize::from(there) + usize::from(self.synchronized_twin),
+                classes,
+                here: there && class == "cku" && !self.synchronized_twin,
+                synchronized: self.synchronized_twin,
             })
         }
     }
@@ -1097,6 +1105,23 @@ mod tests {
                 .contains("on this phone alone")
         );
         assert!(keychain_where(&travels, &secret, false).ok);
+
+        // A twin in iCloud Keychain, of the same service and account, is
+        // counted and fails the check, however RATA's own entry is kept.
+        let twin = Fake {
+            synchronized_twin: true,
+            ..Fake::default()
+        };
+        let c = keychain_where(&twin, &secret, true);
+        assert!(!c.ok, "{c:?}");
+        assert_eq!(c.detail["entries"], 2);
+        assert_eq!(c.detail["synchronized"], true);
+        assert!(
+            c.detail["error"]
+                .as_str()
+                .unwrap()
+                .contains("on this phone alone")
+        );
     }
 
     /// What a phone answers where a computer has more: every service not

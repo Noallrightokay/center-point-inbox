@@ -261,7 +261,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     env:
-      BUNDLE: org.mailrata.desktop
+      # The identifier check-app.sh and run-smoke.sh expect: the committed
+      # one. A store's build sets org.mailrata.mail (D9), and says so here.
+      RATA_BUNDLE: org.mailrata.desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -459,6 +461,9 @@ jobs:
     name: iOS app for a device, unsigned
     runs-on: macos-latest
     timeout-minutes: 90
+    env:
+      # As the Simulator job's: the committed identifier.
+      RATA_BUNDLE: org.mailrata.desktop
     steps:
       - uses: actions/checkout@v4
 

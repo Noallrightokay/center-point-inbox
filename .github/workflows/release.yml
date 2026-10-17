@@ -236,6 +236,14 @@ jobs:
           cargo test --lib -- vault:: store:: tests::at_start
         working-directory: desktop/rata-app/src-tauri
 
+      # The tests above build only the library's test program. This builds
+      # and links what an installer is made from: rata-app.exe, and the
+      # library in each of its kinds (a .dll and a static library too,
+      # which iOS needs), as a release build compiles them all.
+      - name: The program and the library build
+        run: cargo build --lib --bins
+        working-directory: desktop/rata-app/src-tauri
+
   # One release, made before the builds rather than by them: four builds each
   # finding no release and creating one is a race that leaves duplicates. Made
   # as a draft so nobody sees an empty release while the installers build, and

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# check-app.sh RATA.app — what a built iOS app must carry from
-# tauri.ios.conf.json and prepare.sh: RATA's identifier (RATA_BUNDLE, else
-# org.mailrata.desktop), iOS 15 as its minimum, iPhone only, the Info.plist
-# keys prepare.sh adds, the committed privacy manifest at the top of the
-# bundle, where iOS reads it, RATA's own icon, not Tauri's, and no StoreKit
-# configuration (that is for Run in Xcode alone). Exit 1 on anything
-# missing. For .github/workflows/ios.yml.
+# check-app.sh RATA.app [IDENTIFIER] — what a built iOS app must carry from
+# tauri.ios.conf.json and prepare.sh: RATA's identifier (IDENTIFIER, else
+# RATA_BUNDLE, else org.mailrata.desktop), iOS 15 as its minimum, iPhone
+# only, the Info.plist keys prepare.sh adds, the committed privacy manifest
+# at the top of the bundle, where iOS reads it, RATA's own icon, not
+# Tauri's, and no StoreKit configuration (that is for Run in Xcode alone).
+# Exit 1 on anything missing. For .github/workflows/ios.yml and a store's
+# build (TestFlight's names its identifier as the argument).
 set -uo pipefail
 app="${1:?give the built .app}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,9 +19,9 @@ want() {
   echo "$1 = $got"
   [ "$got" = "$2" ] || { echo "::error::$1 is \"$got\", not \"$2\""; bad=1; }
 }
-# The committed identifier, or RATA_BUNDLE: a store's build sets
+# The committed identifier, unless one is named: a store's build sets
 # org.mailrata.mail with --config (D9).
-want CFBundleIdentifier "${RATA_BUNDLE:-org.mailrata.desktop}"
+want CFBundleIdentifier "${2:-${RATA_BUNDLE:-org.mailrata.desktop}}"
 want MinimumOSVersion 15.0
 want UIFileSharingEnabled true
 want LSSupportsOpeningDocumentsInPlace true

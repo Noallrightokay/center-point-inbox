@@ -318,6 +318,11 @@ enum ItemAttr<'a> {
     ThisDeviceOnly,
     /// `kSecAttrSynchronizable`: false, never iCloud Keychain.
     NotSynchronized,
+    /// `kSecAttrSynchronizable`: `kSecAttrSynchronizableAny`, in a query
+    /// only. Without it a query finds only items that are not synchronized,
+    /// so an iCloud Keychain twin would go unseen.
+    #[cfg(any(feature = "smoke", test))]
+    SynchronizedOrNot,
     /// `kSecValueData`: the secret's bytes.
     Secret(&'a [u8]),
 }
@@ -354,6 +359,15 @@ fn ios_new<'a>(service: &'a str, account: &'a str, secret: &'a [u8]) -> [ItemAtt
 #[cfg(any(target_os = "ios", test))]
 fn ios_change(secret: &[u8]) -> [ItemAttr<'_>; 2] {
     [ItemAttr::ThisDeviceOnly, ItemAttr::Secret(secret)]
+}
+
+/// Every item of a service and account, synchronized or not: what the
+/// smoke self-test reads back (`ios::held`), so that a twin in iCloud
+/// Keychain is counted and seen, never left out by the query itself.
+#[cfg(any(all(target_os = "ios", feature = "smoke"), test))]
+fn ios_every<'a>(service: &'a str, account: &'a str) -> [ItemAttr<'a>; 4] {
+    let [class, service, account] = ios_entry(service, account);
+    [class, service, account, ItemAttr::SynchronizedOrNot]
 }
 
 impl Vault for Keychain {
@@ -1099,6 +1113,12 @@ mod ios {
                 key(unsafe { kSecAttrSynchronizable }),
                 CFBoolean::false_value().into_CFType(),
             ),
+            #[cfg(any(feature = "smoke", test))]
+            ItemAttr::SynchronizedOrNot => (
+                key(unsafe { kSecAttrSynchronizable }),
+                key(unsafe { security_framework_sys::item::kSecAttrSynchronizableAny })
+                    .into_CFType(),
+            ),
             ItemAttr::Secret(bytes) => (
                 key(unsafe { kSecValueData }),
                 CFData::from_buffer(bytes).into_CFType(),
@@ -1153,7 +1173,8 @@ mod ios {
     }
 
     /// How the keychain holds the entries of a service and account, read
-    /// back with their attributes.
+    /// back with their attributes: every one, synchronized or not
+    /// (`ios_every`).
     #[cfg(feature = "smoke")]
     pub fn held(service: &str, account: &str) -> Result<super::Held, String> {
         use core_foundation_sys::array::{
@@ -1173,8 +1194,10 @@ mod ios {
         };
         use security_framework_sys::keychain_item::SecItemCopyMatching;
 
-        let mut pairs: Vec<(CFString, CFType)> =
-            ios_entry(service, account).iter().map(pair).collect();
+        let mut pairs: Vec<(CFString, CFType)> = super::ios_every(service, account)
+            .iter()
+            .map(pair)
+            .collect();
         // SAFETY: Security.framework's constant keys and values.
         unsafe {
             pairs.push((
@@ -1990,6 +2013,23 @@ mod tests {
         for service in SERVICES {
             assert!(ios_new(service, "x", b"s").contains(&ThisDeviceOnly));
         }
+    }
+
+    /// What the smoke self-test reads back on iOS (`ios::held`) is every
+    /// item of that service and account, synchronized or not: a query
+    /// without `kSecAttrSynchronizableAny` finds only items that are not,
+    /// so a twin in iCloud Keychain would be neither counted nor seen and
+    /// the check could never fail. Only that query asks it; what RATA
+    /// writes, and finds to write over, is as `keyring` finds an entry.
+    #[test]
+    fn on_ios_the_self_test_reads_back_synchronized_items_too() {
+        use ItemAttr::*;
+        let every = ios_every(SERVICE, "smoke");
+        assert_eq!(every[..3], ios_entry(SERVICE, "smoke"));
+        assert_eq!(every[3], SynchronizedOrNot);
+        assert!(!ios_entry(SERVICE, "x").contains(&SynchronizedOrNot));
+        assert!(!ios_new(SERVICE, "x", b"s").contains(&SynchronizedOrNot));
+        assert!(!ios_change(b"s").contains(&SynchronizedOrNot));
     }
 
     #[test]
