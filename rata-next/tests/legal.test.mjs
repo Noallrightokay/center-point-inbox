@@ -280,6 +280,17 @@ export default async function run(state) {
       'terms: Apple bills, renews, cancels and refunds them, under Apple\'s terms');
     check(T.includes(plain(apple.APPLE_AUTO_RENEWAL)), `terms: the auto-renewal sentence, word for word: "${apple.APPLE_AUTO_RENEWAL.slice(0, 60)}…"`);
     check(T.includes('In the iPhone app there is no key to paste'), 'terms: the iPhone app\'s licence needs no key');
+    /* How long an App Store licence lasts (lib/apple.js, appleLicenceUntil):
+       the margins are named constants, and both pages state them. */
+    const hours = (n) => `${n} hour${n === 1 ? '' : 's'}`;
+    check(T.includes(`A licence for a subscription bought in the iPhone app lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for`)
+      && T.includes(`lasts no more than ${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)} past the end of its period`),
+      `terms: an App Store licence lasts at most LICENCE_DAYS, and APPLE_MARGIN_DAYS (${apple.APPLE_MARGIN_DAYS}) past what was paid for, APPLE_SANDBOX_MARGIN_HOURS (${apple.APPLE_SANDBOX_MARGIN_HOURS}) in the sandbox`);
+    check(P.includes(`The licence lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for (${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)}, for a purchase in Apple's test environment)`),
+      'privacy: the same, under Subscribing in the iPhone app');
+    check(T.includes('AI features stop as soon as Apple refunds or ends the subscription, even while the licence still runs')
+      && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription is still live'),
+      'both pages: the AI relay checks an App Store subscription is still live (app/api/ai)');
     check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
       'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }

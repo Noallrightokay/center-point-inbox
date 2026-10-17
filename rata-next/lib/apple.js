@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { SignedDataVerifier, VerificationException, VerificationStatus, Environment } from '@apple/app-store-server-library';
 import { APPLE_PRODUCTS, ORDER, PLANS } from './plan.js';
 import { tableMissing } from './stripe.js';
+import { LICENCE_DAYS } from './licence.js';
 
 /* ---------------------------------------------------------------------------
    Subscriptions bought in the iPhone app, through Apple's In-App Purchase.
@@ -352,7 +353,9 @@ export function applePreferred(list) {
 const iso = (ms) => new Date(ms).toISOString();
 /* When Apple signed it, which orders what Apple says about one period of a
    subscription (appleWrite). Apple always says; something that does not is
-   treated as the oldest there is, so it never overwrites anything. */
+   treated as signed at the oldest time there is: it loses to anything Apple
+   signed about the same period, though, like anything about a later period,
+   it still replaces a row recording an earlier one. */
 const signedAt = (o) => iso(o && typeof o.signedDate === 'number' && Number.isFinite(o.signedDate) ? o.signedDate : 0);
 /* When the period a transaction pays for began, its purchaseDate, which
    orders the periods of a subscription (appleWrite). Treated as the
@@ -528,6 +531,36 @@ export function appleLive(row, now = Date.now()) {
   if (!Object.values(APPLE_PRODUCTS).includes(row.plan) || !PLANS[row.plan]) return false;
   const until = appleUntil(row);
   return !!until && Date.parse(until) > now;
+}
+
+/* How long a licence for an App Store subscription outlives what was paid
+   for. A Stripe licence lasts LICENCE_DAYS whatever happens to the
+   subscription after it is issued; an App Store one lasts at most that, and
+   never longer than the end of what the row pays for (appleUntil: the
+   period's expiry, or a billing grace period Apple reported) and this
+   margin. So a refund, which Apple grants by itself, leaves at most the rest
+   of the period paid for, and a purchase in Apple's test environment, which
+   costs nothing and whose periods last minutes, no 30-day licence.
+
+   The margin lets a customer who is offline when one period ends and the
+   next begins keep working: the app renews in a licence's last week, at
+   launch, every six hours and when the connection comes back (bridge.js,
+   settleLicence), and on the iPhone on each transaction StoreKit hands over
+   (claude/iap-native), so any of those within the margin moves the licence
+   on to the new period. Three days for the App Store itself; an hour in the
+   sandbox (TestFlight, App Review, Xcode), whose monthly period is five
+   minutes. The privacy policy and terms state both
+   (tests/legal.test.mjs). */
+export const APPLE_MARGIN_DAYS = 3;
+export const APPLE_SANDBOX_MARGIN_HOURS = 1;
+
+/* When a licence issued now for a live row must expire, in milliseconds:
+   the earlier of LICENCE_DAYS from now and the end of what the row pays for
+   plus the margin of its environment. */
+export function appleLicenceUntil(row, now = Date.now()) {
+  const paid = Date.parse(appleUntil(row) || '');
+  const margin = row && row.environment === 'Production' ? APPLE_MARGIN_DAYS * 86400e3 : APPLE_SANDBOX_MARGIN_HOURS * 3600e3;
+  return Math.min(now + LICENCE_DAYS * 86400e3, (Number.isFinite(paid) ? paid : now) + margin);
 }
 
 /* When a row stops being live, if nothing else happens: the later of its

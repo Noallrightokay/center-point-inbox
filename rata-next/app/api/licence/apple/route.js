@@ -5,7 +5,7 @@ import { issue, LICENCE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
 import {
   APPLE_SAID, appleVerifiers, verifyApple, readTransactions, appleIgnored, applePreferred,
-  applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleSub, appleTableBehind,
+  applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleLicenceUntil, appleSub, appleTableBehind,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -132,7 +132,9 @@ async function licenceFor(req) {
     const plan = written.row.plan;
     let licence;
     try {
-      licence = issue({ email: appleSub(s.originalTransactionId), plan });
+      /* No longer than what the row pays for, and a margin (lib/apple.js,
+         appleLicenceUntil): at most LICENCE_DAYS. */
+      licence = issue({ email: appleSub(s.originalTransactionId), plan, until: appleLicenceUntil(written.row, now), now });
     } catch (e) {
       /* The signing key is missing or unreadable: ours, for the log only
          (SEC-7), and never "you have not paid". */

@@ -3,7 +3,7 @@ import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
-import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, appleTableBehind } from '../../../../lib/apple';
+import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, appleLicenceUntil, appleTableBehind } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
 
@@ -168,9 +168,11 @@ async function renew(req) {
    entitlements from StoreKit, and comes here only when StoreKit has
    nothing; so this reads what the App Store's notifications last recorded.
    Live is: not revoked, and not expired or inside a billing grace period
-   Apple reported (lib/apple.js, appleLive). Then it reissues exactly as a
-   live Stripe subscription does. The answers carry no `email`: an App
-   Store subject is not an address and is never shown as one. */
+   Apple reported (lib/apple.js, appleLive). Then it reissues as a live
+   Stripe subscription does, except that the licence lasts no longer than
+   what the row pays for and a margin (appleLicenceUntil), at most
+   LICENCE_DAYS. The answers carry no `email`: an App Store subject is not
+   an address and is never shown as one. */
 async function renewApple(sb, sub) {
   const id = appleIdOf(sub);
   const held = id ? await appleRow(sb, id) : { row: null };
@@ -187,9 +189,11 @@ async function renewApple(sb, sub) {
   }
 
   const plan = held.row.plan;
+  const now = Date.now();
+  const until = appleLicenceUntil(held.row, now);
   let renewed;
   try {
-    renewed = issue({ email: sub, plan });
+    renewed = issue({ email: sub, plan, until, now });
   } catch (e) {
     console.error(`licence/renew: no licence could be issued: ${e.message}`);
     return NextResponse.json({
@@ -205,6 +209,6 @@ async function renewApple(sb, sub) {
     plan,
     planLabel: def.label,
     renewWithinDays: LICENCE_DAYS,
-    message: `Renewed for ${def.label}. Good for another ${LICENCE_DAYS} days offline.`,
+    message: `Renewed for ${def.label}. Good offline until ${new Date(until).toISOString().slice(0, 10)}.`,
   });
 }

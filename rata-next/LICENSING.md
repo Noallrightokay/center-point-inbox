@@ -110,6 +110,17 @@ renew itself, or one that cannot be read, is told to press Restore
 purchases (`APPLE_SAID`), which sends the phone's purchases to
 `/api/licence/apple` for a new one. See `LAUNCH.md` §11 and `lib/apple.js`.
 
+Such a licence is also shorter (below, *Why 30 days*), and the AI relay
+asks its row whether the subscription is still live before each request.
+
+**Before the Mac App Store build ships:** the App Store app's bundle id,
+`org.mailrata.mail`, is shared by the iPhone and Mac apps (Universal
+Purchase), so this path already takes a purchase made on a Mac. The words do
+not yet: the privacy policy, the terms, the help page, `LAUNCH.md` §11 and
+`APPLE_SAID` say "the iPhone app" throughout, and a test or two pins those
+words (`tests/legal.test.mjs`, `tests/help.test.mjs`). Widen them, and the
+tests with them, as a step of that release, not before.
+
 The worst somebody with a stolen token can do is obtain a copy of a token they
 already have — the endpoint returns a licence for the address inside the licence
 presented, and nothing else. Asking a customer to type an email and password
@@ -126,6 +137,32 @@ stops mattering within a billing cycle or two.
 
 `LICENCE_DAYS` in `lib/licence.js` is the one place to change it.
 
+**An App Store licence is shorter.** Apple refunds by itself, so a 30-day
+licence after a refund on the first day would be a month of free use that
+can be had again and again; and a purchase in Apple's test environment
+(TestFlight, App Review) costs nothing and renews every few minutes. So a
+licence for `apple:<id>` lasts the earlier of `LICENCE_DAYS` and the end of
+what its row pays for (the period's expiry, or the end of a billing grace
+period Apple reported) plus a margin: `APPLE_MARGIN_DAYS` (3) for the App
+Store, `APPLE_SANDBOX_MARGIN_HOURS` (1) in the sandbox (`lib/apple.js`,
+`appleLicenceUntil`). For a monthly subscription bought today that is still
+30 days; it is shorter when it is issued later in a period, and much
+shorter in the sandbox.
+
+At the end of a period, nothing shows. The licence then has less than a
+week left, so the app renews it at launch, every six hours and when the
+connection comes back (bridge.js, `settleLicence`), and on the iPhone also
+on each transaction StoreKit hands over, a renewal included
+(`claude/iap-native`). Once Apple has renewed the subscription, through its
+notification or the phone's own transaction, the next renewal brings a
+licence for the new period. A customer offline for more than the margin
+across the boundary finds the licence expired. The app then renews it by
+itself as soon as it is online: at launch, when the connection comes back,
+or when a refresh finds it unlicensed. Until then the licence box says so.
+A customer whose subscription ended, or was refunded, keeps working until
+the licence's own end, and is then told "There is no active RATA
+subscription on this Apple account."
+
 ## Refunds, cancellations and revocation
 
 There is no revocation list, and adding one would undo the reason for signing:
@@ -140,6 +177,15 @@ working because of something at our end.
 
 If that ever becomes too generous, shorten `LICENCE_DAYS` rather than adding a
 callback. Fifteen days halves the exposure and still covers a normal holiday.
+
+An App Store subscription refunded or revoked keeps its licence only to the
+end of what was paid for and the margin (above). The AI relay, whose answers
+cost money, does ask: for an `apple:` licence it reads the subscription's
+row before anything is reserved, and answers a row that is not live as an
+expired licence (`reason: 'expired'`). The app then renews once and asks
+again, so a row that has just caught up answers the second time; otherwise
+the renewal is refused and the customer reads the App Store's sentence. A
+row that cannot be read refuses (503), as the AI cap does.
 
 ## What this does *not* protect against
 

@@ -54,8 +54,9 @@ except Exception:
 EOF
 s=$(status "$BASE/api/licence/renew" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/licence/renew exists ($s)"
 s=$(status "$BASE/api/ai" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/ai exists ($s)"
-# The App Store routes (LAUNCH.md section 11). An empty list is refused (400),
-# and the notifications address answers a browser; neither needs section 11
+# The App Store routes (LAUNCH.md section 11). A body with no list of
+# purchases is refused (400) before anything is checked, and the
+# notifications address answers a browser (200); neither needs section 11
 # done to exist.
 s=$(status "$BASE/api/licence/apple" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/licence/apple exists ($s)"
 s=$(status "$BASE/api/apple/notifications"); [ "$s" = 200 ]; check $? "/api/apple/notifications exists ($s)"

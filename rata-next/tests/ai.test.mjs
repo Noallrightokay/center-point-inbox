@@ -51,9 +51,20 @@ export default async function run(state) {
      (it is down), 'PGRST202' or '42883' (the functions were never created on
      this deploy); `failSettle` fails only the settling. */
   const ledger = new Map();
-  const db = { calls: [], mode: 'ok', failSettle: false };
+  const db = { calls: [], mode: 'ok', failSettle: false, apple: [] };
+  /* And apple_subscriptions, which the relay reads for a licence from the
+     App Store before it reserves anything (tests/apple.test.mjs has the
+     rest): live rows for the two purchases below. */
+  const live = (plan) => ({ plan, environment: 'Production', expires_at: new Date(Date.now() + 20 * 86400e3).toISOString(), grace_until: null, revoked_at: null });
+  const appleRows = new Map([['2000000123456789', live('pro')], ['2000000123456790', live('base')]]);
   const send = (res, status, out) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(out)); };
   const supabase = await listen(async (req, res) => {
+    if (req.url.startsWith('/rest/v1/apple_subscriptions')) {
+      const id = (new URL(req.url, 'http://x').searchParams.get('original_transaction_id') || '').replace(/^eq\./, '');
+      db.apple.push(id);
+      const row = appleRows.get(id);
+      return send(res, 200, row ? [{ original_transaction_id: id, ...row }] : []);
+    }
     const body = JSON.parse((await readBody(req)) || '{}');
     const fn = req.url.replace(/^\/rest\/v1\/rpc\//, '').replace(/\?.*/, '');
     db.calls.push({ path: req.url, fn, body });
@@ -291,8 +302,8 @@ export default async function run(state) {
       db.calls.length = 0;
       const r = await ai({ licence: lic, task: 'summarize', text: SECRET });
       const held = db.calls.find(c => c.fn === 'ai_reserve');
-      check(r.status === 200 && /merger/.test(r.d.text) && held && held.body.p_email === sub && db.calls.every(c => c.body.p_email === sub),
-        `a Pro licence for ${sub} gets a summary, held and settled under ${held && held.body.p_email}`);
+      check(r.status === 200 && /merger/.test(r.d.text) && held && held.body.p_email === sub && db.calls.every(c => c.body.p_email === sub) && db.apple.includes('2000000123456789'),
+        `a Pro licence for ${sub}, whose App Store record is live, gets a summary, held and settled under ${held && held.body.p_email}`);
       check(ledger.get(`${sub}|${month}`) === 2000, `and the month's usage is kept under it: ${ledger.get(`${sub}|${month}`)} µ$`);
       const baseLic = issue({ email: 'apple:2000000123456790', plan: 'base' }, keys.privateKey);
       check((await ai({ licence: baseLic, task: 'summarize', text: SECRET })).status === 403, 'and its plan decides what it may ask, as for any licence');

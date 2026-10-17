@@ -302,11 +302,10 @@ create table if not exists public.apple_subscriptions (
 );
 
 -- A table made by an earlier copy of this section gets the columns it
--- lacks here, and then has the same shape as one made above. Its rows,
--- if any, count as recording the earliest period there is, so the next
--- thing Apple says about each subscription replaces what it holds; they
--- can only be sandbox purchases, and LAUNCH.md section 1 says to delete
--- them before going live.
+-- lacks here, and then has the same shape as one made above. Rows
+-- already in it are kept as they were, each new column set to
+-- 1970-01-01, which is not what Apple said of them. They can only be
+-- sandbox purchases: delete them (LAUNCH.md section 1).
 alter table public.apple_subscriptions
   add column if not exists period_from timestamptz not null default 'epoch';
 alter table public.apple_subscriptions

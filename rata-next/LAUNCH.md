@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1085 checks).
+the website's test suites pass with `npm test` after it (1105 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -66,8 +66,10 @@ the server log says to run section 7. Run it before the first TestFlight
 purchase. Each row records one period of a subscription, from when it
 began (`period_from`), with its own stamp for the grace period
 (`grace_signed_at`); run again over a table made by an earlier copy of
-section 7, it adds both. **Such a table can hold only sandbox
-purchases: before going live, delete its rows** (Table Editor →
+section 7, it adds both. The rows already there are kept as they were,
+with the new columns set to 1970-01-01, which is not what Apple said of
+them. **Such a table can hold only sandbox purchases: delete its rows
+before going live** (Table Editor →
 `apple_subscriptions` → select all → Delete, or `delete from
 public.apple_subscriptions;` in the SQL Editor). Each TestFlight
 subscription's row comes back with its next purchase, restore or
@@ -457,6 +459,13 @@ routes do it:
   renew, expires or is refunded.
 - `/api/licence/renew` renews an `apple:` licence from that record.
 
+An App Store licence lasts at most 30 days, and never more than 3 days past
+the end of what Apple has been paid for (1 hour in the sandbox), so a
+refund leaves at most the rest of that period; the app renews it as the
+subscription renews. The AI relay also reads the subscription's record
+before each request, and refuses one that is not live
+(`LICENSING.md`, *Why 30 days*).
+
 Desktop builds and the Stripe checkout do not change. The steps, in order:
 
 1. **Apple Developer Program**, enrolled as Account Holder, and in App
@@ -553,11 +562,12 @@ Two choices are made for you, and are yours to revisit:
   goes unchecked. The `false` passed as `enableOnlineChecks` in
   `lib/apple.js` is the switch.
 - **Sandbox purchases are accepted**, because App Review and TestFlight buy
-  there. A sandbox purchase costs nothing and its licence lasts 30 days like
-  any other, so everyone you let into TestFlight uses RATA free while they
-  test, with an AI allowance per sandbox subscription. Keep TestFlight to
-  people you would give a licence to: a public TestFlight link gives one to
-  anyone who opens it.
+  there. A sandbox purchase costs nothing. Its licence lasts only an hour
+  past the end of its sandbox period, which is minutes long, so it lasts as
+  long as the sandbox subscription keeps renewing. Everyone you let into
+  TestFlight still uses RATA free while they test, with an AI allowance per
+  sandbox subscription. Keep TestFlight to people you would give a licence
+  to: a public TestFlight link gives one to anyone who opens it.
 
 ---
 

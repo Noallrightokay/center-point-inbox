@@ -96,9 +96,9 @@ function renewalInfo(t, over = {}) {
 
 /* A notification as Apple sends one: its transaction and renewal info
    signed inside it, the whole signed again. */
-function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(), environment, appAppleId, signer } = {}) {
+function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(), environment, appAppleId, signer, bundleId = BUNDLE } = {}) {
   const env = environment || (t ? t.environment : 'Production');
-  const data = { bundleId: BUNDLE, bundleVersion: '1', environment: env, status: 1 };
+  const data = { bundleId, bundleVersion: '1', environment: env, status: 1 };
   /* Apple sends appAppleId only for an app downloaded from the App Store:
      never in the sandbox. */
   if (env === 'Production') data.appAppleId = appAppleId ?? APP_ID;
@@ -528,7 +528,9 @@ export default async function run(state) {
     SUPABASE_URL: sbx.url, SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
     LICENCE_PRIVATE_KEY: keys.privateKey, LICENCE_PUBLIC_KEY: keys.publicKey,
   };
-  const s = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_APP_ID: String(APP_ID) } });
+  /* An AI key and an address for the model nothing answers at: the relay's
+     row check is all these tests reach, never Anthropic. */
+  const s = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_APP_ID: String(APP_ID), ANTHROPIC_API_KEY: 'sk-test-never-sent', AI_API_URL: 'http://127.0.0.1:9/never' } });
   const sent = [];
   const post = async (transactions, { raw, origin } = {}) => {
     if (Array.isArray(transactions)) sent.push(...transactions);
@@ -572,6 +574,38 @@ export default async function run(state) {
         `and its row is recorded: ${row && JSON.stringify({ product: row.product_id, plan: row.plan, env: row.environment })}`);
       check(row && row.email === null && row.app_account_token === null && Object.keys(row).every((k) => !/name|apple_?id/i.test(k)),
         'with nothing personal in it');
+    }
+    console.log('\n— an App Store licence lasts as long as what was paid for, and a margin —');
+    {
+      const exp = (d) => (d.licence ? subOf(d).licence.exp * 1000 : NaN);
+      const near = (a, b) => Math.abs(a - b) <= 2000;
+      check(apple.APPLE_MARGIN_DAYS === 3 && apple.APPLE_SANDBOX_MARGIN_HOURS === 1,
+        `the margins: ${apple.APPLE_MARGIN_DAYS} days for the App Store, ${apple.APPLE_SANDBOX_MARGIN_HOURS} hour in the sandbox`);
+      const month = txn();
+      const m = await post([signJws(month, chain)]);
+      check(near(exp(m.d), Date.now() + 30 * DAY), `a period that ends in 29 days: the licence's own 30 days, the shorter (${new Date(exp(m.d)).toISOString()})`);
+      const week = txn({ expiresDate: Date.now() + 5 * DAY });
+      const w = await post([signJws(week, chain)]);
+      check(near(exp(w.d), week.expiresDate + 3 * DAY) && w.d.expires === new Date(week.expiresDate).toISOString(),
+        `a period that ends in 5 days: to 3 days past its end (${new Date(exp(w.d)).toISOString()})`);
+      const sandbox = txn({ environment: 'Sandbox', expiresDate: Date.now() + 5 * 60e3 });
+      const sb5 = await post([signJws(sandbox, chain)]);
+      check(sb5.d.licensed === true && near(exp(sb5.d), sandbox.expiresDate + 3600e3),
+        `a sandbox period of five minutes: to an hour past its end, not 30 days (${new Date(exp(sb5.d)).toISOString()})`);
+      const lic = issue({ email: apple.appleSub(week.originalTransactionId), plan: 'pro' }, keys.privateKey);
+      const r = await renew(lic);
+      check(r.d.licensed === true && near(exp(r.d), week.expiresDate + 3 * DAY) && /^Renewed for RATA Pro\. Good offline until \d{4}-\d\d-\d\d\.$/.test(r.d.message),
+        `and so from /api/licence/renew: "${r.d.message}"`);
+      const rs = await renew(issue({ email: apple.appleSub(sandbox.originalTransactionId), plan: 'pro' }, keys.privateKey));
+      check(near(exp(rs.d), sandbox.expiresDate + 3600e3), 'and a sandbox one renews to an hour past its period');
+      const stripe = issue({ email: 'buyer@example.com', plan: 'pro' }, keys.privateKey);
+      const seenStripe = checkLicence(stripe, keys.publicKey);
+      check(seenStripe.ok && seenStripe.licence.exp - seenStripe.licence.iat === 30 * 86400, 'a licence for an address still lasts its 30 days');
+      const row = { plan: 'pro', environment: 'Production', expires_at: new Date(Date.now() - DAY).toISOString(), grace_until: new Date(Date.now() + 10 * DAY).toISOString(), revoked_at: null };
+      check(near(apple.appleLicenceUntil(row), Date.now() + 13 * DAY), 'in a billing grace period, to 3 days past the grace period');
+      let refused = false;
+      try { issue({ email: 'apple:1', plan: 'pro', until: Date.now() - 1000 }, keys.privateKey); } catch { refused = true; }
+      check(refused, 'and no licence is issued that would end before it began');
     }
     {
       const b = txn({ productId: BASE, expiresDate: Date.now() + 60 * DAY });
@@ -729,6 +763,18 @@ export default async function run(state) {
       check((await notify(null, 'not json')).status === 400 && (await notify(null, '{}')).status === 400, 'a body that is not a notification: 400');
       const other = await notify(notification(chain, 'DID_RENEW', txn(), { appAppleId: 42 }));
       check(other.status === 400, `a notification for another app: 400 (${other.status})`);
+      /* org.mailrata.desktop is the downloaded desktop app's id, which sells
+         nothing through Apple: a notification for it, or one for RATA's App
+         Store app carrying a transaction signed for it, is another app's. */
+      const asked = sbx.fake.calls.length;
+      const desktopTx = txn({ environment: 'Sandbox', bundleId: 'org.mailrata.desktop' });
+      const desktopNote = await notify(notification(chain, 'DID_RENEW', desktopTx, { environment: 'Sandbox', bundleId: 'org.mailrata.desktop' }));
+      const innerTx = txn({ bundleId: 'org.mailrata.desktop' });
+      const inner = await notify(notification(chain, 'DID_RENEW', innerTx));
+      check(desktopNote.status === 400 && !rowOf(desktopTx) && JSON.stringify(desktopNote.d) === JSON.stringify({ error: 'Bad request' }),
+        `a Sandbox notification for org.mailrata.desktop: 400, no detail, nothing written (${desktopNote.status})`);
+      check(inner.status === 400 && !rowOf(innerTx) && sbx.fake.calls.length === asked,
+        `a notification for ${BUNDLE} whose transaction is signed for org.mailrata.desktop: 400, and the database is not asked (${inner.status})`);
 
       const t = txn({ signedDate: Date.now() - 5 * DAY });
       const sub = await notify(notification(chain, 'SUBSCRIBED', t, { subtype: 'INITIAL_BUY', signedDate: Date.now() - 5 * DAY }));
@@ -1256,6 +1302,49 @@ export default async function run(state) {
         'a table without a column section 7 now adds (42703 on reading it): 503 not-configured, and the log names section 7');
       const sendsAway = [r, none, odd, down, missing].filter((x) => /sign in|choose a plan|at mailrata\.org|mailrata\.org\//i.test(x.d.message || ''));
       check(sendsAway.length === 0, 'and no answer to an App Store licence sends anyone to mailrata.org');
+    }
+
+    console.log('\n— the AI relay asks an App Store licence\'s row first —');
+    {
+      const ask = async (licence) => {
+        const r = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'translate', subject: 'Hi', text: 'Hello there', to: 'fr', licence }) });
+        return { status: r.status, d: await r.json().catch(() => ({})) };
+      };
+      const reserved = (from) => sbx.fake.calls.slice(from).some((c) => c.endsWith('/rest/v1/rpc/ai_reserve'));
+      const licOf3 = (t) => issue({ email: apple.appleSub(t.originalTransactionId), plan: 'pro' }, keys.privateKey);
+
+      const live = txn();
+      await post([signJws(live, chain)]);
+      let at = sbx.fake.calls.length;
+      const ok = await ask(licOf3(live));
+      check(reserved(at) && sbx.fake.calls.slice(at).some((c) => c.endsWith('/rest/v1/apple_subscriptions')),
+        `a live subscription: its row is read, then the allowance is asked (${ok.status}, here a stand-in with no ai_reserve)`);
+
+      const refunded = txn();
+      await post([signJws(refunded, chain)]);
+      await notify(notification(chain, 'REFUND', { ...refunded, revocationDate: Date.now() - 1000, revocationReason: 0 }));
+      at = sbx.fake.calls.length;
+      const r = await ask(licOf3(refunded));
+      check(r.status === 401 && r.d.reason === 'expired' && r.d.error === NOTHING_LIVE && !reserved(at),
+        `refunded, while its licence still runs: 401 expired, "${r.d.error}", and nothing reserved`);
+      at = sbx.fake.calls.length;
+      const none = await ask(issue({ email: 'apple:2999999999999998', plan: 'pro' }, keys.privateKey));
+      check(none.status === 401 && none.d.reason === 'expired' && !reserved(at), 'no row at all: the same');
+
+      sbx.fake.mode = 'broken';
+      at = sbx.fake.calls.length;
+      const down = await ask(licOf3(live));
+      sbx.fake.mode = 'missing';
+      const before = s.log().length;
+      const missing = await ask(licOf3(live));
+      sbx.fake.mode = 'ok';
+      await new Promise((res) => setTimeout(res, 200));
+      check(down.status === 503 && !down.d.reason && !reserved(at), `a database that fails: 503, nothing reserved (fails closed): "${down.d.error}"`);
+      check(missing.status === 503 && missing.d.reason === 'not-configured' && /ai: .*run section 7 of rata-next\/database\.sql/.test(s.log().slice(before)),
+        'no apple_subscriptions table: 503 not-configured, and the log names section 7');
+      at = sbx.fake.calls.length;
+      await ask(issue({ email: 'buyer@example.com', plan: 'pro' }, keys.privateKey));
+      check(!sbx.fake.calls.slice(at).some((c) => c.endsWith('/rest/v1/apple_subscriptions')), 'a licence for an address never reads an App Store row');
     }
 
     console.log('\n— the log —');
