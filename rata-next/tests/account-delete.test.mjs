@@ -147,12 +147,12 @@ async function everythingGoes(check) {
     SUPABASE_URL: supabase.url,
     SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
   } });
-  const del = async () => {
+  const del = async (extra = {}) => {
     fake.calls = [];
     const r = await fetch(s.url + '/api/account', {
       method: 'DELETE',
       headers: { Authorization: 'Bearer a-session', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: 'leaver@example.com' }),
+      body: JSON.stringify({ confirm: 'leaver@example.com', ...extra }),
     });
     return { status: r.status, d: await r.json(), calls: fake.calls };
   };
@@ -202,6 +202,22 @@ async function everythingGoes(check) {
         updated_at: new Date(Date.now() - 40 * 86400000).toISOString() };
       const { status, d } = await del();
       check(status === 200 && d.ok === true, `ended 40 days ago: deleted, ${status}`);
+      fake.sub = null;
+    }
+
+    console.log('\n— a live subscription: refused in the website\'s words, or the store\'s when the deletion page asks —');
+    {
+      /* The deletion page a store build opens (/in-app/delete-account) may
+         not name the billing portal or Stripe; the rule is the same. */
+      fake.sub = { plan: 'pro', status: 'active', event_at: null, updated_at: new Date().toISOString() };
+      const site = await del();
+      check(site.status === 409 && site.d.error === blocksDeletion(fake.sub) && /billing portal/.test(site.d.error),
+        `asked plainly: the website's sentence, "${site.d.error}"`);
+      const store = await del({ words: 'store' });
+      check(store.status === 409 && store.d.error === blocksDeletion(fake.sub, Date.now(), { store: true })
+        && !/billing portal|stripe/i.test(store.d.error) && /where you subscribed/.test(store.d.error),
+        `asked for the store's words: "${store.d.error}"`);
+      check(!store.calls.some(c => c.startsWith('DELETE ')) && !site.calls.some(c => c.startsWith('DELETE ')), 'and nothing is deleted either way');
       fake.sub = null;
     }
 

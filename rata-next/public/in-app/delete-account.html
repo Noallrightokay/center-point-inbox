@@ -13,9 +13,11 @@
 <style>
 /* DESIGN.md: the website's tokens. This page is one a store build opens,
    so it has no site navigation and no link but to the other /in-app/ pages
-   (lib/in-app.js, tests/in-app.test.mjs). What it removes and keeps is
-   lib/account.js's, word for word, and what it says of the backups and
-   where to write is the privacy policy's; the test checks both. */
+   (lib/in-app.js, tests/in-app.test.mjs), and nothing that sells. What it
+   removes and keeps is lib/account.js's, word for word, but for the billing
+   records, which it names as the privacy policy's store copy does; what it
+   says of the backups and where to write is the privacy policy's. The test
+   checks all of it. */
 :root{
   --bg:#F5F6F8; --card:#FCFCFD; --fill:#ECEEF1; --fill-2:#F1F2F4;
   --ink:#15171C; --slate:#51565F; --faint:#6B717B;
@@ -109,7 +111,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
   <ul id="del-keeps">
     <li>your mail, which stays at your provider</li>
     <li>your mailbox passwords, which are in your own computer’s keychain and never reached RATA</li>
-    <li>Stripe's billing records, which Stripe must keep</li>
+    <li>billing records, which the store or payment processor that took your payment must keep</li>
     <li>what the RATA app holds on your device, until you uninstall it</li>
   </ul>
 

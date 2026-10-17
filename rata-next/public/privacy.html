@@ -127,7 +127,7 @@ footer a:hover{color:var(--ink)}
     <p class="lede">RATA is a desktop mail client. It reads your mail on your own computer, so most of what a mail service would know about you never reaches us. This page says what does, and what happens to it.</p>
     <p>RATA and mailrata.org are run by [OWNER: legal entity name], [OWNER: postal address] (&ldquo;we&rdquo;). For anything on this page, write to [OWNER: contact email].</p>
 
-    <section id="never" aria-labelledby="never-h">
+    <!-- in-app:words --><section id="never" aria-labelledby="never-h">
       <h2 id="never-h">What we never see</h2>
       <ul>
         <li><b>Your mail.</b> The app downloads it from your provider over IMAP, keeps it on your computer and sends over SMTP, directly. There is no RATA server between you and your mailbox. The one exception is text you ask RATA&rsquo;s AI to work on, <a href="#ai">below</a>.</li>
@@ -135,9 +135,11 @@ footer a:hover{color:var(--ink)}
         <li><b>Your signatures, contacts and attachments, and the files you convert or make.</b> They stay on your computer. The Format Bridge converts files on your computer, without uploading them, and Create file makes its files there too. If you connect your iCloud Drive or Creative Cloud Files folder, RATA reads and saves files in that folder on your computer and signs in to neither service; Apple&rsquo;s or Adobe&rsquo;s own app keeps the folder in step with your account there, as it does with anything you put in it.</li>
         <li><b>Your card.</b> Stripe takes the payment; we never see the card number.</li>
       </ul>
-    </section>
+    </section><!-- in-app:end
+      card: Stripe takes the payment; => The store or payment processor you pay through takes the payment;
+    -->
 
-    <section id="keep" aria-labelledby="keep-h">
+    <!-- in-app:words --><section id="keep" aria-labelledby="keep-h">
       <h2 id="keep-h">What mailrata.org keeps</h2>
       <p>This is all of it.</p>
       <ul class="facts">
@@ -149,7 +151,10 @@ footer a:hover{color:var(--ink)}
       <p>Your licence is not stored. It is a signed key naming your email address, your plan, and when it was issued and expires; it lives in the app on your computer, and is made afresh each time it is issued or renewed.</p>
       <p>Like every website, the server that runs mailrata.org sees your internet address and browser details with each request, and the hosting may record them in ordinary access logs. RATA&rsquo;s own code logs no email address and no message text. The site sets no advertising or analytics cookies and loads nothing from another company&rsquo;s servers; signing in keeps your session in your browser&rsquo;s own storage.</p>
       <p>Backups of the website&rsquo;s database are encrypted before they leave the server, and each is deleted 90 days after it is made, so something deleted from the database is gone from every backup within 90 days.</p>
-    </section>
+    </section><!-- in-app:end
+      record: Your email address, your plan, its status as Stripe reports it, your Stripe customer id, and when Stripe last changed it. => Your email address, your plan, its status as our payment processor reports it, the processor&rsquo;s customer id for you, and when it last changed it.
+      record-early: If Stripe&rsquo;s word about a new subscription reaches us before the checkout does, it is kept under your Stripe customer id alone => If the processor&rsquo;s word about a new subscription reaches us before the checkout does, it is kept under that customer id alone
+    -->
 
     <section id="ai" aria-labelledby="ai-h">
       <h2 id="ai-h">AI summaries and translation</h2>
@@ -163,13 +168,16 @@ footer a:hover{color:var(--ink)}
       <p>If you never press Summarize, Translate or Run briefing, none of your mail leaves your computer except to your own provider.</p>
     </section>
 
-    <section id="payment" aria-labelledby="pay-h">
+    <!-- in-app:words --><section id="payment" aria-labelledby="pay-h">
       <h2 id="pay-h">Payment</h2>
-      <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy<!-- in-app:cut --> at <a href="https://stripe.com/privacy">stripe.com/privacy</a><!-- in-app:end -->.</p>
-    </section>
+      <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy at <a href="https://stripe.com/privacy">stripe.com/privacy</a>.</p>
+    </section><!-- in-app:end
+      processor: Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; => Our payment processor runs checkout and billing. It tells mailrata.org the email address you paid with, its customer id for you, your plan and whether it is paid;
+      processor-records: Stripe keeps its own billing records, under its own privacy policy at <a href="https://stripe.com/privacy">stripe.com/privacy</a>. => It keeps its own billing records, under its own privacy policy.
+    -->
 
     <section id="app" aria-labelledby="app-h">
-      <h2 id="app-h">What the app connects to</h2>
+      <!-- in-app:words --><h2 id="app-h">What the app connects to</h2>
       <ul>
         <li><b>Your mail provider</b>, to read and send your mail, after asking your domain&rsquo;s DNS where its servers are.</li>
         <li><b>mailrata.org</b>, to renew your licence in its last week, and for the AI requests you make.</li>
@@ -177,9 +185,11 @@ footer a:hover{color:var(--ink)}
         <li><b>GitHub</b>, where RATA&rsquo;s installers are published, to check for a new version.</li>
       </ul>
       <p>A link you open from a message, or from Apps, goes to your browser, and what you do on that site is between you and its owner. If you type the address you use at Google or Microsoft under Your accounts in Apps, it is kept on your computer only and goes nowhere but in the link to that company&rsquo;s own site, so it opens on that account. The app sends us no usage statistics and no crash reports.</p>
-    </section>
+    <!-- in-app:end
+      github: <b>GitHub</b>, where RATA&rsquo;s installers are published, to check for a new version. => <b>GitHub</b>, to check for a new version of the desktop app.
+    --></section>
 
-    <section id="others" aria-labelledby="others-h">
+    <!-- in-app:words --><section id="others" aria-labelledby="others-h">
       <h2 id="others-h">Who else handles it</h2>
       <ul>
         <li><b>Stripe</b>, for payment.</li>
@@ -188,9 +198,11 @@ footer a:hover{color:var(--ink)}
         <li><b>The storage that holds the encrypted backups</b>, which cannot read them.</li>
       </ul>
       <p>We do not sell your information, and we share it with no one else unless the law requires it.</p>
-    </section>
+    </section><!-- in-app:end
+      payment: <b>Stripe</b>, for payment. => <b>Our payment processor</b>, for card payments.
+    -->
 
-    <section id="delete" aria-labelledby="delete-h">
+    <!-- in-app:words --><section id="delete" aria-labelledby="delete-h">
       <h2 id="delete-h">Deleting your account</h2>
       <p>Sign in at mailrata.org and choose Settings, then Delete account. It removes:</p>
       <ul>
@@ -212,7 +224,12 @@ footer a:hover{color:var(--ink)}
         <li><b>While Stripe has not yet confirmed a payment</b>, as while a bank transfer clears.</li>
         <li><b>For 30 days after a subscription ends.</b> A licence issued while it was live keeps working for up to 30 days, and deleting the account sooner would reset what that licence has used of the month&rsquo;s AI allowance. RATA tells you the date from which you can.</li>
       </ul>
-    </section>
+    </section><!-- in-app:end
+      how: Sign in at mailrata.org and choose Settings, then Delete account. => You can delete it on the <a href="/in-app/delete-account">account deletion page</a>.
+      records: Stripe&rsquo;s billing records, which Stripe must keep => billing records, which the store or payment processor that took your payment must keep
+      live: cancel it in the billing portal first; otherwise Stripe would keep charging for an account that no longer exists. => cancel it where you subscribed first; otherwise you would keep being charged for an account that no longer exists.
+      pending: <b>While Stripe has not yet confirmed a payment</b> => <b>While a payment is not yet confirmed</b>
+    -->
 
     <section id="rights" aria-labelledby="rights-h">
       <h2 id="rights-h">Your choices and rights</h2>
@@ -229,7 +246,7 @@ footer a:hover{color:var(--ink)}
   </article>
 </div></main>
 
-<!-- in-app:cut --><footer><div class="wrap">
+<!-- in-app:cut footer --><footer><div class="wrap">
   <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
   <a href="index.html">Home</a>
   <a href="account.html">Licence</a>

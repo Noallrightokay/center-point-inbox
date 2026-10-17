@@ -1,26 +1,30 @@
 /* The store-safe pages under /in-app/ (the store plan's stage 1, item 6).
 
    Google Play fails a consumption-only app when any link in it "eventually
-   leads to" a purchase, so what is checked here is the whole of what a
-   store build could reach from these pages: every same-site link is
-   followed, every page found must be under /in-app/, an outside link may go
-   only to another service's privacy policy, and no link or URL string on
-   any of them, or in a script they load, leads to the prices, the licence
-   page, the app, the sign-in, Stripe or the releases page. The copies must
-   say everything their pages say, from the page as it is now, so the help
-   page's and the privacy policy's own tests keep covering them. And the
-   deletion page must say what deletion removes and keeps as lib/account.js
-   decides it, how long the backups hold it and where to write without a
-   sign-in as the privacy policy says them, and work, by keyboard and
-   screen reader, against the same stand-in Supabase as the account route's
-   own test. */
+   leads to" a purchase, and Apple's 3.1.1 counts any call to action that
+   sends a customer to pay outside the store, so what is checked here is the
+   whole of what a store build could reach from these pages, and all they
+   say: every same-site link is followed, every page found must be under
+   /in-app/, an outside link may go only to another service's privacy
+   policy or a mail provider's own help, no link or URL string on any of
+   them, or in a script they load, leads to the prices, the licence page,
+   the app, the sign-in, Stripe or the releases page, and nothing on them,
+   in their text or an attribute, sells (BUYING: a price, Stripe, the
+   billing portal and the rest). The copies must say everything their pages
+   say but what each page marks for the store, from the page as it is now,
+   keeping every paragraph that sells nothing, so the help page's and the
+   privacy policy's own tests keep covering them. And the deletion page must
+   say what deletion removes and keeps as lib/account.js decides it, how
+   long the backups hold it and where to write without a sign-in as the
+   privacy policy says them, and work, by keyboard and screen reader,
+   against the same stand-in Supabase as the account route's own test. */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 import { startServer, makeChecker, fakeSupabase, fakeSupabaseKey } from './helpers.mjs';
-import { IN_APP_PAGES, storeSafe } from '../lib/in-app.js';
+import { IN_APP_PAGES, STORE_CUTS, storeSafe } from '../lib/in-app.js';
 import { blocksDeletion, DELETION_REMOVES, DELETION_KEEPS } from '../lib/account.js';
 
 const SITE = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,8 +42,58 @@ const POLICIES = [
   ['policies.google.com', '/'],
   ['developers.google.com', '/terms/api-services-user-data-policy'],
 ];
-const isPolicy = u => u.protocol === 'https:' && !u.port && POLICIES.some(([host, path]) =>
+/* And the mail providers' own help and account pages, where the help page's
+   steps make an app password. GitHub's issue template is not one of them:
+   it stays text. */
+const PROVIDERS = [
+  ['support.google.com', '/'],
+  ['myaccount.google.com', '/apppasswords'],
+  ['help.yahoo.com', '/'],
+  ['login.yahoo.com', '/account/security'],
+  ['www.fastmail.help', '/'],
+  ['support.apple.com', '/'],
+  ['account.apple.com', '/'],
+  ['support.hostinger.com', '/'],
+  ['support.microsoft.com', '/'],
+  ['www.zoho.com', '/mail/help'],
+];
+const within = list => u => u.protocol === 'https:' && !u.port && !u.username && !u.password && list.some(([host, path]) =>
   u.hostname === host && (u.pathname === path || u.pathname.startsWith(path.endsWith('/') ? path : path + '/')));
+const isPolicy = within(POLICIES);
+const isProvider = within(PROVIDERS);
+
+/* What none of them may say, in its text or in an attribute: a price, a
+   price by the month or year, Stripe, the billing portal, the licence
+   page, the releases page or an installer, and the calls to choose a plan,
+   upgrade, buy, or subscribe or sign in at mailrata.org. Written here as
+   well as in lib/in-app.js (SELLING), which will not make a copy that says
+   one. */
+const BUYING = [
+  ['a price', /[$€£¥]\s*\d|\b\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|dollars?|euros?)\b|\b(?:USD|EUR|GBP)\s*\d/i],
+  ['a price by the month or year', /\b(?:a|per)\s+(?:month|year)\b|\b(?:billed|charged|paid)\s+(?:monthly|yearly|annually)\b|\/\s?(?:mo|month|yr|year)\b/i],
+  ['Stripe', /\bstripe\b/i],
+  ['the billing portal', /\bbilling portal\b/i],
+  ['the licence page', /\blicen[cs]e page\b/i],
+  ['the releases page', /\breleases page\b/i],
+  ['an installer', /\binstallers?\b/i],
+  ["an installer's file", /\bRATA_<version>_\S*\.(?:exe|dmg|deb|AppImage|msi)\b/i],
+  ['Choose a plan', /\bchoose (?:a|your) plan\b/i],
+  ['Upgrade', /\bupgrad(?:e|es|ed|ing)\b/i],
+  ['Buy', /\bbuy\b/i],
+  ['Subscribe at mailrata.org', /\bsubscribe\b[^.]{0,40}?\b(?:at|on)\s+mailrata\.org\b/i],
+  ['Sign in at mailrata.org', /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b[^.]{0,20}?\bat\s+mailrata\.org\b/i],
+];
+const sellsIn = text => BUYING.filter(([, re]) => re.test(text)).map(([what]) => what);
+
+/* Every cut and every piece of store wording, by page, as lib/in-app.js's
+   STORE_CUTS names them; a new one is added here too, by somebody deciding
+   the store copy may say those words differently. */
+const CUTS = {
+  help: ['footer', 'get', 'install-steps', 'key'],
+  privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
+    'how', 'records', 'live', 'pending'],
+  terms: ['footer', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page', 'new-key', 'stop', 'unsigned'],
+};
 
 /* Where nothing on these pages may lead, written as URL strings, wherever
    they are: an attribute, a script, a comment or the text. */
@@ -64,7 +118,21 @@ const visible = html => entities(html
   .replace(/<\/?a\b[^>]*>/gi, '')
   .replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 const mainOf = html => (html.match(/<main\b[\s\S]*<\/main>/i) || [''])[0];
-const CUT = /<!-- in-app:cut -->([\s\S]*?)<!-- in-app:end -->/g;
+/* The marks a source carries for its store copy (lib/in-app.js says what
+   each does), read here on their own. */
+const CUT = /<!-- in-app:cut ([a-z0-9-]+) -->([\s\S]*?)<!-- in-app:end -->/g;
+const WORDS = /<!-- in-app:words -->([\s\S]*?)<!-- in-app:end\n([\s\S]*?)-->/g;
+const wordingOf = tail => tail.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+  const w = /^([a-z0-9-]+): (.+?) =>(?: (.*))?$/.exec(l);
+  return w ? { id: w[1], old: w[2], now: w[3] || '' } : { id: null, old: l, now: '' };
+});
+/* The page as its store copy should read: what it cuts left out, and its
+   store wording in place of the words it replaces. */
+const asCopy = html => html.replace(CUT, '').replace(WORDS, (all, body, tail) =>
+  wordingOf(tail).reduce((b, { old, now }) => b.replace(old, () => now), body));
+/* Each paragraph, list item, heading and quote, as a reader sees it. */
+const blocksOf = html => [...html.replace(/<!--[\s\S]*?-->/g, '')
+  .matchAll(/<(p|li|h[1-4]|dt|dd|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map(m => visible(m[2])).filter(Boolean);
 
 /* Every tag of these names, with its attributes read as a browser reads
    them: a value in double quotes, in single quotes or in none, a name in
@@ -107,7 +175,7 @@ function tagsIn(html, names) {
       }
       if (!attrs.has(name)) attrs.set(name, entities(value));
     }
-    out.push({ tag: m[1].toLowerCase(), attrs, closed });
+    out.push({ tag: m[1].toLowerCase(), attrs, closed, at: m.index, end: i + 1 });
   }
   return out;
 }
@@ -122,7 +190,8 @@ const PART_OF_THE_PAGE = new Set(['stylesheet', 'icon', 'apple-touch-icon']);
 function linksIn(html) {
   const out = [];
   for (const { tag, attrs, closed } of tagsIn(html, Object.keys(GOES_BY))) {
-    const at = GOES_BY[tag];
+    /* An SVG link's address is its xlink:href. */
+    const at = tag === 'a' && !attrs.has('href') && attrs.has('xlink:href') ? 'xlink:href' : GOES_BY[tag];
     if (closed && OPTIONAL.has(tag) && !attrs.has(at)) continue;
     if (closed && tag === 'link') {
       const rel = (attrs.get('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -164,11 +233,12 @@ export default async function run(state) {
         <a data-href="/in-app/help" href="/app">4</a> <a title="a > b" href="/account">5</a> <a/href="/auth.html">6</a>
         <a id="here">7</a> <a href="#here" href="/app">8</a> <form action='/x'></form> <button formaction=/y>9</button>
         <button type="submit">10</button> <link rel="icon" href="/i.png"> <link rel="icon prefetch" href="/app">
-        <meta http-equiv=Refresh content="0;url=/app"> <a href="/in-app/terms>11</a>`).map(l => `${l.tag} ${l.url}`);
+        <meta http-equiv=Refresh content="0;url=/app"> <a data-x=">" href="index.html#pricing">12</a> <a xlink:href="/app">13</a>
+        <a href="/in-app/terms>11</a>`).map(l => `${l.tag} ${l.url}`);
       const want = ['a /help', 'a /privacy.html', 'a /terms.html', 'a /app', 'a /account', 'a /auth.html', 'a #here', 'form /x',
-        'button /y', 'link /app', 'a null', 'meta refresh 0;url=/app'];
+        'button /y', 'link /app', 'a index.html#pricing', 'a /app', 'a null', 'meta refresh 0;url=/app'];
       check(JSON.stringify(got) === JSON.stringify(want),
-        `single quotes, no quotes, any case, a > in a value, data-href and a quote left open are all read: ${JSON.stringify(got)}`);
+        `single quotes, no quotes, any case, a > in a value, data-href, xlink:href and a quote left open are all read: ${JSON.stringify(got)}`);
       const srcs = loadsIn(`<script src='/a.js'></script><SCRIPT SRC=/b.js></SCRIPT><script>x</script><script src="/c.js`, ['script'], ['src']);
       check(JSON.stringify(srcs) === JSON.stringify(['/a.js', '/b.js', '', null]), `and so is a script's address: ${JSON.stringify(srcs)}`);
     }
@@ -209,7 +279,7 @@ export default async function run(state) {
             }
             continue;
           }
-          if (!isPolicy(u)) wrong.push(`${url}, which is not another service's privacy policy`);
+          if (!isPolicy(u) && !isProvider(u)) wrong.push(`${url}, which is neither another service's privacy policy nor a mail provider's own help`);
         }
         check(wrong.length === 0, `${path} links nowhere else${wrong.length ? `:\n         ${wrong.join('\n         ')}` : ''}`);
         if (/<link\b[^>]*rel="manifest"/i.test(html)) check(false, `${path} links the web app manifest, which opens /app`);
@@ -260,6 +330,39 @@ export default async function run(state) {
         'the deletion page reads the site configuration, so the scan above saw what it reads');
     }
 
+    console.log('\n— nothing on them says anything that sells, in their text or an attribute —');
+    {
+      /* Not only links: a price, Stripe or the billing portal written as
+         plain text is still a call to pay outside the store. */
+      const where = (text, what) => {
+        const re = BUYING.find(([w]) => w === what)[1];
+        const m = text.match(re);
+        return m ? JSON.stringify(text.slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)) : '';
+      };
+      for (const [path, html] of pages) {
+        const attrs = tagsIn(html, ['[a-zA-Z][\\w:-]*']).flatMap(t => [...t.attrs.values()]);
+        const text = `${visible(html)} ${entities(attrs.join(' '))}`;
+        const found = sellsIn(text);
+        check(attrs.length > 10 && found.length === 0,
+          `${path} says nothing that sells, in its text or its ${attrs.length} attribute values${found.length ? `:\n         ${found.map(w => `${w}: ${where(text, w)}`).join('\n         ')}` : ''}`);
+      }
+      /* The deletion page's own script, every sentence it can show, and the
+         refusals the account route gives it (it asks for the store's words). */
+      const js = [...scripts].filter(([h]) => h.includes('/in-app/')).map(([, j]) => j || '').join('\n');
+      check(js.length > 0 && sellsIn(js).length === 0, `the deletion page's script says nothing that sells: ${sellsIn(js).join(', ') || 'nothing'}`);
+      const at = Date.parse('2026-10-17T12:00:00Z');
+      const rows = [{ status: 'active', plan: 'pro' }, { status: 'trialing' }, { status: 'past_due', plan: 'base' },
+        { status: 'incomplete', plan: 'pro' }, { status: 'canceled', plan: 'pro', updated_at: new Date(at - 86400000).toISOString() }];
+      const store = rows.map(r => blocksDeletion(r, at, { store: true }));
+      const site = rows.map(r => blocksDeletion(r, at));
+      check(store.every(Boolean) && store.every(r => !sellsIn(r).length && !/[–—]/.test(r)),
+        `every refusal the deletion page can show sells nothing: ${JSON.stringify(store.map(r => r && sellsIn(r)))}`);
+      check(site.slice(0, 4).every(r => sellsIn(r).length) && site[4] === store[4]
+        && [null, { status: 'canceled', updated_at: new Date(at - 40 * 86400000).toISOString() }, { status: 'incomplete_expired' }]
+          .every(r => blocksDeletion(r, at, { store: true }) === null),
+        "and they are the website's refusals, by the same rules, in other words only where those name the billing portal or Stripe");
+    }
+
     console.log('\n— the copies say everything their pages say, from the page as it is now —');
     for (const [name, file] of Object.entries(IN_APP_PAGES)) {
       const source = read(file);
@@ -270,19 +373,40 @@ export default async function run(state) {
       const brand = (served.match(/<header><div class="wrap nav-in">([\s\S]*?)<\/header>/) || [])[1] || '';
       check(/<b>RATA<\/b>/.test(brand) && !/<a\b/i.test(brand), `/in-app/${name} names RATA at the top, as text`);
       check(/<meta name="robots" content="noindex">/.test(served), `/in-app/${name} asks search engines for the page itself instead`);
+      /* Every mark is one somebody decided on: named here and in
+         lib/in-app.js. */
+      const wording = [...source.matchAll(WORDS)].flatMap(m => wordingOf(m[2]));
+      const ids = [...[...source.matchAll(CUT)].map(m => m[1]), ...wording.map(w => w.id)].sort();
+      check(JSON.stringify(ids) === JSON.stringify([...CUTS[name]].sort())
+        && JSON.stringify([...STORE_CUTS[name]].sort()) === JSON.stringify([...CUTS[name]].sort()),
+        `${file}: its cuts and store wording are the ${CUTS[name].length} named here and in lib/in-app.js: ${ids.join(', ')}`);
+      /* A cut in the page's text takes out something that sells (or, as
+         before, only a link's few words), and store wording replaces words
+         that sell with words that do not. */
+      const cuts = [...mainOf(source).matchAll(CUT)].map(m => [m[1], m[2]]);
+      const badCuts = cuts.filter(([, c]) => !sellsIn(visible(c)).length && !(/<a\b/i.test(c) && visible(c).length <= 40));
+      check(badCuts.length === 0, `${file}: what it leaves out of its text sells${badCuts.length ? `, but not ${badCuts.map(([id]) => id).join(', ')}` : ''}`);
+      const badWords = wording.filter(w => !w.id || !sellsIn(visible(w.old)).length || sellsIn(visible(w.now)).length);
+      check(wording.length > 0 && badWords.length === 0,
+        `${file}: each of its ${wording.length} pieces of store wording replaces words that sell with words that do not${badWords.length ? `: ${badWords.map(w => w.id || w.old).join(', ')}` : ''}`);
       /* What a reader of the page's main part sees is the same, word for
-         word, but for what a source marks to leave out, and those marks
-         inside the text are only ever a link's few words. */
-      const cuts = [...mainOf(source).matchAll(CUT)].map(m => m[1]);
-      check(cuts.every(c => /<a\b/i.test(c) && visible(c).length <= 40),
-        `${file}: what it leaves out of its text is only links (${cuts.map(c => JSON.stringify(visible(c))).join(', ') || 'none'})`);
-      const want = visible(mainOf(source).replace(CUT, ''));
+         word, but for what the page marks for the store. */
+      const want = visible(mainOf(asCopy(source)));
       const got = visible(mainOf(served));
       let at = 0;
       while (at < want.length && want[at] === got[at]) at++;
       check(want.length > 1000 && want === got,
-        `/in-app/${name} says all ${want.length} characters of ${file}'s text` +
+        `/in-app/${name} says all ${want.length} characters of ${file}'s text, with its store wording` +
         (want === got ? '' : `\n         first difference: ${JSON.stringify(want.slice(at, at + 60))} became ${JSON.stringify(got.slice(at, at + 60))}`));
+      /* And every paragraph, list item and heading of the page that sells
+         nothing is in the copy whole, so store wording can only ever change
+         what sells. */
+      const blocks = blocksOf(mainOf(source.replace(CUT, '')));
+      const clean = blocks.filter(b => !sellsIn(b).length);
+      const lost = clean.filter(b => !got.includes(b));
+      check(clean.length > 20 && lost.length === 0,
+        `/in-app/${name} keeps all ${clean.length} of ${file}'s paragraphs, items and headings that sell nothing` +
+        (lost.length ? `:\n         ${lost.slice(0, 3).map(b => JSON.stringify(b.slice(0, 90))).join('\n         ')}` : ''));
     }
     {
       /* The help page's quotes and the privacy policy's promises are
@@ -293,41 +417,92 @@ export default async function run(state) {
       check(said(help) > 0 && said(help) === said(read('help.html')), `/in-app/help quotes all ${said(help)} of RATA's sentences`);
       const policy = visible(pages.get('/in-app/privacy') || '');
       check(DELETION_REMOVES.every(x => policy.includes(x.replace(/[‘’]/g, '’'))), '/in-app/privacy names everything deletion removes');
+      /* Where to delete an account, in the store copy, is the deletion page
+         itself, not Settings on the website. */
+      const del = ((pages.get('/in-app/privacy') || '').match(/<section id="delete"[\s\S]*?<\/section>/) || [''])[0];
+      check(/<a href="\/in-app\/delete-account">[^<]+<\/a>/.test(del) && !/Settings/.test(visible(del)),
+        `/in-app/privacy#delete sends a reader to the deletion page: ${JSON.stringify(visible((del.match(/<p>[\s\S]*?<\/p>/) || [''])[0]))}`);
+      const ending = ((pages.get('/in-app/terms') || '').match(/<section id="ending"[\s\S]*?<\/section>/) || [''])[0];
+      check(/<a href="\/in-app\/delete-account">/.test(ending), '/in-app/terms#ending does too');
     }
 
-    console.log('\n— a link added to a page later is judged too —');
+    console.log('\n— a link added to a page later is judged too, its attributes read as a browser reads them —');
     {
       /* storeSafe keeps only what it knows is safe, so a source that gains
          a link nobody thought about still makes a safe copy. */
-      const src = read('help.html').replace('<h1>Help</h1>',
-        '<h1>Help</h1><p>New: <a href="index.html#pricing">plans</a>, <a href="/account">licence</a>, '
-        + '<a href="https://buy.stripe.com/x">buy</a>, <a href="https://mailrata.org/">home</a>, <a href="//mailrata.org/app">app</a>, '
+      const into = extra => read('help.html').replace('<h1>Help</h1>', `<h1>Help</h1>${extra}`);
+      /* Each link left in a copy, as text=address, read as the crawl reads it. */
+      const linked = html => tagsIn(html, ['a']).filter(t => t.attrs.has('href') || t.attrs.has('xlink:href'))
+        .map(t => `${visible(html.slice(t.end, t.end + html.slice(t.end).search(/<\/a\b/i)))}=${t.attrs.get('href') ?? t.attrs.get('xlink:href')}`);
+      const mine = /^(plans|licence|checkout|home|app|odd|gone|fake|fake2|plain|mail|terms|delete|Google|provider|template|install|single|upper|x|y|z|q|r|dup|ping|bare|prices)=/;
+      const src = into('<p>New: <a href="index.html#pricing">plans</a>, <a href="/account">licence</a>, '
+        + '<a href="https://buy.stripe.com/x">checkout</a>, <a href="https://mailrata.org/">home</a>, <a href="//mailrata.org/app">app</a>, '
         + '<a href="privacy.html?x=1">odd</a>, <a href="/delete-account">gone</a>, <a href="https://policies.google.com.evil.example/">fake</a>, '
+        + '<a href="https://support.google.com.evil.example/">fake2</a>, <a href="http://support.google.com/mail/">plain</a>, '
         + '<a href="mailto:help@example.org">mail</a>, <a href="terms.html#ai">terms</a>, <a href="/in-app/delete-account">delete</a>, '
-        + '<a href="https://policies.google.com/privacy">Google</a>, <a href="#install">install</a>.</p>');
-      const kept = [...storeSafe('help', src).matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g)]
-        .filter(m => /^(plans|licence|buy|home|app|odd|gone|fake|mail|terms|delete|Google|install)$/.test(m[2]))
-        .map(m => `${m[2]}=${m[1]}`);
+        + '<a href="https://policies.google.com/privacy">Google</a>, <a href="https://support.google.com/mail/answer/7126229">provider</a>, '
+        + '<a href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md">template</a>, '
+        + '<a href="#install">install</a>.</p>');
+      const kept = linked(storeSafe('help', src)).filter(l => mine.test(l));
       check(JSON.stringify(kept) === JSON.stringify(['mail=mailto:help@example.org', 'terms=/in-app/terms#ai',
-        'delete=/in-app/delete-account', 'Google=https://policies.google.com/privacy', 'install=#install']),
-        `only mailto:, the in-app pages, a policy page and the page itself stay links: ${kept.join(', ')}`);
-      const odd = storeSafe('help', read('help.html').replace('<h1>Help</h1>',
-        `<h1>Help</h1><p><a href=index.html>bare</a> <a href='/app'>single</a> <a id="here">anchor</a></p>`));
-      check(!/<a href=index|<a href='\/app'/.test(odd) && /<p>bare single <a id="here">anchor<\/a><\/p>/.test(odd),
-        'an address written without double quotes is not judged, so it is not kept either');
-      for (const [what, bad] of [['a script', '<script>location="/"</script>'], ['a handler', '<p onclick="go()">x</p>'],
-        ['a refresh', '<meta http-equiv="refresh" content="0;url=/">'], ['a form', '<form action="/"></form>']]) {
-        let made = true;
-        try { storeSafe('help', read('help.html').replace('<h1>Help</h1>', `<h1>Help</h1>${bad}`)); } catch { made = false; }
-        check(!made, `a page that gains ${what} makes no copy, rather than one nobody judged`);
-      }
-      const unmarked = read('privacy.html').replace(/<!-- in-app:(?:brand|cut|end) -->/g, '');
+        'delete=/in-app/delete-account', 'Google=https://policies.google.com/privacy',
+        'provider=https://support.google.com/mail/answer/7126229', 'install=#install']),
+        `only mailto:, the in-app pages, a policy page, a provider's help and the page itself stay links: ${kept.join(', ')}`);
+
+      /* The reviewers' links: a > inside a quoted value, an SVG link's
+         xlink:href, and the rest of what a browser reads that a quick
+         pattern does not. Each loses its link and keeps its words. */
+      const hostile = '<a title="a > b" href="/account">x</a> <a data-x=">" href="index.html#pricing">y</a> <a xlink:href="/app">z</a> '
+        + '<a title="a > b" href="index.html#pricing">prices</a> <a href="&#105;ndex.html#pricing">q</a> <a href="index&period;html">r</a> '
+        + '<a href="#install" href="/app">dup</a> <a ping="/app" href="#install">ping</a> <a href=index.html>bare</a> '
+        + "<a href='/in-app/terms#ai'>single</a> <A HREF=\"terms.html#ai\">upper</A>";
+      const made = storeSafe('help', into(`<p id="hostile">${hostile}</p>`));
+      const p = (made.match(/<p id="hostile">([\s\S]*?)<\/p>/) || [])[1] || '';
+      check(JSON.stringify(linked(p)) === JSON.stringify(['single=/in-app/terms#ai', 'upper=/in-app/terms#ai'])
+        && visible(p) === 'x y z prices q r dup ping bare single upper',
+        `a > in a quoted value, xlink:href, a character reference, two addresses or a ping each make the link plain text: ${JSON.stringify(p)}`);
+      const urls = BANNED.filter(([, re]) => re.test(p)).map(([what]) => what);
+      check(urls.length === 0 && !/\/app\b|\/account\b/.test(p), `and leave no address behind: ${urls.join(', ') || 'none'}`);
       let threw = '';
-      try { storeSafe('privacy', unmarked); } catch (e) { threw = e.message; }
+      try { storeSafe('help', into('<p><a title="a > b" href="index.html#pricing">buy</a></p>')); } catch (e) { threw = e.message; }
+      check(/still names Buy/.test(threw), `the reviewers' link with its own word, "buy", makes no copy at all: "${threw}"`);
+
+      for (const [what, bad] of [['a script', '<script>location="/"</script>'], ['a handler', '<p onclick="go()">x</p>'],
+        ['a refresh', '<meta http-equiv="refresh" content="0;url=/">'], ['a form', '<form action="/"></form>'],
+        ['a <link rel="prev">', '<link rel="prev" href="index.html">'], ['a <link> to another site', '<link rel="stylesheet" href="https://fonts.example/x.css">'],
+        ['an address on another tag', '<blockquote cite="/app">x</blockquote>'], ['an outside picture', '<img src="https://example.org/x.png" alt="">'],
+        ['an SVG', '<svg><a xlink:href="/app"><text>t</text></a></svg>'], ['a link inside a link', '<a href="#install"><a href="#link">x</a></a>'],
+        ['a quote left open', '<p><a href="/in-app/terms>11</a></p>']]) {
+        let why = '';
+        try { storeSafe('help', into(bad)); } catch (e) { why = e.message; }
+        check(!!why, `a page that gains ${what} makes no copy, rather than one nobody judged${why ? `: "${why}"` : ''}`);
+      }
+    }
+
+    console.log('\n— and so is a word that sells, and a mark that no longer fits —');
+    {
+      const refused = (page, html) => { try { storeSafe(page, html); return ''; } catch (e) { return e.message; } };
+      const privacy = read('privacy.html');
+      let threw = refused('privacy', privacy.replace(/<!-- in-app:[\s\S]*?-->/g, ''));
       check(/marks nothing/.test(threw), `a page that loses its marks makes no copy at all: "${threw}"`);
-      threw = '';
-      try { storeSafe('privacy', read('privacy.html').replace('<!-- in-app:cut --><footer>', '<footer>')); } catch (e) { threw = e.message; }
+      threw = refused('privacy', privacy.replace('<!-- in-app:cut footer --><footer>', '<footer>'));
       check(/without its other half|footer/.test(threw), `nor one whose footer is no longer marked: "${threw}"`);
+      /* What claude/iap-server does to this sentence: the website's words
+         change, so the store's must be decided again. */
+      threw = refused('privacy', privacy.replace('<li><b>Your card.</b> Stripe takes the payment;', '<li><b>Your card.</b> Stripe takes the payment, or Apple in the iPhone app;'));
+      check(/"card" finds its words 0 times[\s\S]*decide what the store copy says now/.test(threw), `nor one whose sentence changed under its store wording: "${threw}"`);
+      threw = refused('privacy', privacy.replace('  card: Stripe takes', '  kard: Stripe takes'));
+      check(/"kard" is not in STORE_CUTS/.test(threw), `nor one with a mark nobody named: "${threw}"`);
+      threw = refused('privacy', privacy.replace(/\n *pending: [^\n]*/, ''));
+      check(/STORE_CUTS\.privacy names pending, which the page no longer marks/.test(threw), `nor one that lost a named piece of wording: "${threw}"`);
+      threw = refused('privacy', privacy.replace('=> The store or payment processor you pay through takes the payment;', '=> Stripe takes the card;'));
+      check(/"card" still names Stripe/.test(threw), `nor store wording that still sells: "${threw}"`);
+      threw = refused('privacy', privacy.replace('  card: Stripe takes the payment; =>', '  card: we never see the card number. =>'));
+      check(/"card" changes words that sell nothing/.test(threw), `nor store wording that changes what sells nothing: "${threw}"`);
+      threw = refused('privacy', privacy.replace('<h1>Privacy policy</h1>', '<h1>Privacy policy</h1><p>Pay with Stripe.</p>'));
+      check(/still names Stripe/.test(threw), `nor a copy whose page gains a word that sells: "${threw}"`);
+      threw = refused('terms', read('terms.html').replace('<h1>Terms of service</h1>', '<h1 title="RATA Pro, $23.99 a month">Terms of service</h1>'));
+      check(/still names a price/.test(threw), `in an attribute too: "${threw}"`);
     }
 
     console.log('\n— the website\'s service worker leaves them to the network —');
@@ -352,11 +527,16 @@ export default async function run(state) {
         `what it removes is DELETION_REMOVES, in order: ${JSON.stringify(removes)}`);
       /* The last of DELETION_KEEPS is said from inside the app ("this
          device ... here"); on a web page it is the app's own copy, as the
-         privacy policy says it. */
-      check(JSON.stringify(keeps.slice(0, -1)) === JSON.stringify(DELETION_KEEPS.slice(0, -1))
+         privacy policy says it. Stripe's billing records are named as the
+         privacy policy's store copy names them, since a store build opens
+         this page. */
+      const records = [...((pages.get('/in-app/privacy') || '').match(/<section id="delete"[\s\S]*?<\/section>/) || [''])[0]
+        .matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m => visible(m[1])).find(t => /billing records/.test(t));
+      check(JSON.stringify(keeps.slice(0, 2)) === JSON.stringify(DELETION_KEEPS.slice(0, 2))
+        && /^Stripe's billing records/.test(DELETION_KEEPS[2]) && !!records && keeps[2] === records
         && /this device/.test(DELETION_KEEPS.at(-1)) && keeps.length === DELETION_KEEPS.length
         && /^what the RATA app holds on your device, until you uninstall it$/.test(keeps.at(-1) || ''),
-        `what it keeps is DELETION_KEEPS, the last said as on a web page: ${JSON.stringify(keeps)}`);
+        `what it keeps is DELETION_KEEPS, the billing records as the privacy policy's store copy says them and the last as on a web page: ${JSON.stringify(keeps)}`);
       check(/does not cancel/.test(text) && /App Store/.test(text) && /Google Play/.test(text),
         'it says deleting the account does not cancel a subscription paid through Apple or Google');
       /* Google Play asks a deletion page for any further time the data is
@@ -409,6 +589,31 @@ export default async function run(state) {
         }));
         check(off.disabled && /not switched on/i.test(off.said), `the form is off and the page says why: "${off.said}"`);
         check(/^If you cannot sign in/.test(off.write), 'and still says where to write to ask for deletion');
+      } finally { await browser.close(); }
+    }
+
+    console.log('\n— on a phone, 390 px wide, every page keeps its 16 px side gutter —');
+    {
+      /* A store build opens these on phones. help.html's layout once took
+         its .wrap's side padding away, so its text touched the screen's
+         edge, on the website and in the copy alike. */
+      const browser = await chromium.launch();
+      try {
+        const pg = await browser.newPage({ viewport: { width: 390, height: 844 } });
+        for (const path of ['/help', ...START]) {
+          await pg.goto(s.url + path);
+          const m = await pg.evaluate(() => {
+            const all = [...document.querySelectorAll('main h1, main h2, main h3, main p, main li, main blockquote, main dl, main aside, main section')]
+              .filter(e => e.getClientRects().length);
+            const out = all.map(e => ({ e, r: e.getBoundingClientRect() }))
+              .filter(({ r }) => r.left < 15.5 || r.right > innerWidth - 15.5)
+              .map(({ e, r }) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} ${Math.round(r.left)}..${Math.round(r.right)}`);
+            const first = document.querySelector('#install') || document.querySelector('main section, main h1');
+            return { seen: all.length, out: out.slice(0, 4), wide: document.documentElement.scrollWidth, left: first ? first.getBoundingClientRect().left : -1 };
+          });
+          check(m.seen > 5 && m.out.length === 0 && m.wide <= 390 && m.left >= 16,
+            `${path}: all ${m.seen} blocks sit 16 px or more from each side (the first at ${Math.round(m.left)} px), with no sideways scroll (${m.wide} px)${m.out.length ? `: ${m.out.join(', ')}` : ''}`);
+        }
       } finally { await browser.close(); }
     }
   } finally { await s.stop(); }
@@ -489,14 +694,15 @@ async function deletesForReal(check) {
     await axe(pg, 'the question before deleting');
 
     fake.sub = { plan: 'pro', status: 'active', event_at: null, updated_at: new Date().toISOString() };
-    const refusal = blocksDeletion(fake.sub);
+    const refusal = blocksDeletion(fake.sub, Date.now(), { store: true });
     await pg.keyboard.press('Tab');
     check((await focused(pg)) === 'del-go', 'Tab reaches Delete my account');
     fake.calls = [];
     await pg.keyboard.press('Enter');
     await pg.waitForFunction(() => { const a = document.querySelector('#del-msg'); return a && !a.hidden && a.textContent.trim(); });
     const refused = await alertOf(pg);
-    check(refused?.role === 'alert' && refused.text === refusal, `the server's own sentence: ${JSON.stringify(refused?.text)}`);
+    check(refused?.role === 'alert' && refused.text === refusal && !sellsIn(refused.text).length && refusal !== blocksDeletion(fake.sub),
+      `the server's own sentence, in the words it gives a store build: ${JSON.stringify(refused?.text)}`);
     check(fake.calls.some(c => c === 'GET /auth/v1/user') && !fake.calls.some(c => c.startsWith('DELETE ')),
       'the session went with the request, and nothing was deleted');
     check(await pg.evaluate(() => !document.querySelector('#del-confirm').hidden && !document.querySelector('#del-go').disabled),

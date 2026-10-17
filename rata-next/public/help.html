@@ -61,7 +61,7 @@ nav .btn{margin-left:6px}
 .head{padding:56px 0 40px;border-bottom:1px solid var(--hair)}
 h1{font-size:clamp(36px,5vw,52px);line-height:1.05;letter-spacing:-.035em;font-weight:600}
 .lede{margin-top:16px;font-size:18px;line-height:1.55;color:var(--slate);max-width:56ch;text-wrap:pretty}
-.layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px;padding:48px 0 96px}
+.layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px;padding-top:48px;padding-bottom:96px}
 .toc{position:sticky;top:96px;align-self:start}
 .toc p{font-size:12.5px;font-weight:500;color:var(--faint);margin-bottom:8px}
 .toc ol{list-style:none;display:grid;gap:2px}
@@ -178,10 +178,12 @@ footer a:hover{color:var(--ink)}
 
 <article>
 
-<section id="install" aria-labelledby="install-h">
+<!-- in-app:words --><section id="install" aria-labelledby="install-h">
   <h2 id="install-h">Install</h2>
   <p>Every installer is on the <a href="https://github.com/Noallrightokay/center-point-inbox/releases">releases page</a>, with its version in the file name. RATA is in beta and the installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. That is expected.</p>
-  <div class="rows">
+  <!-- in-app:end
+    get: Every installer is on the <a href="https://github.com/Noallrightokay/center-point-inbox/releases">releases page</a>, with its version in the file name. RATA is in beta and the installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. That is expected. => The store you got RATA from installs it and keeps it up to date.
+  --><!-- in-app:cut install-steps --><div class="rows">
     <div class="row">
       <b>Windows 10 and 11</b>
       <div>
@@ -204,10 +206,12 @@ footer a:hover{color:var(--ink)}
         <p>On other distributions, make the AppImage executable, then run it: <code>chmod +x RATA_&lt;version&gt;_amd64.AppImage</code>, then <code>./RATA_&lt;version&gt;_amd64.AppImage</code></p>
       </div>
     </div>
-  </div>
+  </div><!-- in-app:end --><!-- in-app:words -->
   <p>The first time RATA opens it asks for your licence key. Copy it from your <a href="account.html">licence page</a> and paste it in: one line, no spaces.</p>
   <p><b>Your version</b> is in the window's title bar, as <code>RATA &lt;version&gt; beta</code>. Put it in every bug report.</p>
-</section>
+</section><!-- in-app:end
+  key: The first time RATA opens it asks for your licence key. Copy it from your <a href="account.html">licence page</a> and paste it in: one line, no spaces. => If RATA asks for your licence key, paste it in: one line, no spaces.
+-->
 
 <section id="link" aria-labelledby="link-h">
   <h2 id="link-h">Link a mailbox</h2>
@@ -497,7 +501,7 @@ footer a:hover{color:var(--ink)}
 </div>
 </main>
 
-<!-- in-app:cut --><footer><div class="wrap">
+<!-- in-app:cut footer --><footer><div class="wrap">
   <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
   <a href="account.html">Licence</a>
   <a href="help.html">Help</a>

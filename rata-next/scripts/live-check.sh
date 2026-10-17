@@ -13,7 +13,8 @@
 # security headers are on, /api/config publishes no service-role key, the
 # landing page's screenshots are there, the privacy policy, the terms and the
 # deletion page are served with every [OWNER: ...] placeholder filled in, and
-# the store-safe pages under /in-app/ are there and lead nowhere that sells.
+# the store-safe pages under /in-app/ are there and lead nowhere, and say
+# nothing, that sells.
 # It cannot sign up, pay or link a mailbox: those are the owner's steps in
 # LAUNCH.md §6.
 set -u
@@ -155,6 +156,9 @@ for p in in-app/help in-app/privacy in-app/terms in-app/delete-account; do
   s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
   ! printf '%s' "$page" | grep -qiE '#pricing|stripe\.com|/releases|(index|account|app|auth)\.html|="/(account|app|auth)"|<nav|<footer'; check $? "/$p has no site navigation and no link that sells"
+  # Nor a word that sells, as plain text (lib/in-app.js SELLING, in short).
+  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|sign(ed)? in at mailrata\.org' | sort -u | tr '\n' ' ')
+  [ -z "$sold" ]; check $? "/$p says nothing that sells${sold:+ (still: $sold)}"
 done
 
 echo

@@ -4,8 +4,9 @@
    through the same Supabase client the website's sign-in page uses (its
    version in LIB is that page's, which the test fetches), then asks the account
    route to delete (DELETE /api/account, the route the app's Settings call
-   too). Whatever the route refuses with is said in its own words; the rules
-   are lib/account.js's, not this page's.
+   too). Whatever the route refuses with is said in its own words, which it
+   gives in the store's wording for this page; the rules are lib/account.js's,
+   not this page's.
 
    Nothing is kept in the browser: the client holds its session in memory
    only, Cancel ends that one session at the sign-in service, and it goes
@@ -111,8 +112,9 @@
         method: 'DELETE',
         headers: { Authorization: 'Bearer ' + session.access_token, 'Content-Type': 'application/json' },
         /* The route deletes only when told the account's own address,
-           which the person has just typed to sign in. */
-        body: JSON.stringify({ confirm: $('del-who').textContent }),
+           which the person has just typed to sign in; and a refusal comes
+           in the words a store build may show (lib/account.js). */
+        body: JSON.stringify({ confirm: $('del-who').textContent, words: 'store' }),
       });
       answer = await r.json().catch(() => null);
       if (r.ok && answer && answer.ok === true) {
