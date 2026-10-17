@@ -20,7 +20,7 @@
 # No message here ever tells the owner to delete it.
 #
 # And the repository variable RATA_IOS_BUNDLE_ID, the bundle id of the App
-# Store Connect app record (org.mailrata.app when unset). The desktop's
+# Store Connect app record (org.mailrata.mail when unset). The desktop's
 # identifier, org.mailrata.desktop, stays in tauri.conf.json: this build is
 # given the store's through Tauri's --config, never by editing the config.
 # The real RATA_LICENCE_PUBLIC_KEY is required too, since a build without it
@@ -80,7 +80,7 @@ WORK="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/rata-testflight"
 ASC="$WORK/asc"
 OVERRIDE="$WORK/override.json"
 
-DEFAULT_BUNDLE="org.mailrata.app"
+DEFAULT_BUNDLE="org.mailrata.mail"
 XCODE_MIN=26
 # The App Store Connect key's three, which decide whether TestFlight is set
 # up, and with them the team, which macOS notarisation shares (above).

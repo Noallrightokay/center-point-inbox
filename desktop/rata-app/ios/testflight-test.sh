@@ -118,8 +118,8 @@ check_case "nothing set" 0 false RATA_LICENCE_PUBLIC_KEY="$LICENCE"
 grep -qxF "::notice::TestFlight is not set up yet: docs/APP-STORES.md" "$tmp/log" \
   && pass "nothing set says so, in the words docs/ is written for" \
   || fail "nothing set must say \"TestFlight is not set up yet: docs/APP-STORES.md\""
-grep -qx "bundle_id=org.mailrata.app" "$tmp/out" && pass "the bundle id is org.mailrata.app when RATA_IOS_BUNDLE_ID is unset" \
-  || fail "the default bundle id is org.mailrata.app"
+grep -qx "bundle_id=org.mailrata.mail" "$tmp/out" && pass "the bundle id is org.mailrata.mail when RATA_IOS_BUNDLE_ID is unset" \
+  || fail "the default bundle id is org.mailrata.mail"
 
 check_case "nothing set, no licence key either" 0 false
 check_case "blank values count as unset" 0 false APPLE_API_KEY_ID="  " APPLE_API_KEY_P8=$'\n'
@@ -354,7 +354,7 @@ run APPLE_API_KEY_ID="$KEY_ID" APPLE_API_ISSUER_ID="$ISSUER" IPA="$ipa" STUB_SAY
 [ $? -eq 1 ] && pass "altool saying FAILED with a status of 0 is a failure" || fail "altool saying FAILED must fail the step"
 ARGS=(upload)
 run APPLE_API_KEY_ID="$KEY_ID" APPLE_API_ISSUER_ID="$ISSUER" IPA="$ipa" STUB_SAY="UPLOAD SUCCEEDED with no errors\n"
-[ $? -eq 0 ] && grep -qF "::notice::RATA 0.1.99 (42) is uploaded to App Store Connect as org.mailrata.app." "$tmp/log" \
+[ $? -eq 0 ] && grep -qF "::notice::RATA 0.1.99 (42) is uploaded to App Store Connect as org.mailrata.mail." "$tmp/log" \
   && pass "an upload says which version and build went, under which bundle id" || { fail "a good upload must pass and say so"; sed 's/^/    /' "$tmp/log"; }
 
 # --- What a failure says -----------------------------------------------------
@@ -391,7 +391,7 @@ explains upload 'ENTITY_ERROR something odd' "The upload failed for a reason thi
 explains_alone() { # step, the start of the one sentence it must give; the tool's words on stdin
   cat > "$tmp/said.log"
   ARGS=(explain "$1" "$tmp/said.log")
-  run RATA_IOS_BUNDLE_ID=org.mailrata.app
+  run RATA_IOS_BUNDLE_ID=org.mailrata.mail
   if [ "$(grep -c '^::error::' "$tmp/log")" -eq 1 ] && grep -qF "::error::$2" "$tmp/log"; then
     pass "$1: $3 is explained by its cause alone"
   else
@@ -408,7 +408,7 @@ IFS= read -r -d '' SIGN_REFUSED <<'SAID' || true
 2026-10-16 19:38:27.903 xcodebuild[60269:152398]  DVTServices: Received response for 0E304227-9420-4625-8A2E-F2B1102C4F9C @ <https://appstoreconnect.apple.com/xcbuild/QH65B2/listTeams.action?clientId=XABBG36SBA>. Error = Error Domain=DVTPortalResponseErrorDomain Code=0 "Communication with Apple failed" UserInfo={NSLocalizedDescription=Communication with Apple failed, NSLocalizedRecoverySuggestion=A non-HTTP 200 response was received (401) for URL https://appstoreconnect.apple.com/xcbuild/QH65B2/listTeams.action?clientId=XABBG36SBA}
 error: exportArchive Communication with Apple failed
 
-error: exportArchive No profiles for 'org.mailrata.app' were found
+error: exportArchive No profiles for 'org.mailrata.mail' were found
 
 ** EXPORT FAILED **
 
@@ -428,7 +428,7 @@ Running altool at path '/Applications/Xcode_26.6.app/Contents/SharedFrameworks/C
     );
 }
 2026-10-16 19:38:32.055 ERROR: [altool.100EA2DF0] GET APP SETTINGS: received status code 401, auth issue.
-2026-10-16 19:38:32.221 ERROR: [altool.B4303C340] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'. (19)
+2026-10-16 19:38:32.221 ERROR: [altool.B4303C340] Cannot determine the Apple ID from Bundle ID 'org.mailrata.mail' and platform 'IOS'. (19)
 2026-10-16 19:38:32.222 ERROR: [altool.100EA2DF0] ExitFailure (31)
 SAID
 explains_alone sign "Apple did not accept the App Store Connect API key." "Apple's answer to a key it does not know" <<< "$SIGN_REFUSED"
@@ -436,31 +436,31 @@ explains_alone upload "Apple did not accept the App Store Connect API key." "App
 explains_alone sign "An Apple agreement is waiting to be accepted." "an agreement with the errors that follow from it" <<'SAID'
 error: exportArchive: PLA Update available: You need to accept the latest Program License Agreement.
 error: exportArchive Communication with Apple failed
-error: exportArchive No profiles for 'org.mailrata.app' were found
+error: exportArchive No profiles for 'org.mailrata.mail' were found
 SAID
 explains_alone upload "An Apple agreement is waiting to be accepted." "an agreement with the errors that follow from it" <<'SAID'
 ERROR: [altool] A required agreement is missing or has expired. "code" : "FORBIDDEN_ERROR"
-ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.mail' and platform 'IOS'.
 SAID
 explains_alone sign "The API key may not sign in Apple's cloud." "a cloud signing refusal with the errors that follow from it" <<'SAID'
 error: exportArchive: Cloud signing permission error
 error: exportArchive: "code" : "FORBIDDEN_ERROR"
-error: exportArchive No profiles for 'org.mailrata.app' were found
+error: exportArchive No profiles for 'org.mailrata.mail' were found
 SAID
 explains_alone upload "Apple refused what the API key asked for, because the key's role is too low." "a role too low with the errors that follow from it" <<'SAID'
 ERROR: [altool] "code" : "FORBIDDEN_ERROR", "title" : "This request is forbidden for security reasons"
-ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.mail' and platform 'IOS'.
 SAID
-explains_alone sign "The bundle id org.mailrata.app is not registered to this team." "no App ID, with Xcode's word for any refusal" <<'SAID'
+explains_alone sign "The bundle id org.mailrata.mail is not registered to this team." "no App ID, with Xcode's word for any refusal" <<'SAID'
 error: exportArchive Communication with Apple failed
-error: exportArchive No profiles for 'org.mailrata.app' were found
+error: exportArchive No profiles for 'org.mailrata.mail' were found
 SAID
 explains_alone upload "Apple's servers did not answer." "a timeout with the errors that follow from it" <<'SAID'
 ERROR: [altool] APP STORE CONNECT API list-apps: The request timed out.
-ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'.
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.mail' and platform 'IOS'.
 SAID
-explains_alone upload "App Store Connect has no app with the bundle id org.mailrata.app." "no app record, alone" <<'SAID'
-ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.app' and platform 'IOS'. (19)
+explains_alone upload "App Store Connect has no app with the bundle id org.mailrata.mail." "no app record, alone" <<'SAID'
+ERROR: [altool] Cannot determine the Apple ID from Bundle ID 'org.mailrata.mail' and platform 'IOS'. (19)
 SAID
 
 # --- redact and forget -------------------------------------------------------
@@ -534,7 +534,7 @@ else
   fail "rehearse apple must pass on Apple's own answers to a made-up key"
   sed 's/^/    /' "$tmp/log"
 fi
-run STUB_STATUS=1 STUB_SAY="error: exportArchive No profiles for 'org.mailrata.app' were found\n"
+run STUB_STATUS=1 STUB_SAY="error: exportArchive No profiles for 'org.mailrata.mail' were found\n"
 [ $? -eq 1 ] && grep -qF "::error::sign with a made-up key must say that Apple did not accept the key." "$tmp/log" \
   && pass "rehearse apple fails when Apple refuses for a reason other than the key" \
   || { fail "rehearse apple must fail when the key is not what Apple refused"; sed 's/^/    /' "$tmp/log"; }
@@ -561,7 +561,7 @@ run STUB_STATUS=1 STUB_SAY="error: exportArchive: The request timed out.\n"
   && grep -qF "Apple did not answer: sign upload." "$tmp/log" \
   && pass "rehearse apple says which steps Apple did not answer" \
   || { fail "rehearse apple must name the steps Apple did not answer"; sed 's/^/    /' "$tmp/log"; }
-run STUB_STATUS=1 STUB_SAY="error: exportArchive: The request timed out.\nerror: No profiles for 'org.mailrata.app' were found\n"
+run STUB_STATUS=1 STUB_SAY="error: exportArchive: The request timed out.\nerror: No profiles for 'org.mailrata.mail' were found\n"
 [ $? -eq 0 ] && pass "a timeout with what follows from it is still no answer" \
   || { fail "a timeout explained alone must still count as no answer"; sed 's/^/    /' "$tmp/log"; }
 run STUB_STATUS=0 STUB_SAY="The request timed out.\n"
