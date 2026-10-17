@@ -566,7 +566,9 @@ impl<C: Call> AppStore<C> {
     }
 
     /// Whether `listen` has been answered: each transaction StoreKit hands
-    /// over by itself now reaches RATA.
+    /// over by itself now reaches RATA. Only the smoke check asks, so a
+    /// build without it never does.
+    #[cfg_attr(not(feature = "smoke"), allow(dead_code))]
     pub fn listening(&self) -> bool {
         self.listening.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -2111,7 +2113,8 @@ mod tests {
         );
         assert!(glue_package.contains(r#".byName(name: "RATAStore")"#));
         let glue = read("ios/Sources/StoreKitPlugin.swift");
-        assert!(glue.contains("\nimport RATAStore\n"));
+        // By lines: a Windows checkout ends each with CR LF.
+        assert!(glue.lines().any(|l| l == "import RATAStore"));
         let code: Vec<&str> = glue
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))

@@ -3,6 +3,7 @@
 // why in a host app). What RATA's Rust then does with each answer is
 // tested in src-tauri/src/appstore.rs, against a stand-in of this.
 
+import AppKit
 import Foundation
 import RATAStore
 import StoreKit
@@ -48,6 +49,26 @@ final class StoreTests: XCTestCase {
     session = nil
   }
 
+  /// Buys `id` as a Mac wrapper of RATAStore must: with the purchase sheet
+  /// anchored to a window of the app's. Without one, StoreKit on a Mac
+  /// finds no "UI anchor" and the purchase fails, as the iPhone glue names
+  /// RATA's scene for the same reason.
+  func buy(_ id: String, from store: Store) async -> PurchaseAnswer {
+    let window = await MainActor.run { () -> NSWindow in
+      let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.makeKeyAndOrderFront(nil)
+      return window
+    }
+    return await store.purchase(id) { product in
+      if #available(macOS 15.0, *) {
+        return try await product.purchase(confirmIn: window)
+      }
+      return try await product.purchase()
+    }
+  }
+
   /// Waits until `heard` holds something, at most `seconds`.
   func arrived(in heard: Heard, seconds: Double = 30) async -> [Signed] {
     let until = Date().addingTimeInterval(seconds)
@@ -78,7 +99,7 @@ final class StoreTests: XCTestCase {
   /// is entitled to, and it is finished once, when RATA asks.
   func testBoughtCarriesItsSignedRecordAndIsFinishedOnce() async throws {
     let store = Store()
-    let answer = await store.purchase(pro)
+    let answer = await buy(pro, from: store)
     XCTAssertEqual(answer.outcome, "bought", answer.message ?? "")
     let bought = try XCTUnwrap(answer.transaction)
     XCTAssertEqual(bought.product, pro)
@@ -102,14 +123,14 @@ final class StoreTests: XCTestCase {
   /// failed with a sentence, and nothing is bought.
   func testFailedSaysWhyAndBuysNothing() async throws {
     let store = Store()
-    let unknown = await store.purchase("org.mailrata.gold.monthly")
+    let unknown = await buy("org.mailrata.gold.monthly", from: store)
     XCTAssertEqual(unknown.outcome, "failed")
     XCTAssertEqual(unknown.message, "The App Store does not offer this subscription here.")
     XCTAssertNil(unknown.transaction)
 
     session.failTransactionsEnabled = true
     session.failureError = .unknown
-    let failed = await store.purchase(pro)
+    let failed = await buy(pro, from: store)
     XCTAssertEqual(failed.outcome, "failed")
     XCTAssertNil(failed.transaction)
     XCTAssertFalse((failed.message ?? "").isEmpty)
@@ -128,7 +149,7 @@ final class StoreTests: XCTestCase {
     let heard = Heard()
     store.listen { heard.add($0) }
 
-    let answer = await store.purchase(base)
+    let answer = await buy(base, from: store)
     XCTAssertEqual(answer.outcome, "pending", answer.message ?? "")
     XCTAssertNil(answer.transaction)
 
@@ -160,7 +181,7 @@ final class StoreTests: XCTestCase {
   /// customer is entitled to.
   func testARefundIsHeardAsRevokedAndEntitlesToNothing() async throws {
     let store = Store()
-    let answer = await store.purchase(pro)
+    let answer = await buy(pro, from: store)
     let bought = try XCTUnwrap(answer.transaction, answer.message ?? answer.outcome)
     let finished = await store.finish(bought.id)
     XCTAssertEqual(finished?.finished, true)
