@@ -212,7 +212,9 @@ customer's typed server says.
   tests cover them. `check_resolved` refuses a name if any answer is
   private. It has no loopback exception at all: the exception is only in
   `check_literal`, and only for the literal `127.0.0.1`.
-- *Follow-up, 2026-10-16, after this review (#164, #163).* NAT64's
+- *Follow-up, 2026-10-16, after this review (#164, #163; on main, first in
+  the next release: 0.1.52 and earlier refuse all of `64:ff9b::/32` and
+  have the old private names).* NAT64's
   well-known prefix `64:ff9b::/96` is no longer refused outright: an
   address in it is judged by the IPv4 address in its last 32 bits, as 6to4
   is, and passes exactly when that IPv4 address would (`64:ff9b::808:808`
@@ -231,7 +233,34 @@ customer's typed server says.
   `the_rest_of_the_nat64_block_is_still_refused`,
   `the_other_ipv4_embeddings_are_judged_as_before`,
   `a_nat64_answer_is_judged_like_any_other`, `names_that_are_never_public`
-  (guard.rs), and the NAT64 tests in `resolve.rs`, `imap.rs` and `smtp.rs`.
+  (guard.rs, every build); the NAT64 tests in `resolve.rs`, `imap.rs` and
+  `smtp.rs` (a hostile answer refused on linking, a refresh, the watch and
+  sending, and a public one dialled; through a scripted hickory resolver,
+  so not in a `system_dns` build); and the loopback suite's
+  `guard_admits_only_the_literal_loopback_address` (`tests/loopback.rs`,
+  CI job *Mail layer against real servers*), which pins that
+  `64:ff9b::7f00:1` and `64:ff9b::127.0.0.1` stay refused with
+  `loopback-tests` on, as literals and as a resolved answer: that
+  feature's exception for the literal `127.0.0.1` is the guard's one
+  deliberate hole.
+- *For the next review part (#163).* `desktop/rata-mail/src/dns_sd.rs`,
+  compiled only for iOS (and on a Mac with the test-only `system-dns`
+  feature), holds the mail engine's first and only `unsafe` code: there
+  was none in `desktop/rata-mail` at v0.1.52 (`0c60aad`), and on main
+  there are nine uses, all in that file. They are the `unsafe extern "C"`
+  block declaring dns_sd's `DNSServiceQueryRecord`,
+  `DNSServiceRefSockFD`, `DNSServiceProcessResult` and
+  `DNSServiceRefDeallocate` and `poll`, and eight `unsafe` blocks, each
+  with a `SAFETY` comment: in the reply callback, the cast of its context
+  pointer back to the question's state, the rdata slice built from the
+  pointer and length dns_sd hands over, and the reply's name read as a C
+  string; then starting a question, freeing it, reading its socket,
+  `poll`, and `DNSServiceProcessResult`. The reply callback is an
+  `extern "C" fn` that must never panic, which across that boundary would
+  end the app. No part of this review has covered it yet; what it hands
+  on comes from the network's resolver, so it is a stranger's input.
+  `records.rs`, which parses that rdata, is safe Rust and tested on every
+  system.
 - Every socket in the engine's non-test code opens in `imap::dial`, which
   IMAP, the IDLE watch and SMTP all call with the addresses `resolve_public`
   returned, so there is one lookup and no rebinding window.

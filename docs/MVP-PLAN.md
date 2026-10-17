@@ -1302,12 +1302,19 @@ has merged goes out in 0.1.52.
 ### The app stores (2026-10-14)
 
 The plan, the store rules behind it and the owner's decisions are in
-`docs/APP-STORES.md`. iOS first, then Google Play; the Mac App Store is
-undecided. On 2026-10-15 the owner chose Apple In-App Purchase (option A1)
-for iOS and consumption-only (G1) for Google Play. State (2026-10-16):
-merged, the NAT64 guard fix
+`docs/APP-STORES.md`. On 2026-10-17 the owner decided the order: the
+first public launch is the desktop direct download, sold through Stripe,
+and the App Store builds come after it, iOS first, then Google Play; when
+a Mac App Store build ships is still open (D10). The same day, D9: the
+iPhone and Mac App Store builds share the bundle id `org.mailrata.app`
+(Universal Purchase, so one subscription covers both), and the direct
+download keeps `org.mailrata.desktop`. On 2026-10-15 the owner chose Apple
+In-App Purchase (option A1) for iOS and consumption-only (G1) for Google
+Play. State (2026-10-17): merged on 2026-10-16 and first in the next
+release, the NAT64 guard fix
 ([#164](https://github.com/Noallrightokay/center-point-inbox/pull/164))
-and, for iOS, the engine's DNS through the system
+and, for iOS, the engine's DNS through the system, with the private zones
+refused on every system
 ([#163](https://github.com/Noallrightokay/center-point-inbox/pull/163));
 open, stage 1's store build of the interface
 ([#165](https://github.com/Noallrightokay/center-point-inbox/pull/165)),
@@ -1319,9 +1326,11 @@ iOS Simulator with a self-test
 and, stacked on it, signed builds to TestFlight once the owner's App Store
 Connect key is set
 ([#170](https://github.com/Noallrightokay/center-point-inbox/pull/170)),
-and the in-app purchase server on mailrata.org
-([#167](https://github.com/Noallrightokay/center-point-inbox/pull/167)); the
-StoreKit bridge and the purchase screen are still to come. Nothing has run
+the in-app purchase server on mailrata.org
+([#167](https://github.com/Noallrightokay/center-point-inbox/pull/167)),
+and, stacked on #166, the StoreKit 2 bridge
+([#172](https://github.com/Noallrightokay/center-point-inbox/pull/172)); the
+purchase screen is still to come. Nothing has run
 on a phone, and nothing on a real IPv6-only network (`docs/APP-STORES.md`
 says what #163 and #164 leave).
 

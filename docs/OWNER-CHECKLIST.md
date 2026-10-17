@@ -125,9 +125,12 @@ PDF on a Mac.
 
 **Unlocks:** selling RATA in the iOS App Store, with Base and Pro as Apple
 subscriptions (`org.mailrata.pro.monthly`, `org.mailrata.base.monthly`),
-the In-App Purchase model you chose on 2026-10-15. The iPhone app and its
-purchase screen are still being built (`docs/APP-STORES.md`), so steps 1,
-2 and the trader details can start now; the rest wait for the app.
+the In-App Purchase model you chose on 2026-10-15. As you decided on
+2026-10-17, the first public launch is the desktop direct download, sold
+through Stripe on mailrata.org, and the App Store comes after it, so
+nothing here holds that launch up. The iPhone app and its purchase
+screen are still being built (`docs/APP-STORES.md`), so steps 1, 2 and the
+trader details can start now; the rest wait for the app.
 
 1. The Apple Developer Program (the same membership as macOS signing in
    §7), then in App Store Connect the Paid Apps agreement, banking and
@@ -135,9 +138,11 @@ purchase screen are still being built (`docs/APP-STORES.md`), so steps 1,
    email that Apple shows publicly; without them RATA is not sold in the
    EU).
 2. The App Store Small Business Program, for the lower commission.
-3. The app record, with its final bundle id (decision D9 in
-   `docs/APP-STORES.md`: `org.mailrata.desktop` today, permanent once the
-   first build is uploaded), and note its numeric App ID.
+3. The app record, with the bundle id `org.mailrata.app` (decision D9,
+   2026-10-17: the iPhone and Mac App Store builds share it, so one
+   subscription covers both; the direct download keeps
+   `org.mailrata.desktop`). It is permanent once the first build is
+   uploaded. Note the record's numeric App ID.
 4. One subscription group, "RATA", with the two monthly subscriptions:
    `org.mailrata.pro.monthly` at level 1 and `org.mailrata.base.monthly` at
    level 2. Each needs its prices, a name and description in each
@@ -147,8 +152,10 @@ purchase screen are still being built (`docs/APP-STORES.md`), so steps 1,
 5. App Store Server Notifications, version 2, for Production and Sandbox,
    both to `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester account.
-7. On the server: `APPLE_BUNDLE_ID` and `APPLE_APP_ID` (`rata-next/LAUNCH.md`
-   will list them once the in-app purchase server, #167, has merged).
+7. On the server: `APPLE_BUNDLE_ID` (`org.mailrata.app`) and
+   `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list them once the in-app
+   purchase server, #167, has merged; as written it assumes
+   `org.mailrata.desktop` when `APPLE_BUNDLE_ID` is unset, so set it).
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
 10. The App Privacy answers ("nutrition label"), the age rating, the
@@ -174,6 +181,7 @@ second device brings the same plan back.
 - **The app stores** (`docs/APP-STORES.md`, where each is set out):
   deleting an account while a subscription is live (D4), what Anthropic
   keeps of AI text (D5), new mail in the background on phones (D7), phone
-  backups (D8), the final store identifiers and a store version without
-  "beta" (D9), the Mac App Store (D10), and the legal entity, address and
-  contact for the privacy policy and terms (D11).
+  backups (D8), a store version without "beta" (D9; its identifiers you
+  decided on 2026-10-17), when the Mac App Store build ships (D10), and
+  the legal entity, address and contact for the privacy policy and terms
+  (D11).

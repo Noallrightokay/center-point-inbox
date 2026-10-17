@@ -84,8 +84,11 @@ those tests open no socket beyond a scripted server of their own, with one
 exception (below). A resolver that answers MX questions with no records
 fails those two (`a_domain_at_microsoft_365_is_found_by_its_mx` and
 `a_real_business_domain_resolves_through_its_mx`). The container this
-project's assistant sessions run in is one (341 of 343 pass there); CI has
-real MX answers, and both pass there. The exception is
+project's assistant sessions run in has one (341 of 343 pass there): its
+resolvers answer only A questions, and MX, AAAA, TXT, SRV and CNAME
+questions all come back with no records, so an empty SRV, SPF or
+autodiscover answer there says nothing about the domain. CI has real
+answers, and both pass there. The exception is
 `imap::tests::a_refresh_dials_a_nat64_answer_that_wraps_a_public_address`:
 it lets a refresh dial `64:ff9b::808:808` (8.8.8.8 as DNS64 writes it) on
 port 993, to show that the guard lets it by. Without an IPv6 route the
@@ -117,23 +120,48 @@ the system's own resolver instead of hickory: SRV, MX and TXT through
 dns_sd (`dns_sd.rs`, answers read by `records.rs`), addresses through
 getaddrinfo, and every address still judged by the outbound guard.
 `build.rs` turns that on for iOS, and on a Mac only with the test-only
-`system-dns` feature, which the macOS app never uses. None of it can run
-on Linux, so the workflow *Mail on Apple systems* (`mail-apple.yml`, job
-*Mail layer on macOS*) runs on every change to the engine: the tests with
-hickory as the macOS app has it, again with `--features system-dns` (12
-more exist only in that build and are ignored there too, since they need
-an Apple system's resolver and most of them real DNS; they run in a step
-of their own), clippy for iOS, a check that hickory is not in the iOS
-build, a build and link for iOS and the iOS Simulator, and the library's
-tests in an iOS Simulator. It is not part of the release gate. The
-Simulator runs the test program as a bare process (`xcrun simctl spawn`),
-outside any app's sandbox, so it does not show the lookups working from a
-sandboxed app (#166's Simulator smoke does, once it merges), and nobody
-has seen iOS's Local Network prompt. Nothing of it has run on a phone or
-on a real IPv6-only network. To build or link the engine for an iOS
-device by hand, set `IPHONEOS_DEPLOYMENT_TARGET=14.0` as the workflow
-does: without it the link targets rustc's default, iOS 10, and fails on
-`___chkstk_darwin`, which aws-lc-sys's C calls.
+`system-dns` feature, which the macOS app never uses. It is on `main`
+since #163 and in no release yet; no released build is for iOS. The
+answer reader (`records.rs`) and the getaddrinfo half
+(`resolve::system_addresses`) are compiled into every test build and
+tested on Linux too, but dns_sd cannot run on Linux, so the workflow
+*Mail on Apple systems* (`mail-apple.yml`, job *Mail layer on macOS*)
+runs on every change to the engine: the 343 tests with hickory as the
+macOS app has it; again with `--features system-dns`, which runs 337 of
+the 343 (the six that need a scripted hickory resolver do not exist in
+that build), plus 12 that exist only there, ignored and run in a step of
+their own, one at a time, since ten of them ask real DNS; clippy for iOS,
+a check that hickory is not in the iOS build, a build for iOS and the iOS
+Simulator and a link of the tests for both, and the library's tests in an
+iOS Simulator (the same 337, then the 12). It is not part of the release
+gate. The Simulator runs the test program as a bare process (`xcrun
+simctl spawn`), outside any app's sandbox, so it does not show the
+lookups working from a sandboxed app (#166's Simulator smoke does, once
+it merges), and nobody has seen iOS's Local Network prompt. Nothing of it
+has run on a phone or on a real IPv6-only network.
+
+Linux CI never compiles that code, and an assistant session sees the
+macOS job only after a push, so check it on Linux before pushing any
+engine change:
+
+```bash
+cd desktop/rata-mail
+cargo clippy --all-targets -- --cfg system_dns -D warnings
+```
+
+It type-checks the iOS code and its tests and links nothing. Engine code
+or a test that uses hickory (`HickoryResolver`, `Resolver.inner`,
+`scripted::answering`) must carry `#[cfg(not(system_dns))]`, since iOS
+does not build hickory at all; this check is what catches one that does
+not.
+
+To link anything holding the engine for an iOS device by hand (its tests,
+or an app), set `IPHONEOS_DEPLOYMENT_TARGET` as the workflow does: without
+it the link targets rustc's default, iOS 10, and fails on
+`___chkstk_darwin`, which aws-lc-sys's C calls. Building the engine alone
+links nothing and does not need it. The workflow uses 14.0; keep it equal
+to the app's `bundle.iOS.minimumSystemVersion`, which is 15.0 in #166 and
+in Tauri's own default, so raise it when #166 merges.
 
 ### The desktop app
 
@@ -361,10 +389,12 @@ Be realistic about this before promising anything to a customer.
   People, never from spam (v0.1.43), sent as `"Name" <address>`
 - Settings → Copy diagnostics (v0.1.43): a plain-text block for a bug report
   with no address, password or message text in it, plus Help and Report a bug
-- A guard that stops a hostile mail server redirecting the app at your own LAN;
-  on an IPv6-only network with NAT64 it judges an address in `64:ff9b::/96`
-  by the IPv4 address inside, so it no longer refuses a mail server that has
-  only IPv4 there (not yet seen on a real IPv6-only network)
+- A guard that stops a hostile mail server redirecting the app at your own LAN.
+  On `main` since #164 and first in the next release: on an IPv6-only
+  network with NAT64 it judges an address in `64:ff9b::/96` by the IPv4
+  address inside, so it no longer refuses a mail server that has only IPv4
+  there. 0.1.52 and earlier still refuse all of `64:ff9b::/32`, on every
+  system. Not yet seen on a real IPv6-only network
 
 **Updates:** from v0.1.23 the app offers each new version itself and
 installs it only if it is signed with the project's update key, once that key
@@ -437,10 +467,15 @@ Gmail, Outlook or any hosted provider. The classification that decides
 "wrong password" (`auth`) versus "refused token" (`oauth`) versus "server
 unreachable" (`net`), and the discovery chain against real DNS, have never
 run against a live provider. Nor has the engine run on a phone or on a real
-IPv6-only network with NAT64, which is where Apple reviews apps: the NAT64
-guard is checked only by the engine's own tests (which run in every
-`cargo test`, locally too), and the iOS lookups only by CI on a Mac and
-in an iOS Simulator; neither on a real network of that kind.
+IPv6-only network with NAT64, which App Review Guideline 2.5.5 requires an
+app to work on fully ("Apps must be fully functional on IPv6-only
+networks"). The NAT64 guard is checked only by the engine's own tests: the
+guard's own in every build, six more that go through a scripted hickory
+resolver in every build but the iOS one (so not in `--features
+system-dns` or the Simulator), and the loopback suite's, which keep a
+wrapped `127.0.0.1` refused with `loopback-tests` on. The iOS lookups are
+checked only by CI on a Mac and in an iOS Simulator. Neither has run on a
+real network of that kind.
 
 That is what `docs/SMOKE.md` is for: a checklist, one column per provider,
 that the owner runs on real machines and records in `docs/MVP-EVIDENCE.md`.
