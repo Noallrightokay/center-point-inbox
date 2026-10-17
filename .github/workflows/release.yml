@@ -217,9 +217,11 @@ jobs:
         shell: bash
         working-directory: desktop/rata-app
 
+      # In the library since RATA became one (lib.rs, for iOS): `--bin
+      # rata-app` would now find no tests at all, and pass.
       - name: Keychain, list and start tests
         run: |
-          cargo test --bin rata-app -- vault:: store:: tests::at_start
+          cargo test --lib -- vault:: store:: tests::at_start
         working-directory: desktop/rata-app/src-tauri
 
   # One release, made before the builds rather than by them: four builds each
