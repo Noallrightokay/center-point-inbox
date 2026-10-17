@@ -3,6 +3,7 @@ import { admin } from '../../../lib/server';
 import { check } from '../../../lib/licence';
 import { planDef } from '../../../lib/plan';
 import { corsHeaders, preflight } from '../../../lib/cors';
+import { APPLE_SAID, appleIdOf, appleSubject, appleRow, appleLive, appleTableBehind } from '../../../lib/apple';
 import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,32 @@ export async function POST(req) {
   const key = process.env.ANTHROPIC_API_KEY;
   const sb = admin();
   if (!key || !sb) return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
+
+  /* Apple grants refunds by itself, at any time, so for a licence from the
+     App Store (sub apple:<id>) the relay, whose answers cost money, also
+     asks the subscription's record whether it is still live, before
+     anything is held against the allowance or sent: a licence still running
+     after a refund gets no AI. (A Stripe licence is not asked; its
+     subscription is checked at renewal, LICENSING.md.) Not live is answered
+     as an expired licence is
+     (reason `expired`), which the app already handles: it renews once and
+     asks again, so a record that has just caught up (a renewal Apple has
+     charged for, a refund reversed) answers the second time, and otherwise
+     the renewal is refused and the customer reads the App Store's sentence.
+     A record that cannot be read refuses, as the cap does. */
+  if (appleSubject(who)) {
+    const id = appleIdOf(who);
+    const held = id ? await appleRow(sb, id) : { row: null };
+    if (held.error) {
+      if (appleTableBehind(held.error)) {
+        console.warn('ai: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
+        return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
+      }
+      console.warn('ai: could not read an App Store subscription', held.error.code || held.error.message);
+      return reply({ error: 'AI is unavailable right now.' }, 503);
+    }
+    if (!appleLive(held.row)) return reply({ error: APPLE_SAID.nothingLive, reason: 'expired' }, 401);
+  }
 
   if (tooFast(who)) return reply({ error: 'Too many AI requests at once — try again in a minute.', reason: 'rate' }, 429);
 

@@ -113,6 +113,7 @@ footer a:hover{color:var(--ink)}
       <li><a href="#keep">What mailrata.org keeps</a></li>
       <li><a href="#ai">AI summaries and translation</a></li>
       <li><a href="#payment">Payment</a></li>
+      <li><a href="#app-store">Subscribing in the iPhone app</a></li>
       <li><a href="#app">What the app connects to</a></li>
       <li><a href="#others">Who else handles it</a></li>
       <li><a href="#delete">Deleting your account</a></li>
@@ -123,7 +124,7 @@ footer a:hover{color:var(--ink)}
 
   <article>
     <h1>Privacy policy</h1>
-    <p class="stamp">Last updated 6 October 2026</p>
+    <p class="stamp">Last updated 17 October 2026</p>
     <p class="lede">RATA is a desktop mail client. It reads your mail on your own computer, so most of what a mail service would know about you never reaches us. This page says what does, and what happens to it.</p>
     <p>RATA and mailrata.org are run by [OWNER: legal entity name], [OWNER: postal address] (&ldquo;we&rdquo;). For anything on this page, write to [OWNER: contact email].</p>
 
@@ -133,7 +134,7 @@ footer a:hover{color:var(--ink)}
         <li><b>Your mail.</b> The app downloads it from your provider over IMAP, keeps it on your computer and sends over SMTP, directly. There is no RATA server between you and your mailbox. The one exception is text you ask RATA&rsquo;s AI to work on, <a href="#ai">below</a>.</li>
         <li><b>Your mailbox passwords, and the sign-in tokens for a Microsoft mailbox.</b> They are kept in your computer&rsquo;s keychain (Keychain on a Mac, Credential Manager on Windows, Secret Service on Linux) and go only to your mail provider (for a Microsoft mailbox, that is Microsoft).</li>
         <li><b>Your signatures, contacts and attachments, and the files you convert or make.</b> They stay on your computer. The Format Bridge converts files on your computer, without uploading them, and Create file makes its files there too. If you connect your iCloud Drive or Creative Cloud Files folder, RATA reads and saves files in that folder on your computer and signs in to neither service; Apple&rsquo;s or Adobe&rsquo;s own app keeps the folder in step with your account there, as it does with anything you put in it.</li>
-        <li><b>Your card.</b> Stripe takes the payment; we never see the card number.</li>
+        <li><b>Your card.</b> Stripe takes the payment, or Apple in the iPhone app; we never see the card number.</li>
       </ul>
     </section>
 
@@ -143,10 +144,11 @@ footer a:hover{color:var(--ink)}
       <ul class="facts">
         <li><b>Your login</b>Your email address and password, the password stored only as a hash, which cannot be turned back into it. The sign-in service also keeps a log of sign-ins and password changes, which can include the internet (IP) address they came from.</li>
         <li><b>Your subscription record</b>Your email address, your plan, its status as Stripe reports it, your Stripe customer id, and when Stripe last changed it. If Stripe&rsquo;s word about a new subscription reaches us before the checkout does, it is kept under your Stripe customer id alone (the plan, its status and when, no email address) until the checkout arrives, usually seconds later, then added to the record and deleted.</li>
-        <li><b>Your AI usage record</b>For each month: your email address, how many AI requests you made and what they cost us. Never any text.</li>
+        <li><b>Your App Store subscription record, if you subscribe in the iPhone app</b>Apple&rsquo;s number for the subscription (its original transaction id), the product and its plan, whether it was bought in Apple&rsquo;s test environment, when its current period began, when it expires, when a billing grace period ends if a renewal fails, when it was refunded or revoked, and when Apple signed what it last told us about the subscription and about a grace period. No name, no email address and no Apple ID: Apple tells us none of them.</li>
+        <li><b>Your AI usage record</b>For each month: your email address (for a subscription bought in the iPhone app, Apple&rsquo;s number for it instead), how many AI requests you made and what they cost us. Never any text.</li>
         <li><b>Your preferences, if you use RATA&rsquo;s page on mailrata.org</b>While you are signed in there, the page keeps your settings in your account so they follow you: your display name and company, your privacy-check profile, your notification and AI choices and the plan the site recorded; your document folder names; your sorting rules (a sender&rsquo;s address and the category you chose for it); and the addresses of the mailboxes listed there, never their passwords. Signatures and API keys are left out. The desktop app does not upload any of this.</li>
       </ul>
-      <p>Your licence is not stored. It is a signed key naming your email address, your plan, and when it was issued and expires; it lives in the app on your computer, and is made afresh each time it is issued or renewed.</p>
+      <p>Your licence is not stored. It is a signed key naming your email address (for a subscription bought in the iPhone app, Apple&rsquo;s number for it instead), your plan, and when it was issued and expires; it lives in the app on your device, and is made afresh each time it is issued or renewed.</p>
       <p>Like every website, the server that runs mailrata.org sees your internet address and browser details with each request, and the hosting may record them in ordinary access logs. RATA&rsquo;s own code logs no email address and no message text. The site sets no advertising or analytics cookies and loads nothing from another company&rsquo;s servers; signing in keeps your session in your browser&rsquo;s own storage.</p>
       <p>Backups of the website&rsquo;s database are encrypted before they leave the server, and each is deleted 90 days after it is made, so something deleted from the database is gone from every backup within 90 days.</p>
     </section>
@@ -159,13 +161,20 @@ footer a:hover{color:var(--ink)}
         <li><b>Summarize</b> (Pro) sends the sender&rsquo;s name and address, the subject, and the text, up to the first 12,000 characters.</li>
         <li><b>Run briefing</b> (Pro) sends, for each of up to 25 of the most recent messages in your inbox from the last 14 days, the sender&rsquo;s name, the subject, the first 1,500 characters of the text, and a number standing for the message, which RATA matches back to it on this computer. The answer says which of them need you to do something.</li>
       </ul>
-      <p>With each request the app sends your licence, which is how the relay knows you are a customer and what your plan includes. The relay at mailrata.org passes the text to Anthropic, whose model writes the answer, and sends the answer back to your app. RATA does not store the text or the answer and does not write either to any log. What it records is the usage count above. Anthropic handles the text under its own terms and privacy policy for businesses that use its service, at <a href="https://www.anthropic.com/legal">anthropic.com/legal</a>.</p>
+      <p>With each request the app sends your licence, which is how the relay knows you are a customer and what your plan includes. For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription is still live. The relay at mailrata.org passes the text to Anthropic, whose model writes the answer, and sends the answer back to your app. RATA does not store the text or the answer and does not write either to any log. What it records is the usage count above. Anthropic handles the text under its own terms and privacy policy for businesses that use its service, at <a href="https://www.anthropic.com/legal">anthropic.com/legal</a>.</p>
       <p>If you never press Summarize, Translate or Run briefing, none of your mail leaves your computer except to your own provider.</p>
     </section>
 
     <section id="payment" aria-labelledby="pay-h">
       <h2 id="pay-h">Payment</h2>
       <p>Stripe runs checkout, billing and the billing portal where you change or cancel your plan. Stripe tells mailrata.org the email address you paid with, your Stripe customer id, your plan and whether it is paid; that is the subscription record above. Stripe keeps its own billing records, under its own privacy policy at <a href="https://stripe.com/privacy">stripe.com/privacy</a>.</p>
+    </section>
+
+    <section id="app-store" aria-labelledby="store-h">
+      <h2 id="store-h">Subscribing in the iPhone app</h2>
+      <p>In RATA&rsquo;s iPhone app, Base and Pro are App Store subscriptions. Apple takes the payment and handles billing, renewal, cancellation and refunds, under Apple&rsquo;s own terms and privacy policy. You need no account at mailrata.org to subscribe there.</p>
+      <p>When you subscribe or restore a purchase, the app sends mailrata.org the purchases Apple has signed for it, and mailrata.org issues your licence from them. The licence lasts at most 30 days, and never more than 3 days past the end of the period Apple has been paid for (1 hour, for a purchase in Apple&rsquo;s test environment). Each one names the product, when it was bought and when it renews or expires, whether it was refunded or revoked, whether it was made in Apple&rsquo;s test environment, Apple&rsquo;s numbers for the purchase, and the country of the App Store and the price. Apple also tells mailrata.org when the subscription renews, fails to renew, expires or is refunded, in the same terms. None of it carries your name, your email address or your Apple ID: Apple does not tell us them.</p>
+      <p>What we keep is the App Store subscription record <a href="#keep">above</a>; the country and the price are not kept. It belongs to no account here, and it names no one, so we keep it, and an AI usage record kept under its number, for as long as RATA sells subscriptions in the iPhone app.</p>
     </section>
 
     <section id="app" aria-labelledby="app-h">
@@ -175,6 +184,7 @@ footer a:hover{color:var(--ink)}
         <li><b>mailrata.org</b>, to renew your licence in its last week, and for the AI requests you make.</li>
         <li><b>Microsoft</b>, in your browser, when you add a Microsoft mailbox with Sign in with Microsoft.</li>
         <li><b>GitHub</b>, where RATA&rsquo;s installers are published, to check for a new version.</li>
+        <li><b>Apple&rsquo;s App Store</b>, in the iPhone app, when you subscribe, restore a purchase or manage your subscription. The app then sends mailrata.org the purchases Apple signed, for your licence.</li>
       </ul>
       <p>A link you open from a message, or from Apps, goes to your browser, and what you do on that site is between you and its owner. If you type the address you use at Google or Microsoft under Your accounts in Apps, it is kept on your computer only and goes nowhere but in the link to that company&rsquo;s own site, so it opens on that account. The app sends us no usage statistics and no crash reports.</p>
     </section>
@@ -183,6 +193,7 @@ footer a:hover{color:var(--ink)}
       <h2 id="others-h">Who else handles it</h2>
       <ul>
         <li><b>Stripe</b>, for payment.</li>
+        <li><b>Apple</b>, for a subscription bought in the iPhone app.</li>
         <li><b>Anthropic</b>, for the AI requests you make.</li>
         <li><b>Hostinger</b>, which hosts the website and the server its database runs on.</li>
         <li><b>The storage that holds the encrypted backups</b>, which cannot read them.</li>
@@ -206,6 +217,7 @@ footer a:hover{color:var(--ink)}
         <li>Stripe&rsquo;s billing records, which Stripe must keep</li>
         <li>what the app holds on your computer, until you uninstall it</li>
       </ul>
+      <p>A subscription bought in the iPhone app is not part of an account here. Deleting an account does not cancel it (cancel it in your Apple Account settings), and does not remove its App Store subscription record, which names no one.</p>
       <h3>When deletion waits</h3>
       <ul>
         <li><b>While your subscription is live</b> (active, in a trial, or retrying a failed payment). RATA cannot cancel a subscription for you, so cancel it in the billing portal first; otherwise Stripe would keep charging for an account that no longer exists.</li>
@@ -217,7 +229,7 @@ footer a:hover{color:var(--ink)}
     <section id="rights" aria-labelledby="rights-h">
       <h2 id="rights-h">Your choices and rights</h2>
       <p>You can use RATA without ever pressing an AI button. You can delete your account yourself, as above. Depending on where you live, you may also have the right to see a copy of what we hold about you, to have it corrected or deleted, to object to how we use it, and to complain to a data protection authority. To ask, write to [OWNER: contact email] from the address on your account.</p>
-      <p>We keep what is listed under <a href="#keep">What mailrata.org keeps</a> until you delete your account, apart from the backups, which go within 90 days of that.</p>
+      <p>We keep what is listed under <a href="#keep">What mailrata.org keeps</a> until you delete your account, apart from the backups, which go within 90 days of that. An App Store subscription record, and an AI usage record kept under its number, are kept as <a href="#app-store">Subscribing in the iPhone app</a> says.</p>
     </section>
 
     <section id="contact" aria-labelledby="contact-h">

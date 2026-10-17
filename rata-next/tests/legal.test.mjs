@@ -16,6 +16,8 @@ import { LICENCE_DAYS, RENEW_GRACE_DAYS } from '../lib/licence.js';
 import { blocksDeletion, DELETION_REMOVES, DELETION_KEEPS } from '../lib/account.js';
 import { PLANS, SELLABLE, ORDER, UNLIMITED, LIVE_STATUSES, money } from '../lib/plan.js';
 import { LIMITS, validate } from '../lib/ai.js';
+import { APPLE_PRODUCTS } from '../lib/plan.js';
+import * as apple from '../lib/apple.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE = join(HERE, '..');
@@ -208,8 +210,8 @@ export default async function run(state) {
        describes, and the AI usage table holds no text. */
     const sql = readFileSync(join(SITE, 'database.sql'), 'utf8');
     const tables = [...sql.matchAll(/create table if not exists public\.(\w+)/g)].map(m => m[1]).sort();
-    check(JSON.stringify(tables) === JSON.stringify(['ai_usage', 'pending_subscriptions', 'subscriptions', 'workspaces']),
-      `the site keeps four tables, the ones the page lists: ${tables.join(', ')}`);
+    check(JSON.stringify(tables) === JSON.stringify(['ai_usage', 'apple_subscriptions', 'pending_subscriptions', 'subscriptions', 'workspaces']),
+      `the site keeps five tables, the ones the page lists: ${tables.join(', ')}`);
     /* pending_subscriptions (BUG-S) holds a subscription event that arrived
        before its checkout: keyed by the Stripe customer, never an address. */
     const kept = (sql.match(/create table if not exists public\.pending_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
@@ -222,5 +224,74 @@ export default async function run(state) {
     const cols = [...usage.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz)/gm)].map(m => m[1]);
     check(JSON.stringify(cols) === JSON.stringify(['email', 'month', 'micro_usd', 'requests', 'updated_at']),
       `the AI usage record is an address, a month, a cost and a count, never any text: ${cols.join(', ')}`);
+  }
+
+  console.log('\n— the iPhone app\'s subscriptions, as lib/apple.js and database.sql keep them —');
+  {
+    /* apple_subscriptions (database.sql §7): every column the code writes is
+       one the privacy policy names, in the policy's words. A column added
+       to the table without words on the page fails here. */
+    const sql = readFileSync(join(SITE, 'database.sql'), 'utf8');
+    const table = (sql.match(/create table if not exists public\.apple_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
+    const cols = [...table.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz|uuid)/gm)].map(m => m[1]);
+    check(JSON.stringify(cols) === JSON.stringify(['original_transaction_id', 'product_id', 'plan', 'environment', 'period_from', 'expires_at',
+      'grace_until', 'grace_signed_at', 'revoked_at', 'signed_at', 'app_account_token', 'email', 'updated_at']),
+      `an App Store subscription is kept as Apple's number, a product, a plan, an environment and dates: ${cols.join(', ')}`);
+    const SAID = {
+      original_transaction_id: 'its original transaction id',
+      product_id: 'the product and its plan',
+      plan: 'the product and its plan',
+      environment: 'whether it was bought in Apple\'s test environment',
+      period_from: 'when its current period began',
+      expires_at: 'when it expires',
+      grace_until: 'when a billing grace period ends if a renewal fails',
+      revoked_at: 'when it was refunded or revoked',
+      signed_at: 'when Apple signed what it last told us about the subscription',
+      grace_signed_at: 'and about a grace period',
+    };
+    const fact = (P.match(/Your App Store subscription record, if you subscribe in the iPhone app.*?No name, no email address and no Apple ID: Apple tells us none of them\./) || [''])[0];
+    const unsaid = Object.entries(SAID).filter(([, words]) => !fact.includes(words)).map(([c]) => c);
+    check(!!fact && unsaid.length === 0, `privacy names each column it keeps under "What mailrata.org keeps" (${unsaid.join(', ') || 'all'})`);
+    /* app_account_token and email are in the table for linking a purchase
+       to an account later; the page says no address is kept, so nothing may
+       write either yet. */
+    const t = { originalTransactionId: '2000000000000001', productId: Object.keys(APPLE_PRODUCTS)[0], expiresDate: Date.now() + 86400e3,
+      signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.mail', environment: 'Production' };
+    const written = [apple.appleRowOf(t, 'Production'), ...[apple.applePurchase(t, 'Production'), ...apple.APPLE_ACTED.map((type) =>
+      apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production'))]
+      .flatMap((c) => (c ? [c.core, c.insert, ...(c.grace ? [c.grace] : [])] : []))];
+    const keys = new Set(written.flatMap(Object.keys));
+    check(written.length > 2 && [...keys].every(k => cols.includes(k) && SAID[k]) && !keys.has('email') && !keys.has('app_account_token'),
+      `what the code writes is only what the page names, never an address: ${[...keys].join(', ')}`);
+    check(P.includes('the country of the App Store and the price') && P.includes('the country and the price are not kept') && !keys.has('price'),
+      'what Apple sends and is not kept is named too');
+    check(P.includes('Apple takes the payment and handles billing, renewal, cancellation and refunds'), 'privacy: Apple handles the payment');
+    check(P.includes('we keep it, and an AI usage record kept under its number, for as long as RATA sells subscriptions in the iPhone app'),
+      'privacy: and how long the record is kept');
+    check(P.includes('Deleting an account does not cancel it') && T.includes('deleting an account here does not cancel it'),
+      'both pages: deleting an account does not cancel an App Store subscription');
+
+    /* The plans sold in the app are plans on sale here, and the terms say
+       Apple bills them, with the App Store's own auto-renewal sentence. */
+    const sold = [...new Set(Object.values(APPLE_PRODUCTS))];
+    check(sold.length === 2 && sold.every(p => SELLABLE.includes(p)) && T.includes('RATA Base and RATA Pro are also sold in RATA\'s iPhone app, as App Store subscriptions'),
+      `terms: both plans (${sold.join(', ')}) are also App Store subscriptions`);
+    check(T.includes('One bought in the app is billed, renewed, cancelled and refunded by Apple, under Apple\'s terms'),
+      'terms: Apple bills, renews, cancels and refunds them, under Apple\'s terms');
+    check(T.includes(plain(apple.APPLE_AUTO_RENEWAL)), `terms: the auto-renewal sentence, word for word: "${apple.APPLE_AUTO_RENEWAL.slice(0, 60)}…"`);
+    check(T.includes('In the iPhone app there is no key to paste'), 'terms: the iPhone app\'s licence needs no key');
+    /* How long an App Store licence lasts (lib/apple.js, appleLicenceUntil):
+       the margins are named constants, and both pages state them. */
+    const hours = (n) => `${n} hour${n === 1 ? '' : 's'}`;
+    check(T.includes(`A licence for a subscription bought in the iPhone app lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for`)
+      && T.includes(`lasts no more than ${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)} past the end of its period`),
+      `terms: an App Store licence lasts at most LICENCE_DAYS, and APPLE_MARGIN_DAYS (${apple.APPLE_MARGIN_DAYS}) past what was paid for, APPLE_SANDBOX_MARGIN_HOURS (${apple.APPLE_SANDBOX_MARGIN_HOURS}) in the sandbox`);
+    check(P.includes(`The licence lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for (${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)}, for a purchase in Apple's test environment)`),
+      'privacy: the same, under Subscribing in the iPhone app');
+    check(T.includes('AI features stop as soon as Apple refunds or ends the subscription, even while the licence still runs')
+      && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription is still live'),
+      'both pages: the AI relay checks an App Store subscription is still live (app/api/ai)');
+    check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
+      'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }
 }

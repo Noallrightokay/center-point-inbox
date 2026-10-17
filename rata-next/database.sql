@@ -250,3 +250,74 @@ drop trigger if exists pending_subscriptions_touch on public.pending_subscriptio
 create trigger pending_subscriptions_touch
   before update on public.pending_subscriptions
   for each row execute function public.touch_updated_at();
+
+-- ------------------------------------------------------------
+-- 7. APPLE_SUBSCRIPTIONS — subscriptions bought in the iPhone
+--    app, through Apple's In-App Purchase.
+--
+--    The App Store's word on each one, keyed by Apple's original
+--    transaction id: what /api/licence/apple writes when the app
+--    sends the purchases StoreKit holds, what App Store Server
+--    Notifications (app/api/apple/notifications) keep up to date,
+--    and what /api/licence/renew reads to renew a licence whose
+--    subject is apple:<original_transaction_id>. A row records one
+--    period of the subscription, the one that began at period_from
+--    (the transaction's purchaseDate). Its fields are written in two
+--    groups, each ordered by period_from and then by its own stamp of
+--    when Apple signed what it says: the subscription's (signed_at)
+--    and the grace period's (grace_until, grace_signed_at, which only
+--    Apple's notifications report). So a notification delivered late,
+--    or twice, never undoes a later one (lib/apple.js, appleWrite).
+--    Not by expires_at: a period paid for in advance can end after
+--    the one that replaced it.
+--
+--    Live means revoked_at is null and expires_at, or grace_until
+--    (Apple's billing grace period, when a renewal has failed), is
+--    still ahead.
+--
+--    It holds Apple's numbers, a product, a plan and dates: no
+--    name, no email address, no Apple ID. Apple tells RATA none of
+--    them. app_account_token and email stay empty: they are for
+--    linking a purchase to a mailrata.org account, which nothing
+--    does yet. A purchase belongs to no account, so deleting an
+--    account has nothing here to remove.
+--
+--    Only the server (service role) touches it; no policy lets a
+--    signed-in user read or write it.
+-- ------------------------------------------------------------
+create table if not exists public.apple_subscriptions (
+  original_transaction_id text primary key,
+  product_id text not null,                 -- APPLE_PRODUCTS in lib/plan.js
+  plan text not null,                       -- 'base' | 'pro'
+  environment text not null,                -- 'Production' | 'Sandbox'
+  period_from timestamptz not null,         -- when the period it records began
+  expires_at timestamptz not null,
+  grace_until timestamptz,                  -- null unless Apple reported a grace period
+  grace_signed_at timestamptz not null,     -- when Apple signed what last told us of it
+  revoked_at timestamptz,                   -- refunded or revoked; null when not
+  signed_at timestamptz not null,           -- when Apple signed what last told us of the rest
+  app_account_token uuid,                   -- unused yet
+  email text,                               -- unused yet
+  updated_at timestamptz not null default now()
+);
+
+-- A table made by an earlier copy of this section gets the columns it
+-- lacks here, and then has the same shape as one made above. Rows
+-- already in it are kept as they were, each new column set to
+-- 1970-01-01, which is not what Apple said of them. They can only be
+-- sandbox purchases: delete them (LAUNCH.md section 1).
+alter table public.apple_subscriptions
+  add column if not exists period_from timestamptz not null default 'epoch';
+alter table public.apple_subscriptions
+  alter column period_from drop default;
+alter table public.apple_subscriptions
+  add column if not exists grace_signed_at timestamptz not null default 'epoch';
+alter table public.apple_subscriptions
+  alter column grace_signed_at drop default;
+
+alter table public.apple_subscriptions enable row level security;
+
+drop trigger if exists apple_subscriptions_touch on public.apple_subscriptions;
+create trigger apple_subscriptions_touch
+  before update on public.apple_subscriptions
+  for each row execute function public.touch_updated_at();
