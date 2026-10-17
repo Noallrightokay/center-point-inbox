@@ -216,15 +216,17 @@ customer's typed server says.
   well-known prefix `64:ff9b::/96` is no longer refused outright: an
   address in it is judged by the IPv4 address in its last 32 bits, as 6to4
   is, and passes exactly when that IPv4 address would (`64:ff9b::808:808`
-  passes; `64:ff9b::7f00:1`, `::a00:1`, `::a9fe:a9fe`, `::6440:1` and
-  `::c0a8:101` are refused), because on an IPv6-only network with DNS64 it
-  is the only answer an IPv4-only mail host has. Still refused: the
+  passes; `64:ff9b::7f00:1`, `64:ff9b::a00:1`, `64:ff9b::a9fe:a9fe`,
+  `64:ff9b::6440:1` and `64:ff9b::c0a8:101`, which wrap 127.0.0.1,
+  10.0.0.1, 169.254.169.254, 100.64.0.1 and 192.168.1.1, are refused),
+  because on an IPv6-only network with DNS64 it is the only answer an
+  IPv4-only mail host has. Still refused: the
   local-use `64:ff9b:1::/48` (RFC 8215), the rest of `64:ff9b::/32`, and a
   /96 with anything but zeros before the IPv4 address. IPv4-mapped and
   IPv4-compatible addresses are unchanged. The private names
-  (`is_private_name`) now also refuse the zones themselves (`local`,
-  `localhost`, `internal`) and all of `arpa`; before, `localhost` and names
-  under `.localhost`, `.local`, `.internal` and `.home.arpa`. Tests:
+  (`is_private_name`) now also refuse the zones `local` and `internal`
+  themselves and all of `arpa`; before, `localhost` itself and names under
+  `.localhost`, `.local`, `.internal` and `.home.arpa`. Tests:
   `nat64_is_judged_by_the_ipv4_address_inside`,
   `the_rest_of_the_nat64_block_is_still_refused`,
   `the_other_ipv4_embeddings_are_judged_as_before`,

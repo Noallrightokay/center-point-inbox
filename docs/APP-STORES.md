@@ -122,7 +122,10 @@ testing on real devices and on an IPv6-only network.
   NAT64 address on an IPv6-only network), no CNAME question ever, and
   nothing asked under `local` or the other private zones. Every address is
   still judged by the guard. Its tests run on a Mac and in an iOS Simulator
-  (CI job *Mail layer on macOS*), not on a phone.
+  (CI job *Mail layer on macOS*), not on a phone. In the Simulator the
+  engine's test program runs as a bare process (`xcrun simctl spawn`),
+  outside any app's sandbox; the lookups from a sandboxed app are #166's
+  Simulator smoke (open, below).
 
 What they leave for stage 3, before submission:
 
@@ -135,14 +138,18 @@ What they leave for stage 3, before submission:
 - TXT over TCP through dns_sd has never been seen: an answer too big for one
   UDP reply goes over TCP, and the macOS runners' DNS never answers one.
   L1's SPF evidence for such a domain depends on it; check it on a device.
+- iOS's Local Network prompt has never been seen. `.local` is no longer
+  asked, but whether anything else in the app raises the prompt shows only
+  in the app on a device.
 
 **In flight, 2026-10-16** (open):
 
 | Branch | Pull request | What |
 |---|---|---|
-| `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Built in steps; not ready until its description says so. |
+| `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Both steps pushed; not to be merged until the lead says so (its description). |
 | `claude/store-pages` | #162 | Stage 1: store-safe help, privacy and terms at `/in-app/…`, and a public account-deletion page. |
-| `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone. Step 1 of 2; step 2 is the Xcode project and a Simulator run. |
+| `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone; then the Xcode project, made afresh each run (`tauri ios init`, `ios/prepare.sh`; nothing under `gen/apple` committed), `tauri.ios.conf.json`, a `smoke` self-test feature, and `.github/workflows/ios.yml`: *iOS app in the Simulator* (the self-test, three runs and screenshots) and *iOS app for a device, unsigned* (a release build checked against the privacy manifest). Both steps in, checks green, ready for review. |
+| `claude/ios-testflight` | #170 | Stage 3: signed builds to TestFlight (`.github/workflows/ios-testflight.yml`, job *iOS app to TestFlight*, its steps in `desktop/rata-app/ios/testflight.sh`) once the owner sets the four App Store Connect secrets (`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8`, `APPLE_TEAM_ID`); with none set it says TestFlight is not set up yet and ends green. Stacked on #166 (its diff includes #166's): merge #166 first. No upload has run. |
 | `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. |
 
 Still to come: the StoreKit 2 bridge (a local Tauri plugin for iOS only,

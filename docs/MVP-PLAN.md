@@ -1313,8 +1313,12 @@ open, stage 1's store build of the interface
 ([#165](https://github.com/Noallrightokay/center-point-inbox/pull/165)),
 store-safe pages on mailrata.org
 ([#162](https://github.com/Noallrightokay/center-point-inbox/pull/162)),
-for iOS the shell as a library a phone can start
-([#166](https://github.com/Noallrightokay/center-point-inbox/pull/166)),
+for iOS the shell as a library a phone can start, built and run in the
+iOS Simulator with a self-test
+([#166](https://github.com/Noallrightokay/center-point-inbox/pull/166))
+and, stacked on it, signed builds to TestFlight once the owner's App Store
+Connect key is set
+([#170](https://github.com/Noallrightokay/center-point-inbox/pull/170)),
 and the in-app purchase server on mailrata.org
 ([#167](https://github.com/Noallrightokay/center-point-inbox/pull/167)); the
 StoreKit bridge and the purchase screen are still to come. Nothing has run

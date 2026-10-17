@@ -80,12 +80,16 @@ from that release on works.
 Apart from DNS lookups (some tests ask the system's resolver about names
 that have been stable for years or that do not exist; `resolve.rs` marks
 the ones that need real answers, and two of those need real MX records),
-those tests never open a socket beyond a scripted server of their own. A
-resolver that answers MX questions with no records fails those two
-(`a_domain_at_microsoft_365_is_found_by_its_mx` and
+those tests open no socket beyond a scripted server of their own, with one
+exception (below). A resolver that answers MX questions with no records
+fails those two (`a_domain_at_microsoft_365_is_found_by_its_mx` and
 `a_real_business_domain_resolves_through_its_mx`). The container this
 project's assistant sessions run in is one (341 of 343 pass there); CI has
-real MX answers, and both pass there.
+real MX answers, and both pass there. The exception is
+`imap::tests::a_refresh_dials_a_nat64_answer_that_wraps_a_public_address`:
+it lets a refresh dial `64:ff9b::808:808` (8.8.8.8 as DNS64 writes it) on
+port 993, to show that the guard lets it by. Without an IPv6 route the
+dial fails at once; with one, the test stops waiting after 3 seconds.
 Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
@@ -117,11 +121,19 @@ getaddrinfo, and every address still judged by the outbound guard.
 on Linux, so the workflow *Mail on Apple systems* (`mail-apple.yml`, job
 *Mail layer on macOS*) runs on every change to the engine: the tests with
 hickory as the macOS app has it, again with `--features system-dns` (12
-of them, ignored elsewhere, ask real DNS and run in a step of their own),
-clippy for iOS, a check that hickory is not in the iOS build, a build and
-link for iOS and the iOS Simulator, and the tests in an iOS Simulator. It
-is not part of the release gate. Nothing of it has run on a phone or on a
-real IPv6-only network.
+more exist only in that build and are ignored there too, since they need
+an Apple system's resolver and most of them real DNS; they run in a step
+of their own), clippy for iOS, a check that hickory is not in the iOS
+build, a build and link for iOS and the iOS Simulator, and the library's
+tests in an iOS Simulator. It is not part of the release gate. The
+Simulator runs the test program as a bare process (`xcrun simctl spawn`),
+outside any app's sandbox, so it does not show the lookups working from a
+sandboxed app (#166's Simulator smoke does, once it merges), and nobody
+has seen iOS's Local Network prompt. Nothing of it has run on a phone or
+on a real IPv6-only network. To build or link the engine for an iOS
+device by hand, set `IPHONEOS_DEPLOYMENT_TARGET=14.0` as the workflow
+does: without it the link targets rustc's default, iOS 10, and fails on
+`___chkstk_darwin`, which aws-lc-sys's C calls.
 
 ### The desktop app
 
@@ -426,8 +438,9 @@ Gmail, Outlook or any hosted provider. The classification that decides
 unreachable" (`net`), and the discovery chain against real DNS, have never
 run against a live provider. Nor has the engine run on a phone or on a real
 IPv6-only network with NAT64, which is where Apple reviews apps: the NAT64
-guard and the iOS lookups are tested only in CI, the lookups on a Mac and
-in an iOS Simulator.
+guard is checked only by the engine's own tests (which run in every
+`cargo test`, locally too), and the iOS lookups only by CI on a Mac and
+in an iOS Simulator; neither on a real network of that kind.
 
 That is what `docs/SMOKE.md` is for: a checklist, one column per provider,
 that the owner runs on real machines and records in `docs/MVP-EVIDENCE.md`.
@@ -435,4 +448,7 @@ If you are picking this up, that is the first thing to do, and the three files
 worth reading first when it misbehaves are `resolve.rs` (finding the server),
 `imap.rs` (handshake and authentication), and `guard.rs` (host refusal).
 Errors are typed rather than stringly, so the message you get back names the
-hosts it tried and what each one said.
+hosts it tried and what each one said. On iOS, add `dns_sd.rs` (a question
+waited out, or a cached "no such record") and `records.rs` (a name it
+declines to ask, or a record it drops): either leaves discovery seeing
+nothing.
