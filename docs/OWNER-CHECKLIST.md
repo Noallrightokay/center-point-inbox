@@ -152,10 +152,9 @@ trader details can start now; the rest wait for the app.
 5. App Store Server Notifications, version 2, for Production and Sandbox,
    both to `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester account.
-7. On the server: `APPLE_BUNDLE_ID` (`org.mailrata.app`) and
-   `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list them once the in-app
-   purchase server, #167, has merged; as written it assumes
-   `org.mailrata.desktop` when `APPLE_BUNDLE_ID` is unset, so set it).
+7. On the server: `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list it
+   once the in-app purchase server, #167, has merged). `APPLE_BUNDLE_ID`
+   is optional: it defaults to `org.mailrata.app`.
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
 10. The App Privacy answers ("nutrition label"), the age rating, the

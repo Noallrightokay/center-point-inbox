@@ -158,6 +158,24 @@ and a release built after it; until then write "not switched on".
 
 The steps are under *Files, Apps and connected accounts* in section 3.
 
+### An IPv6-only network (once, on a Mac; from the release after 0.1.52)
+
+The outbound guard judges NAT64 addresses by the IPv4 address inside, and
+refuses the zones `local`, `internal` and `arpa` themselves (#163, #164).
+Neither has been seen on a real IPv6-only network. A Mac can make one:
+Apple's *Supporting IPv6 DNS64/NAT64 Networks* describes Internet Sharing's
+NAT64 option (`docs/APP-STORES.md` links it). Join that network from the
+computer under test.
+
+| # | Row | Mac |
+|---|---|---|
+| N1 | Link a mailbox whose provider has only IPv4 on that network | ☐ |
+| N2 | A typed server of `local`, `printer.local`, `x.internal` or `1.0.254.169.in-addr.arpa` is refused | ☐ |
+
+N1 passes when the mailbox links and its first sync runs; 0.1.52 refuses it
+with "… points inside a private network". N2 passes when each is refused
+with the same sentence and nothing is dialled.
+
 ### This computer's own (once per computer, v0.1.52 and later)
 
 | # | Row | Windows | Mac | Linux |

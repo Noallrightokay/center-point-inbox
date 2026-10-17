@@ -2175,7 +2175,13 @@ that does not exist, discovery, L1's evidence in time, `.local`, an IMAP
 greeting at the system's addresses) and `dns_sd::tests` (2: the deadline,
 and that every question frees its socket) exist only under `system_dns`,
 are `#[ignore]`d, and run only in *Mail layer on macOS*, on the Mac and in
-the Simulator, one at a time in a step of their own. All 12 exist only in
+the Simulator, one at a time in a step of their own. They depend on outside
+servers as well as real DNS: Gmail's and Fastmail's IMAP (the dial and TLS
+greeting, no sign-in, through the platform verifier: the first sight of
+TLS verification in an iOS Simulator), gmail.com's `_imaps` SRV and SPF
+redirect, fastmail.com's SRV, and autodiscover.microsoft.com's alias to
+autodiscover.outlook.com; a change at Gmail, Fastmail or Microsoft can turn
+the job red with no fault in the change under test. All 12 exist only in
 a `system_dns` build, so only on an Apple system; ten ask real DNS, the
 deadline test asks only a `.local` name, by multicast DNS, which nobody
 answers, and the `.local` test asks nothing at all (every question ends
@@ -2238,8 +2244,8 @@ anyone touching that file, starts there.
 **The outbound guard on IPv6-only networks (NAT64, #164), and its private
 names (#163). On main, first in the next release:** 0.1.52 and earlier
 refuse all of `64:ff9b::/32`, on every system, and do not refuse the
-zones `local`, `internal` and `arpa` themselves, nor names under `arpa`
-other than `home.arpa`. On an IPv6-only network with DNS64 (Guideline
+zones `local`, `internal` and `arpa` themselves, nor any name under
+`arpa` except those under `home.arpa`. On an IPv6-only network with DNS64 (Guideline
 2.5.5: "Apps must be fully functional on IPv6-only networks"; Apple's
 *Supporting IPv6 DNS64/NAT64 Networks* sets "the one used during App
 Review" beside providers' DNS64/NAT64 networks, without saying it is
@@ -2328,7 +2334,8 @@ certificates.
 opened yet; the engine runs against real Dovecot (IMAP) and GreenMail (SMTP,
 and IMAPS on 3993 for a server that declares no special-use folders) on
 every PR (`tests/loopback.rs`), but not against Gmail, Outlook or any hosted
-provider. Run them locally with `sudo
+provider with a sign-in (*Mail layer on macOS* only dials Gmail's and
+Fastmail's IMAP and reads the greeting). Run them locally with `sudo
 desktop/rata-mail/tests/loopback/servers.sh start /tmp/rata-lb`, then
 `SSL_CERT_FILE=/tmp/rata-lb/ca.crt cargo test --features loopback-tests
 --test loopback`. When a real connection fails, the three files to read are
