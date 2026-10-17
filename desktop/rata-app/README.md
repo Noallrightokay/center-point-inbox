@@ -119,7 +119,7 @@ compiled cleanly and then died at bundling.
 
 ## CI
 
-`.github/workflows/desktop-ci.yml`, in four jobs:
+`.github/workflows/desktop-ci.yml`, in five jobs:
 
 - **Mail layer** needs nothing installed and answers in about a minute.
 - **Mail layer against real servers** starts Dovecot and GreenMail on the
@@ -129,18 +129,40 @@ compiled cleanly and then died at bundling.
 - **Desktop shell** installs the system webview and runs `sync-ui.sh` first,
   which makes that script's anchor checks against `rata-next/public` part of
   CI rather than something that fails on a release machine.
+- **Desktop shell on Windows** runs `sync-ui.sh`, then only the keychain,
+  list and start tests (`cargo test --bin rata-app -- vault:: store::
+  tests::at_start`), two of them Windows-only and run against the real
+  Credential Manager, which Linux cannot reach. `release.yml`'s
+  `gate_windows` runs the same steps; change the two together.
 - **Desktop interface, driven** runs `harness/ui-harness.mjs` against the
-  assembled `ui/` under the app's own CSP, with a fake backend, and the update
-  feed's rules (`harness/feed.test.cjs`).
+  assembled `ui/` under the app's own CSP, with a fake backend, then the
+  update feed's rules (`harness/feed.test.cjs`) and the demo's rules
+  (`demo/check.mjs`).
 
-The Rust jobs run `cargo fmt --check`, `cargo clippy --all-targets -- -D
-warnings` and `cargo test --all-targets`. `release.yml` also installs and
-launches each installer on its own runner before keeping it
-(`harness/smoke-installed.sh`, `.ps1` on Windows).
+*Mail layer* and *Desktop shell* run `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings` and `cargo test --all-targets`; the
+loopback job runs clippy with its feature and then only `--test
+loopback`.
+`release.yml` also installs and launches each installer on its own runner
+before keeping it (`harness/smoke-installed.sh`, `.ps1` on Windows).
 
-The toolchain is pinned rather than `stable`. With `-D warnings`, an unpinned
-toolchain means a new clippy lint reddens an unrelated pull request on the day
-it ships, which teaches everyone to ignore the colour.
+`.github/workflows/mail-apple.yml` (workflow *Mail on Apple systems*, job
+*Mail layer on macOS*) runs on every change to `desktop/rata-mail/` or to
+itself. It tests the engine on a Mac with hickory, as the macOS app looks
+names up, and again with `--features system-dns`, as iOS does (dns_sd and
+getaddrinfo); runs the system resolver's own tests against real DNS;
+clippy for iOS; checks that neither iOS target builds hickory; builds for
+iOS and the iOS Simulator; and runs the engine's tests in an iOS
+Simulator. It is not part of the release gate and builds nothing of the
+shell. Linux CI never compiles the iOS code, so check it locally with
+`cargo clippy --all-targets -- --cfg system_dns -D warnings` in
+`desktop/rata-mail` (the top-level `README.md` says more).
+
+The toolchain is pinned rather than `stable`, to the same version in both
+workflows (`RUST`, 1.94.1; `release.yml` names it inline): bump them
+together. With `-D warnings`, an unpinned toolchain means a new clippy lint
+reddens an unrelated pull request on the day it ships, which teaches
+everyone to ignore the colour.
 
 Some of the mail tests resolve real names — `anthropic.com` has no mail server
 of its own and its MX is the case the whole discovery module exists for, so a

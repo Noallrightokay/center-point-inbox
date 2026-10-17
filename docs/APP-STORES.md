@@ -12,12 +12,31 @@ its source by a second reader; 96 confirmed and 3 corrected, all as read
 on 2026-10-14, with Apple's guidelines last updated June 8, 2026), and the
 in-app purchase design of 2026-10-15. The direct downloads (`.dmg`,
 `.exe`, `.deb`, AppImage) and the website's Stripe checkout are not
-affected by any of it.
+affected by any of it, except the two outbound-guard changes of #163 and
+#164 (below), which every desktop build gets from the next release.
 
 ## What the owner has decided
 
-- **Order:** the iOS App Store first, then Google Play. The Mac App Store
-  is undecided (D10 below).
+- **Order, decided 2026-10-17:** the first public launch is the desktop
+  direct download (the `.dmg`, `.exe`, `.deb` and AppImage, sold through
+  Stripe on mailrata.org). The App Store builds come after it: the iOS App
+  Store first, then Google Play. When a Mac App Store build ships is still
+  open (D10 below). Nothing in this file holds the desktop launch up.
+- **Store identifiers (D9), decided 2026-10-17:** the iPhone and Mac App
+  Store builds share the bundle id `org.mailrata.app`, so they are one app
+  record in App Store Connect and one subscription covers both (Universal
+  Purchase: Apple has every platform of a record use the iOS app's bundle
+  id, and one purchase covers the app and its in-app purchases on each).
+  The direct-download desktop app keeps `org.mailrata.desktop`, which
+  `tauri.conf.json` names today. The owner makes the App Store Connect
+  app record with `org.mailrata.app`. The Tauri CLI (2.12.0) warns, but
+  does not refuse, when an identifier ends in `.app`, the extension of a
+  macOS app bundle. The warning is printed by every build given that id,
+  the iOS and TestFlight builds included, where it is harmless; the clash
+  it warns about could matter only to a Mac App Store build, and none has
+  been made yet. The in-app purchase server (#167) and #170's
+  `RATA_IOS_BUNDLE_ID` both default to `org.mailrata.app`. The store version (1.x, no
+  "beta") is still open under D9.
 - **Apple: In-App Purchase (option A1), decided 2026-10-15.** Base and Pro
   are sold inside the iOS app as two monthly auto-renewable subscriptions
   in one subscription group, "RATA":
@@ -74,13 +93,26 @@ sections; Google numbers are Play Console Help answers.
 | Age rating and US state laws | 2.3.6; Texas SB 2420 from 2026-06-04 (Declared Age Range for IAP buyers there). | 16569691: Texas in effect; Age Signals offered, not required. | Answer the questionnaire; the Texas question goes to a lawyer. |
 | Sign in with Apple | 4.8: not required for a company's own accounts or a mail client. | n/a | Holds while nobody can create the RATA account with Google or Microsoft. |
 
+Re-verified on 2026-10-17 against Apple's own pages: 2.5.5 reads "Apps
+must be fully functional on IPv6-only networks." Apple's *Supporting
+IPv6-only Networks* says that "as of June 1, 2016, all apps submitted to
+the App Store must support IPv6-only networks", that a server on the
+wider internet "will be accessible to IPv6-only devices via DNS64/NAT64",
+and that forming an IPv6 address by putting an IPv4 address after
+`64:ff9b::/96` yourself is "not a general solution". Its older guide,
+*Supporting IPv6 DNS64/NAT64 Networks*, sets a DNS64/NAT64 test network
+made on a Mac beside the networks service providers supply, and says
+"these networks (as well as the one used during App Review) do allow for
+direct IPv6-to-IPv6 connectivity". Neither page says in so many words
+that review runs on an IPv6-only network; what is certain is the
+requirement.
+
 Flagged by the code audit but not re-verified against a source: 2.2 (the
-"beta" label belongs in TestFlight), 2.5.5 (review on an IPv6-only NAT64
-network), 5.2.1 (other companies' marks in the Apps view), the "HIPAA"
-default privacy-check profile, and 3.1.2(c) (Terms and Privacy links in
-the binary). Check each before submitting. Payment rules in the US are
-still moving: re-read Apple 3.1.1(a) and Google's answer 15582165 just
-before launch.
+"beta" label belongs in TestFlight), 5.2.1 (other companies' marks in the
+Apps view), the "HIPAA" default privacy-check profile, and 3.1.2(c) (Terms
+and Privacy links in the binary). Check each before submitting. Payment
+rules in the US are still moving: re-read Apple 3.1.1(a) and Google's
+answer 15582165 just before launch.
 
 ## The stages, and what is in flight
 
@@ -92,12 +124,14 @@ yet seen on a Mac); the AI consent rewritten and made withdrawable;
 "Report this answer"; Privacy and Terms rows in Settings; store-safe help,
 privacy, terms and account-deletion pages; phone fixes (safe areas, no
 Install button, notification permission asked only when turned on); the
-outbound guard on IPv6-only networks; and groundwork for mobile.
+outbound guard on IPv6-only networks (done: #164, merged 2026-10-16, on
+main and first in the next release); and groundwork for mobile.
 
 **Stage 2: the owner's decisions** (below).
 
 **Stage 3: the mobile builds.** The lib target, an Android keychain
-(keyring keeps nothing on Android), DNS on iOS through the system,
+(keyring keeps nothing on Android), DNS on iOS through the system (the
+engine's half done: #163, merged 2026-10-16; what it leaves is below),
 `rustls-platform-verifier` set up on Android, links through
 `tauri-plugin-opener`, links in formatted mail on mobile, saving through
 pickers and share sheets, background refresh, mobile sign-in, the Android
@@ -107,22 +141,59 @@ testing on real devices and on an IPv6-only network.
 **Stage 4: the owner's accounts and forms** (below, and
 `docs/OWNER-CHECKLIST.md` §9).
 
-**In flight, 2026-10-16** (all open, none merged):
+**Merged, 2026-10-16** (on main, in no release yet; both change the
+desktop app too, from the next release):
+
+- #164 (`claude/nat64-guard`), stage 1. The outbound guard judges an
+  address in NAT64's well-known prefix `64:ff9b::/96` by the IPv4 address
+  in its last 32 bits, so a mail host with only IPv4 can be reached from
+  an IPv6-only network with DNS64. The rest of `64:ff9b::/32`, the
+  local-use `64:ff9b:1::/48` among it, stays refused; an operator's own
+  NAT64 prefix is judged as ordinary IPv6. 0.1.52 and earlier refuse all
+  of `64:ff9b::/32`.
+- #163 (`claude/ios-dns`), stage 3, the engine's half of DNS on iOS. SRV,
+  MX and TXT through dns_sd, addresses through getaddrinfo (which makes the
+  NAT64 address on an IPv6-only network), no CNAME question ever, and
+  nothing asked under `local` or the other private zones. Every address is
+  still judged by the guard, which on every system now also refuses the
+  zones `local`, `internal` and all of `arpa` themselves (0.1.52 and
+  earlier do not). Its tests run on a Mac and in an iOS Simulator
+  (CI job *Mail layer on macOS*), not on a phone. In the Simulator the
+  engine's test program runs as a bare process (`xcrun simctl spawn`),
+  outside any app's sandbox; the lookups from a sandboxed app are #166's
+  Simulator smoke (open, below).
+
+What they leave for stage 3, before submission:
+
+- A test on a real IPv6-only network with NAT64, on a device, since 2.5.5
+  requires an app to be fully functional on IPv6-only networks (above).
+  GitHub's runners have no such network.
+- An IPv4 address typed as the server is dialled as typed, never
+  synthesised to NAT64, so on an IPv6-only network it cannot be reached
+  (names are fine). Probably fixed by handing the literal to getaddrinfo on
+  iOS too (`resolve_public`), and not visible on any runner.
+- TXT over TCP through dns_sd has never been seen: an answer too big for one
+  UDP reply goes over TCP, and the macOS runners' DNS never answers one.
+  L1's SPF evidence for such a domain depends on it; check it on a device.
+- iOS's Local Network prompt has never been seen. `.local` is no longer
+  asked, but whether anything else in the app raises the prompt shows only
+  in the app on a device.
+
+**In flight, 2026-10-17** (open):
 
 | Branch | Pull request | What |
 |---|---|---|
-| `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Built in steps; not ready until its description says so. |
+| `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Both steps pushed; not to be merged until the lead says so (its description). |
 | `claude/store-pages` | #162 | Stage 1: store-safe help, privacy and terms at `/in-app/…`, and a public account-deletion page. |
-| `claude/nat64-guard` | #164 | Stage 1: the outbound guard judges `64:ff9b::/96` by the IPv4 address inside, so IPv6-only networks work. |
-| `claude/ios-dns` | #163 | Stage 3: on iOS the engine looks names up through the system (`dns_sd` and getaddrinfo) instead of hickory. |
-| `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone. Step 1 of 2; step 2 is the Xcode project and a Simulator run. |
-| `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. |
+| `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone; then the Xcode project, made afresh each run (`tauri ios init`, `ios/prepare.sh`; nothing under `gen/apple` committed), `tauri.ios.conf.json`, a `smoke` self-test feature, and `.github/workflows/ios.yml`: *iOS app in the Simulator* (the self-test, three runs and screenshots) and *iOS app for a device, unsigned* (a release build checked against the privacy manifest). Both steps in, checks green, ready for review. |
+| `claude/ios-testflight` | #170 | Stage 3: signed builds to TestFlight (`.github/workflows/ios-testflight.yml`, job *iOS app to TestFlight*, its steps in `desktop/rata-app/ios/testflight.sh`) once the owner sets the App Store Connect key's three secrets (`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8`), all or none, with `APPLE_TEAM_ID` beside them. `APPLE_TEAM_ID` alone, which macOS notarisation in `release.yml` already uses, sets nothing up: with the key's secrets unset the job says TestFlight is not set up yet and ends green, and with all four set it also requires the real `RATA_LICENCE_PUBLIC_KEY`. The bundle id comes from the repository variable `RATA_IOS_BUNDLE_ID`, default `org.mailrata.app` (D9's decided id, so the owner need not set it); `tauri.conf.json` keeps `org.mailrata.desktop`. Stacked on #166 (its diff includes #166's): merge #166 first. No upload has run. |
+| `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. Its `APPLE_BUNDLE_ID` defaults to `org.mailrata.app` (D9), so the owner sets it only if the app record uses another id; a transaction signed for any other bundle id, `org.mailrata.desktop` included, is refused. |
+| `claude/iap-native` | #172 | Stage 3: the StoreKit 2 bridge, a local Tauri plugin for iOS only (`desktop/rata-app/plugins/storekit/`), called only from Rust (`appstore.rs`: products, buy, restore, manage and renewal through `/api/licence/apple`, each transaction finished only after the licence is kept), and `ios/RATA.storekit` for testing in Xcode. Stacked on #166. |
 
-Still to come: the StoreKit 2 bridge (a local Tauri plugin for iOS only,
-called only from Rust: products, buy, restore, manage), and the purchase
-screen and Settings rows in the page ("Choose your plan", Restore
-purchases, Manage subscription), after #165 and the assistant's own AI
-consent dialog (#161, `claude/assist-v1`) have merged.
+Still to come: the purchase screen and Settings rows in the page
+("Choose your plan", Restore purchases, Manage subscription), after #165
+and the assistant's own AI consent dialog (#161, `claude/assist-v1`) have
+merged.
 
 D6, which features ship on phones first: the plan recommends mail,
 Microsoft mailbox sign-in and AI. #166 as pushed switches off everything
@@ -137,8 +208,8 @@ included, until mobile sign-in exists.
 | D5 | What Anthropic keeps of AI text | Settles the consent wording, the privacy policy and the "Emails" answer on both forms. | Zero data retention, or a clear statement of Anthropic's retention. |
 | D7 | New mail in the background on phones | Phones suspend RATA; there is no push without credentials on a server. | IDLE while in front, plus `BGAppRefreshTask` (iOS) and WorkManager (Android, 15 minutes or more). No promise of instant mail. |
 | D8 | Phone backups | Backups would copy mail and the list off the device. | Exclude them: `isExcludedFromBackup` and keychain items "this device only" on iOS; no backup on Android. |
-| D9 | Final store identifiers and version | `org.mailrata.desktop` becomes permanent with the first upload; "beta" belongs in TestFlight. | Choose the ids before the first upload; ship stores at 1.x; a 1024 px icon without alpha. |
-| D10 | The Mac App Store | Sandboxed, no licence screen; customers moving from the `.dmg` relink. | Last, or never: the `.dmg` already serves Macs. |
+| D9 | The store version (the identifiers were decided on 2026-10-17: `org.mailrata.app` for the iPhone and Mac App Store builds, `org.mailrata.desktop` for the direct download; above) | "beta" belongs in TestFlight. | Ship stores at 1.x; a 1024 px icon without alpha. |
+| D10 | When the Mac App Store build ships | Sandboxed, no licence screen; customers moving from the `.dmg` relink. Under D9 it shares the iPhone app's record and `org.mailrata.app`, so one subscription covers both. | Last, or never: the `.dmg` already serves Macs. |
 | D11 | Legal entity, address, contact, governing law | Fills `privacy.html` and `terms.html`; Apple's EU trader status publishes them. | Needed before any store submission. |
 
 ## The owner's steps in App Store Connect
@@ -148,15 +219,16 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
 1. The Apple Developer Program, then the Paid Apps agreement, banking and
    tax in App Store Connect.
 2. The Small Business Program, for the lower commission.
-3. The app record, with its bundle id (D9), and its numeric App ID for
-   `APPLE_APP_ID`.
+3. The app record, with the bundle id `org.mailrata.app` (D9, decided
+   2026-10-17), and its numeric App ID for `APPLE_APP_ID`.
 4. The subscription group "RATA" and the two products above, with prices,
    names and descriptions in each language, and the review screenshot
    each product needs.
 5. App Store Server Notifications V2, for Production and Sandbox, to
    `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester.
-7. `APPLE_BUNDLE_ID` and `APPLE_APP_ID` on the server.
+7. `APPLE_APP_ID` on the server (`APPLE_BUNDLE_ID` is optional: it
+   defaults to `org.mailrata.app`).
 8. Run `database.sql` §7.
 9. Redeploy mailrata.org.
 10. The App Privacy ("nutrition label") answers.
@@ -202,6 +274,15 @@ Apple, all read 2026-10-14:
 - US state age laws: https://developer.apple.com/news/?id=sg176nne
 - Age ratings: https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions/
 - The Developer Program License Agreement: https://developer.apple.com/support/terms/apple-developer-program-license-agreement/
+
+Apple, read 2026-10-17:
+
+- App Review Guidelines 2.5.5, same address as above.
+- Supporting IPv6-only Networks: https://developer.apple.com/support/ipv6/
+- Supporting IPv6 DNS64/NAT64 Networks (archived guide, section
+  "Limitations of Local Testing"): https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/NetworkingOverview/UnderstandingandPreparingfortheIPv6Transition/UnderstandingandPreparingfortheIPv6Transition.html
+- Universal Purchase, "Add platforms" in App Store Connect Help (the same
+  bundle id as the iOS app on each platform of one record): https://developer.apple.com/support/universal-purchase/
 
 Google Play, all read 2026-10-14 (`https://support.google.com/googleplay/android-developer/answer/<n>`):
 
