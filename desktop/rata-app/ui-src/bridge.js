@@ -1022,6 +1022,27 @@
   /* How long a renewal may take before it counts as unreachable. */
   const RENEW_WAIT = 20e3;
 
+  /* What a store build says when mailrata.org refuses a renewal. The site's
+     own sentences are written for the direct build and the website: a
+     cancelled subscription is told to "Choose a plan at mailrata.org", a
+     purchase being set up is spoken of as a payment, and the rest send the
+     customer to sign in there. A store build may lead to no purchase outside
+     the store, so it never shows the site's sentence: each reason has its
+     own words here, naming the mailrata.org account as the licence box does,
+     with no link, price or plan to choose, and a reason this build does not
+     know gets the last one. Whether the licence is kept is unchanged. */
+  const STORE_REFUSALS = {
+    'no-subscription': 'This licence has ended. Your plan is managed in your mailrata.org account.',
+    'too-old': 'This licence expired too long ago to renew itself. Paste a new licence key from your mailrata.org account.',
+    pending: 'Your licence is being set up. RATA keeps the licence it has and tries again later.',
+    malformed: 'That licence could not be read. Paste a new licence key from your mailrata.org account.',
+    'bad-signature': 'mailrata.org did not recognise the signature on this licence. Paste a new licence key from your mailrata.org account.',
+    'no-public-key': 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.',
+    'not-configured': 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+  };
+  const storeRefusal = (reason) => (Object.prototype.hasOwnProperty.call(STORE_REFUSALS, reason) ? STORE_REFUSALS[reason]
+    : 'mailrata.org did not renew this licence. Your plan is managed in your mailrata.org account.');
+
   /* Ask mailrata.org for a fresh licence. Answers the standing after a
      renewal that worked, `{ licensed: false, reason, message }` when
      mailrata.org answered with a reason and a sentence of its own, and null
@@ -1059,7 +1080,7 @@
          that cannot sign one (not-configured, its own fault too). Each is
          asked again at the next renewal. */
       if (d && d.licensed !== true && typeof d.reason === 'string' && typeof d.message === 'string' && d.message.trim()) {
-        return { licensed: false, reason: d.reason, message: d.message };
+        return { licensed: false, reason: d.reason, message: STORE ? storeRefusal(d.reason) : d.message };
       }
       if (d.licensed && d.licence) {
         /* Rust keeps the new token only if it verifies (set_licence): one
@@ -1104,7 +1125,8 @@
         standing = after && after.licensed ? after : await invoke('licence_status');
         /* Still not licensed after a real refusal: the licence box says why in
            the server's words ("Sign in at mailrata.org to get a new one"),
-           not only that the licence has expired. */
+           or a store build's own (storeRefusal), not only that the licence
+           has expired. Settings' plan line shows the same sentence. */
         if (after && !after.licensed && !standing.licensed && after.message) {
           standing = Object.assign({}, standing, { message: after.message });
         }

@@ -1217,11 +1217,11 @@ body.send-counting #toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
           <div id="conn-list"></div>
         </div>
         <div class="comp-sec">
-          <div class="sec-label">Plan &amp; billing</div>
+          <div class="sec-label" id="plan-sec">Plan &amp; billing</div>
           <div class="set-row"><div class="grow"><b>Current plan</b><span id="plan-line">—</span></div><span class="badge work" id="plan-badge" style="font-size:12px;padding:5px 12px">Free preview</span></div>
           <div class="set-row" id="plan-change"><div class="grow"><b>Change plan</b><span id="plan-compare"></span></div><span id="plan-buttons" style="display:flex;gap:8px;flex-wrap:wrap"></span><span id="bill-nolinks" style="font-size:12px;color:var(--faint)">Checkout is on mailrata.org</span></div>
           <div class="set-row" id="bill-row"><div class="grow"><b>Manage billing</b><span>Update card, switch plans, download invoices, or cancel — in your Stripe customer portal.</span></div><a class="btn" id="bill-portal" target="_blank" rel="noopener" style="display:none">Open billing portal</a></div>
-          <div class="set-row" id="plan-managed" style="display:none"><div class="grow"><b>Billing</b><span>Your plan is managed in your mailrata.org account.</span></div></div>
+          <div class="set-row" id="plan-managed" style="display:none"><div class="grow"><b>Managing your plan</b><span>Your plan is managed in your mailrata.org account.</span></div></div>
         </div>
         <div class="comp-sec">
           <div class="sec-label">About</div>
@@ -4287,8 +4287,10 @@ const money=n=>Number.isInteger(n)?'$'+n:'$'+n.toFixed(2);
    signed token Rust checks, which is what actually decides what the app
    will do; the app never reads the website's record, and asking it left
    every paying tester on "No plan yet" with Side by side locked. LIC is the
-   licence's standing as Rust reports it (licence_status). */
-let LIC=null;
+   licence's standing as Rust reports it (licence_status), or as the bridge
+   last settled it (rata-standing), which may carry mailrata.org's reason
+   for refusing a renewal. LIC_HEARD counts the bridge's word. */
+let LIC=null,LIC_HEARD=0;
 const planKey=()=>window.__RATA_NATIVE__?(LIC&&LIC.licensed&&LIC.plan?LIC.plan.key:null):S.settings.plan;
 const tier=()=>TIERS[planKey()]||null;
 const tierLabel=()=>tier()?tier().label:window.__RATA_NATIVE__?'No licence yet':'No plan yet';
@@ -4314,7 +4316,7 @@ function takeStanding(st){
   /* What is connected, and whether this plan may use it (K1). */
   loadConnections();
 }
-addEventListener('rata-standing',e=>takeStanding(e.detail));
+addEventListener('rata-standing',e=>{LIC_HEARD++;takeStanding(e.detail)});
 const can=f=>!!(tier()&&tier()[f]);
 /* What to say when something is held back, always naming the plan that has
    it and what that costs. A store build names no price and says nothing of
@@ -6037,9 +6039,11 @@ function renderPlan(){
   /* A store build: the plan's own sentence with no price and, in place of
      prices, buy buttons, Checkout and the billing portal, where the plan is
      managed, in words alone. The store sells; nothing here may lead to a
-     purchase anywhere else. */
+     purchase anywhere else, so the section is named for the plan, not for
+     billing. */
   $('#plan-change').style.display=$('#bill-row').style.display=STORE_BUILD?'none':'';
   $('#plan-managed').style.display=STORE_BUILD?'':'none';
+  $('#plan-sec').textContent=STORE_BUILD?'Plan':'Plan & billing';
   if(STORE_BUILD){
     const m=t?mailboxes(t):'';
     line.textContent=t
@@ -6333,7 +6337,7 @@ const sigForReply=acctId=>S.settings.sigReplies===false?'':sigOf(acctId);
    folder keeps its drafts here, as before, and is not asked again this
    session. CMP_SRV is one draft's side of this: a save that ends after the
    composer has moved on still files its copy under the draft it was for. */
-const newSrv=()=>({draftId:null,ref:null,rec:null,rev:0,edits:0,saved:0,other:null,discarded:false});
+const newSrv=()=>({draftId:null,ref:null,rec:null,rev:0,edits:0,saved:0,other:null,discarded:false,asking:0});
 let CMP_SRV=newSrv();
 let DRAFT_SAVING=Promise.resolve(),SENDING=false,DRAFT_TIMER=null;
 const DRAFT_NOPLACE=new Set();
@@ -6408,7 +6412,14 @@ async function saveDraft(d,email,why){
     messageId:'',replyTo:'',bodyV:2,truncated:nFiles>0,html:false,draftId:r.draftId,ownDraft:true,savedAt:Date.now()});
   S.messages=S.messages.filter(m=>m.id!==rec.id);S.messages.push(rec);
   srv.ref={email,uid:r.uid,uidvalidity:r.uidvalidity,draftId:r.draftId};srv.rec=rec;
-  const replaced=[srv.other,moved].filter(Boolean);srv.other=null;
+  /* The draft from another device being finished stays in Drafts while
+     Discard asks about it (srv.asking), and for good once Stop finishing
+     has been chosen (srv.discarded): a save already on its way when
+     Discard was pressed must not move it to the Trash, since "Stop
+     finishing" promises it stays. Discard's handler sends it once the
+     answer is Keep writing. */
+  const other=srv.asking||srv.discarded?null:srv.other;
+  const replaced=[other,moved].filter(Boolean);if(other)srv.other=null;
   if(CMP_SRV===srv){
     CMP_DRAFT=rec;
     /* Files carried from a copy in Drafts are in the one just saved now,
@@ -6424,9 +6435,12 @@ async function saveDraft(d,email,why){
   if(why==='close')toast('Saved to Drafts');
   if(replaced.length)await serverAct(replaced,'trash');
 }
+/* Never while a question is open over the composer (Discard's, above all):
+   a save then could move the draft being finished to the Trash before the
+   customer has answered whether to keep it. The next tick saves instead. */
 function startDraftTimer(){
   if(!window.__RATA_NATIVE__||DRAFT_TIMER)return;
-  DRAFT_TIMER=setInterval(()=>{if(ov.classList.contains('open'))queueDraftSave('timer')},draftEvery());
+  DRAFT_TIMER=setInterval(()=>{if(ov.classList.contains('open')&&!ASK)queueDraftSave('timer')},draftEvery());
 }
 function stopDraftTimer(){clearInterval(DRAFT_TIMER);DRAFT_TIMER=null}
 /* Everyone a draft is for, To and Cc together, for showing. */
@@ -6564,9 +6578,27 @@ function renderDraftHead(){
    Drafts, as before. */
 $('#cmp-discard').onclick=async()=>{
   const srv=CMP_SRV,saved=!!srv.rec;
-  if(!await ask(saved?{title:'Discard this draft?',text:'It will be moved to the Trash, with anything attached to it.',ok:'Discard',cancel:'Keep writing',danger:true}
-    :CMP_DRAFT?{title:'Stop finishing this draft?',text:'Your changes here will be gone; the draft stays in your Drafts folder.',ok:'Stop finishing',cancel:'Keep writing',danger:true}
-    :{title:'Discard this draft?',text:'What you have written, and anything attached to it, will be gone.',ok:'Discard',cancel:'Keep writing',danger:true}))return;
+  /* Nothing saves over the question (the timer waits, and a save already
+     on its way leaves the draft being finished in Drafts: saveDraft). */
+  srv.asking++;
+  let yes;
+  try{
+    yes=await ask(saved?{title:'Discard this draft?',text:'It will be moved to the Trash, with anything attached to it.',ok:'Discard',cancel:'Keep writing',danger:true}
+      :CMP_DRAFT?{title:'Stop finishing this draft?',text:'Your changes here will be gone; the draft stays in your Drafts folder.',ok:'Stop finishing',cancel:'Keep writing',danger:true}
+      :{title:'Discard this draft?',text:'What you have written, and anything attached to it, will be gone.',ok:'Discard',cancel:'Keep writing',danger:true});
+  }finally{srv.asking--}
+  if(!yes){
+    /* Keep writing. A save that landed while the question was open has
+       replaced the draft being finished, which goes to the Trash now, as
+       the save would have sent it (unless a later save already has). */
+    await DRAFT_SAVING;
+    const o=srv.other;
+    if(o&&srv.rec&&!srv.discarded&&!srv.asking){
+      srv.other=null;dropMessages([o]);save();renderMailFilters();renderMail();
+      await serverAct([o],'trash');
+    }
+    return;
+  }
   /* Only the draft the question was about, still open. */
   if(CMP_SRV!==srv||!ov.classList.contains('open'))return;
   srv.discarded=true;
@@ -8496,8 +8528,13 @@ function showWelcome(ob){
      anyone runs into it. */
   refreshQuota();
   webNote();
-  /* In the app, what the licence allows. */
-  if(window.__RATA_NATIVE__){try{takeStanding(await apiFetch('/api/licence'))}catch(e){}}
+  /* In the app, what the licence allows. The bridge's word, once it has
+     spoken, is the latest: its renewal at launch may have been refused with
+     a sentence that licence_status does not hold, which the licence box
+     shows and the plan line must not contradict. So Rust is asked only
+     while the bridge has said nothing, and an answer overtaken by the
+     bridge's is not used. */
+  if(window.__RATA_NATIVE__){try{const heard=LIC_HEARD,st=heard?LIC:await apiFetch('/api/licence');takeStanding(LIC_HEARD!==heard?LIC:st)}catch(e){}}
   renderSplitLock();
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');

@@ -21,6 +21,21 @@ const B = process.argv[2];
    about what only one build does (its update row, its plan rows, where its
    links go, what it says of plans) expect that build's own answer. */
 const STORE = process.argv.slice(3).includes('--store');
+/* What the licence box says when mailrata.org refuses a renewal: the site's
+   own sentence in the direct build, and in a store build words of its own
+   for each reason (bridge.js storeRefusal), since the site's name a plan to
+   choose, a payment, or a page to sign in to. */
+const STORE_REFUSED = {
+  'no-subscription': 'This licence has ended. Your plan is managed in your mailrata.org account.',
+  'too-old': 'This licence expired too long ago to renew itself. Paste a new licence key from your mailrata.org account.',
+  pending: 'Your licence is being set up. RATA keeps the licence it has and tries again later.',
+  malformed: 'That licence could not be read. Paste a new licence key from your mailrata.org account.',
+  'bad-signature': 'mailrata.org did not recognise the signature on this licence. Paste a new licence key from your mailrata.org account.',
+  'no-public-key': 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.',
+  'not-configured': 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+  '': 'mailrata.org did not renew this licence. Your plan is managed in your mailrata.org account.',
+};
+const refusedSaid = (reason, site) => (STORE ? STORE_REFUSED[reason] ?? STORE_REFUSED[''] : site);
 const STORE_SOFT_CAP_JS = 3500000;
 let fails = 0;
 const check = (c, m) => { console.log(`${c ? '  PASS' : '  FAIL'}  ${m}`); if (!c) fails++; };
@@ -343,6 +358,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       /* F1: as core::save_draft. A new UID for every save; the copy before
          is "replaced" whenever the page names one. */
       case 'save_draft': {
+        /* A save that takes its time: answered once the harness calls
+           __mock.draftGo(). */
+        if (M.draftWait) await M.draftWait;
         if (M.draftNoPlace) return { outcome: 'no-place', error: args.draft.from + ' has no Drafts folder, so RATA keeps this draft on this computer only.' };
         if (M.draftFails) throw { email: args.draft.from, kind: 'net', error: 'The draft was not saved to Drafts in ' + args.draft.from + ' — imap.example.com could not be reached. It is kept here and will be saved again.' };
         M.draftUid = (M.draftUid || 100) + 1;
@@ -1000,6 +1018,109 @@ console.log('\n— drafts written here are saved to the mailbox (F1) —');
   const again = await saves();
   check(s.length === 1 && t.some((x) => /no Drafts folder/.test(x)) && again.length === 1,
     `a mailbox with no Drafts folder is asked once, and never again by the timer or a close: ${JSON.stringify({ n: again.length, t })}`);
+  await pg.close();
+}
+
+console.log('\n— while Discard asks, nothing saves over the question —');
+{
+  /* Discard asks in the page now, and a question in the page does not stop
+     the clock the way the browser's own did. Finishing a draft from another
+     device, Discard asks "Stop finishing this draft? … the draft stays in
+     your Drafts folder." A save landing before the answer would move that
+     draft to the Trash, and Stop finishing would then send RATA's copy
+     after it, leaving Drafts empty. */
+  const pg = await open(true);
+  const mk = (uid) => ({ id: 'me@example.com_drafts_' + uid, folder: 'drafts', acct: 'me@example.com', acct_label: 'Example', from_name: 'Me', from_addr: 'me@example.com',
+    to_name: 'Bo Li', to_addr: 'bo@example.org', to_all: ['bo@example.org'], cc: [], bcc: [], in_reply_to: '', subject: 'S' + uid, preview: 'p', body: 'Draft ' + uid,
+    ts: Date.now() - uid * 1000, unread: false, starred: false, uid, uidvalidity: 7, message_id: '', reply_to: '', truncated: false, attachments: [], html: false });
+  await pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [], drafts: [{ email: 'me@example.com', ids: msgs.map((m) => m.id) }] };
+    await serverSync('mail', true);
+  }, [mk(61), mk(62), mk(63), mk(64)]);
+  const look = () => pg.evaluate(() => ({ saves: __mock.calls.filter(([c]) => c === 'save_draft').length,
+    trashed: __mock.calls.filter(([c, a]) => c === 'change_messages' && a.action === 'trash').flatMap(([, a]) => a.uids),
+    drafts: S.messages.filter((m) => m.draft).map((m) => m.uid).sort((a, b) => a - b), asking: !!ASK }));
+  /* Continue a draft from Drafts and change it, with the timer stopped
+     while the words go in, so no save lands before Discard is pressed. */
+  const finish = async (uid, every) => {
+    await pg.evaluate(() => closeCompose());
+    await pg.evaluate((every) => { window.__RATA_DRAFT_EVERY = every; }, every);
+    await pg.evaluate((id) => openMail(id), 'me@example.com_drafts_' + uid);
+    await pg.click('#md-continue');
+    await pg.waitForTimeout(200);
+    await pg.evaluate(() => stopDraftTimer());
+    await pg.fill('#cmp-body', `Draft ${uid}, changed here`);
+    await pg.evaluate(() => { __mock.calls = []; });
+  };
+
+  /* The timer comes round, several times, while the question is open. */
+  await finish(61, 150);
+  await pg.click('#cmp-discard');
+  await pg.waitForSelector('#ask-ov.open', { timeout: 3000 }).catch(() => {});
+  const asked = await pg.evaluate(() => $('#ask-title').textContent);
+  await pg.evaluate(() => startDraftTimer());
+  await pg.waitForTimeout(700);
+  let st = await look();
+  check(asked === 'Stop finishing this draft?' && st.asking && st.saves === 0 && st.trashed.length === 0,
+    `the timer saves nothing while "${asked}" waits for an answer: ${JSON.stringify(st)}`);
+  await answer(pg);
+  await pg.waitForTimeout(300);
+  st = await look();
+  check(st.saves === 0 && st.trashed.length === 0 && st.drafts.includes(61),
+    `and Stop finishing leaves the draft in Drafts, as the question said, with nothing moved to the Trash: ${JSON.stringify(st)}`);
+
+  /* A save already on its way when Discard is pressed, answered while the
+     question is open: Stop finishing moves only RATA's copy to the Trash. */
+  await finish(62, 60e3);
+  await pg.evaluate(() => { __mock.draftWait = new Promise((r) => { __mock.draftGo = () => { __mock.draftWait = null; r(); }; }); queueDraftSave('timer'); return null; });
+  await pg.click('#cmp-discard');
+  await pg.waitForSelector('#ask-ov.open', { timeout: 3000 }).catch(() => {});
+  await pg.evaluate(() => __mock.draftGo());
+  await pg.waitForTimeout(300);
+  const copy = await pg.evaluate(() => __mock.draftUid);
+  st = await look();
+  check(st.asking && st.saves === 1 && st.trashed.length === 0 && st.drafts.includes(62) && st.drafts.includes(copy),
+    `a save that lands while Discard asks keeps the draft being finished where it is: ${JSON.stringify({ copy, ...st })}`);
+  await answer(pg);
+  await pg.waitForTimeout(300);
+  st = await look();
+  check(st.trashed.join() === String(copy) && st.drafts.includes(62) && !st.drafts.includes(copy),
+    `and Stop finishing moves only RATA's copy to the Trash; the draft stays in Drafts: ${JSON.stringify({ copy, ...st })}`);
+
+  /* The same, answered Keep writing: the save stands, and the draft it
+     replaced goes to the Trash then, as the save would have sent it. */
+  await finish(63, 60e3);
+  await pg.evaluate(() => { __mock.draftWait = new Promise((r) => { __mock.draftGo = () => { __mock.draftWait = null; r(); }; }); queueDraftSave('timer'); return null; });
+  await pg.click('#cmp-discard');
+  await pg.waitForSelector('#ask-ov.open', { timeout: 3000 }).catch(() => {});
+  await pg.evaluate(() => __mock.draftGo());
+  await pg.waitForTimeout(300);
+  st = await look();
+  check(st.trashed.length === 0, `while the question is open, the draft it replaced waits: ${JSON.stringify(st)}`);
+  await answer(pg, false);
+  await pg.waitForTimeout(300);
+  const copy2 = await pg.evaluate(() => __mock.draftUid);
+  st = await look();
+  const kept = await pg.evaluate(() => ({ open: ov.classList.contains('open'), body: $('#cmp-body').value }));
+  check(st.trashed.join() === '63' && !st.drafts.includes(63) && st.drafts.includes(copy2) && kept.open && kept.body === 'Draft 63, changed here',
+    `Keep writing keeps the words and the save, and the draft it replaced goes to the Trash once: ${JSON.stringify({ copy2, ...st, kept })}`);
+  await pg.evaluate(() => closeCompose());
+  await pg.waitForTimeout(200);
+  st = await look();
+  check(st.trashed.join() === '63' && st.saves === 1, `closing it then saves nothing new and moves nothing else: ${JSON.stringify(st)}`);
+
+  /* Stop finishing answered before that save lands: the save still files
+     RATA's copy, which goes to the Trash, and the draft stays in Drafts. */
+  await finish(64, 60e3);
+  await pg.evaluate(() => { __mock.draftWait = new Promise((r) => { __mock.draftGo = () => { __mock.draftWait = null; r(); }; }); queueDraftSave('timer'); return null; });
+  await pg.click('#cmp-discard');
+  await answer(pg);
+  await pg.evaluate(() => __mock.draftGo());
+  await pg.waitForTimeout(400);
+  const copy3 = await pg.evaluate(() => __mock.draftUid);
+  st = await look();
+  check(st.saves === 1 && st.trashed.join() === String(copy3) && st.drafts.includes(64) && !st.drafts.includes(copy3),
+    `a save that lands after Stop finishing moves only RATA's copy to the Trash; the draft stays in Drafts: ${JSON.stringify({ copy3, ...st })}`);
   await pg.close();
 }
 
@@ -2430,7 +2551,8 @@ console.log('\n— a licence too old to renew itself says what to do —');
   const tooOld = 'This licence expired more than 90 days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.';
   let pg = await open(false, { old: true, renew: { body: { licensed: false, reason: 'too-old', message: tooOld } } });
   let said = await why(pg);
-  check(pg.__renewals === 1 && said === tooOld, `too-old: the licence box says to sign in for a new one: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
+  check(pg.__renewals === 1 && said === refusedSaid('too-old', tooOld),
+    `too-old: the licence box says ${STORE ? 'to paste a new key from the mailrata.org account' : 'to sign in for a new one'}: ${JSON.stringify({ renewals: pg.__renewals, said })}`);
   await pg.close();
   /* A server having a bad morning is not an answer: the app's own words stay. */
   pg = await open(false, { old: true, renew: { status: 500, body: { error: 'The licence service is not configured.' } } });
@@ -2481,13 +2603,13 @@ console.log('\n— a renewal mailrata.org answers but cannot give keeps the lice
     pg = await open(false, { lic: { token: 'v1.first.sig', now: T0 + 13 * DAY, genuine: genuine() }, renew: () => reply });
     await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
     st = await look(pg);
-    check(pg.__renewals === 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.retry && st.why === answer.body.message,
-      `${reason}: an expired licence is kept, not cleared, and the box gives the site's sentence: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
+    check(pg.__renewals === 1 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.retry && st.why === refusedSaid(reason, answer.body.message),
+      `${reason}: an expired licence is kept, not cleared, and the box gives ${STORE ? 'the store build\'s own sentence for it' : 'the site\'s sentence'}: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
     await pg.click('#rata-licence-retry');
     /* The box disables Try again while it renews and enables it after. */
     await pg.waitForFunction(() => !document.querySelector('#rata-licence-retry')?.disabled, null, { timeout: 5000 }).catch(() => {});
     st = await look(pg);
-    check(pg.__renewals === 2 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.why === answer.body.message && !/could not reach/.test(st.err),
+    check(pg.__renewals === 2 && st.sets === 0 && st.disk === 'v1.first.sig' && st.box && st.why === refusedSaid(reason, answer.body.message) && !/could not reach/.test(st.err),
       `${reason}: Try again asks once more, keeps the licence and does not say the site could not be reached: ${JSON.stringify({ renewals: pg.__renewals, ...st })}`);
     /* The licence kept is still the one that renews once the site can. */
     reply = { body: { licensed: true, licence: 'v1.second.sig', message: 'Renewed.' } };
@@ -3571,8 +3693,12 @@ console.log('\n— accessibility: axe at five points, and the list, dialogs and 
   await pg.waitForTimeout(300);
   await axe(pg, 'an open message, dark');
   await pg.emulateMedia({ colorScheme: 'light' });
-  /* Between 901 and 1200 px the rail is icons only: still named. */
+  /* Between 901 and 1200 px the rail is icons only: still named. The same
+     settling as above on the way back to light, or axe can measure a row's
+     light text against a background still fading from dark (seen once, on
+     a mail row's time and preview). */
   await pg.setViewportSize({ width: 1000, height: 720 });
+  await pg.waitForTimeout(300);
   const rail = await pg.evaluate(() => [...document.querySelectorAll('#rail .nav-item')].filter((b) => b.getClientRects().length).map((b) => b.querySelector('.nav-label') && getComputedStyle(b.querySelector('.nav-label')).display !== 'none' && b.querySelector('.nav-label').getBoundingClientRect().width <= 1));
   check(rail.length >= 4 && rail.every(Boolean), `icons-only, each rail button still carries its word for a screen reader: ${JSON.stringify(rail)}`);
   await axe(pg, 'the inbox with the rail as icons only');
@@ -4008,8 +4134,11 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
       ov.classList.add('open'); const over = px('#send-toast', 'top'); if (!was) ov.classList.remove('open');
       document.body.classList.add('send-counting'); const counting = px('#toast', 'bottom'); document.body.classList.remove('send-counting');
       const fab = document.querySelector('#assist-fab').getBoundingClientRect(), nav = document.querySelector('#mnav').getBoundingClientRect();
+      /* And the foot of Assist's answer, which scrolls down to the home
+         indicator (.as-out). claude/assist-v1 rewrites that rule: a merge
+         that takes its side must keep the inset, or this fails. */
       out.floats = { toast: px('#toast', 'bottom'), counting, send: px('#send-toast', 'bottom'), over, fab: [px('#assist-fab', 'right'), px('#assist-fab', 'bottom')],
-        fabClear: !nav.height || fab.bottom <= nav.top };
+        fabClear: !nav.height || fab.bottom <= nav.top, asOut: parseFloat(cs('.as-out').paddingBottom) };
     }
     return out;
   });
@@ -4020,7 +4149,7 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   let m = await measure(pg);
   check(same(m.topbar.pad, [0, 24, 0, 24]) && m.topbar.height === 56 && same(m.app, [0, 0, 0, 0]) && same(m.rail, [22, 14, 16, 14]) && all(m.overlays, [20, 20, 20, 20]) && same(m.compose, [0, 0, 0, 0]) && m.acct === 56,
     `on a computer nothing moves: the top bar 56 px, the rail and every question as before: ${JSON.stringify(m)}`);
-  check(same(m.floats, { toast: 24, counting: 76, send: 24, over: 24, fab: [20, 20], fabClear: true }),
+  check(same(m.floats, { toast: 24, counting: 76, send: 24, over: 24, fab: [20, 20], fabClear: true, asOut: 24 }),
     `nor do the toasts and the Assist button: ${JSON.stringify(m.floats)}`);
   await ctx.close();
 
@@ -4029,8 +4158,8 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   check(same(m.topbar.pad, [47, 24, 0, 24]) && m.topbar.height === 103 && m.acct === 103, `a phone upright: the top bar reaches under the status bar and keeps its 56 px below it, and the account menu opens below that: ${JSON.stringify(m.topbar)} ${m.acct}`);
   check(all(m.overlays, [47, 20, 34, 20]) && same(m.compose, [47, 0, 0, 0]),
     `every question and sheet keeps clear of the status bar and the home indicator, and the composer of the status bar: ${JSON.stringify({ overlays: m.overlays, compose: m.compose })}`);
-  check(same(m.floats, { toast: 58, counting: 110, send: 58, over: 71, fab: [20, 110], fabClear: true }),
-    `the toasts keep clear of the home indicator, the Undo toast over the composer of the status bar, and the Assist button stays above the bottom bar: ${JSON.stringify(m.floats)}`);
+  check(same(m.floats, { toast: 58, counting: 110, send: 58, over: 71, fab: [20, 110], fabClear: true, asOut: 58 }),
+    `the toasts and the foot of Assist's answer keep clear of the home indicator, the Undo toast over the composer of the status bar, and the Assist button stays above the bottom bar: ${JSON.stringify(m.floats)}`);
   const pane = await pg.evaluate(() => { go('inbox'); const d = $('#mail-detail'); d.classList.add('open'); const r = d.getBoundingClientRect(); d.classList.remove('open'); return [r.top, r.left]; });
   check(same(pane, [47, 0]), `the reading pane, over the list on a phone, starts below the status bar: ${JSON.stringify(pane)}`);
   /* The shortcut sheet is taller than a phone: it scrolls inside the room
@@ -4050,7 +4179,7 @@ console.log('\n— a phone’s edges: the top bar, the rail, every question and 
   const nav = await pg.evaluate(() => { const c = getComputedStyle($('#mnav')); return [parseFloat(c.paddingLeft), parseFloat(c.paddingRight)]; });
   check(same(m.app, [0, 47, 0, 47]) && same(nav, [47, 47]) && all(m.overlays, [20, 47, 21, 47]),
     `a phone on its side: nothing sits under the notch, the page, the bottom bar and every question included: ${JSON.stringify({ app: m.app, nav, overlays: m.overlays['#ask-ov'] })}`);
-  check(same(m.floats, { toast: 45, counting: 97, send: 45, over: 24, fab: [67, 97], fabClear: true }),
+  check(same(m.floats, { toast: 45, counting: 97, send: 45, over: 24, fab: [67, 97], fabClear: true, asOut: 45 }),
     `and the Assist button keeps clear of the notch and the bottom bar, the toasts of the home indicator: ${JSON.stringify(m.floats)}`);
   await ctx.close();
 
@@ -5501,6 +5630,21 @@ if (!STORE) {
         privacy: 'https://mailrata.org/in-app/privacy', terms: 'https://mailrata.org/in-app/terms', account: 'https://mailrata.org/in-app/delete-account' })
       && existsSync(joinPath(store, 'app.html')) && existsSync(joinPath(store, 'bridge.js')),
     `RATA_DISTRIBUTION=store writes a store config.js: no payment links, and only the store-safe pages: ${JSON.stringify(c)}`);
+    /* Its pages' markup names the store-safe pages too, swapped by exact
+       text: nothing there waits on a script to stop leading to GitHub or
+       the website's own Help, Privacy and Terms. */
+    const marked = (dir) => ['app.html', 'auth.html'].map((f) => (existsSync(joinPath(dir, f)) ? _read(joinPath(dir, f), 'utf8') : '')
+      .match(/href="https?:\/\/[^"]*"/g) || []);
+    let hrefs = marked(store);
+    check(JSON.stringify(hrefs) === JSON.stringify([
+      ['href="https://mailrata.org/in-app/help"', 'href="https://mailrata.org/in-app/help#report"', 'href="https://mailrata.org/in-app/privacy"', 'href="https://mailrata.org/in-app/terms"'],
+      ['href="https://mailrata.org/in-app/terms"', 'href="https://mailrata.org/in-app/privacy"']]),
+    `and its app.html and auth.html link, in their markup, only to the store-safe pages: ${JSON.stringify(hrefs)}`);
+    /* And what Report a bug's row says it opens: the store-safe page, not
+       a form on GitHub. */
+    const bugWhat = (dir) => ((existsSync(joinPath(dir, 'app.html')) ? _read(joinPath(dir, 'app.html'), 'utf8') : '').match(/<span id="bug-what">([^<]*)<\/span>/) || [])[1];
+    check(bugWhat(store) === 'What to put in a bug report, on mailrata.org. Never paste a password or your licence key into one.',
+      `and its Report a bug row says, in its markup, what the store-safe page holds, not that it opens a form on GitHub: ${JSON.stringify(bugWhat(store))}`);
     r = run('store', store);
     check(r.status === 0, `and builds again into its own earlier build: ${JSON.stringify(r.stderr.trim())}`);
     const direct = joinPath(tmp, 'direct');
@@ -5510,6 +5654,13 @@ if (!STORE) {
       && c.stripePortal === 'https://mailrata.org/app' && c.pages && c.pages.account === 'https://mailrata.org/app' && c.pages.licence === 'https://mailrata.org/account'
       && c.pages.releases === 'https://github.com/Noallrightokay/center-point-inbox/releases' && !c.pages.help,
     `unset, it is the direct build, with today's links: ${JSON.stringify(c)}`);
+    hrefs = marked(direct);
+    check(JSON.stringify(hrefs) === JSON.stringify([
+      ['href="https://mailrata.org/help"', 'href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md"', 'href="https://mailrata.org/privacy.html"', 'href="https://mailrata.org/terms.html"'],
+      ['href="https://mailrata.org/terms.html"', 'href="https://mailrata.org/privacy.html"']]),
+    `and its pages keep the website's own links, as the website serves them: ${JSON.stringify(hrefs)}`);
+    check(bugWhat(direct) === 'Opens the Beta bug form on GitHub. It is public: never paste a password or your licence key.',
+      `and its Report a bug row still says it opens the form on GitHub: ${JSON.stringify(bugWhat(direct))}`);
     const theirs = joinPath(tmp, 'theirs');
     mkdirSync(theirs); writeFileSync(joinPath(theirs, 'notes.txt'), 'mine');
     r = run(undefined, theirs);
@@ -5541,6 +5692,24 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
   if (STORE) check(found['config.js'].length === 0, `and nor does the store build's config.js: ${JSON.stringify(found['config.js'])}`);
   else check(['#pricing', 'mailrata.org/app', 'mailrata.org/account', 'the releases page'].every((w) => found['config.js'].some((x) => x.includes(w))),
     `the direct build's are in its config.js, where the check finds them: ${JSON.stringify(found['config.js'])}`);
+  /* Nor any address that leads to one: every page of the website outside
+     the store-safe /in-app/ (and /api/, which is not a page) links on to the
+     prices, the licence page or the releases, and so does GitHub. A store
+     build holds none at all, in a link, a script or a comment, so it never
+     depends on a script swapping its links when the page loads (sync-ui.sh
+     swaps the markup's). The direct build keeps the website's own Help,
+     Report a bug, Privacy and Terms, where the check finds them. */
+  const strays = {};
+  for (const f of FILES) {
+    strays[f] = [...(await (await fetch(B + '/' + f)).text()).matchAll(ADDRESS)].map((m) => m[0].replace(/[.,;:!]+$/, ''))
+      .filter((raw) => /^https?:\/\//i.test(raw) || /[/?#]/.test(raw))
+      .filter((raw) => !storeSafe(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw));
+  }
+  if (STORE) check(FILES.every((f) => strays[f].length === 0),
+    `no file of the store build holds an address on GitHub or a mailrata.org page outside /in-app/: ${JSON.stringify(FILES.filter((f) => strays[f].length).map((f) => [f, strays[f]]))}`);
+  else check(['https://mailrata.org/help', 'https://mailrata.org/privacy.html', 'https://mailrata.org/terms.html'].every((u) => strays['app.html'].includes(u))
+    && strays['app.html'].some((u) => /^https:\/\/github\.com\//.test(u)) && strays['auth.html'].includes('https://mailrata.org/terms.html'),
+  `the direct build's pages keep the website's Help, Report a bug, Privacy and Terms, and the check finds them: ${JSON.stringify({ app: strays['app.html'], auth: strays['auth.html'] })}`);
 
   /* Live: what each screen says, its titles, and where every link on it
      goes, on Pro, on Base with every mailbox used, without a licence, and
@@ -5562,20 +5731,23 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
   await pg.evaluate(() => { go('set'); renderSettings(); });
   await pg.click('#btn-delete');
   await pg.waitForFunction(() => !/Checking/.test(document.querySelector('#del-detail').textContent), null, { timeout: 3000 }).catch(() => {});
-  let plan = await pg.evaluate(() => ({ line: $('#plan-line').textContent, badge: $('#plan-badge').textContent,
+  let plan = await pg.evaluate(() => ({ line: $('#plan-line').textContent, badge: $('#plan-badge').textContent, sec: $('#plan-sec').textContent,
+    billing: (document.querySelector('#view-set').innerText.match(/billing/gi) || []).length,
     rows: ['#plan-change', '#bill-row', '#plan-managed', '#upd-row'].map((s) => $(s) ? getComputedStyle($(s)).display !== 'none' : null),
     managed: $('#plan-managed') && $('#plan-managed').innerText.replace(/\s+/g, ' ').trim(), managedControls: $('#plan-managed') && $('#plan-managed').querySelectorAll('a, button').length }));
   let j = judged(await harvest(pg, ['#view-set']));
   if (STORE) {
     check(plan.line === 'Licensed for RATA Pro until 26 October 2026. More than two mailboxes in one Center Point inbox, side by side.' && plan.badge === 'RATA Pro',
       `Pro: the plan's own sentence, with no price: "${plan.line}"`);
-    check(JSON.stringify(plan.rows) === '[false,false,true,false]' && plan.managed === 'Billing Your plan is managed in your mailrata.org account.' && plan.managedControls === 0,
+    check(JSON.stringify(plan.rows) === '[false,false,true,false]' && plan.managed === 'Managing your plan Your plan is managed in your mailrata.org account.' && plan.managedControls === 0,
       `no Change plan, Manage billing or Updates row; in their place "Your plan is managed in your mailrata.org account.", with no link or button: ${JSON.stringify(plan)}`);
+    check(plan.sec === 'Plan' && plan.billing === 0, `the section is named for the plan, and Settings says nothing of billing: ${JSON.stringify({ sec: plan.sec, billing: plan.billing })}`);
     check(clean(j), `Settings names no price, purchase, billing portal or update, and links nowhere that sells or to GitHub: ${JSON.stringify(j)}`);
   } else {
     check(plan.line === 'Licensed for RATA Pro until 26 October 2026. $23.99 a month · more than two mailboxes in one Center Point inbox, side by side.' && plan.badge === 'RATA Pro',
       `Pro: the plan's sentence, with its price, as before: "${plan.line}"`);
-    check(JSON.stringify(plan.rows) === '[true,true,false,true]', `Change plan, Manage billing and Updates show, and the store's sentence does not: ${JSON.stringify(plan.rows)}`);
+    check(JSON.stringify(plan.rows) === '[true,true,false,true]' && plan.sec === 'Plan & billing' && plan.billing > 0,
+      `Change plan, Manage billing and Updates show under Plan & billing, and the store's sentence does not: ${JSON.stringify({ rows: plan.rows, sec: plan.sec })}`);
     check(j.unsafe.some((u) => sells(u)) && j.words.length > 0, `and Settings links to the billing portal and names prices and updates, as it should here: ${JSON.stringify(j)}`);
   }
   await pg.close();
@@ -5687,6 +5859,31 @@ console.log(`\n— what the ${STORE ? 'store' : 'direct'} build sells, and where
     `the licence box links to the licence page, as before: ${JSON.stringify(box)}`);
   }
   await pg.close();
+
+  /* A subscription that has ended: the licence here has expired, and
+     mailrata.org refuses to renew it (no-subscription) with a sentence that
+     tells the customer to choose a plan there; and a reason this build has
+     never heard of, in words that do the same. A store build's licence box
+     and Settings' plan line say it in their own words instead, with no plan
+     to choose; the direct build shows the site's sentence, as before. */
+  for (const [reason, site] of [['no-subscription', 'There is no active subscription on this account. Choose a plan at mailrata.org to keep using RATA.'],
+    ['a-reason-from-later', 'Something changed. Choose a plan at mailrata.org to keep using RATA.']]) {
+    pg = await open(false, { old: true, renew: { body: { licensed: false, reason, email: 'me@example.com', message: site } } });
+    await pg.waitForSelector('#rata-licence', { timeout: 5000 }).catch(() => {});
+    await pg.waitForFunction(() => LIC && LIC.licensed === false && LIC.message !== 'This licence expired on 1 March 2026.', null, { timeout: 5000 }).catch(() => {});
+    const ended = await pg.evaluate(() => { go('set'); renderSettings(); return { why: $('#rata-licence-why').textContent, line: $('#plan-line').textContent }; });
+    j = judged(await harvest(pg, ['#rata-licence', '#plan-line']));
+    const want = refusedSaid(reason, site);
+    if (STORE) {
+      check(pg.__renewals === 1 && ended.why === want && ended.line === want && !/choose a plan/i.test(ended.why + ended.line),
+        `${reason}: the licence box and the plan line say "${want}", never the site's "choose a plan": ${JSON.stringify(ended)}`);
+      check(clean(j), `${reason}: and the box and the plan line name no price, purchase or plan to buy, and link nowhere that sells: ${JSON.stringify(j)}`);
+    } else {
+      check(pg.__renewals === 1 && ended.why === site && ended.line === site && j.words.some((w) => /choose a plan/i.test(w)),
+        `${reason}: the licence box and the plan line give the site's sentence, as before, and the check sees its "choose a plan": ${JSON.stringify({ ended, words: j.words })}`);
+    }
+    await pg.close();
+  }
 
   /* The sign-up page, arriving as from a checkout (?next=account&checkout=success). */
   const ap = await browser.newPage();
