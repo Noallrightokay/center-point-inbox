@@ -16,6 +16,7 @@
 //! asks for) is `cfg(desktop)` here, and on a phone the features that need
 //! one answer as a build without them does.
 
+mod appstore;
 mod cloud;
 mod commands;
 mod core;
@@ -271,6 +272,12 @@ pub fn run() {
             .open_js_links_on_click(false)
             .build(),
     );
+    // On an iPhone, RATA is bought through the App Store (`appstore`), with
+    // StoreKit 2 in RATA's own plugin. Its Rust side only, as the opener's:
+    // the plugin names no command a page could be allowed, and no capability
+    // names the plugin.
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_storekit::init());
     builder
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -339,6 +346,8 @@ pub fn run() {
             if let Some(token) = smoke::given_licence() {
                 smoke.record(smoke::licence(&rata, &token));
             }
+            #[cfg(target_os = "ios")]
+            let bought = rata.clone();
             app.manage(rata);
             // The window is built here rather than from the config alone
             // (`"create": false` there) so that it can be told where it may
@@ -385,8 +394,13 @@ pub fn run() {
             let live = watch::Watching::default();
             app.manage(live.clone());
             watch::start(app.handle().clone(), live);
+            // The App Store, on an iPhone: what the `store_*` commands ask,
+            // the listener for what StoreKit hands over by itself, and the
+            // licence renewed through it at launch and every six hours.
+            #[cfg(target_os = "ios")]
+            appstore::start(app.handle(), bought);
             #[cfg(feature = "smoke")]
-            smoke::start(smoke);
+            smoke::start(smoke, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -434,6 +448,11 @@ pub fn run() {
             commands::created_list,
             commands::created_read,
             commands::forget_created,
+            appstore::store_products,
+            appstore::store_buy,
+            appstore::store_restore,
+            appstore::store_manage,
+            appstore::store_renew,
             #[cfg(feature = "smoke")]
             smoke::smoke_page,
         ])

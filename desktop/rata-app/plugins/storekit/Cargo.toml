@@ -1,0 +1,17 @@
+[package]
+name = "tauri-plugin-storekit"
+version = "0.1.0"
+edition = "2024"
+description = "Buying RATA in the iPhone app: StoreKit 2, called by RATA's own Rust and never by the page"
+publish = false
+# Tauri's plugin build (tauri-plugin) requires `links`, equal to the name.
+links = "tauri-plugin-storekit"
+
+# Only RATA for iOS depends on this (src-tauri/Cargo.toml). Nothing here is
+# new to the tree: tauri and tauri-plugin are what the notification and
+# opener plugins already build with.
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

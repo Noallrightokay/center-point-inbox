@@ -1,0 +1,9 @@
+# What Tauri's plugin build writes when this is built for iOS: its copy of
+# Tauri's Swift package, which ios/Package.swift names, and the permission
+# files of a plugin that has none.
+.tauri/
+permissions/
+# What SwiftPM leaves beside a package it resolves or builds.
+ios/.build/
+ios/.swiftpm/
+ios/Package.resolved

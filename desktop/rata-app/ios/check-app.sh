@@ -25,6 +25,11 @@ for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
   echo "$key = $got"
   [ -n "$got" ] || { echo "::error::no $key"; bad=1; }
 done
+# The StoreKit configuration is for Run in Xcode alone (prepare.sh).
+if find "$app" -name '*.storekit' | grep -q .; then
+  echo "::error::the bundle carries a StoreKit configuration"
+  bad=1
+fi
 if cmp -s "$app/PrivacyInfo.xcprivacy" "$here/PrivacyInfo.xcprivacy"; then
   echo "PrivacyInfo.xcprivacy: in the bundle, as committed"
 else

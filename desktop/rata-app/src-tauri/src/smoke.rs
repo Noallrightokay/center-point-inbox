@@ -5,7 +5,8 @@
 //! no test on a computer can stand in for: the keychain, the app's folder
 //! and the list's lock, names looked up through the system's resolver (the
 //! records discovery and L1 read), discovery of a real address, a TLS
-//! connection to a real mail server through the guard, and the page itself.
+//! connection to a real mail server through the guard, the App Store's
+//! StoreKit plugin answering RATA, and the page itself.
 //! Each answer goes into `smoke.json` in the app's data folder, written once
 //! and whole when the last check is done, for the job to read.
 //!
@@ -413,9 +414,10 @@ pub fn smoke_page(smoke: State<'_, Arc<Smoke>>, page: Page) {
     smoke.heard(page);
 }
 
-/// The rest, once the window is up: the keychain, the network, then the
-/// page's report (waited for), and `smoke.json`.
-pub fn start(smoke: Arc<Smoke>) {
+/// The rest, once the window is up: the keychain, the network, the App
+/// Store's plugin (`appstore::smoke_check`), then the page's report (waited
+/// for), and `smoke.json`.
+pub fn start(smoke: Arc<Smoke>, app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let secret = fresh_secret();
         let kept = tauri::async_runtime::spawn_blocking(move || keychain(&InKeychain, &secret))
@@ -423,6 +425,7 @@ pub fn start(smoke: Arc<Smoke>) {
             .unwrap_or_else(|e| Check::new("keychain", false, json!({ "error": e.to_string() })));
         smoke.record(kept);
         network(&smoke).await;
+        smoke.record(crate::appstore::smoke_check(&app).await);
         let page = smoke.wait_for_page(PAGE_WAIT).await;
         smoke.record(judge_page(page.as_ref(), smoke.view.as_deref()));
         if let Err(e) = smoke.finish(page) {

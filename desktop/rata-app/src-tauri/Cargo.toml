@@ -60,6 +60,13 @@ tauri-plugin-single-instance = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
 
+# Buying RATA in the iPhone app (appstore.rs): StoreKit 2, in RATA's own
+# plugin, which only RATA's Rust calls. iOS only: a computer and Android are
+# built without it, and their `store_*` commands answer that the App Store
+# is not available there.
+[target.'cfg(target_os = "ios")'.dependencies]
+tauri-plugin-storekit = { path = "../plugins/storekit" }
+
 # Marking saved files as downloads on macOS (mark.rs). Already in the tree
 # through the updater's tar, so nothing new is built.
 [target.'cfg(target_os = "macos")'.dependencies]

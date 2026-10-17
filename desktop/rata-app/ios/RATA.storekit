@@ -1,0 +1,98 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "5A7A0C3E",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21800001",
+      "localizations" : [
+
+      ],
+      "name" : "RATA",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "1.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6748000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Everything in RATA. Placeholder price, for testing in Xcode only.",
+              "displayName" : "RATA Pro",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.mailrata.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "RATA Pro, monthly (placeholder price, not the real one)",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "0.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6748000002",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "RATA for your own mailboxes. Placeholder price, for testing in Xcode only.",
+              "displayName" : "RATA Base",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "org.mailrata.base.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "RATA Base, monthly (placeholder price, not the real one)",
+          "subscriptionGroupID" : "21800001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
