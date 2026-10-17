@@ -8,10 +8,11 @@ name: iOS
 #
 # What runs here: the shell compiled for iOS, the desktop shell still
 # compiling for macOS, a build without self-update holding none of the
-# updater nor a desktop build the smoke self-test, RATA itself built for
-# the iOS Simulator and run there, with its self-test and screenshots, and
-# RATA built for a device as a store's build would be, unsigned, whose
-# program the privacy manifest is checked against.
+# updater nor a desktop build the smoke self-test, RATA's StoreKit code
+# built for macOS and run against its StoreKit configuration, RATA itself
+# built for the iOS Simulator and run there, with its self-test and
+# screenshots, and RATA built for a device as a store's build would be,
+# unsigned, whose program the privacy manifest is checked against.
 
 on:
   push:
@@ -171,6 +172,51 @@ jobs:
       - name: The desktop shell still compiles for macOS
         run: cargo check --all-targets
         working-directory: desktop/rata-app/src-tauri
+
+  # RATA's StoreKit code on its own (plugins/storekit/store, the Swift
+  # package RATAStore, which the iOS builds below compile into the app):
+  # built for macOS, as a later Mac App Store build would use it, then run
+  # against ios/RATA.storekit in StoreKit's test environment, inside the
+  # small Mac app plugins/storekit/testing makes for it (that environment
+  # serves an app, never a Swift package's own tests). The products load
+  # from the configuration; a purchase is bought with Apple's signed record
+  # and finished once; a failure says why; Ask to Buy is pending and its
+  # approval reaches the listener; a purchase made before anything listens
+  # waits for it; a refund is heard as revoked.
+  storekit:
+    name: StoreKit code against RATA.storekit
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The newest Xcode this image has
+        run: |
+          xcode=$(python3 desktop/rata-app/ios/newest-xcode.py)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        timeout-minutes: 10
+        run: brew install xcodegen
+
+      - name: RATAStore builds for macOS
+        run: swift build --package-path desktop/rata-app/plugins/storekit/store
+
+      - name: RATAStore against RATA.storekit, in a host app
+        working-directory: desktop/rata-app/plugins/storekit/testing
+        run: |
+          xcodegen generate --spec project.yml
+          xcodebuild test -project StoreTesting.xcodeproj -scheme StoreTests \
+            -destination 'platform=macOS' -derivedDataPath build \
+            -resultBundlePath "$RUNNER_TEMP/StoreTests.xcresult"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: storekit-tests
+          path: ${{ runner.temp }}/StoreTests.xcresult
+          retention-days: 14
 
   # RATA itself in the iOS Simulator. The Xcode project is made afresh from
   # the committed sources on every run (`tauri ios init`, then

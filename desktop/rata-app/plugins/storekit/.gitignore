@@ -7,3 +7,9 @@ permissions/
 ios/.build/
 ios/.swiftpm/
 ios/Package.resolved
+store/.build/
+store/.swiftpm/
+store/Package.resolved
+# The project testing/project.yml makes, and what Xcode builds there.
+testing/*.xcodeproj/
+testing/build/

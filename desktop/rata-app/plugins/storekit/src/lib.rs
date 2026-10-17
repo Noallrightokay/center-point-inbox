@@ -1,5 +1,8 @@
-//! Buying RATA in the iPhone app: Apple's StoreKit 2, in Swift (ios/), as a
-//! Tauri plugin that RATA's own Rust calls and the page never does.
+//! Buying RATA in the iPhone app: Apple's StoreKit 2, in Swift, as a Tauri
+//! plugin that RATA's own Rust calls and the page never does. What talks to
+//! StoreKit is the Swift package RATAStore (store/), which imports no Tauri
+//! and builds for macOS too, for a later Mac App Store build; ios/ is the
+//! Tauri glue around it.
 //!
 //! App Store rule 3.1.1 lets an iPhone app sell itself only through Apple's
 //! In-App Purchase, so RATA for iOS buys and restores its subscriptions here.

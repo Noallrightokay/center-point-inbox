@@ -2,8 +2,9 @@
 //!
 //! App Store rule 3.1.1 lets an iPhone app sell a paid plan only through
 //! Apple's In-App Purchase, never by a licence key. So RATA for iOS buys and
-//! restores its subscriptions with StoreKit (the Swift plugin in
-//! `plugins/storekit`), and mailrata.org turns what StoreKit says the
+//! restores its subscriptions with StoreKit (`plugins/storekit`: the Swift
+//! package RATAStore talks to StoreKit, and a Tauri plugin hands it RATA's
+//! commands on iOS), and mailrata.org turns what StoreKit says the
 //! customer is entitled to into RATA's ordinary licence
 //! (`/api/licence/apple`, which checks Apple's signature on each
 //! transaction). The licence is the one `licence.rs` checks offline, and it
@@ -549,6 +550,9 @@ pub struct AppStore<C> {
     /// listener each ask mailrata.org, keep and finish under this, so two
     /// never race to keep a licence or to finish the same transaction.
     one: tokio::sync::Mutex<()>,
+    /// Whether the Swift side has taken the listener's channel, so that
+    /// what `Transaction.updates` brings reaches RATA (the smoke check).
+    listening: std::sync::atomic::AtomicBool,
 }
 
 impl<C: Call> AppStore<C> {
@@ -557,7 +561,14 @@ impl<C: Call> AppStore<C> {
             kit: Kit { call },
             server,
             one: tokio::sync::Mutex::new(()),
+            listening: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Whether `listen` has been answered: each transaction StoreKit hands
+    /// over by itself now reaches RATA.
+    pub fn listening(&self) -> bool {
+        self.listening.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// What RATA sells, as StoreKit offers it here: Pro, then Base, with
@@ -655,7 +666,10 @@ impl<C: Call> AppStore<C> {
     /// Where `Transaction.updates` should go: a channel of RATA's
     /// (`tauri::ipc::Channel`), as JSON.
     pub async fn listen(&self, handler: Value) -> Result<(), String> {
-        self.kit.listen(handler).await
+        self.kit.listen(handler).await?;
+        self.listening
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     /// `first`, then what the customer is entitled to now. Should StoreKit
@@ -803,42 +817,54 @@ pub async fn store_renew(app: tauri::AppHandle) -> Answer {
     Answer::unavailable()
 }
 
-/// The smoke build's check (`smoke`): the StoreKit plugin is loaded and
-/// answers RATA's question for the products. A Simulator started by simctl
-/// has no StoreKit configuration and no App Store account, so none may come
-/// back; that it answers at all is what is checked.
+/// The smoke build's check (`smoke`): the StoreKit plugin is loaded, has
+/// taken the channel for what `Transaction.updates` brings (waited for, up
+/// to ten seconds), and answers RATA's question for the products. A
+/// Simulator started by simctl has no StoreKit configuration and no App
+/// Store account, so none may come back; that it answers at all is what is
+/// checked.
 #[cfg(feature = "smoke")]
 pub async fn smoke_check(app: &tauri::AppHandle) -> crate::smoke::Check {
     #[cfg(target_os = "ios")]
-    let answer = match ios::shop(app) {
-        Some((shop, _)) => tokio::time::timeout(Duration::from_secs(30), shop.products())
-            .await
-            .ok(),
-        None => None,
+    let (answer, listening) = match ios::shop(app) {
+        Some((shop, _)) => {
+            for _ in 0..20 {
+                if shop.listening() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let answer = tokio::time::timeout(Duration::from_secs(30), shop.products())
+                .await
+                .ok();
+            (answer, shop.listening())
+        }
+        None => (None, false),
     };
     #[cfg(not(target_os = "ios"))]
-    let answer = {
+    let (answer, listening) = {
         let _ = app;
-        Some(Answer::unavailable())
+        (Some(Answer::unavailable()), false)
     };
-    smoke_judged(answer.as_ref(), cfg!(target_os = "ios"))
+    smoke_judged(answer.as_ref(), listening, cfg!(target_os = "ios"))
 }
 
 #[cfg(feature = "smoke")]
-fn smoke_judged(answer: Option<&Answer>, ios: bool) -> crate::smoke::Check {
+fn smoke_judged(answer: Option<&Answer>, listening: bool, ios: bool) -> crate::smoke::Check {
     let detail = match answer {
         None => {
-            json!({ "error": "the StoreKit plugin did not answer within 30 seconds, or is not loaded" })
+            json!({ "error": "the StoreKit plugin did not answer within 30 seconds, or is not loaded", "listening": listening })
         }
         Some(a) => json!({
             "available": a.available,
+            "listening": listening,
             "products": a.products.as_ref().map(|p| p.iter().map(|o| o.product.id.clone()).collect::<Vec<_>>()),
             "said": a.message,
         }),
     };
     crate::smoke::Check {
         name: "app store",
-        ok: answer.is_some_and(|a| a.available == ios),
+        ok: answer.is_some_and(|a| a.available == ios) && listening == ios,
         detail,
     }
 }
@@ -1996,11 +2022,17 @@ mod tests {
                 "{handler}"
             );
 
+            // Listening only once the Swift side has taken the channel.
+            let kit = StandIn::new().then("listen", Err("not now".into()));
+            let refused = shop(&kit, "http://127.0.0.1:9/");
+            assert!(refused.listen(handler.clone()).await.is_err());
+            assert!(!refused.listening());
+
             let kit = StandIn::new().then("listen", Ok(Value::Null));
-            shop(&kit, "http://127.0.0.1:9/")
-                .listen(handler.clone())
-                .await
-                .unwrap();
+            let listening = shop(&kit, "http://127.0.0.1:9/");
+            assert!(!listening.listening());
+            listening.listen(handler.clone()).await.unwrap();
+            assert!(listening.listening());
             assert_eq!(
                 kit.asked.lock().unwrap()[0],
                 ("listen", json!({ "handler": handler }))
@@ -2016,18 +2048,91 @@ mod tests {
         });
     }
 
+    /// On iOS the plugin must answer for the products (none, in a Simulator
+    /// simctl started) and must have taken the listener's channel; off iOS
+    /// the App Store is not available and nothing listens.
     #[cfg(feature = "smoke")]
     #[test]
-    fn the_smoke_check_passes_when_the_plugin_answers_on_ios() {
+    fn the_smoke_check_passes_when_the_plugin_answers_and_listens_on_ios() {
         let listed = Answer {
             available: true,
             products: Some(vec![]),
             message: Some("no products".into()),
             ..Answer::default()
         };
-        assert!(smoke_judged(Some(&listed), true).ok);
-        assert!(!smoke_judged(None, true).ok);
-        assert!(!smoke_judged(Some(&Answer::unavailable()), true).ok);
-        assert!(smoke_judged(Some(&Answer::unavailable()), false).ok);
+        let passed = smoke_judged(Some(&listed), true, true);
+        assert!(passed.ok);
+        assert_eq!(passed.detail["listening"], true);
+        assert!(!smoke_judged(Some(&listed), false, true).ok);
+        assert!(!smoke_judged(None, true, true).ok);
+        assert!(!smoke_judged(Some(&Answer::unavailable()), true, true).ok);
+        assert!(smoke_judged(Some(&Answer::unavailable()), false, false).ok);
+        assert!(!smoke_judged(Some(&Answer::unavailable()), true, false).ok);
+    }
+
+    /// What talks to StoreKit (plugins/storekit/store, the Swift package
+    /// RATAStore) stands apart from Tauri's glue, so that a later Mac App
+    /// Store build can use it as it is: it imports Foundation and StoreKit
+    /// alone, names macOS 12 beside iOS 15, and depends on no other
+    /// package; the iOS plugin depends on it and leaves StoreKit's
+    /// transactions to it; and the Mac tests of it (plugins/storekit/testing)
+    /// read the configuration that is really there.
+    #[test]
+    fn the_storekit_code_stands_apart_from_tauri() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins/storekit");
+        let read = |path: &str| std::fs::read_to_string(plugin.join(path)).unwrap();
+
+        let package = read("store/Package.swift");
+        assert!(package.contains(".iOS(.v15)"), "{package}");
+        assert!(package.contains(".macOS(.v12)"), "{package}");
+        assert!(
+            !package.contains(".package("),
+            "RATAStore depends on nothing"
+        );
+        let mut files = 0;
+        for entry in std::fs::read_dir(plugin.join("store/Sources/RATAStore")).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines().filter(|l| l.starts_with("import ")) {
+                assert!(
+                    matches!(line, "import Foundation" | "import StoreKit"),
+                    "{}: {line}",
+                    path.display()
+                );
+            }
+            files += 1;
+        }
+        assert!(files > 0, "RATAStore has no Swift");
+
+        let glue_package = read("ios/Package.swift");
+        assert!(
+            glue_package.contains(r#".package(name: "RATAStore", path: "../store")"#),
+            "{glue_package}"
+        );
+        assert!(glue_package.contains(r#".byName(name: "RATAStore")"#));
+        let glue = read("ios/Sources/StoreKitPlugin.swift");
+        assert!(glue.contains("\nimport RATAStore\n"));
+        let code: Vec<&str> = glue
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect();
+        assert!(
+            !code.iter().any(|l| l.contains("Transaction.")),
+            "the iOS glue reads StoreKit's transactions itself"
+        );
+
+        let project = read("testing/project.yml");
+        let config = project
+            .lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix("- path: ")
+                    .filter(|p| p.ends_with("RATA.storekit"))
+            })
+            .expect("testing/project.yml names RATA.storekit");
+        assert!(
+            plugin.join("testing").join(config).is_file(),
+            "testing/project.yml names {config}, which is not there"
+        );
     }
 }
