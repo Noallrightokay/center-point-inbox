@@ -121,6 +121,10 @@ pub struct Page {
     /// The view asked for, and whether it is the one showing.
     pub view: Option<String>,
     pub shown: Option<bool>,
+    /// Whether the page is shown in dark appearance
+    /// (`prefers-color-scheme: dark`), which ios/run-smoke.sh holds to
+    /// what the Simulator was set to.
+    pub dark: bool,
     pub agent: String,
     pub after_ms: f64,
 }
@@ -370,6 +374,7 @@ const PAGE_SCRIPT: &str = r#"(() => {
       errors,
       view: VIEW,
       shown,
+      dark: matchMedia('(prefers-color-scheme: dark)').matches,
       agent: navigator.userAgent,
       afterMs: Date.now() - started,
     } }).catch(() => {});
@@ -977,6 +982,14 @@ mod tests {
         assert!(set.contains("const VIEW = \"set\";"));
         assert!(!set.contains("__RATA_SMOKE_VIEW__"));
         assert!(set.contains("'smoke_page'"));
+        // The appearance the page is shown in, which run-smoke.sh holds to
+        // the Simulator's; a report from before the field reads as light.
+        assert!(set.contains("dark: matchMedia('(prefers-color-scheme: dark)').matches"));
+        let page: Page =
+            serde_json::from_value(json!({ "path": "app.html", "dark": true })).unwrap();
+        assert!(page.dark);
+        let page: Page = serde_json::from_value(json!({ "path": "app.html" })).unwrap();
+        assert!(!page.dark);
     }
 
     /// An entry in a map, which can be made to misbehave. Its class is what
