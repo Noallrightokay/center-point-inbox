@@ -87,7 +87,10 @@ your computer.
   password, and a long token (usual for work accounts) also makes entries
   under `org.mailrata.desktop.oauth-piece`.
 - **The password is NOT in RATA's own file.** Open `mailboxes.json`:
-  - Windows: `%APPDATA%\org.mailrata.desktop\`
+  - Windows: `%LOCALAPPDATA%\org.mailrata.desktop\` (paste it into
+    Explorer's address bar). Up to v0.1.51 it was in
+    `%APPDATA%\org.mailrata.desktop\`; the first start of a later version
+    moves it and removes the old copy.
   - macOS: `~/Library/Application Support/org.mailrata.desktop/`
   - Linux: `~/.local/share/org.mailrata.desktop/`
 
@@ -96,6 +99,18 @@ your computer.
   app password; zero matches is correct. **If you find it, report that
   first: it is the most serious bug possible here.** This file also holds
   your licence key, so never paste it, attach it or screenshot it anywhere.
+  Beside it you may see `mailboxes.lock`, which keeps a second copy of RATA
+  from opening the same list (expected), and on Windows, for a while after
+  the move, `mailboxes.json.moved`.
+
+**Windows on a work network (a profile that follows you between PCs).**
+From v0.1.52 RATA keeps the mailbox list, your passwords and its sign-ins
+on the PC they were made on, even where your Windows profile roams. So the
+first time you start RATA on a second PC that shared the old list, it may
+open with no mailboxes and ask for your licence key: link your mailboxes
+and paste the key again there, once. That is expected, not lost mail: mail
+stays on your mail server. While another PC on the same profile still runs
+v0.1.51 or older, it may ask you to link a mailbox again too.
 
 And one more: in **Settings → Linked accounts**, press **Remove** on a
 mailbox, then check its keychain entry is gone too (for a Microsoft mailbox,

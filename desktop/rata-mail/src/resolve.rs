@@ -194,9 +194,11 @@ impl Resolver {
             .collect()
     }
 
+    /// Never a CNAME question: the alias the system hands back on the way
+    /// to the name's addresses (`dns_sd::alias`).
     async fn cname_answer(&self, name: &str) -> Option<String> {
-        let found = dns_sd::ask(name, dns_sd::CNAME).await;
-        found.iter().map(Vec::as_slice).find_map(records::cname)
+        let alias = dns_sd::alias(name).await?;
+        records::cname(&alias)
     }
 }
 
@@ -222,13 +224,13 @@ impl Resolver {
         self.txt_answers(name).await
     }
 
-    /// Where a name is an alias for, if it is one: the first CNAME answer,
-    /// which is the name's own record. A failed lookup is no alias.
+    /// Where a name is an alias for, if it is one: the name's own CNAME
+    /// record. A failed lookup is no alias.
     ///
-    /// Not for a name RATA then connects to or asks anything else about: on
-    /// iOS, where every question goes to the system's resolver, a CNAME
-    /// question about a name with no CNAME record holds up later questions
-    /// that reach that name, its addresses among them (`crate::dns_sd`).
+    /// On iOS this is never a CNAME question, which would leave the system's
+    /// resolver holding up later questions that reach the name, from RATA
+    /// or any other app: the system follows the alias on the way to the
+    /// name's addresses, and hands it back (`crate::dns_sd`).
     pub async fn cname(&self, name: &str) -> Option<String> {
         let target = self.cname_answer(name).await?;
         Some(target.trim_end_matches('.').to_string())
@@ -605,12 +607,27 @@ async fn found_elsewhere<D: Lookup + Sync>(dns: &D, domain: &str) -> Vec<Candida
     out
 }
 
-/// A DNS that answers from a script, and remembers what it was asked.
+/// A DNS that answers from a script, and remembers what it was asked; and a
+/// [`Resolver`] whose name server answers every address question one way.
+///
+/// The second half points hickory at a name server of its own, so it is
+/// left out of a build that sets `system_dns` (declared in build.rs), which
+/// looks names up through the system's resolver, one that cannot be pointed
+/// anywhere. The tests that use it carry the same gate.
 #[cfg(test)]
 pub(crate) mod scripted {
+    #[cfg(not(system_dns))]
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket};
     use std::sync::Mutex;
 
+    #[cfg(not(system_dns))]
+    use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+    #[cfg(not(system_dns))]
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
+
     use super::Lookup;
+    #[cfg(not(system_dns))]
+    use super::{HickoryResolver, Resolver};
 
     #[derive(Default)]
     pub(crate) struct Dns {
@@ -675,6 +692,62 @@ pub(crate) mod scripted {
                 .find(|(n, _)| n == name)
                 .map(|(_, t)| t.clone())
         }
+    }
+
+    /// A [`Resolver`] whose name server answers every AAAA question with
+    /// `ip` and every other question with nothing: what a hostile name
+    /// server, or DNS64, can say about any name. The server is a real one
+    /// on 127.0.0.1, so the answer reaches the guard through hickory exactly
+    /// as the machine's own resolver's would, on every path that dials.
+    #[cfg(not(system_dns))]
+    pub(crate) fn answering(ip: Ipv6Addr) -> Resolver {
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = sock.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                if let Some(answer) = answer(&buf[..n], ip) {
+                    let _ = sock.send_to(&answer, from);
+                }
+            }
+        });
+        let mut udp = ConnectionConfig::udp();
+        udp.port = port;
+        let server = NameServerConfig::new(IpAddr::V4(Ipv4Addr::LOCALHOST), true, vec![udp]);
+        let inner = HickoryResolver::builder_with_config(
+            ResolverConfig::from_name_servers(vec![server]),
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .unwrap();
+        Resolver { inner }
+    }
+
+    /// The reply to one query: its own header and question back, an AAAA
+    /// question answered with `ip`, any other with no records.
+    #[cfg(not(system_dns))]
+    fn answer(query: &[u8], ip: Ipv6Addr) -> Option<Vec<u8>> {
+        // The name runs from byte 12 to a zero length; type and class follow.
+        let mut end = 12;
+        loop {
+            let len = usize::from(*query.get(end)?);
+            end += 1 + len;
+            if len == 0 {
+                break;
+            }
+        }
+        let aaaa = u16::from_be_bytes([*query.get(end)?, *query.get(end + 1)?]) == 28;
+        let mut out = query.get(..end + 4)?.to_vec();
+        out[2] = 0x80 | (query[2] & 0x79); // a response, same opcode and RD
+        out[3] = 0x80; // recursion available, no error
+        out[6..8].copy_from_slice(&u16::from(aaaa).to_be_bytes());
+        out[8..12].fill(0); // no authority, no additional records
+        if aaaa {
+            // The name by pointer to the question, AAAA, IN, a minute, 16 bytes.
+            out.extend_from_slice(&[0xc0, 12, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
+            out.extend_from_slice(&ip.octets());
+        }
+        Some(out)
     }
 }
 
@@ -850,6 +923,37 @@ mod tests {
             );
             let missing = format!("nx-{}.invalid", std::process::id());
             assert_eq!(check_host(&r, &missing).await, HostVerdict::NotFound);
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_nat64_answer_is_judged_by_the_ipv4_address_inside() {
+        rt().block_on(async {
+            // An IPv4-only mail host seen from an IPv6-only network with
+            // DNS64: the address handed back is the very one judged.
+            let ip: std::net::Ipv6Addr = "64:ff9b::808:808".parse().unwrap();
+            let r = scripted::answering(ip);
+            assert_eq!(
+                resolve_public(&r, "imap.dns64.test").await,
+                Ok(("imap.dns64.test".to_string(), vec![IpAddr::V6(ip)]))
+            );
+            // The same answer wrapping somewhere private.
+            for inside in [
+                "64:ff9b::7f00:1",
+                "64:ff9b::a00:1",
+                "64:ff9b::a9fe:a9fe",
+                "64:ff9b::6440:1",
+                "64:ff9b::c0a8:101",
+                "64:ff9b:1::a00:1",
+            ] {
+                let r = scripted::answering(inside.parse().unwrap());
+                assert_eq!(
+                    resolve_public(&r, "imap.dns64.test").await,
+                    Err(HostVerdict::NotPublic),
+                    "{inside}"
+                );
+            }
         });
     }
 
@@ -1448,15 +1552,49 @@ mod tests {
         fn a_cname_comes_from_the_system() {
             rt().block_on(async {
                 let r = system();
+                let quick = |what: &str, t: Instant| {
+                    let took = t.elapsed();
+                    assert!(took < QUICK, "{what}: {took:?}");
+                };
                 // microsoft.com's autodiscover name is an alias for
-                // Outlook's: L1's evidence of Microsoft 365.
+                // Outlook's: L1's evidence of Microsoft 365. It is the
+                // first of a chain of several, and only the name's own
+                // alias is taken.
+                let t = Instant::now();
                 let alias = r.cname("autodiscover.microsoft.com").await;
+                quick("autodiscover.microsoft.com", t);
                 assert_eq!(alias.as_deref(), Some("autodiscover.outlook.com"));
                 assert!(alias.as_deref().and_then(autodiscover_provider).is_some());
-                // A name that exists but is no alias: nothing, at once.
-                let started = Instant::now();
-                assert_eq!(r.cname("gmail.com").await, None);
-                assert!(started.elapsed() < QUICK, "{:?}", started.elapsed());
+                let (alias, ended) = dns_sd::aliased("autodiscover.microsoft.com").await;
+                assert!(
+                    alias.is_some() && ended == dns_sd::Ended::Answered,
+                    "{ended:?}"
+                );
+                // It was an address question, never a CNAME one, so what
+                // is asked about the name next is answered at once.
+                let t = Instant::now();
+                let addrs = system_addresses("autodiscover.microsoft.com").await;
+                quick("addresses of autodiscover.microsoft.com", t);
+                assert!(!addrs.is_empty());
+
+                // Names that exist but are no alias: nothing, at once.
+                // github.com's own records are addresses, and www.github.com
+                // is an alias for it: a host reached through a name whose
+                // alias was asked about, which a CNAME question about
+                // github.com would leave the system holding up.
+                for name in ["gmail.com", "github.com"] {
+                    let t = Instant::now();
+                    assert_eq!(r.cname(name).await, None, "{name}");
+                    quick(name, t);
+                }
+                let t = Instant::now();
+                let addrs = system_addresses("www.github.com").await;
+                quick("addresses of www.github.com", t);
+                assert!(!addrs.is_empty());
+                assert_eq!(
+                    r.cname("www.github.com").await.as_deref(),
+                    Some("github.com")
+                );
             });
         }
 
@@ -1498,15 +1636,17 @@ mod tests {
                 let r = system();
                 let pid = std::process::id();
                 for name in [format!("nx-{pid}.gmail.com"), format!("nx-{pid}.invalid")] {
-                    // Each record type is answered "no such name", not
-                    // waited out: fresh from the network the first time,
-                    // from the system's cache the second, which is believed
-                    // once nothing fresher comes (`dns_sd::SETTLE`).
+                    // Each question discovery asks is answered "no such
+                    // name", not waited out: fresh from the network the
+                    // first time, from the system's cache the second, which
+                    // is believed once nothing fresher comes
+                    // (`dns_sd::SETTLE`). The autodiscover name's alias is
+                    // an address question (`dns_sd::aliased`).
                     for (what, rrtype, asked) in [
                         ("MX", dns_sd::MX, name.clone()),
                         ("SRV", dns_sd::SRV, format!("_imaps._tcp.{name}")),
                         ("TXT", dns_sd::TXT, name.clone()),
-                        ("CNAME", dns_sd::CNAME, format!("autodiscover.{name}")),
+                        ("A", dns_sd::A, format!("autodiscover.{name}")),
                     ] {
                         for time in ["first", "second"] {
                             let t = Instant::now();
@@ -1521,18 +1661,28 @@ mod tests {
                             );
                         }
                     }
-                    // As discovery asks: the CNAME of the domain's
-                    // autodiscover name, never of a host it dials (see
-                    // `dns_sd`, on what a CNAME question does to one).
+                    // As discovery asks, and then the addresses of the
+                    // domain and of its autodiscover name, each at once:
+                    // no CNAME question was asked about either (`dns_sd`,
+                    // on what one does to the questions after it).
                     let auto = format!("autodiscover.{name}");
                     assert!(r.mx(&name).await.is_empty(), "{name}");
                     assert_eq!(r.srv_imaps(&name).await, None, "{name}");
                     assert!(r.txt(&name).await.is_empty(), "{name}");
-                    assert_eq!(r.cname(&auto).await, None, "{auto}");
                     let t = Instant::now();
-                    assert_eq!(check_host(&r, &name).await, HostVerdict::NotFound);
+                    let (alias, ended) = dns_sd::aliased(&auto).await;
                     let took = t.elapsed();
-                    assert!(took < QUICK, "addresses of {name}: {took:?}");
+                    assert!(
+                        alias.is_none() && ended == dns_sd::Ended::Answered && took < QUICK,
+                        "alias of {auto}: {ended:?} after {took:?}"
+                    );
+                    assert_eq!(r.cname(&auto).await, None, "{auto}");
+                    for host in [&name, &auto] {
+                        let t = Instant::now();
+                        assert_eq!(check_host(&r, host).await, HostVerdict::NotFound);
+                        let took = t.elapsed();
+                        assert!(took < QUICK, "addresses of {host}: {took:?}");
+                    }
                 }
             });
         }
@@ -1642,36 +1792,55 @@ mod tests {
             // says a name does not exist. No public mail server is there,
             // so none of discovery's questions is asked, each ends at once,
             // and every server it suggests is refused by the guard without
-            // a lookup.
+            // a lookup. The same for a domain with `_` in it, whose
+            // questions could otherwise slip past the guard's reading of
+            // host names, and for an SPF `redirect=` any domain's owner can
+            // write, `_spf.local` or `loca\l` (dns_sd reads `\l` as `l`).
             rt().block_on(async {
                 let r = system();
                 let t = Instant::now();
-                for (rrtype, name) in [
-                    (dns_sd::SRV, "_imaps._tcp.printer.local"),
-                    (dns_sd::MX, "printer.local"),
-                    (dns_sd::TXT, "printer.local"),
-                    (dns_sd::CNAME, "autodiscover.printer.local"),
+                for domain in ["printer.local", "a_b.local", "corp_x.internal"] {
+                    for (rrtype, name) in [
+                        (dns_sd::SRV, format!("_imaps._tcp.{domain}")),
+                        (dns_sd::MX, domain.to_string()),
+                        (dns_sd::TXT, domain.to_string()),
+                        (dns_sd::A, format!("autodiscover.{domain}")),
+                    ] {
+                        let (found, ended) = dns_sd::asked(&name, rrtype).await;
+                        assert!(
+                            found.is_empty() && ended == dns_sd::Ended::NotAsked,
+                            "{name}: {} records, {ended:?}",
+                            found.len()
+                        );
+                    }
+                    let auto = format!("autodiscover.{domain}");
+                    let (alias, ended) = dns_sd::aliased(&auto).await;
+                    assert!(
+                        alias.is_none() && ended == dns_sd::Ended::NotAsked,
+                        "{auto}"
+                    );
+                    match discover(&r, &format!("someone@{domain}"), None).await {
+                        Discovery::Candidates { hosts, .. } => {
+                            assert!(!hosts.is_empty());
+                            for c in &hosts {
+                                let verdict = check_host(&r, &c.host).await;
+                                assert!(!verdict.is_allowed(), "{}: {verdict:?}", c.host);
+                            }
+                        }
+                        other => panic!("{domain}: {other:?}"),
+                    }
+                }
+                for redirect in [
+                    "_spf.local",
+                    "_spf.acme.local",
+                    "acme.loca\\l",
+                    "_spf.acme.loca\\108",
                 ] {
-                    let (found, ended) = dns_sd::asked(name, rrtype).await;
+                    let (found, ended) = dns_sd::asked(redirect, dns_sd::TXT).await;
                     assert!(
                         found.is_empty() && ended == dns_sd::Ended::NotAsked,
-                        "{name}: {} records, {ended:?}",
-                        found.len()
+                        "{redirect}: {ended:?}"
                     );
-                }
-                match discover(&r, "someone@printer.local", None).await {
-                    Discovery::Candidates { hosts, .. } => {
-                        assert!(!hosts.is_empty());
-                        for c in &hosts {
-                            assert_eq!(
-                                check_host(&r, &c.host).await,
-                                HostVerdict::NotPublic,
-                                "{}",
-                                c.host
-                            );
-                        }
-                    }
-                    other => panic!("{other:?}"),
                 }
                 let took = t.elapsed();
                 assert!(took < Duration::from_secs(1), "{took:?}");

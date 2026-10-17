@@ -5826,6 +5826,98 @@ mod tests {
         });
     }
 
+    /// NAT64 spellings of 127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1
+    /// and 192.168.1.1, and one in the local-use prefix.
+    #[cfg(not(system_dns))] // only the tests below use it
+    const NAT64_INSIDE: [&str; 6] = [
+        "64:ff9b::7f00:1",
+        "64:ff9b::a00:1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::6440:1",
+        "64:ff9b::c0a8:101",
+        "64:ff9b:1::a00:1",
+    ];
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn linking_refuses_a_nat64_answer_that_wraps_a_private_address() {
+        rt().block_on(async {
+            for inside in NAT64_INSIDE {
+                let r = crate::resolve::scripted::answering(inside.parse().unwrap());
+                // Every server discovery finds for the domain, and one typed.
+                for typed in [None, Some("mail.dns64.test")] {
+                    match verify(&r, "me@dns64.test", "x", typed).await {
+                        Verify::Failed(why) => {
+                            assert!(why.contains("private network"), "{inside}: {why}")
+                        }
+                        other => panic!("{inside} {typed:?}: {other:?}"),
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_refresh_refuses_a_nat64_answer_that_wraps_a_private_address() {
+        rt().block_on(async {
+            for inside in NAT64_INSIDE {
+                let r = crate::resolve::scripted::answering(inside.parse().unwrap());
+                match fetch_newest(&r, &acct("imap.dns64.test"), 15, &[]).await {
+                    Err(Fetched::Host(why)) => {
+                        assert!(why.contains("private network"), "{inside}: {why}")
+                    }
+                    other => panic!("{inside}: {other:?}"),
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn the_watch_refuses_a_nat64_answer_that_wraps_a_private_address() {
+        rt().block_on(async {
+            for inside in NAT64_INSIDE {
+                let r = crate::resolve::scripted::answering(inside.parse().unwrap());
+                match watch(&r, &acct("imap.dns64.test")).await.err() {
+                    Some(Watched::Host(why)) => {
+                        assert!(why.contains("private network"), "{inside}: {why}")
+                    }
+                    other => panic!("{inside}: {other:?}"),
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_refresh_dials_a_nat64_answer_that_wraps_a_public_address() {
+        // 8.8.8.8 as DNS64 gives it. The guard lets it by, so the refresh goes
+        // on to the socket: on a machine with no IPv6 route that fails at once
+        // as a network failure, and where there is one the dial may still be
+        // going when the test stops waiting. A refusal would be back at once,
+        // since nothing is dialled before the guard has judged, and the answer
+        // is already in the resolver's cache from the lookup just before.
+        rt().block_on(async {
+            let ip: std::net::Ipv6Addr = "64:ff9b::808:808".parse().unwrap();
+            let r = crate::resolve::scripted::answering(ip);
+            let host = "imap.dns64.test";
+            assert_eq!(
+                resolve_public(&r, host).await,
+                Ok((host.to_string(), vec![IpAddr::V6(ip)]))
+            );
+            let mailbox = acct(host);
+            let refresh = fetch_newest(&r, &mailbox, 15, &[]);
+            match timeout(Duration::from_secs(3), refresh).await {
+                Err(_) => {} // still dialling
+                Ok(Err(Fetched::Net(why))) => {
+                    assert!(!why.contains("No mail server answers"), "{why}")
+                }
+                Ok(other) => panic!("{other:?}"),
+            }
+        });
+    }
+
     #[test]
     fn a_private_override_is_refused_rather_than_dialled() {
         rt().block_on(async {

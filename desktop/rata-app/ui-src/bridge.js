@@ -693,9 +693,12 @@
 
        Every refusal is a rejected { service, kind, error }; kind is one of
        unknown, unavailable, unlicensed, plan, not-found, not-connected,
-       gone, refused, offline, too-large, needs-confirmation, disk, partial.
-       The page shows `error` and acts on `kind` only for
-       needs-confirmation and partial.
+       gone, refused, offline, too-large, needs-confirmation, disk, partial,
+       unsure. The page shows `error` and acts on `kind` only for
+       needs-confirmation, partial (above) and unsure: a cloud_save whose
+       last part went and whose answer was lost (OneDrive, Google Drive), so
+       the file may be there; the page says so without "Could not save" and
+       reads the folder on show again.
        Everything that comes back (names, accounts, notes, paths, `where`,
        `error`) is the provider's or a stranger's text: the page draws it
        with textContent only. */

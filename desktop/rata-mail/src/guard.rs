@@ -109,8 +109,23 @@ fn v6_public(ip: Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return false;
     }
+    if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        // 64:ff9b::/96 — NAT64's well-known prefix carries its v4 in the last
+        // two groups. On an IPv6-only network with DNS64 this is the only
+        // answer an IPv4-only mail host has, and the gateway connects to the
+        // v4 inside, so that is what is judged.
+        return v4_public(Ipv4Addr::new(
+            (seg[6] >> 8) as u8,
+            seg[6] as u8,
+            (seg[7] >> 8) as u8,
+            seg[7] as u8,
+        ));
+    }
     if seg[0] == 0x64 && seg[1] == 0xff9b {
-        return false; // 64:ff9b::/96 — NAT64, another v4 in disguise
+        // The rest of 64:ff9b::/32, the local-use 64:ff9b:1::/48 among it
+        // (RFC 8215): where its v4 sits depends on the operator's prefix
+        // length, so there is nothing to judge.
+        return false;
     }
     if seg[0] == 0x2002 {
         // 2002::/16 — 6to4 carries its v4 in the next two groups
@@ -132,14 +147,15 @@ fn v6_public(ip: Ipv6Addr) -> bool {
 
 /// Names that never belong to a public mail server, whatever DNS says about
 /// them. Checked before any lookup so a resolver that helpfully answers for
-/// `localhost` cannot get a word in.
+/// `localhost` cannot get a word in. The zones themselves count too, and so
+/// does all of `.arpa` (the reverse zones and `home.arpa`): no mail server is
+/// named there, and on Apple systems the system's resolver answers `local`
+/// and the link-local reverse zones by asking the local network.
 fn is_private_name(host: &str) -> bool {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
-    h == "localhost"
-        || h.ends_with(".localhost")
-        || h.ends_with(".local")
-        || h.ends_with(".internal")
-        || h.ends_with(".home.arpa")
+    ["localhost", "local", "internal", "arpa"]
+        .iter()
+        .any(|zone| h == *zone || h.ends_with(&format!(".{zone}")))
 }
 
 /// Normalise a host as typed, and reject anything that is not a plausible
@@ -287,6 +303,127 @@ mod tests {
         assert_eq!(v("100.128.0.1"), HostVerdict::Allowed);
     }
 
+    /// `v4` as DNS64 synthesises it: the well-known NAT64 prefix,
+    /// `64:ff9b::/96`, with the IPv4 address in the last 32 bits.
+    fn nat64(v4: &str) -> IpAddr {
+        let [a, b, c, d] = v4.parse::<Ipv4Addr>().unwrap().octets();
+        IpAddr::V6(Ipv6Addr::new(
+            0x64,
+            0xff9b,
+            0,
+            0,
+            0,
+            0,
+            u16::from_be_bytes([a, b]),
+            u16::from_be_bytes([c, d]),
+        ))
+    }
+
+    #[test]
+    fn nat64_is_judged_by_the_ipv4_address_inside() {
+        // On an IPv6-only network with DNS64 (Apple's app review network,
+        // T-Mobile US) an IPv4-only mail host answers only like this, and the
+        // gateway connects to the IPv4 address inside.
+        for ok in ["64:ff9b::808:808", "64:ff9b::8.8.8.8", "[64:ff9b::101:101]"] {
+            assert_eq!(v(ok), HostVerdict::Allowed, "{ok} should be allowed");
+        }
+        // 127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1, 192.168.1.1.
+        for bad in [
+            "64:ff9b::7f00:1",
+            "64:ff9b::a00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::6440:1",
+            "64:ff9b::c0a8:101",
+            "64:ff9b::127.0.0.1",
+        ] {
+            assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
+        }
+        // Exactly as the IPv4 address itself is judged, every range the
+        // guard refuses and the public addresses either side of them.
+        for v4 in [
+            "127.0.0.1",
+            "127.255.255.254",
+            "10.0.0.1",
+            "172.16.4.4",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "100.127.255.255",
+            "198.18.0.1",
+            "198.19.0.1",
+            "192.0.0.1",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "224.0.0.1",
+            "239.255.255.250",
+            "240.0.0.1",
+            "255.255.255.255",
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.15.0.1",
+            "172.32.0.1",
+            "100.63.0.1",
+            "100.128.0.1",
+            "192.1.0.1",
+            "198.20.0.1",
+        ] {
+            let ip: IpAddr = v4.parse().unwrap();
+            assert_eq!(is_public(nat64(v4)), is_public(ip), "{}", nat64(v4));
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_nat64_block_is_still_refused() {
+        // 64:ff9b:1::/48 is for an operator's own NAT64 (RFC 8215), where the
+        // IPv4 address sits wherever that operator's prefix length puts it,
+        // so there is nothing to judge. The rest of 64:ff9b::/32 is not
+        // assigned, and a /96 with anything but zeros before the IPv4 address
+        // is not the well-known prefix.
+        for bad in [
+            "64:ff9b:1::808:808",
+            "64:ff9b:1:808:808::",
+            "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+            "64:ff9b:2::808:808",
+            "64:ff9b::1:808:808",
+            "64:ff9b:0:0:1::808:808",
+        ] {
+            assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
+        }
+    }
+
+    #[test]
+    fn the_other_ipv4_embeddings_are_judged_as_before() {
+        // IPv4-mapped (::ffff:0:0/96) and the deprecated IPv4-compatible
+        // (::/96) forms are judged by the IPv4 address inside; `::` and `::1`
+        // are themselves, never 0.0.0.0 and 0.0.0.1.
+        for ok in ["::ffff:808:808", "::ffff:8.8.8.8", "::808:808"] {
+            assert_eq!(v(ok), HostVerdict::Allowed, "{ok} should be allowed");
+        }
+        for bad in ["::ffff:a00:1", "::a00:1", "::7f00:1", "::a9fe:a9fe", "::1"] {
+            assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
+        }
+    }
+
+    #[test]
+    fn a_nat64_answer_is_judged_like_any_other() {
+        // What a hostile resolver can say about a name: one wrapped private
+        // address condemns it, as a plain one does.
+        let public = nat64("8.8.8.8");
+        assert_eq!(check_resolved(&[public]), HostVerdict::Allowed);
+        for inside in ["127.0.0.1", "10.0.0.1", "169.254.169.254", "100.64.0.1"] {
+            assert_eq!(
+                check_resolved(&[public, nat64(inside)]),
+                HostVerdict::NotPublic,
+                "{inside}"
+            );
+            assert_eq!(check_resolved(&[nat64(inside)]), HostVerdict::NotPublic);
+        }
+    }
+
     #[test]
     fn names_that_are_never_public() {
         for bad in [
@@ -296,6 +433,12 @@ mod tests {
             "nas.local",
             "x.home.arpa",
             "a.localhost",
+            "local",
+            "internal",
+            "home.arpa",
+            "1.0.254.169.in-addr.arpa",
+            "b.e.f.ip6.arpa",
+            "arpa",
         ] {
             assert_eq!(v(bad), HostVerdict::NotPublic, "{bad} should be refused");
         }
