@@ -15,12 +15,12 @@
 # System Events when the runner allows that (see mac_title).
 #
 # "Stays up" is the check that matters: the window is built in the app's
-# setup (main.rs), and a setup that fails ends the process, so a process
+# setup (lib.rs), and a setup that fails ends the process, so a process
 # alive after UP seconds has built its window. The log is kept and failed on
 # a panic.
 #
 # Then each one is launched a second time while the first is up: it must
-# find the first (main.rs, review R5) and exit 0 within AGAIN seconds, and
+# find the first (lib.rs, review R5) and exit 0 within AGAIN seconds, and
 # the first must stay up. On Linux single instance hands over through a
 # name on the D-Bus session bus, which every desktop has and a runner does
 # not, so the Linux half runs inside a session bus of its own
@@ -58,7 +58,7 @@ one() {
   FOUND="$(cd "$(dirname "$hits")" && pwd)/$(basename "$hits")"
 }
 
-# A panic is the Rust side giving up; "could not start" is main.rs's own
+# A panic is the Rust side giving up; "could not start" is lib.rs's own
 # last words. Anything else in the log (WebKit's chatter about GPUs under
 # Xvfb, say) is shown but is not a failure.
 clean_log() {
@@ -118,7 +118,7 @@ linux_watch() {
   if [ -z "$title" ]; then fail "$what showed no window named RATA… within ${WAIT} s."
   elif [ "$title" != "$EXPECT" ]; then fail "$what's window is titled \"$title\", not \"$EXPECT\"."
   else say "$what's window: \"$title\"."
-    # fit_to_screen (main.rs): the screen here is a 1366×768 laptop's, and
+    # fit_to_screen (lib.rs): the screen here is a 1366×768 laptop's, and
     # the configured 1280×860 must have been shrunk to fit it.
     geo=$(DISPLAY=:99 xdotool getwindowgeometry --shell "$wid" 2>/dev/null | grep -E '^(WIDTH|HEIGHT)=' | tr '\n' ' ')
     say "$what's window size: ${geo:-unknown}"

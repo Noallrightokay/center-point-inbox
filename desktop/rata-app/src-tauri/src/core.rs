@@ -2900,6 +2900,26 @@ fn hand_fetched(
 /// a workspace export, never anything near this.
 pub const SAVE_MAX: usize = 100 * 1024 * 1024;
 
+/// Where a save goes (an attachment, a file the interface made), from the
+/// folders the system reports. On a computer, the Downloads folder: on
+/// Linux Tauri finds it only through the desktop's `user-dirs.dirs`, which
+/// not every system has (without it, every save failed there), so the
+/// conventional `~/Downloads` stands in. On iOS, the app's own Documents
+/// folder and nothing else: the one folder of an app's that the Files app
+/// shows, once Info.plist says it may (STAGE 3 item 7). A Downloads folder
+/// there is one nobody could ever open.
+pub fn save_folder(
+    ios: bool,
+    documents: Option<PathBuf>,
+    downloads: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if ios {
+        return documents;
+    }
+    downloads.or_else(|| home.map(|h| h.join("Downloads")))
+}
+
 /// A file the interface made — a converted document, a workspace export —
 /// saved into `dir` (the Downloads folder). The webview does not save a
 /// page's downloads on its own, so without this "Convert & download" did
@@ -3816,6 +3836,33 @@ mod tests {
         let big = vec![0u8; SAVE_MAX + 1];
         assert!(save_file(&dir, "big.bin", &big, &[]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Saves go to Downloads on a computer (`~/Downloads` where the desktop
+    /// names none), and on iOS to the app's Documents folder, which the
+    /// Files app shows, never to a Downloads folder there.
+    #[test]
+    fn a_save_goes_to_downloads_and_on_ios_to_the_apps_documents() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        let home = "/var/mobile/Containers/Data/Application/A1";
+        let docs = "/var/mobile/Containers/Data/Application/A1/Documents";
+        let down = "/var/mobile/Containers/Data/Application/A1/Downloads";
+        assert_eq!(save_folder(true, p(docs), p(down), p(home)), p(docs));
+        assert_eq!(save_folder(true, None, p(down), p(home)), None);
+        assert_eq!(
+            save_folder(
+                false,
+                p("/home/ann/Documents"),
+                p("/home/ann/Dl"),
+                p("/home/ann")
+            ),
+            p("/home/ann/Dl")
+        );
+        assert_eq!(
+            save_folder(false, p("/home/ann/Documents"), None, p("/home/ann")),
+            p("/home/ann/Downloads")
+        );
+        assert_eq!(save_folder(false, None, None, None), None);
     }
 
     /// SEC-9 (F2): a name a file Create file made is recorded under is
