@@ -18,7 +18,8 @@
    long the backups hold it and where to write without a sign-in as the
    privacy policy says them, and work, by keyboard and screen reader,
    against the same stand-in Supabase as the account route's own test. */
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -65,7 +66,8 @@ const isProvider = within(PROVIDERS);
 /* What none of them may say, in its text or in an attribute: a price, a
    price by the month or year, Stripe, the billing portal, the licence
    page, the releases page or an installer, the calls to choose a plan,
-   upgrade, buy, or subscribe or sign in at mailrata.org, that mailrata.org
+   upgrade, buy, or subscribe or sign in (or on) at, to or on mailrata.org,
+   in any of those words' forms, that mailrata.org
    sells RATA or that it is bought "here", and paying with an address or at
    a place. Written here as well as in lib/in-app.js (SELLING), which will
    not make a copy that says one. */
@@ -83,8 +85,8 @@ const BUYING = [
   ['Buy', /\bbuy\b|\bbu(?:ys|ying)\s+(?:(?:a|the|your)\s+)?(?:plans?|subscriptions?|licen[cs]es?|RATA)\b/i],
   ['Sold at mailrata.org', /\b(?:sells?|sold|selling|bought)\b[^.]{0,60}?\bmailrata\.org\b|\bmailrata\.org\b[^.]{0,20}?\b(?:sells?|sold|selling)\b|\b(?:bought|sold|buy)\s+here\b|\b(?:also|too)\s+(?:sold|bought)\b/i],
   ['Pay with or at', /\bpay(?:s|ing)?\s+(?:with|at|on)\b/i],
-  ['Subscribe at mailrata.org', /\bsubscribe\b[^.]{0,40}?\b(?:at|on)\s+mailrata\.org\b/i],
-  ['Sign in at mailrata.org', /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b[^.]{0,20}?\bat\s+mailrata\.org\b/i],
+  ['Subscribe at mailrata.org', /\bsubscri(?:be|bes|bed|bing|ption)\b[^.]{0,40}?\b(?:at|on|to|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
+  ['Sign in at mailrata.org', /\b(?:sign|log)(?:s|ed|ged|ing|ging)?[ -]?(?:in|on)\b[^.]{0,20}?\b(?:at|to|on|into|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
 ];
 const sellsIn = text => BUYING.filter(([, re]) => re.test(text)).map(([what]) => what);
 
@@ -92,7 +94,7 @@ const sellsIn = text => BUYING.filter(([, re]) => re.test(text)).map(([what]) =>
    STORE_CUTS names them; a new one is added here too, by somebody deciding
    the store copy may say those words differently. */
 const CUTS = {
-  help: ['footer', 'get', 'install-steps', 'key', 'write'],
+  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'write'],
   privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
     'how', 'records', 'live', 'pending'],
   terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
@@ -306,6 +308,43 @@ export default async function run(state) {
       }
     }
 
+    console.log('\n— the copies are made when the site is built, and go out as their pages do —');
+    {
+      /* Made by `npm run build`, so a page whose copy cannot be made (a
+         sentence changed under its store wording) fails the build, in CI
+         and on the host, instead of answering 500 once deployed. */
+      let built = {};
+      try { built = JSON.parse(readFileSync(join(SITE, '.next', 'prerender-manifest.json'), 'utf8')).routes || {}; } catch { /* checked below */ }
+      const names = Object.keys(IN_APP_PAGES);
+      check(names.every(n => built[`/in-app/${n}`]), `Next made ${names.map(n => `/in-app/${n}`).join(', ')} at build time`);
+      /* Next would send a page it made at build time with s-maxage of a
+         year, which a cache in between may keep long after the policy
+         changes; proxy.js sends each as the page it is made from goes. */
+      const PAGE_AT = { help: '/help', privacy: '/privacy.html', terms: '/terms.html' };
+      for (const [name, file] of Object.entries(IN_APP_PAGES)) {
+        const [copy, page] = await Promise.all([`/in-app/${name}`, PAGE_AT[name] || `/${file}`]
+          .map(p => fetch(s.url + p, { redirect: 'manual' })));
+        const [a, b] = [copy, page].map(r => r.headers.get('cache-control'));
+        check(copy.status === 200 && page.status === 200 && !!a && a === b && !/s-maxage/.test(a),
+          `/in-app/${name} goes out with its page's Cache-Control: ${JSON.stringify(a)} (${PAGE_AT[name] || file}: ${JSON.stringify(b)})`);
+      }
+      /* Nor do they read public/ while the site runs: a host that starts
+         Next from another folder still serves them. */
+      const away = mkdtempSync(join(tmpdir(), 'rata-elsewhere-'));
+      const s2 = await startServer({ from: away });
+      try {
+        for (const name of names) {
+          const r = await fetch(`${s2.url}/in-app/${name}`, { redirect: 'manual' });
+          const html = await r.text();
+          check(r.status === 200 && html === (pages.get(`/in-app/${name}`) || null),
+            `/in-app/${name} is served the same by a server started from another folder (${r.status})`);
+        }
+      } finally {
+        await s2.stop();
+        rmSync(away, { recursive: true, force: true });
+      }
+    }
+
     console.log('\n— nothing on them, or in what they load, leads to buying —');
     {
       /* Scripts are followed too, as are scripts a script names (the
@@ -396,7 +435,10 @@ export default async function run(state) {
       const badWords = wording.filter(w => !w.id || !sellsIn(visible(w.old)).length || sellsIn(visible(w.now)).length);
       check(wording.length > 0 && badWords.length === 0,
         `${file}: each of its ${wording.length} pieces of store wording replaces words that sell with words that do not${badWords.length ? `: ${badWords.map(w => w.id || w.old).join(', ')}` : ''}`);
-      const badAdds = added.filter(([, put]) => !visible(put) || sellsIn(visible(put)).length);
+      /* Words, or a stylesheet (the help page's gutter on a phone), whose
+         own text sells nothing either. */
+      const badAdds = added.filter(([, put]) => (/^<style\b[^>]*>[^<]*<\/style>$/i.test(put.trim())
+        ? sellsIn(put).length : !visible(put) || sellsIn(visible(put)).length));
       check(badAdds.length === 0, `${file}: what its store copy adds (${added.length}) sells nothing${badAdds.length ? `, but ${badAdds.map(([id]) => id).join(', ')} does` : ''}`);
       /* What a reader of the page's main part sees is the same, word for
          word, but for what the page marks for the store. */
@@ -542,10 +584,17 @@ export default async function run(state) {
       check(/still names a price/.test(threw), `or in a stylesheet's words: "${threw}"`);
       for (const [what, said] of [['sells the plans', 'mailrata.org sells the plans.'], ['bought here', 'Bought here, both renew.'],
         ['also sold', 'Both are also sold in the iPhone app.'], ['pay with', 'Pay with the address on your account.'],
-        ['buying', 'By buying a plan you agree.']]) {
+        ['buying', 'By buying a plan you agree.'], ['signing in at', 'Renew it by signing in at mailrata.org.'],
+        ['sign in to', 'Sign in to mailrata.org for a new key.'], ['log on to', 'Log on to https://mailrata.org to renew.'],
+        ['subscribing through', 'Keep subscribing through mailrata.org.']]) {
         threw = refused('terms', read('terms.html').replace('<h1>Terms of service</h1>', `<h1>Terms of service</h1><p>${said}</p>`));
-        check(/still names (Sold at mailrata\.org|Pay with or at|Buy)/.test(threw), `nor "${what}": "${threw}"`);
+        check(/still names (Sold at mailrata\.org|Pay with or at|Buy|Sign in at mailrata\.org|Subscribe at mailrata\.org)/.test(threw)
+          && sellsIn(said).length > 0, `nor "${what}": "${threw}"`);
       }
+      /* But the deletion page may ask for the account it deletes. */
+      const asks = 'Sign in with your mailrata.org email address and password.';
+      threw = refused('terms', read('terms.html').replace('<h1>Terms of service</h1>', `<h1>Terms of service</h1><p>${asks}</p>`));
+      check(!threw && !sellsIn(asks).length, `while "${asks}" sells nothing${threw ? `: "${threw}"` : ''}`);
       threw = refused('help', read('help.html').replace('with the same details.</p>\n  -->', 'with the same details, or buy RATA Pro.</p>\n  -->'));
       check(/adds as "write" names Buy/.test(threw), `nor what a store copy adds, when it sells: "${threw}"`);
       /* claude/iap-server adds a sentence to the licence paragraph and to
@@ -654,13 +703,14 @@ export default async function run(state) {
 
     console.log('\n— on a phone, 390 px wide, every page keeps its 16 px side gutter —');
     {
-      /* A store build opens these on phones. help.html's layout once took
-         its .wrap's side padding away, so its text touched the screen's
-         edge, on the website and in the copy alike. */
+      /* A store build opens these on phones. help.html's layout takes its
+         .wrap's side padding away, so its text touches the screen's edge;
+         the website's page keeps its look, and its store copy gets the
+         gutter back (in-app:add gutter). */
       const browser = await chromium.launch();
       try {
         const pg = await browser.newPage({ viewport: { width: 390, height: 844 } });
-        for (const path of ['/help', ...START]) {
+        for (const path of START) {
           await pg.goto(s.url + path);
           const m = await pg.evaluate(() => {
             const all = [...document.querySelectorAll('main h1, main h2, main h3, main p, main li, main blockquote, main dl, main aside, main section')]
@@ -736,6 +786,38 @@ async function deletesForReal(check) {
       'the password went to the sign-in service, and nothing was deleted');
     await axe(pg, 'a refused password');
 
+    /* The same refusal a second time (the password mistyped twice, or a
+       field left empty twice) is emptied first and said again, so a screen
+       reader hears it again: the same words put back into an alert are no
+       change it announces. Watched as the alert changes. */
+    const sayAgain = async (what, want) => {
+      await pg.evaluate(() => {
+        const a = document.querySelector('#del-msg');
+        const said = window.__said = [];
+        if (window.__watch) window.__watch.disconnect();
+        window.__watch = new MutationObserver(() => said.push(a.hidden ? '' : a.textContent.trim()));
+        window.__watch.observe(a, { attributes: true, childList: true, characterData: true, subtree: true });
+      });
+      await pg.keyboard.press('Enter');
+      const again = await pg.waitForFunction(w => {
+        const said = window.__said || [];
+        const a = document.querySelector('#del-msg');
+        return said.indexOf('') >= 0 && said.slice(said.indexOf('') + 1).includes(w) && !a.hidden && a.textContent.trim() === w;
+      }, want, { timeout: 5000 }).then(() => true, () => false);
+      const said = await pg.evaluate(() => window.__said);
+      check(again && (await focused(pg)) === 'del-password', `${what}: the alert is emptied, then says ${JSON.stringify(want)} again: ${JSON.stringify(said)}`);
+    };
+    fake.calls = [];
+    await sayAgain('the same wrong password again', 'Invalid login credentials');
+    check(fake.calls.filter(c => c.startsWith('POST /auth/v1/token')).length === 1, 'and the sign-in really was tried again');
+    await pg.keyboard.press('ControlOrMeta+a');
+    await pg.keyboard.press('Backspace');
+    await pg.keyboard.press('Enter');
+    await pg.waitForFunction(() => document.querySelector('#del-msg').textContent.trim() === 'Type your email address and password.');
+    fake.calls = [];
+    await sayAgain('an empty password twice', 'Type your email address and password.');
+    check(!fake.calls.some(c => c.startsWith('POST /auth/v1/token')), 'and nothing went to the sign-in service');
+
     console.log('\n— signed in, it asks once more, and shows the server\'s own refusal —');
     await pg.keyboard.press('ControlOrMeta+a');
     await pg.keyboard.type(fake.password);
@@ -772,6 +854,7 @@ async function deletesForReal(check) {
     const backToSignIn = async () => {
       await pg.waitForFunction(() => !document.querySelector('#del-signin').hidden);
       await pg.waitForFunction(() => document.activeElement && document.activeElement.id === 'del-password');
+      await pg.waitForFunction(() => !document.querySelector('#del-msg').hidden);
       return pg.evaluate(() => ({
         confirmHidden: document.querySelector('#del-confirm').hidden,
         who: document.querySelector('#del-who').textContent,

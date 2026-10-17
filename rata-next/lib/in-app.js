@@ -7,9 +7,10 @@
    mailrata.org does both: each carries the site's navigation and footer,
    which lead to the prices, the licence page and the sign-in, and the terms
    name the prices and Stripe's billing portal. So the pages a store build
-   opens live under /in-app/, and each is made from its page on every request
-   (app/in-app/[page]/route.js), so the words are written once and a copy
-   cannot drift from them:
+   opens live under /in-app/, and each is made from its page when the site
+   is built (app/in-app/[page]/route.js), so the words are written once and a
+   copy cannot drift from them; a page whose copy cannot be made fails the
+   build, so it never reaches the live site:
 
    - What a source marks is changed in the copy only. The marks are
      comments, so the website's own page does not change:
@@ -30,9 +31,11 @@
        <!-- in-app:add ID
          HTML
        -->
-         Something only the store copy says, such as where to write for
-         help where the website sends people to GitHub. On the website it is
-         a comment, so the page's look and words do not change.
+         Something only the store copy has, such as where to write for
+         help where the website sends people to GitHub, or the help page's
+         side gutter on a phone, which its own layout takes away (a store
+         build opens it on phones). On the website it is a comment, so the
+         page's look and words do not change.
 
      Every ID is in STORE_CUTS, and every ID there is in its page. No mark
      sits inside another.
@@ -40,7 +43,8 @@
      billing portal, licence page, releases page, installer, "Choose a
      plan", "Upgrade", "Buy", no saying that mailrata.org sells RATA or
      that it was bought "here", no "pay with" an address or at a place, and
-     no call to subscribe or sign in at mailrata.org. Each OLD must carry
+     no call to subscribe or sign in at, to or on mailrata.org, in any of
+     those words' forms. Each OLD must carry
      one of these and its NEW none, what a store copy adds carries none, and
      a copy that still carries one anywhere, in its text, in an attribute
      or in a quoted string of its stylesheet, is not made.
@@ -76,7 +80,7 @@ export const DELETE_PAGE = 'delete-account';
 /* Every cut and every piece of store wording, by page. A mark whose ID is not
    here makes no copy, and nor does an ID here that its page has lost. */
 export const STORE_CUTS = {
-  help: ['footer', 'get', 'install-steps', 'key', 'write'],
+  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'write'],
   privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
     'how', 'records', 'live', 'pending'],
   terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
@@ -106,8 +110,12 @@ export const SELLING = [
   /* "Pay with the same address as your account": no store payment is made
      with an address, so it can only mean paying somewhere else. */
   ['Pay with or at', /\bpay(?:s|ing)?\s+(?:with|at|on)\b/i],
-  ['Subscribe at mailrata.org', /\bsubscribe\b[^.]{0,40}?\b(?:at|on)\s+mailrata\.org\b/i],
-  ['Sign in at mailrata.org', /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b[^.]{0,20}?\bat\s+mailrata\.org\b/i],
+  /* Subscribing or signing in (or on) at, to, on or through mailrata.org,
+     in any form ("signing in at", "Log on to", "subscribed through");
+     not "Sign in with your mailrata.org email address", which is how the
+     deletion page asks for the account it deletes. */
+  ['Subscribe at mailrata.org', /\bsubscri(?:be|bes|bed|bing|ption)\b[^.]{0,40}?\b(?:at|on|to|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
+  ['Sign in at mailrata.org', /\b(?:sign|log)(?:s|ed|ged|ing|ging)?[ -]?(?:in|on)\b[^.]{0,20}?\b(?:at|to|on|into|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
 ];
 
 /* Outside pages a copy may still link to. https only; the host exactly, and
@@ -468,5 +476,5 @@ export function storeSafe(name, html) {
   const head = out.replace(/<meta charset="UTF-8">/i, m => `${m}\n<meta name="robots" content="noindex">`);
   if (head === out) throw new Error(`${file} has no <meta charset="UTF-8"> to follow`);
   return head.replace(/^<!DOCTYPE html>\n?/i, m =>
-    `${m}<!-- The store-safe copy of public/${file}, made by lib/in-app.js on every request. Change that page, not this copy. -->\n`);
+    `${m}<!-- The store-safe copy of public/${file}, made by lib/in-app.js when the site is built. Change that page, not this copy. -->\n`);
 }

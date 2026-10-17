@@ -159,7 +159,7 @@ for p in in-app/help in-app/privacy in-app/terms in-app/delete-account; do
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
   ! printf '%s' "$page" | grep -qiE '#pricing|stripe\.com|/releases|(index|account|app|auth)\.html|="/(account|app|auth)"|<nav|<footer'; check $? "/$p has no site navigation and no link that sells"
   # Nor a word that sells, as plain text (lib/in-app.js SELLING, in short).
-  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|\bbu(ys|ying) ((a|the|your) )?(plans?|subscriptions?|licen[cs]es?|rata)\b|\b(bought|sold|buy) here\b|\b(also|too) (sold|bought)\b|mailrata\.org (sells?|sold)\b|\b(sells?|sold) [^.<]{0,40}at mailrata\.org|\bpay(s|ing)? (with|at|on)\b|sign(ed)? in at mailrata\.org' | sort -u | tr '\n' ' ')
+  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|\bbu(ys|ying) ((a|the|your) )?(plans?|subscriptions?|licen[cs]es?|rata)\b|\b(bought|sold|buy) here\b|\b(also|too) (sold|bought)\b|mailrata\.org (sells?|sold)\b|\b(sells?|sold) [^.<]{0,40}at mailrata\.org|\bpay(s|ing)? (with|at|on)\b|\b(sign|log)(s|ed|ged|ing|ging)?[ -]?(in|on)\b[^.<]{0,20}\b(at|to|on|into|through|via) (https?://)?(www\.)?mailrata\.org|\bsubscri(be|bes|bed|bing|ption)\b[^.<]{0,40}\b(at|on|to|through|via) (https?://)?(www\.)?mailrata\.org' | sort -u | tr '\n' ' ')
   [ -z "$sold" ]; check $? "/$p says nothing that sells${sold:+ (still: $sold)}"
 done
 

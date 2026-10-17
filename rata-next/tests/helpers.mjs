@@ -2,6 +2,7 @@
    `next start` so suites exercise the production build rather than dev. */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -31,18 +32,25 @@ function freePort() {
    start their own server rather than sharing one. `env` may be an object, or
    a function of the base URL for a value that embeds the port (redirect.test
    points REDIRECT_TO at the server itself). */
-export async function startServer({ env = {} } = {}) {
+export async function startServer({ env = {}, from } = {}) {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   const resolved = typeof env === 'function' ? env(url) : env;
 
   /* detached:true puts the server in its own process group. `npx next start`
      spawns a `next-server` child that ignores a SIGTERM aimed at the parent —
-     killing the group is what actually frees the port. */
-  const proc = spawn('npx', ['next', 'start', '-p', String(port)], {
+     killing the group is what actually frees the port.
+     `from` starts Next in that folder instead, naming the site's, as a host
+     that does not run it from the site's own folder would. */
+  const site = fileURLToPath(new URL('..', import.meta.url));
+  const [cmd, args] = from
+    ? [process.execPath, [`${site}node_modules/next/dist/bin/next`, 'start', site, '-p', String(port)]]
+    : ['npx', ['next', 'start', '-p', String(port)]];
+  const proc = spawn(cmd, args, {
     env: { ...process.env, ...resolved, NEXT_TELEMETRY_DISABLED: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
+    ...(from ? { cwd: from } : {}),
   });
   let log = '';
   proc.stdout.on('data', d => { log += d; });

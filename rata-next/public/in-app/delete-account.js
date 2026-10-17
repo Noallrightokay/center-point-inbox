@@ -44,10 +44,22 @@
   let sb = null;
   let session = null;
   let busy = false;
+  let saying = 0;
 
+  /* The alert is emptied at once, and a sentence put back a moment later,
+     once the page has been drawn without the old one: a refusal said again
+     in the same words (a password mistyped twice) is otherwise no change a
+     screen reader hears. A newer call wins over one still waiting. */
   function say(text) {
-    msg.textContent = text || '';
-    msg.hidden = !text;
+    const mine = ++saying;
+    msg.textContent = '';
+    msg.hidden = true;
+    if (!text) return;
+    setTimeout(() => {
+      if (mine !== saying) return;
+      msg.textContent = text;
+      msg.hidden = false;
+    }, 120);
   }
 
   function loadLib() {
@@ -74,6 +86,7 @@
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (busy) return;
+    say('');
     const address = email.value.trim();
     if (!address || !password.value) {
       say('Type your email address and password.');
