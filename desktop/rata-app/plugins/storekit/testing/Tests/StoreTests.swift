@@ -78,6 +78,38 @@ final class StoreTests: XCTestCase {
     return heard.all
   }
 
+  /// What the customer is entitled to, once that lists `id` (at most
+  /// `seconds`). Straight after a purchase answered, StoreKit's test
+  /// environment listed nothing in `Transaction.currentEntitlements` (seen
+  /// in CI), which is why RATA's Rust sends the bought transaction itself
+  /// ahead of the entitlements (appstore.rs, `with_entitlements`).
+  func entitlements(of store: Store, listing id: String, seconds: Double = 20) async -> [Signed] {
+    let until = Date().addingTimeInterval(seconds)
+    var list = await store.entitlements().transactions
+    while !list.contains(where: { $0.id == id }) && Date() < until {
+      try? await Task.sleep(nanoseconds: 250_000_000)
+      list = await store.entitlements().transactions
+    }
+    return list
+  }
+
+  /// What the test session and StoreKit hold for `product`, for a failure.
+  func held(_ product: String) async -> String {
+    let session = self.session.allTransactions().map {
+      "\($0.identifier) \($0.productIdentifier) state \($0.state.rawValue)"
+    }
+    var latest = "none"
+    if let result = await Transaction.latest(for: product) {
+      switch result {
+      case .verified(let t):
+        latest = "verified \(t.id), expires \(String(describing: t.expirationDate)), revoked \(t.revocationDate != nil)"
+      case .unverified(let t, let error):
+        latest = "unverified \(t.id): \(error)"
+      }
+    }
+    return "the session holds \(session); Transaction.latest: \(latest)"
+  }
+
   /// StoreKit reads the configuration, and sells exactly RATA's two
   /// products from it, monthly, at its prices, with no offer.
   func testTheProductsAreRatasTwoMonthlySubscriptions() async throws {
@@ -107,8 +139,11 @@ final class StoreTests: XCTestCase {
     XCTAssertFalse(bought.revoked)
     XCTAssertFalse(bought.originalId.isEmpty)
 
-    let entitled = await store.entitlements().transactions
-    XCTAssertEqual(entitled.map(\.id), [bought.id])
+    let entitled = await entitlements(of: store, listing: bought.id)
+    if entitled.map(\.id) != [bought.id] {
+      let why = await held(pro)
+      XCTFail("entitled to \(entitled.map(\.id)), not [\(bought.id)]: \(why)")
+    }
     XCTAssertEqual(entitled.first?.jws.split(separator: ".").count, 3)
 
     let first = await store.finish(bought.id)

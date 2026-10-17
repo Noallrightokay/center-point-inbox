@@ -63,19 +63,17 @@ tauri-plugin-single-instance = "2"
 core-foundation = "0.9"
 core-foundation-sys = "0.8"
 security-framework-sys = { version = "2", default-features = false }
+# Buying RATA in the iPhone app (appstore.rs): StoreKit 2, in RATA's own
+# plugin, which only RATA's Rust calls. iOS only: a computer and Android are
+# built without it, and their `store_*` commands answer that the App Store
+# is not available there.
+tauri-plugin-storekit = { path = "../plugins/storekit" }
 
 # Whether the session bus's address can be read before single instance's
 # plugin is set up, which panics when it cannot (lib.rs). The zbus the
 # plugin itself uses, so nothing new is built.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
-
-# Buying RATA in the iPhone app (appstore.rs): StoreKit 2, in RATA's own
-# plugin, which only RATA's Rust calls. iOS only: a computer and Android are
-# built without it, and their `store_*` commands answer that the App Store
-# is not available there.
-[target.'cfg(target_os = "ios")'.dependencies]
-tauri-plugin-storekit = { path = "../plugins/storekit" }
 
 # Marking saved files as downloads on macOS (mark.rs). Already in the tree
 # through the updater's tar, so nothing new is built.

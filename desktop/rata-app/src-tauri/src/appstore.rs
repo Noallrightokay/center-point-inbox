@@ -821,10 +821,10 @@ pub async fn store_renew(app: tauri::AppHandle) -> Answer {
 
 /// The smoke build's check (`smoke`): the StoreKit plugin is loaded, has
 /// taken the channel for what `Transaction.updates` brings (waited for, up
-/// to ten seconds), and answers RATA's question for the products. A
-/// Simulator started by simctl has no StoreKit configuration and no App
-/// Store account, so none may come back; that it answers at all is what is
-/// checked.
+/// to ten seconds), and `store_products`, the command the page will call,
+/// answers through it. A Simulator started by simctl has no StoreKit
+/// configuration and no App Store account, so no product may come back;
+/// that it answers at all is what is checked.
 #[cfg(feature = "smoke")]
 pub async fn smoke_check(app: &tauri::AppHandle) -> crate::smoke::Check {
     #[cfg(target_os = "ios")]
@@ -836,7 +836,7 @@ pub async fn smoke_check(app: &tauri::AppHandle) -> crate::smoke::Check {
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            let answer = tokio::time::timeout(Duration::from_secs(30), shop.products())
+            let answer = tokio::time::timeout(Duration::from_secs(30), store_products(app.clone()))
                 .await
                 .ok();
             (answer, shop.listening())
@@ -2050,26 +2050,33 @@ mod tests {
         });
     }
 
-    /// On iOS the plugin must answer for the products (none, in a Simulator
-    /// simctl started) and must have taken the listener's channel; off iOS
-    /// the App Store is not available and nothing listens.
+    /// In a module named `smoke`, so that Desktop CI's run of the smoke
+    /// build's tests (`-- "smoke::"`) runs it.
     #[cfg(feature = "smoke")]
-    #[test]
-    fn the_smoke_check_passes_when_the_plugin_answers_and_listens_on_ios() {
-        let listed = Answer {
-            available: true,
-            products: Some(vec![]),
-            message: Some("no products".into()),
-            ..Answer::default()
-        };
-        let passed = smoke_judged(Some(&listed), true, true);
-        assert!(passed.ok);
-        assert_eq!(passed.detail["listening"], true);
-        assert!(!smoke_judged(Some(&listed), false, true).ok);
-        assert!(!smoke_judged(None, true, true).ok);
-        assert!(!smoke_judged(Some(&Answer::unavailable()), true, true).ok);
-        assert!(smoke_judged(Some(&Answer::unavailable()), false, false).ok);
-        assert!(!smoke_judged(Some(&Answer::unavailable()), true, false).ok);
+    mod smoke {
+        use super::*;
+
+        /// On iOS the plugin must answer for the products (none, in a
+        /// Simulator simctl started) and must have taken the listener's
+        /// channel; off iOS the App Store is not available and nothing
+        /// listens.
+        #[test]
+        fn the_check_passes_when_the_plugin_answers_and_listens_on_ios() {
+            let listed = Answer {
+                available: true,
+                products: Some(vec![]),
+                message: Some("no products".into()),
+                ..Answer::default()
+            };
+            let passed = smoke_judged(Some(&listed), true, true);
+            assert!(passed.ok);
+            assert_eq!(passed.detail["listening"], true);
+            assert!(!smoke_judged(Some(&listed), false, true).ok);
+            assert!(!smoke_judged(None, true, true).ok);
+            assert!(!smoke_judged(Some(&Answer::unavailable()), true, true).ok);
+            assert!(smoke_judged(Some(&Answer::unavailable()), false, false).ok);
+            assert!(!smoke_judged(Some(&Answer::unavailable()), true, false).ok);
+        }
     }
 
     /// What talks to StoreKit (plugins/storekit/store, the Swift package
