@@ -45,8 +45,13 @@ import { tableMissing } from './stripe.js';
 export const APPLE_ROOT_FILES = ['AppleRootCA-G3.cer', 'AppleRootCA-G2.cer', 'AppleIncRootCertificate.cer'];
 
 /* The bundle id every purchase must carry, unless APPLE_BUNDLE_ID says
-   otherwise (the final identifier is the owner's decision, D9). */
-export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.desktop';
+   otherwise: RATA's App Store app, which the iPhone and the Mac App Store
+   apps share (Universal Purchase), so one subscription covers both and a
+   purchase from either carries this id, under one app record and one
+   APPLE_APP_ID. The desktop app downloaded from mailrata.org is
+   org.mailrata.desktop, sells nothing through Apple, and has nothing to do
+   with this path: a transaction signed for it is another app's. */
+export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.app';
 
 /* What /api/licence/apple takes: the app's current entitlements, at most
    ten signed transactions of at most 16 KiB each. A real one is roughly 5
@@ -81,15 +86,17 @@ export const APPLE_SAID = Object.freeze({
    it and the terms repeat it (tests/legal.test.mjs). */
 export const APPLE_AUTO_RENEWAL = 'Payment is charged to your Apple Account when you confirm. The subscription renews automatically unless it is cancelled at least 24 hours before the end of the current period. Manage or cancel it in your Apple Account settings.';
 
-/* The notification types that change a row, and what each changes
-   (appleChange). Anything else is answered 200 and left alone. */
+/* The notification types that change a row (appleChange). Each states the
+   whole of what it knows; only REFUND and REVOKE, and REFUND_REVERSED, also
+   say by their type whether the subscription is revoked. Anything else is
+   answered 200 and left alone. */
 const CURRENT = ['SUBSCRIBED', 'DID_RENEW', 'DID_CHANGE_RENEWAL_PREF', 'OFFER_REDEEMED'];
 const DATES = ['DID_FAIL_TO_RENEW', 'EXPIRED', 'GRACE_PERIOD_EXPIRED'];
 const REVOKED = ['REFUND', 'REVOKE'];
 export const APPLE_ACTED = Object.freeze([...CURRENT, ...DATES, ...REVOKED, 'REFUND_REVERSED']);
 
 const AUTO_RENEWABLE = 'Auto-Renewable Subscription';
-const COLS = 'original_transaction_id,product_id,plan,environment,period_from,expires_at,grace_until,revoked_at,signed_at';
+const COLS = 'original_transaction_id,product_id,plan,environment,period_from,expires_at,grace_until,grace_signed_at,revoked_at,signed_at';
 
 /* ---- the licence's subject ------------------------------------------------ */
 
@@ -222,7 +229,11 @@ function statusOf(e) {
 }
 
 /* The environment signed data says it is from, read without checking the
-   signature: it only chooses which verifier checks it. */
+   signature: it only chooses which verifier checks it. It is Apple's
+   environment (Production, Sandbox, Xcode, LocalTesting), never the
+   platform: with Universal Purchase a purchase made in the Mac App Store
+   app carries the same bundle id, app id and environments as one made on
+   the iPhone, and nothing here asks which it was. */
 export function claimedEnvironment(kind, jws) {
   try {
     const p = JSON.parse(Buffer.from(String(jws).split('.')[1] || '', 'base64url').toString('utf8'));
@@ -339,7 +350,7 @@ export function applePreferred(list) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
-/* When Apple signed it, which orders the writes about one period of a
+/* When Apple signed it, which orders what Apple says about one period of a
    subscription (appleWrite). Apple always says; something that does not is
    treated as the oldest there is, so it never overwrites anything. */
 const signedAt = (o) => iso(o && typeof o.signedDate === 'number' && Number.isFinite(o.signedDate) ? o.signedDate : 0);
@@ -347,8 +358,15 @@ const signedAt = (o) => iso(o && typeof o.signedDate === 'number' && Number.isFi
    orders the periods of a subscription (appleWrite). Treated as the
    earliest there is when missing, as signedAt is. */
 const periodFrom = (t) => iso(t && typeof t.purchaseDate === 'number' && Number.isFinite(t.purchaseDate) ? t.purchaseDate : 0);
+/* The grace fields of a row that has heard of no grace period for its
+   period: what a new row, and a later period replacing a row, starts
+   with. */
+const EPOCH = iso(0);
+const NO_GRACE = Object.freeze({ grace_until: null, grace_signed_at: EPOCH });
 
-/* A row as a transaction describes it. */
+/* A row's subscription fields as a transaction describes them: the
+   product, the plan, the period and its expiry, whether the transaction is
+   revoked, and when Apple signed it. Everything but the grace period. */
 export function appleRowOf(t, environment) {
   return {
     product_id: t.productId,
@@ -361,38 +379,30 @@ export function appleRowOf(t, environment) {
   };
 }
 
-/* What a notification changes, as { patch, insert, fresh }, or null when it
+/* What a notification says, as { core, grace, insert }, or null when it
    changes nothing RATA keeps: another type, another product, no
    transaction to read, or a transaction the customer upgraded from
    (`isUpgraded`). The subscription it was upgraded to has a transaction of
    its own, which writes the row, and Apple refunding what was left of the
-   old one is no refund of the new one. `insert` is the whole row, for a
-   subscription not seen yet; `patch` what it writes over a row recording
-   the same period (appleWrite); `fresh`, when set, what it writes over a
-   row recording an earlier period, and the patch otherwise.
+   old one is no refund of the new one.
 
-   - SUBSCRIBED, DID_RENEW, DID_CHANGE_RENEWAL_PREF, OFFER_REDEEMED: the
-     product, the plan, the period, the expiry and the environment of the
-     transaction it carries, which is the subscription's latest. And whether
-     that transaction is revoked, so a customer who resubscribes after a
-     refund is live again (its new transaction carries no revocationDate).
-   - DID_FAIL_TO_RENEW, EXPIRED, GRACE_PERIOD_EXPIRED: only the dates, the
-     expiry and the end of a billing grace period (gracePeriodExpiresDate,
-     which DID_FAIL_TO_RENEW carries with the subtype GRACE_PERIOD). The row
-     is simply not live once they have passed.
-   - REFUND, REVOKE: when it was revoked. REFUND_REVERSED: no longer. A
-     refund is of one period, and can be of one that has already ended
-     while the one paid for now goes on, so these change only the period
-     their transaction is for: a refund of an earlier period than the row
-     records changes nothing, and a reversal of one does not undo a refund
-     of the current period.
+   Every notification states the whole of what it knows at the moment
+   Apple signed it, whatever its type, so that the newest one wins
+   (appleWrite) and one delivered late, or twice, changes nothing:
 
-   For the last two groups a row recording an earlier period gets the whole
-   row as the transaction describes it (`fresh`), not only the dates or the
-   revocation: a refund of a period the row has not heard of yet is
-   recorded as that period's, so the period's own transaction from before
-   the refund then finds it, and a later period that is not revoked
-   replaces an earlier one that was. */
+   - `core`: the product, the plan, the period, its expiry and the
+     environment, from its transaction, which is the subscription's latest;
+     whether that transaction is revoked (its revocationDate, or null), and
+     when Apple signed the notification. A REFUND or REVOKE whose
+     transaction gives no revocationDate is revoked when Apple signed it;
+     a REFUND_REVERSED is not revoked, whatever its transaction still says.
+   - `grace`, only when the notification carries renewal info: the end of
+     a billing grace period (its gracePeriodExpiresDate, or null when it
+     gives none), and when Apple signed the notification. Without renewal
+     info a notification says nothing about the grace period, and leaves it
+     as it is. DID_FAIL_TO_RENEW with the subtype GRACE_PERIOD is the one
+     that starts one; the rest carry it on, or end it.
+   - `insert`: the whole row, for a subscription not seen yet. */
 export function appleChange(n, t, r, environment) {
   const type = n && n.notificationType;
   if (!APPLE_ACTED.includes(type)) return null;
@@ -400,95 +410,105 @@ export function appleChange(n, t, r, environment) {
   if (typeof t.expiresDate !== 'number') return null;
   if (t.isUpgraded === true) return null;
   const at = signedAt(n);
-  const grace = r && typeof r.gracePeriodExpiresDate === 'number' ? iso(r.gracePeriodExpiresDate) : null;
-  const whole = { ...appleRowOf(t, environment), grace_until: grace, signed_at: at };
-  if (CURRENT.includes(type)) {
-    const { product_id, plan, period_from, expires_at, revoked_at } = whole;
-    const patch = { product_id, plan, environment, period_from, expires_at, revoked_at, signed_at: at };
-    return { patch, insert: { ...whole, ...patch }, fresh: null };
-  }
-  let patch;
-  if (DATES.includes(type)) {
-    const inGrace = type !== 'DID_FAIL_TO_RENEW' || n.subtype === 'GRACE_PERIOD';
-    patch = { expires_at: whole.expires_at, grace_until: inGrace ? grace : null, signed_at: at };
-  } else if (REVOKED.includes(type)) {
-    patch = { revoked_at: iso(typeof t.revocationDate === 'number' ? t.revocationDate : n.signedDate || Date.now()), signed_at: at };
-  } else {
-    patch = { revoked_at: null, signed_at: at };
-  }
-  const insert = { ...whole, ...patch };
-  return { patch, insert, fresh: insert };
+  const own = typeof t.revocationDate === 'number' ? t.revocationDate : null;
+  let revoked = own;
+  if (REVOKED.includes(type) && own === null) revoked = typeof n.signedDate === 'number' && Number.isFinite(n.signedDate) ? n.signedDate : Date.now();
+  if (type === 'REFUND_REVERSED') revoked = null;
+  const core = { ...appleRowOf(t, environment), revoked_at: revoked === null ? null : iso(revoked), signed_at: at };
+  const grace = r && typeof r === 'object'
+    ? { grace_until: typeof r.gracePeriodExpiresDate === 'number' && Number.isFinite(r.gracePeriodExpiresDate) ? iso(r.gracePeriodExpiresDate) : null, grace_signed_at: at }
+    : null;
+  return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
 
-/* What a live transaction the app sent changes (/api/licence/apple): the
-   row as it describes it, over a row recording the same period or an
-   earlier one (appleWrite). An upgraded transaction never gets here, since
-   appleIgnored refuses it. */
+/* What a live transaction the app sent says (/api/licence/apple): its
+   subscription fields, and nothing about a grace period, which StoreKit's
+   transaction does not carry. An upgraded transaction never gets here,
+   since appleIgnored refuses it. */
 export function applePurchase(t, environment) {
-  const row = appleRowOf(t, environment);
-  return { patch: row, insert: row, fresh: null };
+  const core = appleRowOf(t, environment);
+  return { core, grace: null, insert: { ...core, ...NO_GRACE } };
 }
 
 /* ---- the row -------------------------------------------------------------- */
 
-/* Write what a transaction or notification says, in the order of the
-   subscription's periods and, within one period, of when Apple signed it.
+/* Write what a transaction or notification says, so that whatever order
+   Apple's notifications and the phone's purchases arrive in, and however
+   often, the row ends as it would had each arrived once, in the order
+   Apple signed them.
+
    A row records one period, the one that began at its period_from: the
    transaction's purchaseDate. Renewals, upgrades, downgrades,
    resubscriptions and offers each begin a period later than the one
    before, however long each lasts; the expiry would not do, since a
    period paid for in advance (an introductory offer of several months, an
-   offer code) can end after the one that replaced it.
+   offer code) can end after the one that replaced it. Within one period,
+   what Apple signed later wins, in two groups of fields, each with its
+   own stamp:
 
-   So a row's key is (period_from, signed_at), and a write goes through
-   only when its own key is no lower: over a row recording an earlier
-   period, or the same period with what Apple signed no later. The key
-   never goes down. Apple's notifications can arrive in any order (one
-   answered 500 comes back hours later) and end as if they had come in
-   order: a renewal delivered after a refund of the period before it still
-   lands, and nothing about an earlier period, whenever Apple signed it,
-   changes a row recording a later one. A transaction replayed after its
-   refund finds the refund. The guard is in the database, so two deliveries
-   racing each other cannot both pass a check and then both write.
+   - the subscription fields (`core`), stamped signed_at. Written over a
+     row recording an earlier period, which this one replaces, its grace
+     fields reset with it (to this notification's grace, or to none); or
+     over a row recording the same period whose signed_at is no later. A
+     row recording a later period is never written.
+   - the grace fields, grace_until and grace_signed_at, written only by a
+     notification that carries renewal info: over a row recording this
+     same period whose grace_signed_at is no later. The core write has
+     already moved a row of an earlier period on to this one, and only a
+     notification knows the grace period: the phone's purchase never
+     touches it, so a transaction StoreKit signed later cannot hide a
+     grace period Apple reported earlier.
 
-   Without `fresh` it is one update. With it, a row recording an earlier
-   period takes `fresh` and one recording the same period the patch, in two
-   updates whose guards cannot both hold. A row not there yet is inserted;
-   if another request inserted it in between, the guarded update is tried
-   once more. Answers { row, wrote } with the row as it stands after (the
-   newer one, when this was older), or { error }. */
-export async function appleWrite(sb, id, { patch, insert, fresh = null }) {
+   So each group's (period_from, stamp) never goes down. Every guard is in
+   the database, so two deliveries racing each other cannot both pass a
+   check and then both write. A row not there yet is inserted whole; if
+   another request inserted it in between, the guarded updates are tried
+   once more. Answers { row, wrote } with the row as it stands after, or
+   { error }. */
+export async function appleWrite(sb, id, { core, grace = null, insert }) {
   const table = () => sb.from('apple_subscriptions');
   const update = async (values, guard) => {
     const { data, error } = await guard(table().update(values).eq('original_transaction_id', id)).select(COLS);
     if (error) throw error;
     return data && data.length ? data[0] : null;
   };
-  const from = insert.period_from;
-  const signed = insert.signed_at;
-  /* An ISO time holds no comma or parenthesis, so it needs no quoting in
-     PostgREST's or=(...), as the Stripe webhook's orderGuard relies on. */
-  const guarded = async () => {
-    if (!fresh) return update(patch, (q) => q.or(`period_from.lt.${from},and(period_from.eq.${from},signed_at.lte.${signed})`));
-    return (await update(fresh, (q) => q.lt('period_from', from)))
-      || update(patch, (q) => q.eq('period_from', from).lte('signed_at', signed));
-  };
+  const from = core.period_from;
+  const coreWrite = async () => (await update({ ...core, ...(grace || NO_GRACE) }, (q) => q.lt('period_from', from)))
+    || update(core, (q) => q.eq('period_from', from).lte('signed_at', core.signed_at));
   try {
-    let row = await guarded();
-    if (row) return { row, wrote: true };
-    const { data, error } = await table()
-      .upsert({ original_transaction_id: id, ...insert }, { onConflict: 'original_transaction_id', ignoreDuplicates: true })
-      .select(COLS);
-    if (error) throw error;
-    if (data && data.length) return { row: data[0], wrote: true };
-    row = await guarded();
-    if (row) return { row, wrote: true };
+    let row = await coreWrite();
+    if (!row) {
+      const { data, error } = await table()
+        .upsert({ original_transaction_id: id, ...insert }, { onConflict: 'original_transaction_id', ignoreDuplicates: true })
+        .select(COLS);
+      if (error) throw error;
+      if (data && data.length) return { row: data[0], wrote: true };
+      row = await coreWrite();
+    }
+    let wrote = !!row;
+    if (grace) {
+      const kept = await update(grace, (q) => q.eq('period_from', from).lte('grace_signed_at', grace.grace_signed_at));
+      if (kept) { row = kept; wrote = true; }
+    }
+    if (row) return { row, wrote };
     const held = await table().select(COLS).eq('original_transaction_id', id).maybeSingle();
     if (held.error) throw held.error;
     return { row: held.data || null, wrote: false };
   } catch (error) {
     return { error: error || { message: 'unknown' } };
   }
+}
+
+/* Whether a database error means the database is behind section 7 of
+   database.sql: no apple_subscriptions table (tableMissing), or one made
+   by an earlier copy of section 7 without a column this code reads or
+   writes (Postgres's undefined column, 42703, or PostgREST's PGRST204,
+   which names the column and the table). Either way the log says to run
+   section 7, and the answer is "not switched on". */
+export function appleTableBehind(error) {
+  if (tableMissing(error)) return true;
+  const code = error && error.code;
+  return code === '42703' || (code === 'PGRST204' && /apple_subscriptions/.test(String(error.message || '')));
 }
 
 /* The row for an original transaction id, or { error }. */

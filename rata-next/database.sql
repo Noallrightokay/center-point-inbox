@@ -262,12 +262,14 @@ create trigger pending_subscriptions_touch
 --    and what /api/licence/renew reads to renew a licence whose
 --    subject is apple:<original_transaction_id>. A row records one
 --    period of the subscription, the one that began at period_from
---    (the transaction's purchaseDate), and every write is ordered
---    by period_from and then by signed_at, when Apple signed what
---    it says, so a notification delivered late never undoes a
---    later one (lib/apple.js, appleWrite). Not by expires_at: a
---    period paid for in advance can end after the one that
---    replaced it.
+--    (the transaction's purchaseDate). Its fields are written in two
+--    groups, each ordered by period_from and then by its own stamp of
+--    when Apple signed what it says: the subscription's (signed_at)
+--    and the grace period's (grace_until, grace_signed_at, which only
+--    Apple's notifications report). So a notification delivered late,
+--    or twice, never undoes a later one (lib/apple.js, appleWrite).
+--    Not by expires_at: a period paid for in advance can end after
+--    the one that replaced it.
 --
 --    Live means revoked_at is null and expires_at, or grace_until
 --    (Apple's billing grace period, when a renewal has failed), is
@@ -291,18 +293,28 @@ create table if not exists public.apple_subscriptions (
   period_from timestamptz not null,         -- when the period it records began
   expires_at timestamptz not null,
   grace_until timestamptz,                  -- null unless Apple reported a grace period
+  grace_signed_at timestamptz not null,     -- when Apple signed what last told us of it
   revoked_at timestamptz,                   -- refunded or revoked; null when not
-  signed_at timestamptz not null,           -- when Apple signed what last wrote the row
+  signed_at timestamptz not null,           -- when Apple signed what last told us of the rest
   app_account_token uuid,                   -- unused yet
   email text,                               -- unused yet
   updated_at timestamptz not null default now()
 );
 
--- A table made before period_from existed gets it here. Its rows, if
--- any, count as recording the earliest period there is, so the next
--- thing Apple says about each subscription replaces what it holds.
+-- A table made by an earlier copy of this section gets the columns it
+-- lacks here, and then has the same shape as one made above. Its rows,
+-- if any, count as recording the earliest period there is, so the next
+-- thing Apple says about each subscription replaces what it holds; they
+-- can only be sandbox purchases, and LAUNCH.md section 1 says to delete
+-- them before going live.
 alter table public.apple_subscriptions
   add column if not exists period_from timestamptz not null default 'epoch';
+alter table public.apple_subscriptions
+  alter column period_from drop default;
+alter table public.apple_subscriptions
+  add column if not exists grace_signed_at timestamptz not null default 'epoch';
+alter table public.apple_subscriptions
+  alter column grace_signed_at drop default;
 
 alter table public.apple_subscriptions enable row level security;
 

@@ -5,7 +5,7 @@ import { issue, LICENCE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
 import {
   APPLE_SAID, appleVerifiers, verifyApple, readTransactions, appleIgnored, applePreferred,
-  applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleSub, tableMissing,
+  applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleSub, appleTableBehind,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -25,8 +25,11 @@ export const dynamic = 'force-dynamic';
    written in the order of the subscription's periods, then of when Apple
    signed it (lib/apple.js, appleWrite), and the licence follows the row as
    it then stands. So a transaction replayed after its refund, or one for a
-   period that a later one has replaced, unlocks nothing, and one for the
-   period after a refunded one is recorded whenever Apple signed it.
+   period that a later one has replaced, changes nothing and unlocks
+   nothing of its own (only what the row says is live), and one for the
+   period after a refunded one is recorded whenever Apple signed it. A
+   transaction never touches the grace period, which only Apple's
+   notifications report.
 
    One past its expiry writes nothing, and unlocks only what its row says
    is live. That is a billing grace period: StoreKit still lists the
@@ -117,8 +120,8 @@ async function licenceFor(req) {
     if (written.error) {
       /* Fail closed: a licence that cannot be recorded, or checked against
          its row, is not issued. */
-      if (tableMissing(written.error)) {
-        console.warn('licence/apple: the database has no apple_subscriptions table; run section 7 of rata-next/database.sql');
+      if (appleTableBehind(written.error)) {
+        console.warn('licence/apple: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
         return refuse('not-configured', APPLE_SAID.off, 503);
       }
       console.warn(`licence/apple: could not ${lapsed ? 'read' : 'record'} an App Store purchase`, written.error.code || written.error.message);

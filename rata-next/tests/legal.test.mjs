@@ -235,7 +235,7 @@ export default async function run(state) {
     const table = (sql.match(/create table if not exists public\.apple_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
     const cols = [...table.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz|uuid)/gm)].map(m => m[1]);
     check(JSON.stringify(cols) === JSON.stringify(['original_transaction_id', 'product_id', 'plan', 'environment', 'period_from', 'expires_at',
-      'grace_until', 'revoked_at', 'signed_at', 'app_account_token', 'email', 'updated_at']),
+      'grace_until', 'grace_signed_at', 'revoked_at', 'signed_at', 'app_account_token', 'email', 'updated_at']),
       `an App Store subscription is kept as Apple's number, a product, a plan, an environment and dates: ${cols.join(', ')}`);
     const SAID = {
       original_transaction_id: 'its original transaction id',
@@ -246,7 +246,8 @@ export default async function run(state) {
       expires_at: 'when it expires',
       grace_until: 'when a billing grace period ends if a renewal fails',
       revoked_at: 'when it was refunded or revoked',
-      signed_at: 'when Apple signed what it last told us',
+      signed_at: 'when Apple signed what it last told us about the subscription',
+      grace_signed_at: 'and about a grace period',
     };
     const fact = (P.match(/Your App Store subscription record, if you subscribe in the iPhone app.*?No name, no email address and no Apple ID: Apple tells us none of them\./) || [''])[0];
     const unsaid = Object.entries(SAID).filter(([, words]) => !fact.includes(words)).map(([c]) => c);
@@ -255,10 +256,10 @@ export default async function run(state) {
        to an account later; the page says no address is kept, so nothing may
        write either yet. */
     const t = { originalTransactionId: '2000000000000001', productId: Object.keys(APPLE_PRODUCTS)[0], expiresDate: Date.now() + 86400e3,
-      signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.desktop', environment: 'Production' };
+      signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.app', environment: 'Production' };
     const written = [apple.appleRowOf(t, 'Production'), ...[apple.applePurchase(t, 'Production'), ...apple.APPLE_ACTED.map((type) =>
       apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production'))]
-      .flatMap((c) => (c ? [c.patch, c.insert, ...(c.fresh ? [c.fresh] : [])] : []))];
+      .flatMap((c) => (c ? [c.core, c.insert, ...(c.grace ? [c.grace] : [])] : []))];
     const keys = new Set(written.flatMap(Object.keys));
     check(written.length > 2 && [...keys].every(k => cols.includes(k) && SAID[k]) && !keys.has('email') && !keys.has('app_account_token'),
       `what the code writes is only what the page names, never an address: ${[...keys].join(', ')}`);

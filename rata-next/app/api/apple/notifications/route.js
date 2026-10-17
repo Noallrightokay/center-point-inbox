@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { admin } from '../../../../lib/server';
 import {
-  APPLE_ACTED, appleVerifiers, appleTakesProduction, verifyApple, verifyAppleIn, readNotification, appleChange, appleWrite, tableMissing,
+  APPLE_ACTED, appleVerifiers, appleTakesProduction, verifyApple, verifyAppleIn, readNotification, appleChange, appleWrite, appleTableBehind,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -17,12 +17,16 @@ export const dynamic = 'force-dynamic';
    The notification is signed like a transaction, and the transaction and
    renewal info inside it are signed again; all three are verified
    (lib/apple.js), each by the verifier of the notification's environment.
-   What each type changes is appleChange's; every write is ordered by when
-   the period its transaction pays for began, then by when Apple signed
-   the notification (appleWrite), so one delivered late never undoes a
-   later one, and a renewal delivered after a refund of the period before
-   it still lands. A subscription not seen yet gets its row from the
-   notification.
+   Each notification states the whole of what it knows at the moment Apple
+   signed it (appleChange): the subscription's fields from its
+   transaction, and the grace period from its renewal info when it carries
+   one. Each of the two is ordered by when the period the transaction pays
+   for began, then by when Apple signed the notification (appleWrite), so
+   one delivered late or twice never undoes a later one: a renewal
+   delivered after a refund of the period before it still lands, a refund
+   is not lost behind a later grace notice, nor a grace period behind a
+   later change of renewal preference. A subscription not seen yet gets
+   its row from the notification.
 
    Apple retries anything not answered 200, for days. So a refusal of the
    signature is a 400 that says nothing more, and a fault at this end (the
@@ -83,8 +87,8 @@ export async function POST(req) {
   }
   const written = await appleWrite(sb, t.payload.originalTransactionId, change);
   if (written.error) {
-    if (tableMissing(written.error)) {
-      console.warn('apple/notifications: the database has no apple_subscriptions table; run section 7 of rata-next/database.sql');
+    if (appleTableBehind(written.error)) {
+      console.warn('apple/notifications: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
     } else {
       console.warn('apple/notifications: could not record a notification', written.error.code || written.error.message);
     }

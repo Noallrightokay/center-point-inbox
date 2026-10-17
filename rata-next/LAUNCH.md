@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1065 checks).
+the website's test suites pass with `npm test` after it (1085 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -64,8 +64,14 @@ iPhone app is out, and nothing breaks without it, but `/api/licence/apple`
 answers 503 "App Store purchases are not switched on for RATA yet." and
 the server log says to run section 7. Run it before the first TestFlight
 purchase. Each row records one period of a subscription, from when it
-began (`period_from`); run again over a table made before that column,
-section 7 adds it.
+began (`period_from`), with its own stamp for the grace period
+(`grace_signed_at`); run again over a table made by an earlier copy of
+section 7, it adds both. **Such a table can hold only sandbox
+purchases: before going live, delete its rows** (Table Editor →
+`apple_subscriptions` → select all → Delete, or `delete from
+public.apple_subscriptions;` in the SQL Editor). Each TestFlight
+subscription's row comes back with its next purchase, restore or
+notification.
 
 **Check:** Table Editor → `subscriptions` shows both new columns, and
 `ai_usage`, `pending_subscriptions` and `apple_subscriptions` exist;
@@ -158,8 +164,8 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_DOMAIN` | **leave unset** — there is no domain add-on to sell (step 3) |
-| `APPLE_APP_ID` | the iPhone app's numeric Apple ID, from App Store Connect once its app record exists (§11). Without it only sandbox purchases (TestFlight, App Review) are accepted; a real one is answered "not switched on" |
-| `APPLE_BUNDLE_ID` | optional; the iPhone app's bundle id. Default `org.mailrata.desktop`; set it if the app record uses another (decision D9) |
+| `APPLE_APP_ID` | the App Store app's numeric Apple ID (one app record for the iPhone and the Mac), from App Store Connect once it exists (§11). Without it only sandbox purchases (TestFlight, App Review) are accepted; a real one is answered "not switched on" |
+| `APPLE_BUNDLE_ID` | optional; the bundle id of RATA's App Store app, which the iPhone and Mac App Store apps share (Universal Purchase), so one subscription covers both. Default `org.mailrata.app`; set it only if the app record uses another. (The desktop app downloaded from mailrata.org stays `org.mailrata.desktop` and has nothing to do with this.) |
 
 Public — these are emitted to every visitor, which is correct for all of them:
 
@@ -461,7 +467,9 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    App Store Small Business Program), so Apple's commission is 15% rather
    than 30% while proceeds stay under its limit.
 3. **The app record**: App Store Connect → Apps → New App, with the bundle
-   id you decide on (D9; the site assumes `org.mailrata.desktop`). Its
+   id `org.mailrata.app`, for iOS and macOS alike: the iPhone and Mac App
+   Store apps share it (Universal Purchase), so one subscription covers
+   both and purchases from either reach the site the same way. Its
    **Apple ID**, a number under App Information, is `APPLE_APP_ID`.
 4. **The subscriptions**: the app → Monetization → Subscriptions → one
    subscription group named **RATA**, with two auto-renewable subscriptions,
@@ -497,7 +505,7 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
 6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
    address that is not an Apple Account already.
 7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
-   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.desktop`
+   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.app`
    (§4).
 8. **The database**: run `database.sql` again (§1); section 7 adds
    `apple_subscriptions`.

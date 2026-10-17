@@ -19,6 +19,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
 import { makeChain, signJws, unsignedJws } from './apple-chain.mjs';
+import { deliveryOrders } from './apple-order.mjs';
 import { generateKeys, issue, check as checkLicence } from '../lib/licence.js';
 import { APPLE_PRODUCTS, PLANS, ORDER } from '../lib/plan.js';
 import * as apple from '../lib/apple.js';
@@ -40,7 +41,7 @@ const PINNED = {
 };
 
 const DAY = 86400e3;
-const BUNDLE = 'org.mailrata.desktop';
+const BUNDLE = 'org.mailrata.app';
 const APP_ID = 1234567890;
 const PRO = 'org.mailrata.pro.monthly';
 const BASE = 'org.mailrata.base.monthly';
@@ -173,52 +174,97 @@ function pgHolds(row, f) {
 
 /* Supabase, for apple_subscriptions (and subscriptions, which only a
    Stripe licence's renewal may ask). `mode`: 'ok', 'missing' (database.sql
-   section 7 never ran: PostgREST's PGRST205) or 'broken'. `queries` keeps
-   each request's method and query string. */
+   section 7 never ran: PostgREST's PGRST205), 'behind' (a table made by an
+   earlier copy of section 7, without grace_signed_at: PostgREST's
+   PGRST204 for a write naming it, Postgres's 42703 for a read) or
+   'broken'. `queries` keeps each request's method and query string, and
+   `bodies` its body. It
+   answers over HTTP, for the site, and through `fetch`, for supabase-js in
+   this process, which the delivery orders use since they are many. */
+const BEHIND = 'grace_signed_at';
 async function fakeSupabase() {
-  const fake = { rows: new Map(), mode: 'ok', calls: [], queries: [] };
+  const fake = { rows: new Map(), mode: 'ok', calls: [], queries: [], bodies: [] };
   const matches = (row, fs) => fs.every((f) => pgHolds(row, f));
+  /* The rows a request can match: only the one its primary key names, when
+     it names one, as Postgres would find it; the delivery orders make
+     thousands. */
+  const candidates = (fs) => {
+    const key = fs.find((f) => f.col === 'original_transaction_id' && f.op === 'eq');
+    if (!key) return [...fake.rows.values()];
+    const row = fake.rows.get(key.val);
+    return row ? [row] : [];
+  };
+  const answer = (method, url, prefer, raw) => {
+    fake.calls.push(`${method} ${url.pathname}`);
+    fake.queries.push(`${method} ${url.pathname}?${decodeURIComponent(url.search.slice(1))}`);
+    fake.bodies.push(raw || '');
+    if (url.pathname === '/rest/v1/subscriptions') return [200, []];
+    if (url.pathname !== '/rest/v1/apple_subscriptions') return [404, { message: 'not in the stand-in' }];
+    if (fake.mode === 'missing') return [404, { code: 'PGRST205', details: null, hint: null, message: "Could not find the table 'public.apple_subscriptions' in the schema cache" }];
+    if (fake.mode === 'broken') return [500, { code: 'XX000', details: null, hint: null, message: 'disk on fire' }];
+    if (fake.mode === 'behind') {
+      if (raw && raw.includes(`"${BEHIND}"`)) return [400, { code: 'PGRST204', details: null, hint: null, message: `Could not find the '${BEHIND}' column of 'apple_subscriptions' in the schema cache` }];
+      if ((url.searchParams.get('select') || '').split(',').includes(BEHIND)) return [400, { code: '42703', details: null, hint: null, message: `column apple_subscriptions.${BEHIND} does not exist` }];
+    }
+    let fs;
+    try { fs = pgFilters(url.searchParams); } catch (e) { return [400, { code: 'PGRST100', message: e.message }]; }
+    if (method === 'GET') return [200, candidates(fs).filter((r) => matches(r, fs))];
+    if (method === 'PATCH') {
+      const patch = JSON.parse(raw);
+      const hit = candidates(fs).filter((r) => matches(r, fs));
+      for (const r of hit) Object.assign(r, patch, { updated_at: new Date().toISOString() });
+      return [200, hit.map((r) => ({ ...r }))];
+    }
+    if (method === 'POST') {
+      const body = JSON.parse(raw);
+      const ignore = /resolution=ignore-duplicates/.test(prefer || '');
+      const out = [];
+      for (const row of Array.isArray(body) ? body : [body]) {
+        if (fake.rows.has(row.original_transaction_id)) {
+          if (!ignore) return [409, { code: '23505', message: 'duplicate key value violates unique constraint' }];
+          continue;
+        }
+        const stored = { grace_until: null, revoked_at: null, app_account_token: null, email: null, ...row, updated_at: new Date().toISOString() };
+        fake.rows.set(row.original_transaction_id, stored);
+        out.push({ ...stored });
+      }
+      return [201, out];
+    }
+    return [405, { message: 'not in the stand-in' }];
+  };
   const srv = createServer((req, res) => {
-    const url = new URL(req.url, 'http://x');
     let raw = '';
     req.on('data', (d) => { raw += d; });
     req.on('end', () => {
-      const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
-      fake.calls.push(`${req.method} ${url.pathname}`);
-      fake.queries.push(`${req.method} ${url.pathname}?${decodeURIComponent(url.search.slice(1))}`);
-      if (url.pathname === '/rest/v1/subscriptions') return json(200, []);
-      if (url.pathname !== '/rest/v1/apple_subscriptions') return json(404, { message: 'not in the stand-in' });
-      if (fake.mode === 'missing') return json(404, { code: 'PGRST205', details: null, hint: null, message: "Could not find the table 'public.apple_subscriptions' in the schema cache" });
-      if (fake.mode === 'broken') return json(500, { code: 'XX000', details: null, hint: null, message: 'disk on fire' });
-      let fs;
-      try { fs = pgFilters(url.searchParams); } catch (e) { return json(400, { code: 'PGRST100', message: e.message }); }
-      if (req.method === 'GET') return json(200, [...fake.rows.values()].filter((r) => matches(r, fs)));
-      if (req.method === 'PATCH') {
-        const patch = JSON.parse(raw);
-        const hit = [...fake.rows.values()].filter((r) => matches(r, fs));
-        for (const r of hit) Object.assign(r, patch, { updated_at: new Date().toISOString() });
-        return json(200, hit);
-      }
-      if (req.method === 'POST') {
-        const body = JSON.parse(raw);
-        const ignore = /resolution=ignore-duplicates/.test(req.headers.prefer || '');
-        const out = [];
-        for (const row of Array.isArray(body) ? body : [body]) {
-          if (fake.rows.has(row.original_transaction_id)) {
-            if (!ignore) return json(409, { code: '23505', message: 'duplicate key value violates unique constraint' });
-            continue;
-          }
-          const stored = { grace_until: null, revoked_at: null, app_account_token: null, email: null, ...row, updated_at: new Date().toISOString() };
-          fake.rows.set(row.original_transaction_id, stored);
-          out.push(stored);
-        }
-        return json(201, out);
-      }
-      json(405, { message: 'not in the stand-in' });
+      const [status, body] = answer(req.method, new URL(req.url, 'http://x'), req.headers.prefer, raw);
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
     });
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-  return { fake, url: `http://127.0.0.1:${srv.address().port}`, close: () => new Promise((r) => { srv.close(() => r()); srv.closeAllConnections(); }) };
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  fake.fetch = async (input, init = {}) => {
+    const headers = new Headers(init.headers);
+    const [status, body] = answer(init.method || 'GET', new URL(String(input)), headers.get('prefer'), typeof init.body === 'string' ? init.body : '');
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  };
+  return { fake, url, close: () => new Promise((r) => { srv.close(() => r()); srv.closeAllConnections(); }) };
+}
+
+/* supabase-js for a real PostgREST at `base` (no /rest/v1 in front of it,
+   and no JWT secret, so the stand-in's key is not sent). */
+function viaPostgrest(base) {
+  return createClient('http://postgrest.invalid', 'none', {
+    auth: { persistSession: false },
+    global: {
+      fetch: (input, init = {}) => {
+        const headers = new Headers(init.headers);
+        headers.delete('authorization');
+        headers.delete('apikey');
+        return fetch(base + String(input).replace(/^http:\/\/postgrest\.invalid\/rest\/v1/, ''), { ...init, headers });
+      },
+    },
+  });
 }
 
 /* Every .rs file under a folder, for the product ids the iOS app's
@@ -293,6 +339,12 @@ export default async function run(state) {
     }
     const bundle = await apple.verifyApple('transaction', signJws(txn({ bundleId: 'com.example.other' }), chain), made);
     check(!bundle.ok && bundle.status === 'INVALID_APP_IDENTIFIER', `another app's purchase is refused as another app's: ${bundle.status}`);
+    const desktop = await apple.verifyApple('transaction', signJws(txn({ bundleId: 'org.mailrata.desktop' }), chain), made);
+    check(!desktop.ok && desktop.status === 'INVALID_APP_IDENTIFIER',
+      `so is one signed for org.mailrata.desktop, the downloaded desktop app's id, which sells nothing through Apple: ${desktop.status}`);
+    const shared = await apple.verifyApple('transaction', signJws(txn(), chain), made);
+    check(shared.ok && shared.payload.bundleId === 'org.mailrata.app',
+      'and one carrying org.mailrata.app verifies, whether bought on the iPhone or the Mac (Universal Purchase: one bundle id, and a transaction names no platform)');
 
     const xcode = txn({ environment: 'Xcode' });
     const noFlag = await apple.verifyApple('transaction', unsignedJws(xcode), made);
@@ -308,8 +360,8 @@ export default async function run(state) {
     check(!forged.ok && !forged.noAppId && forged.status === 'VERIFICATION_FAILURE', 'and a forged one is still reported as forged');
     check(apple.appleSettings({ APPLE_APP_ID: '12ab' }).appId === null && apple.appleSettings({ APPLE_APP_ID: '12ab' }).appIdUnreadable,
       'an APPLE_APP_ID that is not a number is not used');
-    check(apple.appleSettings({}).bundleId === BUNDLE && apple.appleSettings({ APPLE_BUNDLE_ID: ' org.example.rata ' }).bundleId === 'org.example.rata',
-      `the bundle id is ${BUNDLE} unless APPLE_BUNDLE_ID says otherwise`);
+    check(apple.APPLE_DEFAULT_BUNDLE_ID === 'org.mailrata.app' && apple.appleSettings({}).bundleId === 'org.mailrata.app' && apple.appleSettings({ APPLE_BUNDLE_ID: ' org.example.rata ' }).bundleId === 'org.example.rata',
+      `the bundle id is org.mailrata.app, the iPhone and Mac App Store apps' (D9), unless APPLE_BUNDLE_ID says otherwise`);
     const broken = apple.appleVerifiers({ APPLE_TEST_ROOT: 'bm90IGEgY2VydGlmaWNhdGU=' });
     check(!!broken.off, `a root that cannot be read switches App Store purchases off: ${broken.off}`);
 
@@ -434,20 +486,44 @@ export default async function run(state) {
     const first = await apple.appleWrite(sb, id, apple.applePurchase(t, 'Production'));
     const n = sbx.fake.queries.length;
     const again = await apple.appleWrite(sb, id, apple.applePurchase(t, 'Production'));
-    const asked = sbx.fake.queries.slice(n);
-    check(first.wrote && again.wrote && asked.length === 1 && asked[0].startsWith('PATCH /rest/v1/apple_subscriptions?')
-      && asked[0].includes(`original_transaction_id=eq.${id}`) && asked[0].includes(`or=(period_from.lt.${from},and(period_from.eq.${from},signed_at.lte.${signed}))`),
-      `a purchase is one update, over a row of an earlier period or of the same one signed no later: ${asked[0] || 'nothing asked'}`);
+    const asked = sbx.fake.queries.slice(n).map((x) => x.split('?')[1].replace(/&select=.*/, ''));
+    check(first.wrote && again.wrote && asked.length === 2 && asked[0] === `original_transaction_id=eq.${id}&period_from=lt.${from}`
+      && asked[1] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${signed}`,
+      `a purchase: over a row of an earlier period, else over the same period signed no later; nothing about a grace period: ${asked.join(' | ')}`);
+    const wrote = sbx.fake.bodies.slice(n).map((b) => Object.keys(JSON.parse(b || '{}')));
+    check(wrote.length === 2 && wrote[0].includes('grace_signed_at') && !wrote[1].some((k) => /grace/.test(k)),
+      `over the same period it never writes the grace fields, and over an earlier one it starts them afresh: ${wrote.map((k) => k.filter((x) => /grace/.test(x)).join('+') || 'none').join(' | ')}`);
     const at = Date.now() + 1000;
-    const refund = apple.appleChange({ notificationType: 'REFUND', signedDate: at }, { ...t, revocationDate: at }, null, 'Production');
+    const notice = apple.appleChange({ notificationType: 'DID_FAIL_TO_RENEW', subtype: 'GRACE_PERIOD', signedDate: at }, t, { gracePeriodExpiresDate: at + 16 * DAY }, 'Production');
     const m = sbx.fake.queries.length;
-    const r = await apple.appleWrite(sb, id, refund);
-    const two = sbx.fake.queries.slice(m);
+    const r = await apple.appleWrite(sb, id, notice);
+    const three = sbx.fake.queries.slice(m).map((x) => x.split('?')[1].replace(/&select=.*/, ''));
     const stamp = new Date(at).toISOString();
-    check(r.wrote && !!r.row.revoked_at && two.length === 2 && two[0].includes(`period_from=lt.${from}`) && two[1].includes(`period_from=eq.${from}`) && two[1].includes(`signed_at=lte.${stamp}`),
-      `a refund is two: the whole row over an earlier period, else the revocation over the same period: ${two.map((x) => x.split('?')[1].replace(/&select=.*/, '')).join(' | ')}`);
-    check(r.row.period_from === from && r.row.expires_at === new Date(t.expiresDate).toISOString(), 'and the row still records the period it did');
+    check(r.wrote && three.length === 3 && three[0] === `original_transaction_id=eq.${id}&period_from=lt.${from}`
+      && three[1] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${stamp}`
+      && three[2] === `original_transaction_id=eq.${id}&period_from=eq.${from}&grace_signed_at=lte.${stamp}`,
+      `a notice with renewal info: the subscription's fields so, then the grace period's, over the same period with its own stamp no later: ${three.join(' | ')}`);
+    check(r.row.grace_until === new Date(at + 16 * DAY).toISOString() && r.row.grace_signed_at === stamp && r.row.signed_at === stamp && r.row.period_from === from,
+      'and the row records both, each with its stamp');
   }
+
+  console.log('\n— every delivery order ends as signing order does —');
+  {
+    const sb = createClient('http://stand-in.invalid', fakeSupabaseKey('service_role'), { auth: { persistSession: false }, global: { fetch: sbx.fake.fetch } });
+    const started = Date.now();
+    const ran = await deliveryOrders({ sb, check, label: '' });
+    console.log(`  (${ran.orders} orders, ${ran.deliveries} deliveries, on the stand-in, in ${((Date.now() - started) / 1000).toFixed(1)} s)`);
+    /* The same against a real Postgres and PostgREST, when one is given:
+       APPLE_TEST_POSTGREST=<its address>, over a database with section 7
+       of database.sql (and touch_updated_at from section 1) run. */
+    const real = String(process.env.APPLE_TEST_POSTGREST || '').trim();
+    if (real) {
+      const t0 = Date.now();
+      const onReal = await deliveryOrders({ sb: viaPostgrest(real), check, label: 'Postgres and PostgREST: ', width: 8 });
+      console.log(`  (${onReal.orders} orders, ${onReal.deliveries} deliveries, against ${real}, in ${((Date.now() - t0) / 1000).toFixed(1)} s)`);
+    }
+  }
+
   const base = {
     SUPABASE_URL: sbx.url, SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
     LICENCE_PRIVATE_KEY: keys.privateKey, LICENCE_PUBLIC_KEY: keys.publicKey,
@@ -524,6 +600,7 @@ export default async function run(state) {
       ['a refunded one', { revocationDate: Date.now() - 1000, revocationReason: 1 }],
       ['one the customer upgraded from', { isUpgraded: true }],
       ['another app\'s', { bundleId: 'com.example.other' }],
+      ['one signed for org.mailrata.desktop, the downloaded desktop app', { bundleId: 'org.mailrata.desktop' }],
       ['an unknown product', { productId: 'org.mailrata.lifetime' }],
       ['a purchase that is not a subscription', { type: 'Non-Consumable' }],
     ]) {
@@ -624,6 +701,13 @@ export default async function run(state) {
       check(m.status === 503 && refusal(m.d, 'not-configured', OFF), `apple_subscriptions missing: 503 "${m.d.message}"`);
       check(/run section 7 of rata-next\/database\.sql/.test(s.log().slice(before)) && !/section 7|database/i.test(JSON.stringify(m.d)),
         'the server log names section 7, the answer does not');
+      sbx.fake.mode = 'behind';
+      const behindAt = s.log().length;
+      const old = await post([signJws(txn(), chain)]);
+      sbx.fake.mode = 'ok';
+      await new Promise((res) => setTimeout(res, 200));
+      check(old.status === 503 && refusal(old.d, 'not-configured', OFF) && /run section 7 of rata-next\/database\.sql/.test(s.log().slice(behindAt)),
+        `a table made by an earlier copy of section 7, without a column it now adds (PGRST204): 503 "${old.d.message}", and the log names section 7`);
     }
 
     console.log('\n— the app may call it, and nobody else may read the answer —');
@@ -952,6 +1036,68 @@ export default async function run(state) {
           `REFUND_REVERSED of a later period${lostRefund ? ', its refund lost and retried after' : ''}: the row records it, live (${r.d.plan || r.d.reason})`);
       }
       {
+        /* Notifications about the same period out of order. Each states
+           the whole of what it knows when Apple signed it, so the one
+           Apple signed last wins, whatever arrives last: a refund answered
+           500 and sent again after a later grace notice is not lost (that
+           notice says the period is refunded too); a grace notice answered
+           500 and sent again after a later change of renewal preference
+           still stands (that change carries the grace period in its renewal
+           info, and the grace period has its own stamp); a reversal
+           answered 500 and sent again after a later grace notice is not
+           lost either. */
+        const p = txn({ purchaseDate: Date.now() - 35 * DAY, expiresDate: Date.now() - 5 * DAY, signedDate: Date.now() - 35 * DAY });
+        const refundAt = Date.now() - 20 * DAY;
+        const grace = Date.now() + 11 * DAY;
+        const inGrace = (t, signedDate) => notification(chain, 'DID_FAIL_TO_RENEW', t, { subtype: 'GRACE_PERIOD', renewal: renewalInfo(t, { gracePeriodExpiresDate: grace, isInBillingRetryPeriod: true }), signedDate });
+        const lostThenLate = async (first, later) => {
+          sbx.fake.mode = 'broken';
+          const lost = await notify(first);
+          sbx.fake.mode = 'ok';
+          const landed = await notify(later);
+          const again = await notify(first);
+          return lost.status === 500 && landed.status === 200 && again.status === 200;
+        };
+
+        const a = txn({ ...p, originalTransactionId: nextId() });
+        await notify(notification(chain, 'SUBSCRIBED', a, { signedDate: a.signedDate }));
+        const okA = await lostThenLate(
+          notification(chain, 'REFUND', { ...a, revocationDate: refundAt, revocationReason: 0 }, { signedDate: refundAt }),
+          inGrace({ ...a, revocationDate: refundAt, revocationReason: 0 }, Date.now() - 5 * DAY),
+        );
+        check(okA && rowOf(a).revoked_at === at(refundAt) && rowOf(a).grace_until === at(grace) && refusal((await renew(licOf(a))).d, 'no-subscription'),
+          'a REFUND answered 500, then a grace notice Apple signed after it: the period ends refunded, and renews nothing');
+
+        const b = txn({ ...p, originalTransactionId: nextId() });
+        await notify(notification(chain, 'SUBSCRIBED', b, { signedDate: b.signedDate }));
+        const okB = await lostThenLate(
+          inGrace(b, Date.now() - 5 * DAY),
+          notification(chain, 'DID_CHANGE_RENEWAL_PREF', b, { subtype: 'DOWNGRADE', renewal: renewalInfo(b, { autoRenewProductId: BASE, gracePeriodExpiresDate: grace }), signedDate: Date.now() - 3 * DAY }),
+        );
+        const rb = await renew(licOf(b));
+        check(okB && rowOf(b).grace_until === at(grace) && rb.d.licensed === true,
+          `a grace notice answered 500, then a change of renewal preference Apple signed after it: still in grace, and renews (${rb.d.reason || rb.d.plan})`);
+        const offered = txn({ ...p, originalTransactionId: nextId() });
+        await notify(notification(chain, 'SUBSCRIBED', offered, { signedDate: offered.signedDate }));
+        const okO = await lostThenLate(
+          inGrace(offered, Date.now() - 5 * DAY),
+          notification(chain, 'OFFER_REDEEMED', offered, { renewal: renewalInfo(offered, { gracePeriodExpiresDate: grace }), signedDate: Date.now() - 3 * DAY }),
+        );
+        check(okO && rowOf(offered).grace_until === at(grace) && (await renew(licOf(offered))).d.licensed === true,
+          'and so with an offer redeemed after it');
+
+        const c = txn({ ...p, originalTransactionId: nextId() });
+        await notify(notification(chain, 'SUBSCRIBED', c, { signedDate: c.signedDate }));
+        await notify(notification(chain, 'REFUND', { ...c, revocationDate: refundAt, revocationReason: 0 }, { signedDate: refundAt }));
+        const okC = await lostThenLate(
+          notification(chain, 'REFUND_REVERSED', c, { signedDate: Date.now() - 10 * DAY }),
+          inGrace(c, Date.now() - 5 * DAY),
+        );
+        const rc = await renew(licOf(c));
+        check(okC && rowOf(c).revoked_at === null && rc.d.licensed === true,
+          `a REFUND_REVERSED answered 500, then a grace notice Apple signed after it: not revoked, and renews (${rc.d.reason || rc.d.plan})`);
+      }
+      {
         /* A refund of a period the row has not heard of yet is recorded as
            that period's: P2's renewal is lost, then P2 is refunded. P2's
            transaction from before the refund, from the phone or as the
@@ -1030,6 +1176,13 @@ export default async function run(state) {
       await new Promise((res) => setTimeout(res, 200));
       check(down.status === 500 && missing.status === 500, `a database that fails or has no table: 500, so Apple sends it again (${down.status}, ${missing.status})`);
       check(/run section 7 of rata-next\/database\.sql/.test(s.log().slice(before)), 'and the log names section 7');
+      sbx.fake.mode = 'behind';
+      const behindAt = s.log().length;
+      const old = await notify(notification(chain, 'DID_RENEW', txn(), { renewal: renewalInfo(txn()) }));
+      sbx.fake.mode = 'ok';
+      await new Promise((res) => setTimeout(res, 200));
+      check(old.status === 500 && /run section 7 of rata-next\/database\.sql/.test(s.log().slice(behindAt)),
+        `a table without a column section 7 now adds: 500, and the log names section 7 (${old.status})`);
     }
 
     console.log('\n— renewing an App Store licence —');
@@ -1094,6 +1247,13 @@ export default async function run(state) {
       check(down.status === 503 && refusal(down.d, 'unavailable') && /keeps the licence it has/.test(down.d.message), `the database fails: 503, "${down.d.message}"`);
       check(missing.status === 503 && refusal(missing.d, 'not-configured') && missing.d.message === OFF && /run section 7/.test(s.log().slice(before)),
         'apple_subscriptions missing: 503 not-configured, and the log names section 7');
+      sbx.fake.mode = 'behind';
+      const behindAt = s.log().length;
+      const old = await renew(lic);
+      sbx.fake.mode = 'ok';
+      await new Promise((res) => setTimeout(res, 200));
+      check(old.status === 503 && refusal(old.d, 'not-configured') && old.d.message === OFF && /run section 7/.test(s.log().slice(behindAt)),
+        'a table without a column section 7 now adds (42703 on reading it): 503 not-configured, and the log names section 7');
       const sendsAway = [r, none, odd, down, missing].filter((x) => /sign in|choose a plan|at mailrata\.org|mailrata\.org\//i.test(x.d.message || ''));
       check(sendsAway.length === 0, 'and no answer to an App Store licence sends anyone to mailrata.org');
     }

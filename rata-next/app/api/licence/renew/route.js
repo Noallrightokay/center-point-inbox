@@ -3,7 +3,7 @@ import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
-import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, tableMissing } from '../../../../lib/apple';
+import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, appleTableBehind } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
 
@@ -175,8 +175,8 @@ async function renewApple(sb, sub) {
   const id = appleIdOf(sub);
   const held = id ? await appleRow(sb, id) : { row: null };
   if (held.error) {
-    if (tableMissing(held.error)) {
-      console.warn('licence/renew: the database has no apple_subscriptions table; run section 7 of rata-next/database.sql');
+    if (appleTableBehind(held.error)) {
+      console.warn('licence/renew: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
       return NextResponse.json({ licensed: false, reason: 'not-configured', message: APPLE_SAID.off }, { status: 503 });
     }
     console.warn('licence/renew: could not read an App Store subscription', held.error.code || held.error.message);
