@@ -423,6 +423,34 @@ pub(crate) async fn wrap_tls(tcp: TcpStream, name: &str, host: &str) -> Result<T
         .map_err(|e| format!("{host} could not be trusted: {e}"))
 }
 
+/// The first thing an IMAP server says, reached the way every connection
+/// RATA makes is: the name judged by the guard ([`resolve_public`]), a
+/// socket to an address that was judged ([`dial`]), and TLS checked against
+/// the name ([`wrap_tls`]). Nothing is sent, so nothing signs in. One line
+/// of it, as [`one_line`] makes one.
+///
+/// For a build's self-test on a device (the app's `smoke` feature), which
+/// proves the system's resolver, the guard, a socket and the trust store
+/// together where none of them can be tested beforehand. Nothing else calls
+/// it.
+pub async fn greeting(resolver: &Resolver, host: &str, port: u16) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+    let (name, addrs) = resolve_public(resolver, host)
+        .await
+        .map_err(|verdict| verdict.explain(host))?;
+    let tcp = dial(&addrs, port, host).await?;
+    let mut tls = wrap_tls(tcp, &name, host).await?;
+    let mut heard = [0u8; 512];
+    let n = timeout(GREETING, tls.read(&mut heard))
+        .await
+        .map_err(|_| format!("{host} did not answer in time."))?
+        .map_err(|e| format!("{host} did not answer as a mail server: {}", io_reason(&e)))?;
+    if n == 0 {
+        return Err(format!("{host} closed the connection without answering."));
+    }
+    Ok(one_line(&String::from_utf8_lossy(&heard[..n])))
+}
+
 /// Sign in with whatever the mailbox signs in with. Whatever goes wrong is
 /// said without the secret in it: every server sentence goes through
 /// [`credential::said`], SMTP's rule, with what RATA sent as the secrets
@@ -5728,6 +5756,26 @@ mod tests {
                     other => panic!("{host} should have been refused outright: {other:?}"),
                 }
             }
+        });
+    }
+
+    /// The self-test's greeting goes through the guard like every other
+    /// connection: a private address or a name that does not exist is
+    /// answered with the guard's words, before any socket opens.
+    #[test]
+    fn a_greeting_is_asked_only_of_a_public_server() {
+        rt().block_on(async {
+            let r = Resolver::system().expect("resolver");
+            for host in ["127.0.0.1", "192.168.1.1", "localhost", "::ffff:7f00:1"] {
+                let why = greeting(&r, host, IMAP_PORT).await.unwrap_err();
+                assert!(
+                    why.contains("private network") || why.contains("not a valid"),
+                    "{host}: {why}"
+                );
+            }
+            let host = format!("nx-{}.invalid", std::process::id());
+            let why = greeting(&r, &host, IMAP_PORT).await.unwrap_err();
+            assert_eq!(why, format!("No mail server answers at {host}."));
         });
     }
 

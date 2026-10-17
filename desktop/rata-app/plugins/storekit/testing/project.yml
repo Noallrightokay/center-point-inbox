@@ -1,0 +1,59 @@
+# RATAStore (../store) against ios/RATA.storekit, in StoreKit's test
+# environment (SKTestSession): no App Store account, no network, and each
+# transaction signed by Xcode's test certificate, which StoreKit verifies
+# as it verifies Apple's. That environment serves an app, never the xctest
+# tool a Swift package's own tests run in, so the tests run inside a small
+# Mac app made for them here; on a Mac, because RATAStore is also what a
+# later Mac App Store build would use. Made with xcodegen, as
+# ios/prepare.sh remakes the app's project, and run by ios.yml:
+#
+#   xcodegen generate --spec project.yml
+#   xcodebuild test -project StoreTesting.xcodeproj -scheme StoreTests \
+#     -destination platform=macOS
+name: StoreTesting
+options:
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  RATAStore:
+    path: ../store
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    # Signed to run on this Mac only, with no team: nothing here is shipped.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  StoreHost:
+    type: application
+    platform: macOS
+    sources: [Host]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.mailrata.storekit-tests
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+  StoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      # Read from the tests' own bundle (SKTestSession(contentsOf:)).
+      - path: ../../../ios/RATA.storekit
+        buildPhase: resources
+    dependencies:
+      - target: StoreHost
+      - package: RATAStore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.mailrata.storekit-tests.tests
+schemes:
+  StoreTests:
+    build:
+      targets:
+        StoreHost: all
+        StoreTests: [test]
+    test:
+      targets: [StoreTests]

@@ -5,8 +5,21 @@ edition = "2024"
 description = "RATA — your mail, on your machine"
 default-run = "rata-app"
 
+# What main.rs ran is the library's `run` (lib.rs), so that a phone can start
+# it too: iOS links the static library into its app, Android loads the
+# shared one. The `_lib` suffix keeps its files apart from the program's on
+# Windows. The program, `rata-app`, is still what the desktop installers
+# ship, under that name.
+[lib]
+name = "rata_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Reading the config the CLI hands over (`TAURI_CONFIG`), to leave the
+# updater's out of a build without self-update (build.rs). Already in the
+# tree through tauri-build, so nothing new is built.
+serde_json = "1"
 
 [dependencies]
 rata-mail = { path = "../../rata-mail", features = ["serde"] }
@@ -21,22 +34,43 @@ getrandom = "0.3"
 sha2 = "0.11"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-open = "5"
+# Handing a web address to the browser, and a file RATA made to its app
+# (links.rs, created.rs), after RATA's own checks. Its Rust side only: the
+# page is granted none of it. On a computer it starts the system's opener
+# through the `open` crate, as RATA did itself before; on a phone it asks
+# the system, since an app there cannot start a program.
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", optional = true }
 tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
 
-# A second launch handing over to the first (main.rs, review R5), on
-# Windows and Linux; on macOS the list's lock is the only guard. Its Linux
-# half uses zbus and its Windows half windows-sys, both already in the tree.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# A second launch handing over to the first (lib.rs, review R5), on
+# Windows and Linux; on macOS the list's lock is the only guard, and a
+# phone runs one copy of an app at a time by itself. Its Linux half uses
+# zbus and its Windows half windows-sys, both already in the tree.
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
 tauri-plugin-single-instance = "2"
 
+# On iOS RATA writes its keychain entries itself, to stay on the phone
+# (vault.rs: keyring's iOS writer files them to go into backups and onto
+# another phone, with no setting for it), and marks its data folders as
+# never backed up (backup.rs). The versions keyring's own iOS backend uses,
+# through security-framework 2, so nothing new is built.
+[target.'cfg(target_os = "ios")'.dependencies]
+core-foundation = "0.9"
+core-foundation-sys = "0.8"
+security-framework-sys = { version = "2", default-features = false }
+# Buying RATA in the iPhone app (appstore.rs): StoreKit 2, in RATA's own
+# plugin, which only RATA's Rust calls. iOS only: a computer and Android are
+# built without it, and their `store_*` commands answer that the App Store
+# is not available there.
+tauri-plugin-storekit = { path = "../plugins/storekit" }
+
 # Whether the session bus's address can be read before single instance's
-# plugin is set up, which panics when it cannot (main.rs). The zbus the
+# plugin is set up, which panics when it cannot (lib.rs). The zbus the
 # plugin itself uses, so nothing new is built.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
@@ -60,5 +94,15 @@ windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Securit
 flate2 = "1"
 
 [features]
-# Tauri needs this to build a release binary without a console window on Windows.
-default = []
+default = ["self-update"]
+# Updating itself from RATA's own releases (update.rs), as the desktop
+# installers do. Left out (--no-default-features) of a build for an app
+# store or a phone, which its store updates: such a build has no updater,
+# no feed address and no updater key in it (build.rs), and answers the page
+# as a build without the key does.
+self-update = ["dep:tauri-plugin-updater"]
+# A self-test run as RATA starts (src/smoke.rs), for a device nobody can
+# watch: the iOS Simulator job in .github/workflows/ios.yml. Never on by
+# default and never in a release; harness/verify-release.sh fails a
+# published binary that holds its words.
+smoke = []
