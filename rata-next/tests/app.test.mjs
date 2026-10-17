@@ -148,6 +148,20 @@ export default async function run(state) {
       'and no code that could reach those hosts is left in the page');
     check(!offMachine.operator, 'no operator settings (OAuth client, Supabase, Stripe links, API endpoint) shown to customers');
     check(offMachine.chat.length === 0, `no Slack, Discord or phone to add: ${offMachine.chat.join(', ') || 'email only'}`);
+    /* Needs me and Waiting on them are RATA's guess from the mail the app
+       holds (Assistant v1, P2), so the website, which reads no mail, offers
+       neither, nor their setting, keys or buttons. */
+    const guess = await page.evaluate(() => {
+      go('inbox'); renderMailFilters();
+      const chips = [...document.querySelectorAll('#mail-filters [data-f]')].map(b => b.dataset.f);
+      go('set');
+      const row = document.querySelector('#wait-row');
+      const out = { chips, wait: !!row && !row.hidden && row.getClientRects().length > 0, needsKey: KEYS.find(k => k.keys.includes('g n')).run() };
+      go('inbox');
+      return out;
+    });
+    check(!guess.chips.includes('needs') && !guess.chips.includes('waiting') && !guess.wait && guess.needsKey === false,
+      `no Needs me or Waiting on them on the website, nor their setting or key: ${JSON.stringify(guess)}`);
 
     /* A workspace saved by an older build still opens, minus what it can no
        longer show. */

@@ -24,7 +24,7 @@
     };
   }
 
-  const DEMO_VERSION = '8';
+  const DEMO_VERSION = '9';
   const UID = 'local_demo2';
   const ME = 'Riley Carter';
   const DAY = 86400000, HOUR = 3600000, MIN = 60000;
@@ -277,6 +277,16 @@ Hi Dana,
 
 Thanks for reaching out. For 12 staff at your centre, the infant and
 child CPR class would be`, atts: [{ index: 1, name: 'Tidepool CPR quote, Little Oaks.pdf', mime: 'application/pdf', size: 5200 }] }),
+    /* Asked six days ago and not answered: it waits on them (Assistant v1,
+       Waiting on them). */
+    msg({ uid: 404, acct: CPR, folder: 'sent', to: 'jordan@harboursidegym.example', toName: 'Jordan Reyes', subject: 'Recertification dates for your trainers?', ago: 6 * DAY,
+      body: `
+Hi Jordan,
+
+Your trainers' BLS cards run out in December. Could you send me the dates
+that suit your trainers? I can come to the gym on a weekday evening.
+
+Riley` }),
 
     /* Clearchart Medical Writing (side business) */
     msg({ uid: 501, acct: WRITE, from: 'tom.becker@wellnessquarterly.example', fromName: 'Tom Becker', subject: 'Winter issue: 1,200 words on sleep and shift work?', ago: 7 * HOUR, unread: true,

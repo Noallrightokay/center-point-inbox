@@ -207,6 +207,22 @@ for (const form of FORMS) {
   await ready();
   check((await theirs()) === THEIRS, `opening the demo leaves another page’s storage alone: ${await theirs()}`);
 
+  /* Needs me and Waiting on them: RATA's guess from the sample mail, made
+     in the page and sent nowhere (Assistant v1, P2). */
+  await page.waitForFunction(() => NEEDS.size >= 3 && WAITING.size >= 1, null, { timeout: 8000 }).catch(() => {});
+  const relayAtStart = await page.evaluate(() => (window.__RATA_DEMO_AI || []).length);
+  await page.evaluate(() => go('inbox'));
+  await page.click('#mail-filters [data-f="needs"]');
+  await page.waitForTimeout(200);
+  const needs = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#mail-scroll .mail-row')].map((r) => r.dataset.id), chip: $('#mail-filters [data-f="needs"]').getAttribute('aria-label') }));
+  check(needs.rows.length >= 3 && /^Needs me, \d+ messages$/.test(needs.chip || ''), `Needs me shows at least 3 of the sample messages: ${JSON.stringify(needs)}`);
+  await page.click('#mail-filters [data-f="waiting"]');
+  await page.waitForTimeout(200);
+  const waiting = await page.evaluate(() => [...document.querySelectorAll('#mail-scroll .mail-row')].map((r) => r.dataset.id));
+  check(waiting.includes('bookings@tidepoolcpr.example_sent_404') && relayAtStart === 0,
+    `Waiting on them shows the question to Harbourside Gym, and neither asked the relay anything: ${JSON.stringify(waiting)}`);
+  await page.evaluate(() => { mailFilter = 'all'; renderMailFilters(); renderMail(); });
+
   /* AI, answered in the page. */
   /* Opening fetches the whole message first (open_message), which draws
      the pane again; a button pressed before that would lose its answer. */
@@ -253,18 +269,24 @@ for (const form of FORMS) {
   await page.click('#aiok-save');
   await page.waitForFunction(() => !$('#as-run').disabled && (window.__RATA_DEMO_AI || []).some((b) => b.task === 'tasks'), null, { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(300);
-  const brief = await page.evaluate(() => ({ out: $('#as-out').textContent, flags: S.messages.filter((m) => m.flag).map((m) => m.subj + ': ' + m.flag.task),
+  /* What it kept from AI and left out is said above the answer, in #as-pre
+     (P3), which is filled again once the briefing is in. */
+  await page.waitForFunction(() => /Kept from AI/.test($('#as-pre').textContent), null, { timeout: 5000 }).catch(() => {});
+  const brief = await page.evaluate(() => ({ out: $('#as-out').textContent, pre: $('#as-pre').textContent, flags: S.messages.filter((m) => m.flag).map((m) => m.subj + ': ' + m.flag.task),
+    groups: [...document.querySelectorAll('#as-out .as-group h3')].map((h) => h.textContent),
     sent: ((window.__RATA_DEMO_AI || []).filter((b) => b.task === 'tasks').at(-1) || { messages: [] }).messages.map((m) => m.subject), boxes: S.settings.aiBoxes }));
   const HOSPITAL = /reappointment|November ED|Shift swap|Quality committee|pay statement|sign-in prompt|Grand Rounds/;
   check(brief.sent.length > 0 && !brief.sent.some((s) => HOSPITAL.test(s)) && brief.boxes[LARK] === 'off' && brief.boxes[SALT] === 'off',
     `no hospital subject reaches the relay once both are left unticked: ${JSON.stringify(brief.sent)}`);
   /* A mailing (the newsletter carries List-Unsubscribe) stays on this
      computer too, as the privacy page says, and the answer says so. */
-  check(!brief.sent.some((s) => /autumn hikes/.test(s)) && /Left out on this computer: \d+ mailings?/.test(brief.out),
-    `the newsletter is left out of the briefing, and the answer says mailings were: ${JSON.stringify(brief.sent)}`);
+  check(!brief.sent.some((s) => /autumn hikes/.test(s)) && /Left out on this computer: \d+ mailings?/.test(brief.pre),
+    `the newsletter is left out of the briefing, and the panel says mailings were: ${JSON.stringify(brief.sent)}`);
   check(brief.flags.length >= 3 && brief.flags.every((f) => /: Demo: /.test(f)) && !brief.flags.some((f) => HOSPITAL.test(f)) && /need/.test(brief.out)
-    && brief.out.includes('Kept from AI') && brief.out.includes(LARK) && brief.out.includes(SALT),
-  `Run briefing flags the rest with the demo’s own tasks and names what it kept from AI: ${JSON.stringify(brief.flags)}`);
+    && /Kept from AI: /.test(brief.pre) && brief.pre.includes(LARK) && brief.pre.includes(SALT),
+  `Run briefing flags the rest with the demo’s own tasks, and #as-pre names both hospitals as kept from AI: ${JSON.stringify({ flags: brief.flags, pre: brief.pre })}`);
+  check(brief.groups.length >= 2 && brief.groups.every((g) => /^[^\s@]+@[^\s@]+ · \d+ needs? you$/.test(g)),
+    `the answer is grouped under a heading per mailbox: ${JSON.stringify(brief.groups)}`);
   await page.evaluate(() => closeAssist());
   /* A renewal, as bridge.js asks for one (Try again in the licence box). */
   const renewed = await page.evaluate(async () => {

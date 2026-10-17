@@ -122,8 +122,9 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (608 checks, among them axe-core accessibility scans of the inbox, an
-open message, the composer, Settings and the dialogs, in light and dark,
+policy (660 checks, among them axe-core accessibility scans of the inbox, an
+open message, the composer, Settings, the dialogs, Needs me, Waiting on
+them and Assist's briefing by mailbox, in light and dark,
 failing on any serious or critical rule). CI runs it as *Desktop interface,
 driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
 repository root:
@@ -143,7 +144,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 917 checks, no network, no database required
+npm test 2>&1 | cat # 919 checks, no network, no database required
 npm run dev
 ```
 

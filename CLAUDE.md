@@ -30,9 +30,9 @@ however convenient.
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
-| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 917 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
+| `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 919 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (608 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (660 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -867,15 +867,47 @@ that adds the buttons must add the words (as first written in 4ba30c1). Plan-gat
 the start, 1 500 chars, of up to 25 recent messages from the last 14
 days, each named only by its place, `"1"`..`"25"`, never by `m.id`, which
 carries the mailbox key and so its address; I1, v0.1.45, harness check).
-**What the briefing leaves out** (`briefPick`), as the privacy page says:
-mailings (`m.unsub`, or what `categorize` files under Updates, a Sort rule
-first), mail answered since (`convoIndex`: one pass joining held mail by
-`convoKeys`, as `conversationOf` links it, and the newest sent message in
-each; a message older than that has had an answer), mailboxes kept from AI,
-and, with the check on, any message it finds something in. It walks newest
-first and reads texts from disk only until 25 pass, so the counts it gives
-under the answer ("Left out on this computer: 2 mailings, 1 you have
-answered.") are of what would otherwise have gone.
+**Today, across every inbox (Assistant v1, P3).** The briefing reads the
+inbox mail of the last 14 days of every mailbox, or of one picked in
+`#as-scope` (`BRIEF_SCOPE`; pills with `aria-pressed`, app only, shown
+with two or more mailboxes), and **leaves out** (`briefCandidates`,
+`briefPick`), as the privacy page says: mailings (`m.unsub`, or what
+`categorize` files under Updates, a Sort rule first), mail answered since
+(`convoIndex`, *Needs me* below), mail marked Done or snoozed, mail of a
+mailbox kept from AI or not decided yet, and, with the check on, any
+message it finds something in. The rest is taken one message from each
+mailbox in turn, the mailbox with the newest first, so a busy mailbox
+cannot crowd a quiet one out, up to `BRIEF_MAX` (25), or `BRIEF_ONE` (12,
+on its own `const` line; `legal.test` holds it at most 25) for one
+mailbox; texts are read from disk only until those pass, and the
+`AI_BRIEF_JSON` trim drops the last taken. Before any press, `#as-pre`
+(`aria-live=polite`, `fillPre`, on open, on a scope change and after a
+briefing, with no request) says what Run briefing would send, by mailbox,
+and what stays ("Left out on this computer: 2 mailings, 1 you have
+answered. Kept from AI: … (6 messages).", and "This month’s AI allowance
+is nearly used." from 90%), and **What it leaves out** (`#as-left`,
+`aria-expanded`, `#as-leftlist`) lists each message with its reason.
+Undecided mailboxes in scope go through the briefing's dialog first, and
+the pick is made again after. The answer (`renderBrief`) is headed "6 need
+you across 3 mailboxes, 2 important" and grouped under an `h3` per mailbox
+("<address> · 3 need you"), important first, then by day due, then newest.
+Each row (`briefRow`, DOM methods only) is a `div.as-item` holding a
+button that opens the message (sender, Important, the task, its next step
+in words, `dueWords`) and its own buttons, named in full: Reply (first
+when the step is a reply), Done, Snooze, and Archive through `takeOff`.
+Rows are no longer `role=button`, which nested buttons (axe's
+nested-interactive). Done, Snooze and Archive take the row away and move
+the focus to the next row's button, else Run briefing. "Looked at 25 of
+58 recent messages." and **Look at the next N** (`#as-more`) are a second
+press and a second request, never automatic, of mail this panel has not
+sent (`BRIEF_SEEN`, emptied by Run briefing, opening and a scope change).
+A briefing re-flags only what it was sent: a named message gets `m.flag =
+{task, due, important, next, at, by: 'brief'}`, an unnamed one loses a
+briefing's flag, and a flag the customer set (`by: 'you'`) stays; an
+answer naming none of the places sent ("The briefing could not be read.")
+keeps every flag, as an error does. The quick briefing (`runLocalBrief`,
+every plan, sends nothing) has the same groups and rows, with Done and
+Snooze in the app, follows the scope, and is what a scope change shows.
 The sender goes by name only: the relay drops anything in angle brackets
 and any word with an `@` (`nameOnly`), whatever an app version sends, and
 the page sends none (`aiName`). The app sends `today` and each message's
@@ -949,8 +981,60 @@ gone, and `tidyV6` drops a stored one. The bridge gives up after `AI_WAIT`
 "RATA’s AI service took too long to answer. Try again." The app never
 sends anything on its own (opening Assist runs the local briefing), and
 falls back to the local summary/briefing with the reason when AI cannot be
-used. Flags are stored as `m.flag` and shown in the list. Translations live
-in `TRANSLATED` for the session. **Long mail and long answers (BUG-A,
+used. Flags are stored as `m.flag` and shown in the list ("⚑ task · due 31
+Oct", with "Important" as a badge of its own, and none once the message is
+done). Translations live in `TRANSLATED` for the session.
+**Needs me and Waiting on them (Assistant v1, P2).** RATA's guess, made in
+the page from the mail it holds, on every plan, app only, and sent
+nowhere. Two chips after Unread, each naming its count ("Needs me · 6",
+`aria-label` "Needs me, 6 messages"; "Waiting on them · 2"), whose views
+end, or say when empty ("Nothing needs you." / "Nobody owes you an
+answer."), "RATA’s guess, made on this computer from mail it holds from
+the last 30 days. Done and Snooze take a message out." `needsMe`: inbox
+mail of the last `NEEDS_DAYS` (30), not done, not snoozed, not answered
+since, and (a) flagged, (b) from someone the customer has written to
+(`writtenTo`: To and Cc of held sent mail, the customer's own addresses
+aside) or saved in People, and asking something, or (c) starred; a
+mailing only by (a) or (c). In that view the preview says why ("Asked you
+a question · 3 days", "You starred it", "Briefing: …", "You flagged it").
+`waitingOn`: mail the customer really sent (Sent, or RATA's own record of
+a send; not "recorded here only"), the newest they sent in its
+conversation, nobody else having written since, older than
+`S.settings.waitDays` (Settings → Workspace, *Waiting on them after*, 2,
+3, 5 or 7 days, 3 unless set) and younger than 30, which asks something
+or follows one of the customer's own questions still unanswered (a
+follow-up's own words ask nothing). **Asking** (`m.asks`, `m.asksV` 1) is
+judged once per message by `scanAsks`, after each refresh and at start,
+for mail of the last 30 days, its text read from disk 200 at a time: a
+line of the subject or of the first 600 characters of its own words
+(`newWords`, never the mail quoted under them) ending in `?`, or
+`ASSIST_ACTIONS`/`ASSIST_DEADLINE`; until then the subject and preview
+stand in. **`convoIndex`** is one pass (it replaces `conversationOf` per
+message, which would be quadratic): a union-find over `convoKeys` of mail
+`convoJoins` admits, giving each conversation the customer's last send
+(`lastSent`; a message older than that has had an answer; a send recorded
+here only does not count), its id (`latestSent`), every send (`sentIn`)
+and when anyone else last wrote (`lastOther`). `NEEDS` and `WAITING` are
+refilled 300 ms after any `save()` (`queueNeeds`; `needsNow` at once),
+redrawing the chips and the strip when a count moves. **Done and Snooze**
+are `m.track = {done: 'done'|'replied'|'answered', at, snooze}`, kept with
+the message in IndexedDB as `m.flag` is, never synced, gone with Delete
+account. The reading pane offers **Done** (**Got an answer** when it waits
+on them) and **Snooze ▾** (`role=menu`: Tomorrow 7:00, Monday 7:00, The
+day before it’s due, Pick a date…, which opens a date field) wherever the
+guess or a flag holds a message, and **Write follow-up** (`followUp`: from
+the mailbox it went from, to its To and Cc, "Re: …", "Just following up on
+my note below." above the signature and the quoted message, `REPLYING`
+set) when it waits on them. `wakeSnoozed` runs at start and every 30 s on
+its own timer, since `autoTick` returns early during a refresh. A reply
+that goes marks what it answered done (`markReplied`, received mail only,
+so a follow-up marks nothing) and says "Sent from X. Marked done: you
+replied"; a reply a refresh finds in Sent does the same. In the app the
+digest strip counts these ("6 unread · 3 need you · 2 waiting on others ·
+Open briefing →"); the website keeps its own. Under every plan an open
+message's conversation starts "Last word: Dana Whitfield, 2 days ago ·
+waiting on you" (`.convo-last`). Keys: y Done, b Snooze (its menu, the
+focus on its first choice), g n Needs me, g t Assist. **Long mail and long answers (BUG-A,
 v0.1.43).** The page cuts what it sends (`aiCut`): 12 000 characters of one
 message (`AI_TEXT`, exactly what the relay reads and what the privacy page
 promises), 300 of a subject, 200 of a sender, 1 500 of each briefing

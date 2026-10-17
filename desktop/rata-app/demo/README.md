@@ -127,6 +127,11 @@ All in `demo-backend.js`:
   `unread`/`starred`, `folder` (`'sent'`, `'drafts'`, `'archive'`,
   `'junk'` for Spam, or `{ named: 'Folder' }`; the inbox when left out), `atts` for attachments, and `mid`/`inReplyTo`
   to thread replies into one conversation. Give each message its own `uid`.
+  Needs me and Waiting on them are the page's own guess from this mail,
+  as in the app: a question from someone saved in `CONTACTS` or written
+  to, a starred or flagged message, and, for Waiting on them, a sent
+  question with no answer more than three days old (the CPR business's
+  to Harbourside Gym, `uid` 404). `check.mjs` expects both.
 - **Mail that arrives while you watch**: the `setTimeout` after `MAIL`.
 - **Saved people**: `CONTACTS`.
 - **Attachments**: `FILES`. Documents are written by RATA's own Word,

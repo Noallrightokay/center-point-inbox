@@ -236,6 +236,14 @@ body.split-on .side-list,body.split-on .split-pane{width:auto}
 .m-subj.none{color:var(--faint);font-style:italic}
 .badge.flag{background:var(--amber-soft);color:var(--ink);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .badge.flag.hot{background:var(--red-soft);color:var(--red)}
+/* Needs me and Waiting on them (Assistant v1, P2). */
+.vl-note{margin:0;padding:12px 18px 22px;text-align:center;font-size:12px;line-height:1.5;color:var(--slate)}
+.empty .vl-why{display:block;max-width:360px;margin:6px auto 0;font-size:12.5px;line-height:1.5;color:var(--slate)}
+.md-convo .convo-last{margin:0 8px 8px;font-size:12.5px;color:var(--slate)}
+.snz-pick{position:absolute;top:110%;left:0;z-index:30;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:230px;padding:10px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg)}
+.snz-pick[hidden]{display:none}
+.snz-pick label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--slate)}
+#wait-row[hidden]{display:none}
 .md-ai{margin-top:14px;white-space:pre-line}
 .md-ai-title{display:block;margin-bottom:4px}
 .md-ai-note{font-size:12px;color:var(--faint);margin-top:6px}
@@ -792,16 +800,41 @@ button.cv-row:hover{background:var(--fill-2)}
 @media (prefers-reduced-motion:reduce){#assist{animation:none}}
 .as-head{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--hair-2)}
 .as-head b{font-size:15px;font-weight:600}
-.as-actions{display:flex;gap:8px;padding:14px 18px 6px}
+.as-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 18px 6px}
+/* Today, across every inbox (Assistant v1, P3): which mailboxes, what Run
+   briefing would send, and what it leaves out, all said before a press. */
+.as-scope{display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%}
+.as-scope[hidden],#as-left[hidden],.as-leftlist[hidden]{display:none}
+.as-scope .pill[aria-pressed="true"]{background:var(--ink);color:var(--bg);box-shadow:none}
+.as-pre{flex-basis:100%;margin:2px 0 0;font-size:12.5px;line-height:1.5;color:var(--slate)}
+.as-pre:empty{display:none}
+#as-left{font-size:12.5px;min-height:28px;padding:4px 10px}
+.as-leftlist{flex-basis:100%;max-height:220px;overflow-y:auto;background:var(--fill-2);border-radius:var(--r-sm);padding:8px 12px}
+.as-leftlist ul{list-style:none;margin:0;padding:0}
+.as-leftlist li{font-size:12.5px;line-height:1.45;color:var(--ink);padding:4px 0;border-bottom:1px solid var(--hair-2);overflow-wrap:anywhere}
+.as-leftlist li:last-child{border-bottom:0}
+.as-leftlist .why{color:var(--slate)}
 .as-out{flex:1;overflow-y:auto;padding:12px 18px 24px}
 .as-sum{font-size:14px;color:var(--slate);margin:6px 0 14px}
 .as-sum b{color:var(--ink);font-weight:600}
-.as-item{background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:var(--lift)}
-.as-item:hover{background:var(--fill-2)}
+.as-group h3{font-size:13px;font-weight:600;line-height:1.3;margin:18px 0 8px;color:var(--ink);overflow-wrap:anywhere}
+.as-group:first-of-type h3{margin-top:6px}
+/* A row holds buttons of its own, so it is not one (axe's
+   nested-interactive): the part that opens the message is a button, and
+   so is each thing to do with it. */
+.as-item{background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:12px 14px;margin-bottom:8px}
+.as-open{display:block;width:100%;text-align:left;background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;border-radius:4px}
+.as-open:hover .as-who{text-decoration:underline}
 .as-line1{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .as-line1 b{font-size:13px}
-.as-t{margin-left:auto;font-size:11px;color:var(--faint)}
-.as-text{font-size:13px;color:var(--slate);margin-top:5px}
+.as-t{margin-left:auto;font-size:11px;color:var(--slate)}
+.as-text{display:block;font-size:13px;color:var(--ink);margin-top:5px;overflow-wrap:anywhere}
+.as-when{display:block;font-size:12.5px;color:var(--slate);margin-top:4px}
+.as-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;position:relative}
+.as-acts .btn{min-height:28px;padding:4px 10px;font-size:12.5px}
+.as-acts .md-sortmenu{top:100%}
+.as-foot{margin-top:16px}
+.empty.as-clear{padding:30px 10px}
 .as-why{display:flex;gap:5px;margin-top:7px}
 .as-chip{font-size:11px;font-weight:500;padding:1px 7px;border-radius:5px}
 .as-chip.question{background:var(--tint-soft);color:var(--tint)}
@@ -1169,6 +1202,7 @@ body.send-counting #toast{bottom:76px}
           <div class="set-row"><div class="grow"><b>Display name</b><span>Shown on outbound messages</span></div><input type="text" id="set-name" aria-label="Display name"></div>
           <div class="set-row" id="notify-row" style="display:none"><div class="grow"><b>New-mail notifications</b><span>When mail arrives while RATA is in the background</span></div><select class="sel" id="set-notify" aria-label="New-mail notifications"><option value="full">Show sender and subject</option><option value="count">Only say new mail arrived</option><option value="off">Off</option></select></div>
           <div class="set-row" id="undo-row" style="display:none"><div class="grow"><b>Undo send</b><span>How long Send waits, so a message can be taken back</span></div><select class="sel" id="set-undo" aria-label="Undo send"><option value="0">Off, send at once</option><option value="5">5 seconds</option><option value="10">10 seconds</option></select></div>
+          <div class="set-row" id="wait-row" hidden><div class="grow"><b>Waiting on them after</b><span>How long mail you sent with a question waits for an answer before it shows in Waiting on them</span></div><select class="sel" id="set-wait" aria-label="Waiting on them after"><option value="2">2 days</option><option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></div>
           <div class="set-row" id="keys-row"><div class="grow"><b>Keyboard shortcuts</b><span>Press ? to see them all. They never act while you are typing in a field.</span></div><button class="btn" id="keys-show">Show shortcuts</button><input type="checkbox" id="set-keys" aria-label="Keyboard shortcuts on"></div>
         </div>
         <div class="comp-sec" id="sig-sec" style="display:none">
@@ -1374,7 +1408,11 @@ body.send-counting #toast{bottom:76px}
       <button class="cmp-close" id="as-close" aria-label="Close Rata Assist">✕</button>
     </div>
     <div class="as-actions">
+      <div class="as-scope" id="as-scope" role="group" aria-label="Which mailboxes" hidden></div>
       <button class="btn primary" id="as-run">Run briefing</button>
+      <p class="as-pre" id="as-pre" aria-live="polite"></p>
+      <button class="btn" id="as-left" aria-expanded="false" aria-controls="as-leftlist" hidden>What it leaves out</button>
+      <div class="as-leftlist" id="as-leftlist" hidden></div>
     </div>
     <div class="as-out" id="as-out"><div class="empty" style="padding:30px 10px"><b>Your day, distilled</b>Assist reads your mail on this computer for to-dos, requests, and deadlines hiding in it.</div></div>
   </aside>
@@ -1767,7 +1805,10 @@ function saveLocal(){
   if(MS&&!msQueued){msQueued=true;queueMicrotask(()=>{msFlush().catch(()=>{})})}
   try{localStorage.setItem(LS_KEY,JSON.stringify(MS?metaOf(S):S))}catch(e){toast('Storage full — export and reset')}
 }
-function save(){saveLocal();scheduleCloudSync()}
+/* Needs me and Waiting on them (Assistant v1, P2): the ids of each, worked
+   out again a moment after anything is saved (queueNeeds). */
+const NEEDS=new Set(),WAITING=new Set();let NEEDS_T=0;
+function save(){saveLocal();scheduleCloudSync();queueNeeds()}
 /* Deleting a message has to survive the next sync. Sync adds anything it has
    not seen, and a deleted message is by definition not there any more — so
    without a record of the deletion, the next refresh put it straight back.
@@ -2618,6 +2659,16 @@ function renderDigest(){
   const el=$('#digest');if(!el)return;
   const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
   const unread=pool.filter(m=>m.unread).length;
+  /* In the app the strip counts what Needs me and Waiting on them hold
+     (Assistant v1, P2), and shows while any of the three is not zero. */
+  if(window.__RATA_NATIVE__){
+    const need=NEEDS.size,wait=WAITING.size;
+    if(!unread&&!need&&!wait){el.innerHTML='';return}
+    const said=[unread&&`<b>${unread} unread</b>`,need&&`${need} need${need===1?'s':''} you`,wait&&`${wait} waiting on others`].filter(Boolean).join(' · ');
+    el.innerHTML=`<button class="digest-strip"><span class="dg-text">${said}</span><span class="dg-cta">Open briefing →</span></button>`;
+    el.querySelector('.digest-strip').onclick=openAssist;
+    return;
+  }
   if(!unread){el.innerHTML='';return}
   const pr=pool.filter(m=>m.unread&&categorize(m)==='priority');
   const top=pr[0]||pool.find(m=>m.unread);
@@ -2655,7 +2706,12 @@ function renderCats(){
   el.querySelectorAll('[data-cat]').forEach(p=>p.onclick=()=>{catFilter=p.dataset.cat;renderCats();renderMail()});
 }
 function renderMailFilters(){renderCats();
-  let chips=[['all','All'],['unread','Unread'],['starred','Starred']];
+  let chips=[['all','All'],['unread','Unread']];
+  /* RATA's guess at what is waiting on whom (Assistant v1, P2): the app
+     only, since only the app holds mail. Each says its count in its name. */
+  if(window.__RATA_NATIVE__)chips.push(['needs','Needs me · '+NEEDS.size],['waiting','Waiting on them · '+WAITING.size]);
+  chips.push(['starred','Starred']);
+  const named={needs:['Needs me',NEEDS.size],waiting:['Waiting on them',WAITING.size]};
   S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
   chips.push(['sent','Sent']);
   for(const f of ['drafts','archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
@@ -2663,7 +2719,7 @@ function renderMailFilters(){renderCats();
   if(BOX)chips.push(['box',boxLabel(BOX.email,BOX.name)]);
   if(window.__RATA_NATIVE__&&boxAccts().length)chips.push(['folders',boxPanel?'Folders \u25b4':'Folders \u25be']);
   if(!chips.some(c=>c[0]===mailFilter))mailFilter='all';
-  $('#mail-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${mailFilter===f?'on':''}" data-f="${esc(f)}"${f==='folders'?` aria-expanded="${boxPanel}"`:''}>${esc(l)}</button>`).join('');
+  $('#mail-filters').innerHTML=chips.map(([f,l])=>`<button class="pill ${mailFilter===f?'on':''}" data-f="${esc(f)}"${f==='folders'?` aria-expanded="${boxPanel}"`:''}${named[f]?` aria-label="${esc(named[f][0]+', '+named[f][1]+' message'+(named[f][1]===1?'':'s'))}"`:''}>${esc(l)}</button>`).join('');
   $$('#mail-filters .pill').forEach(p=>p.onclick=()=>{
     if(p.dataset.f==='folders'){toggleBoxPanel();return}
     mailFilter=p.dataset.f;renderMailFilters();renderMail();
@@ -2779,6 +2835,8 @@ function mailPool(acctId){
   if(acctId)pool=pool.filter(m=>m.acct===acctId);
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
+  else if(mailFilter==='needs')pool=pool.filter(m=>NEEDS.has(m.id));
+  else if(mailFilter==='waiting')pool=pool.filter(m=>WAITING.has(m.id));
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
   else if(['archive','junk','drafts'].includes(mailFilter))pool=pool.filter(m=>folderOf(m)===mailFilter);
   else if(mailFilter==='box')pool=BOX?pool.filter(m=>folderOf(m)==='named'&&m.box===BOX.name&&mailEmailOf(m)===BOX.email):[];
@@ -2787,7 +2845,7 @@ function mailPool(acctId){
      left out. The old chain dropped sent mail last and unconditionally, so
      the Sent chip always showed an empty list. Starred also shows starred
      archived mail. */
-  if(!['sent','archive','junk','drafts','box'].includes(mailFilter)){
+  if(!['sent','archive','junk','drafts','box','waiting'].includes(mailFilter)){
     pool=pool.filter(m=>inInbox(m)||(mailFilter==='starred'&&!m.sent&&folderOf(m)==='archive'));
     if(catFilter!=='all')pool=pool.filter(m=>categorize(m)===catFilter);
   }
@@ -2963,12 +3021,12 @@ function mailRowHTML(m){
           ${m.ch==='email'&&(!m.prov||m.prov==='imap')?'':`<span class="badge ${m.ch==='email'?m.prov:m.ch}">${m.ch==='email'?m.prov:chan(m.ch).label}</span>`}
           ${m.lang?`<span class="badge trans">⇄ ${m.lang}</span>`:``}
           ${!m.sent&&!m.draft&&categorize(m)!=='other'?`<span class="badge ${categorize(m)==='priority'?'work':'personal'}">${CATS[categorize(m)]||''}</span>`:''}
-          ${m.flag?`<span class="badge flag${m.flag.important?' hot':''}" title="${esc(m.flag.task+(m.flag.due?' \u2014 by '+m.flag.due:''))}">\u2691 ${esc(m.flag.task)}</span>`:''}
+          ${m.flag&&!isDone(m)?`${m.flag.important?'<span class="badge flag hot">Important</span>':''}<span class="badge flag" title="${esc(flagWords(m.flag))}">\u2691 ${esc(flagWords(m.flag))}</span>`:''}
           ${m.atts.length?`<span class="clip"><span aria-hidden="true">📎 ${m.atts.length}</span><span class="vh">${m.atts.length} attachment${m.atts.length===1?'':'s'}</span></span>`:''}
           ${m.starred?'<span class="clip star" aria-hidden="true">★</span>':''}
         </span><span class="m-time">${rel(m.ts)}</span></div>
         ${m.subj?`<div class="m-subj">${esc(m.subj)}</div>`:'<div class="m-subj none">(no subject)</div>'}
-        <div class="m-prev">${esc(m.prev)}</div>
+        <div class="m-prev">${esc(mailFilter==='needs'&&NEEDS.has(m.id)?needsWhy(m):m.prev)}</div>
       </div>
     </div>`;
 }
@@ -2982,6 +3040,11 @@ function renderMail(){
   const inBox=mailFilter==='box'&&BOX&&!splitOn,bkey=inBox?boxKey(BOX.email,BOX.name):'';
   if(!pool.length&&inBox){
     sc.innerHTML=`<div class="empty"><b>${BOX_LOADING.has(bkey)?'Loading '+esc(boxLabel(BOX.email,BOX.name))+'\u2026':'Nothing in '+esc(boxLabel(BOX.email,BOX.name))}</b>${BOX_LOADING.has(bkey)?'':'Mail you file in this folder appears here.'}</div>`;
+    return}
+  /* Needs me and Waiting on them are RATA's guess (P2), and say so. */
+  const guess=['needs','waiting'].includes(mailFilter)&&!splitOn;
+  if(!pool.length&&guess){
+    sc.innerHTML=`<div class="empty"><b>${mailFilter==='needs'?'Nothing needs you.':'Nobody owes you an answer.'}</b><span class="vl-why">${esc(NEEDS_GUESS)}</span></div>`;
     return}
   if(!pool.length){
     const linked=S.linked.length;
@@ -2998,8 +3061,8 @@ function renderMail(){
     if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
-  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&(olderCandidates().length||(S.gaps||[]).length);
-  vlist(sc,pool,more?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
+  const more=guess?false:inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&(olderCandidates().length||(S.gaps||[]).length);
+  vlist(sc,pool,guess?`<p class="vl-note">${esc(NEEDS_GUESS)}</p>`:more?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
   const lo=document.getElementById('load-older');
   if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await (inBox?loadBox(BOX.email,BOX.name,true):loadOlder())}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
   wireRows(sc,true);
@@ -3557,6 +3620,11 @@ function fillConvo(el,m){
   const n=document.createElement('span');n.className='n';n.textContent=String(list.length);
   h.append('In this conversation ',n);
   el.setAttribute('aria-labelledby','md-convo-h');
+  /* Who wrote last, and when; with whom it waits when RATA's guess (P2)
+     says so. From the list already made: nothing is read for it. */
+  const last=list[list.length-1],lw=document.createElement('p');lw.className='convo-last';
+  lw.textContent='Last word: '+(last.sent?'you':msgFrom(last))+', '+agoWords(last.ts)
+    +(NEEDS.has(last.id)?' · waiting on you':WAITING.has(last.id)?' · waiting on them':'');
   const ol=document.createElement('ol');ol.className='cv-list';
   for(const x of list){
     const li=document.createElement('li');
@@ -3575,7 +3643,7 @@ function fillConvo(el,m){
     if(!on)row.onclick=()=>{openMail(x.id);const c=$('#md-convo .cv-row.on');if(c)c.focus({preventScroll:true})};
     li.append(row);ol.append(li);
   }
-  el.append(h,ol);
+  el.append(h,lw,ol);
   if(capped){const p=document.createElement('p');p.className='cv-more';p.textContent='This conversation is longer than '+CONVO_MAX+' messages. These are the '+CONVO_MAX+' nearest this one.';el.append(p)}
   const cur=ol.querySelector('.cv-row.on');
   if(cur&&list.length>6)ol.scrollTop=Math.max(0,cur.offsetTop-ol.clientHeight/2);
@@ -3609,6 +3677,10 @@ function openMail(id){
   /* K1: Save to ▾ by each attachment, and Share to Slack, when connected. */
   const clouds=savable&&cloudTargets().length>0,slack=slackReady();
   const unsub=unsubOf(m);
+  /* Done and Snooze, where RATA guesses this waits on someone (P2) or a
+     flag says so; Write follow-up where it waits on them. App only. */
+  const waiting=!!window.__RATA_NATIVE__&&WAITING.has(id);
+  const tracked=!!window.__RATA_NATIVE__&&!m.draft&&!isDone(m)&&(NEEDS.has(id)||waiting||!!m.flag);
   /* A long message, or one with attachments, is fetched in full when opened:
      the stored copy is the start of it, and the attachments are not kept. */
   /* Also when it may have an HTML version: the stored copy is text only, and
@@ -3639,6 +3711,8 @@ function openMail(id){
         ${!m.sent&&(m.replyTo||m.fromAddr)?'<button class="btn primary" id="md-reply">Reply</button>':''}
         ${replyAllOf(m)?'<button class="btn" id="md-replyall">Reply all</button>':''}
         ${!m.sent||folderOf(m)==='sent'?'<button class="btn" id="md-forward">Forward</button>':''}
+        ${waiting?'<button class="btn" id="md-follow">Write follow-up</button>':''}
+        ${tracked?`<button class="btn" id="md-done">${waiting?'Got an answer':'Done'}</button><div class="md-sortwrap"><button class="btn" id="md-snooze" aria-haspopup="menu" aria-expanded="false" aria-controls="md-snoozemenu">Snooze ▾</button><div class="md-sortmenu" id="md-snoozemenu" role="menu" aria-label="Snooze until"></div><div class="snz-pick" id="md-snoozepick" role="group" aria-label="Snooze until a day you pick" hidden></div></div>`:''}
         ${c?`<button class="btn" id="md-person">View thread with ${esc(c.name.split(' ')[0])}</button>`:''}
         <div class="md-sortwrap"><button class="btn" id="md-move">Sort ▾</button><div class="md-sortmenu" id="md-sortmenu">${Object.entries(CATS).map(([c,l])=>`<button data-mv="${c}">${l}</button>`).join('')}<label><input type="checkbox" id="mv-always"> Always from this sender</label></div></div>
         <button class="btn" id="md-sum">✦ Summarize</button>
@@ -3685,6 +3759,12 @@ function openMail(id){
   if($('#md-reply'))$('#md-reply').onclick=()=>replyTo(m);
   if($('#md-replyall'))$('#md-replyall').onclick=()=>replyTo(m,true);
   if($('#md-forward'))$('#md-forward').onclick=()=>forwardMessage(m);
+  if($('#md-follow'))$('#md-follow').onclick=()=>followUp(m);
+  /* The pane is drawn again without the button just pressed; the focus
+     goes to the first of its actions rather than to nowhere. */
+  const refocus=()=>{if(selMail!==id)return;openMail(id);const b=$('#mail-detail .md-actions .btn');if(b)b.focus({preventScroll:true})};
+  if($('#md-done'))$('#md-done').onclick=()=>{markDone(m,waiting?'answered':'done');toast(waiting?'Marked done: you got an answer':'Marked done');refocus()};
+  if($('#md-snooze'))wireSnooze($('#md-snooze'),$('#md-snoozemenu'),$('#md-snoozepick'),m,refocus);
   if($('#md-sum'))$('#md-sum').onclick=()=>summarizeMessage(m.id);
   if($('#md-translate'))$('#md-translate').onclick=()=>translateMessage(m.id);
   if($('#md-trtoggle'))$('#md-trtoggle').onclick=()=>{tr.hidden=!tr.hidden;openMail(id)};
@@ -4022,9 +4102,13 @@ const KEYS=[
   {keys:['s'],where:'msg',what:'Star or unstar',run:()=>keyPress('#md-star')},
   {keys:['u'],where:'msg',what:'Mark unread',run:()=>keyPress('#md-unread')},
   {keys:['m'],where:'msg',what:'Move to a folder',run:keyFile},
+  {keys:['y'],where:'msg',what:'Done, out of Needs me or Waiting on them',run:()=>keyPress('#md-done')},
+  {keys:['b'],where:'msg',what:'Snooze',run:keySnooze},
   {keys:['c'],where:'any',what:'Compose',run:()=>{composeNew();return true}},
   {keys:['/'],where:'any',what:'Search',run:keySearch},
   {keys:['g i'],where:'any',what:'Go to the inbox',run:()=>{go('inbox');return true}},
+  {keys:['g n'],where:'any',what:'Go to Needs me',run:keyNeeds},
+  {keys:['g t'],where:'any',what:'Open Assist, for today across every inbox',run:()=>{openAssist();return true}},
   {keys:['Escape'],where:'any',what:'Close the message or the composer',run:keyEscape},
   {keys:['?'],where:'any',what:'Show these shortcuts',run:()=>{openKeys();return true}},
 ];
@@ -4094,6 +4178,14 @@ function keyFile(){
   $('#md-file').focus();
   return true;
 }
+/* Snooze opens its menu, which takes the focus to its first choice. */
+function keySnooze(){return keyPress('#md-snooze')}
+/* Needs me is the app's (P2). */
+function keyNeeds(){
+  if(!window.__RATA_NATIVE__)return false;
+  mailFilter='needs';go('inbox');
+  return true;
+}
 function keySearch(){
   $('#top-search-btn').click();
   if(keyShown('#search-input'))$('#search-input').focus();
@@ -4101,6 +4193,7 @@ function keySearch(){
 }
 function keyEscape(){
   if(ov.classList.contains('open')){closeCompose();return true}
+  if(SNZ_OPEN){SNZ_OPEN.close(true);return true}
   const menu=$('.md-sortmenu.open');if(menu){menu.classList.remove('open');return true}
   if($('#assist-ov').classList.contains('open')){closeAssist();return true}
   if(currentView==='inbox'&&selMail){
@@ -5472,6 +5565,7 @@ function renderSettings(){
   $('#set-name').value=S.settings.name;
   if($('#notify-row')){$('#notify-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-notify').value=notifyMode()}
   if($('#undo-row')){$('#undo-row').style.display=window.__RATA_NATIVE__?'':'none';$('#set-undo').value=String(sendDelay())}
+  if($('#wait-row')){$('#wait-row').hidden=!window.__RATA_NATIVE__;$('#set-wait').value=String(waitDays())}
   $('#set-keys').checked=keysOn();
   renderSigs();
   renderAISettings();
@@ -5531,6 +5625,7 @@ function renderSigs(){
   $('#set-sigreplies').checked=S.settings.sigReplies!==false;
 }
 $('#set-sigreplies').addEventListener('change',e=>{S.settings.sigReplies=e.target.checked;save();toast(e.target.checked?'Replies and forwards get your signature':'Only new messages get your signature')});
+$('#set-wait').addEventListener('change',e=>{S.settings.waitDays=Number(e.target.value);save();needsNow();toast('Mail you sent waits on them after '+waitDays()+' days')});
 $('#set-undo').addEventListener('change',e=>{S.settings.undoSend=Number(e.target.value);save();toast(e.target.value==='0'?'Messages send as soon as you press Send':'Send waits '+e.target.value+' seconds, so you can undo it')});
 $('#set-notify').addEventListener('change',e=>{S.settings.notify=e.target.value;save();toast(e.target.value==='off'?'New-mail notifications are off':'New-mail notifications are on')});
 function renderLinked(){
@@ -6864,12 +6959,14 @@ async function deliver(it,sb){
      as every mail app does, rather than waiting there to be sent twice. */
   const finished=realSent&&it.finished&&it.finished.uid?it.finished:null;
   if(finished)dropMessages([finished]);
+  /* A reply that went marks what it answered done (P2). */
+  const marked=realSent&&it.replying?markReplied([it.replying]):0;
   save();
   await audit('msg.send',realSent?`REAL email "${subj}" sent to ${to}${cc?' (Cc '+cc+')':''}${bcc?' (+'+bcc.split(',').filter(x=>x.trim()).length+' Bcc)':''} via ${acct.label}`:`Email "${subj}" to ${to} recorded (no linked account)`);
-  return {ok:true,realSent,mAcct,finished};
+  return {ok:true,realSent,mAcct,finished,marked};
 }
 async function sentAfter(r){
-  toast(r.realSent?('Sent from '+r.mAcct.label):'Recorded here only — link a mailbox in Settings to send real email');
+  toast(r.realSent?('Sent from '+r.mAcct.label+(r.marked?'. Marked done: you replied':'')):'Recorded here only — link a mailbox in Settings to send real email');
   const finished=r.finished;
   if(finished){
     if(selMail===finished.id){selMail=null;$('#mail-detail').classList.remove('open');renderResting()}
@@ -7433,8 +7530,13 @@ async function absorbMail(res,quiet){
   /* What left a folder elsewhere leaves here too (BUG-C); never what this
      refresh itself brought. */
   settlePresent(res.present,new Set([...(res.messages||[]),...archived].map(m=>m.id)));
+  /* A reply sent from anywhere, found in Sent, marks what it answered done
+     (P2), as one sent from here does. */
+  markReplied((res.messages||[]).filter(m=>m&&m.sent).map(m=>m.inReplyTo));
   save();
   setTimeout(upgradeBodies,0);
+  /* Whether new mail asks something, for Needs me and Waiting on them. */
+  scanAsks();
   const msStuck=f=>f.signIn==='microsoft'||msLinked(linkedFind('mail',f.email));
   const again=(res.partial||[]).filter(f=>f.needsRelink&&msStuck(f)).map(f=>f.email);
   const stuck=(res.partial||[]).filter(f=>f.needsRelink&&!msStuck(f)).map(f=>f.email);
@@ -8376,6 +8478,248 @@ async function translateMessage(id){
   if(selMail===id)openMail(id);
 }
 
+/* ---------------- NEEDS ME AND WAITING ON THEM (Assistant v1, P2) ----------------
+   RATA's guess, made on this computer from the mail it holds, at what waits
+   on the customer and what the customer waits on. Nothing here is sent
+   anywhere, on any plan; the app only, since only the app holds mail.
+   A message needs the customer (needsMe) when it is in the inbox, from the
+   last NEEDS_DAYS days, not marked done or snoozed, not answered since (a
+   message sent from here, newer, in the same conversation, convoIndex), and
+   (a) a flag says so, (b) its sender (From or Reply-To) is someone the
+   customer has written to or saved in People and it asks something, or
+   (c) it is starred. A mailing needs nobody unless (a) or (c) holds. Mail
+   the customer sent waits on them (waitingOn) when it asks something, is
+   the newest the customer sent in its conversation, nobody else has
+   written since, and it is older than S.settings.waitDays (2, 3, 5 or 7;
+   3 unless set) and younger than NEEDS_DAYS. Done and Snooze take a
+   message out of both: m.track = {done: 'done'|'replied'|'answered', at,
+   snooze}, kept with the message in IndexedDB as m.flag is, gone with it
+   on Delete account, and never synced. NEEDS and WAITING (above save())
+   hold the ids, worked out in one pass (fillNeeds) 300 ms after the last
+   save. */
+const NEEDS_DAYS=30;
+const NEEDS_GUESS='RATA’s guess, made on this computer from mail it holds from the last 30 days. Done and Snooze take a message out.';
+const trackOf=m=>m&&m.track&&typeof m.track==='object'?m.track:null;
+const isDone=m=>!!(trackOf(m)&&trackOf(m).done);
+const isSnoozed=(m,now=Date.now())=>{const t=trackOf(m);return !!(t&&Number(t.snooze)>now)};
+const waitDays=()=>{const n=Number(S.settings.waitDays);return [2,3,5,7].includes(n)?n:3};
+/* Whether a message asks something: a line of its subject, or of the first
+   ASK_SPAN characters of its own words (not the mail quoted under them),
+   ends in a question mark, or it names an action or a deadline as the
+   quick briefing reads them. Worked out once per message (m.asks, with
+   m.asksV) by scanAsks, from the text on disk; until then the subject and
+   the preview stand in. */
+const ASK_SPAN=600,ASKS_V=1;
+function asksIn(subj,words){
+  const t=String(subj||'')+'\n'+String(words||'').slice(0,ASK_SPAN);
+  return t.split('\n').some(l=>/\?\s*$/.test(l.trim()))||ASSIST_ACTIONS.test(t)||ASSIST_DEADLINE.test(t);
+}
+const asksOf=m=>m.asksV===ASKS_V?!!m.asks:asksIn(m.subj,m.prev);
+/* After each refresh and once at start: the mail of the last NEEDS_DAYS
+   days not judged yet, its text read from disk 200 at a time. */
+let ASKS_BUSY=false,ASKS_AGAIN=false;
+async function scanAsks(){
+  if(!window.__RATA_NATIVE__)return 0;
+  if(ASKS_BUSY){ASKS_AGAIN=true;return 0}
+  ASKS_BUSY=true;let n=0;
+  try{
+    do{
+      ASKS_AGAIN=false;
+      const from=Date.now()-NEEDS_DAYS*864e5;
+      const todo=S.messages.filter(m=>m.asksV!==ASKS_V&&(m.ts||0)>=from&&channelEnabled(m.ch)&&!m.draft&&(inInbox(m)||m.sent));
+      for(let i=0;i<todo.length;i+=200){
+        const part=todo.slice(i,i+200),texts=await bodiesOf(part);
+        for(const m of part){m.asks=asksIn(m.subj,newWords(texts.get(m.id)||'')||m.prev);m.asksV=ASKS_V;n++}
+      }
+    }while(ASKS_AGAIN);
+  }finally{ASKS_BUSY=false}
+  if(n)save();
+  return n;
+}
+/* Sent mail as the customer's own: what really went (not "recorded here
+   only"), from Sent or RATA's own record of a send. */
+const sentReally=m=>!!m.sent&&!m.draft&&m.real!==false&&(folderOf(m)==='sent'||!m.folder);
+function needsMe(m,ix,now,people){
+  if(!inInbox(m)||!channelEnabled(m.ch)||isGone(m.id,m.uidvalidity))return false;
+  if(now-(m.ts||0)>NEEDS_DAYS*864e5||isDone(m)||isSnoozed(m,now))return false;
+  if(ix.lastSent(ix.comp(m))>(m.ts||0))return false;
+  if(m.flag||m.starred)return true;
+  if(briefMailing(m))return false;
+  const who=[m.fromAddr,m.replyTo].map(a=>String(a||'').trim().toLowerCase()).filter(Boolean);
+  return who.some(a=>ix.writtenTo.has(a)||people.has(a))&&asksOf(m);
+}
+function waitingOn(m,ix,now){
+  if(!sentReally(m)||!channelEnabled(m.ch)||isGone(m.id,m.uidvalidity)||isDone(m)||isSnoozed(m,now))return false;
+  const age=now-(m.ts||0);
+  if(age>NEEDS_DAYS*864e5||age<waitDays()*864e5)return false;
+  const c=ix.comp(m);
+  if(c==null||ix.latestSent(c)!==m.id||ix.lastOther(c)>(m.ts||0))return false;
+  /* It asks, or a message the customer sent since they last wrote does and
+     is not marked done: a follow-up ("Just following up on my note below")
+     asks nothing in its own words, and the question still waits. */
+  const since=ix.lastOther(c);
+  return asksOf(m)||ix.sentIn(c).some(x=>x!==m&&(x.ts||0)>since&&!isDone(x)&&asksOf(x));
+}
+function queueNeeds(){
+  if(!window.__RATA_NATIVE__)return;
+  clearTimeout(NEEDS_T);NEEDS_T=setTimeout(fillNeeds,300);
+}
+function needsNow(){clearTimeout(NEEDS_T);NEEDS_T=0;fillNeeds()}
+function fillNeeds(){
+  NEEDS_T=0;
+  if(!window.__RATA_NATIVE__||!S||!Array.isArray(S.messages))return;
+  const ix=convoIndex(),now=Date.now();
+  const people=new Set((S.contacts||[]).map(c=>String(c.addr||'').trim().toLowerCase()).filter(Boolean));
+  const n=new Set(),w=new Set();
+  for(const m of S.messages){if(needsMe(m,ix,now,people))n.add(m.id);else if(waitingOn(m,ix,now))w.add(m.id)}
+  const same=(a,b)=>a.size===b.size&&[...a].every(x=>b.has(x));
+  if(same(n,NEEDS)&&same(w,WAITING))return;
+  const counts=n.size!==NEEDS.size||w.size!==WAITING.size;
+  NEEDS.clear();for(const x of n)NEEDS.add(x);
+  WAITING.clear();for(const x of w)WAITING.add(x);
+  if(counts){renderMailFilters();renderDigest()}
+  if(currentView==='inbox'&&['needs','waiting'].includes(mailFilter))renderMail();
+}
+/* A snooze that has run out goes, so the message is back where it was.
+   On its own timer, since autoTick does nothing while a refresh runs. */
+function wakeSnoozed(){
+  const now=Date.now();let n=0;
+  for(const m of S.messages){
+    const t=trackOf(m);if(!t||!t.snooze||Number(t.snooze)>now)continue;
+    delete t.snooze;if(!t.done)delete m.track;n++;
+  }
+  if(n){save();needsNow();renderMail()}
+  return n;
+}
+/* Why a message is in Needs me, in place of its preview there. */
+function needsWhy(m){
+  if(m.flag&&m.flag.by==='you')return 'You flagged it';
+  if(m.flag)return 'Briefing: '+String(m.flag.task||'');
+  if(m.starred)return 'You starred it';
+  const d=Math.floor((Date.now()-(m.ts||0))/864e5);
+  return 'Asked you a question · '+(d<1?'today':d===1?'1 day':d+' days');
+}
+/* A flag in words: its task, and its day when it has one. */
+function dueShort(due){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(due||'')))return '';
+  const [y,mo,d]=String(due).split('-').map(Number);
+  return new Date(y,mo-1,d).toLocaleDateString(undefined,{day:'numeric',month:'short'});
+}
+const flagWords=f=>String(f&&f.task||'')+(dueShort(f&&f.due)?' · due '+dueShort(f.due):'');
+function agoWords(ts){
+  const d=Math.max(0,Date.now()-(ts||0));
+  if(d<3600e3){const n=Math.max(1,Math.round(d/60e3));return n+' minute'+(n===1?'':'s')+' ago'}
+  if(d<864e5){const n=Math.max(1,Math.round(d/3600e3));return n+' hour'+(n===1?'':'s')+' ago'}
+  const n=Math.floor(d/864e5);return n+' day'+(n===1?'':'s')+' ago';
+}
+/* Done: out of Needs me or Waiting on them for good. `how` is done, or
+   answered (Got an answer), or replied (a reply went, deliver()). */
+function markDone(m,how){
+  m.track={done:how||'done',at:Date.now()};
+  save();needsNow();renderMail();
+}
+/* Messages a reply just sent, or a reply found in Sent, answered: done.
+   Received mail only: a follow-up answers the customer's own message, which
+   still waits on them (waitingOn reads the conversation). */
+function markReplied(ids){
+  const want=new Set([...ids].filter(Boolean));let n=0;
+  if(!want.size)return 0;
+  for(const x of S.messages){if(x.messageId&&want.has(x.messageId)&&!x.sent&&!x.draft&&!isDone(x)){x.track={done:'replied',at:Date.now()};n++}}
+  return n;
+}
+/* Snooze: out of both until 7:00 on the day chosen, this computer's time. */
+function snoozeAt(day){const d=new Date(day);d.setHours(7,0,0,0);return d.getTime()}
+function snoozeChoices(m){
+  const now=new Date(),t=new Date(now),mon=new Date(now);
+  t.setDate(t.getDate()+1);mon.setDate(mon.getDate()+((8-mon.getDay())%7||7));
+  const out=[['Tomorrow 7:00',snoozeAt(t)],['Monday 7:00',snoozeAt(mon)]];
+  const due=m&&m.flag&&String(m.flag.due||'');
+  if(/^\d{4}-\d{2}-\d{2}$/.test(due||'')){
+    const [y,mo,d]=due.split('-').map(Number),b=snoozeAt(new Date(y,mo-1,d-1));
+    if(b>Date.now())out.push(['The day before it’s due',b]);
+  }
+  return out;
+}
+function snoozeMsg(m,ts){
+  m.track={snooze:ts,at:Date.now()};
+  save();needsNow();renderMail();
+  toast('Snoozed until '+new Date(ts).toLocaleString(undefined,{weekday:'short',day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}));
+}
+/* A Snooze button and its menu (role=menu: Tomorrow, Monday, the day
+   before it is due, Pick a date). Pick a date opens a small group beside
+   the menu with a date field. One open at a time; a click elsewhere or
+   Escape closes it, Escape giving the focus back to the button. `after`
+   runs once the message is snoozed. */
+let SNZ_OPEN=null;
+document.addEventListener('click',e=>{if(SNZ_OPEN&&!SNZ_OPEN.wrap.contains(e.target))SNZ_OPEN.close(false)});
+function wireSnooze(btn,menu,pick,m,after){
+  const wrap=btn.parentElement;
+  const close=back=>{
+    menu.classList.remove('open');pick.hidden=true;btn.setAttribute('aria-expanded','false');
+    if(SNZ_OPEN&&SNZ_OPEN.wrap===wrap)SNZ_OPEN=null;
+    if(back&&btn.isConnected)btn.focus();
+  };
+  const done=ts=>{close(false);snoozeMsg(m,ts);if(after)after(ts)};
+  const item=(label,run)=>{const b=document.createElement('button');b.type='button';b.setAttribute('role','menuitem');b.tabIndex=-1;b.textContent=label;b.onclick=run;return b};
+  const openPick=()=>{
+    pick.textContent='';
+    const lab=document.createElement('label');lab.textContent='Snooze until';
+    const inp=document.createElement('input');inp.type='date';inp.className='txt';
+    const t=new Date();t.setDate(t.getDate()+1);inp.min=isoDay(t.getTime());inp.value=inp.min;
+    lab.append(inp);
+    const go=document.createElement('button');go.type='button';go.className='btn';go.textContent='Snooze';
+    const no=document.createElement('button');no.type='button';no.className='btn';no.textContent='Cancel';
+    go.onclick=()=>{
+      const v=inp.value;if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){toast('Pick a day to snooze it until.');return}
+      const [y,mo,d]=v.split('-').map(Number),ts=snoozeAt(new Date(y,mo-1,d));
+      if(ts<=Date.now()){toast('Pick a day after today.');return}
+      done(ts);
+    };
+    no.onclick=()=>close(true);
+    pick.append(lab,go,no);pick.hidden=false;btn.setAttribute('aria-expanded','true');
+    SNZ_OPEN={wrap,close};inp.focus();
+  };
+  btn.onclick=e=>{
+    e.stopPropagation();
+    if(menu.classList.contains('open')||!pick.hidden){close(true);return}
+    if(SNZ_OPEN)SNZ_OPEN.close(false);
+    menu.textContent='';
+    for(const [label,ts] of snoozeChoices(m))menu.append(item(label,()=>done(ts)));
+    menu.append(item('Pick a date…',()=>{menu.classList.remove('open');openPick()}));
+    menu.classList.add('open');btn.setAttribute('aria-expanded','true');
+    SNZ_OPEN={wrap,close};
+    menu.querySelector('[role=menuitem]').focus();
+  };
+  menu.onkeydown=e=>{
+    const items=[...menu.querySelectorAll('[role=menuitem]')],i=items.indexOf(document.activeElement),n=items.length;
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();items[(i+(e.key==='ArrowDown'?1:-1)+n)%n].focus()}
+    else if(e.key==='Home'||e.key==='End'){e.preventDefault();items[e.key==='Home'?0:n-1].focus()}
+    else if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close(true)}
+    else if(e.key==='Tab')close(false);
+  };
+  pick.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close(true)}};
+}
+/* Write follow-up, on mail that waits on them: a reply to the customer's
+   own message, from the mailbox it went from, to everyone it went to. */
+async function followUp(m){
+  const stored=bodyNow(m)??await bodyOf(m);
+  newDraft();openCompose();
+  const from=$('#cmp-from');
+  if(m.acct&&[...from.options].some(o=>o.value===m.acct))from.value=m.acct;
+  const to=Array.isArray(m.toAll)&&m.toAll.length?m.toAll.join(', '):(m.toAddr||m.toName||'');
+  $('#cmp-to').value=to;
+  if(Array.isArray(m.cc)&&m.cc.length){$('#cmp-cc').value=m.cc.join(', ');showCc(true)}
+  const subj=m.subj&&m.subj!=='(no subject)'?m.subj:'';
+  $('#cmp-subj').value=(/^re:/i.test(subj)?'':'Re: ')+subj;
+  const own=String(stored||m.prev||'');
+  const sig=sigForReply(from.value);CMP_SIG=sig||null;
+  $('#cmp-body').value='Just following up on my note below.\n\n'+(sig?sig+'\n\n':'')+`On ${new Date(m.ts).toLocaleString()}, you wrote:\n`+own.split('\n').map(l=>'> '+l).join('\n');
+  REPLYING={id:m.id,messageId:m.messageId||''};
+  DRAFT={kind:'reply',to:m.toName||to};renderDraftHead();
+  liveScan();
+  const b=$('#cmp-body');b.focus();b.setSelectionRange(0,0);b.scrollTop=0;
+}
+
 /* ---------------- RATA ASSIST (to-do & request bot) ---------------- */
 const ASSIST_ACTIONS=/\b(can you|could you|would you|please|need(s)? (you|to)|let me know|confirm|review|sign|send (me|over|the)|call me|schedule|approve|due|deadline|asap|invoice|wire|w-?9|remind|clarification|questions?)\b/i;
 const ASSIST_DEADLINE=/\b(by |before |due )(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|eod|end of (day|week)|the \d{1,2}(st|nd|rd|th)?|\d{1,2}\/\d{1,2})\b|\bthis (week|afternoon|morning)\b|\btonight\b|\btomorrow\b/i;
@@ -8401,43 +8745,131 @@ async function extractTodos(){
   items.sort((a,b)=>(b.why.includes('deadline')-a.why.includes('deadline'))||(b.unread-a.unread)||(b.ts-a.ts));
   return items;
 }
-function assistItemHTML(i){
-  return `<div class="as-item" data-mid="${i.mid}" role="button" tabindex="0">
-    <div class="as-line1"><span class="badge ${i.ch}">${chan(i.ch).label}</span><b>${esc(i.who)}</b>${i.unread?'<span class="badge trans">unread</span>':''}<span class="as-t">${rel(i.ts)}</span></div>
-    <div class="as-text">${esc(i.text)}</div>
-    <div class="as-why">${i.why.map(w=>`<span class="as-chip ${w}">${w}</span>`).join('')}</div>
-  </div>`;
+/* What a briefing's next step is, in words (lib/ai.js NEXT). */
+const NEXT_WORDS={reply:'asks you to reply',do:'asks you to do something',pay:'asks you to pay',sign:'asks you to sign',attend:'asks you to attend',read:'asks you to read something'};
+/* The quick briefing's reasons, in words. */
+const LOCAL_WHY={question:'a question',action:'a request',deadline:'a deadline'};
+/* Which briefing is on screen, AI's or the quick one, so a row's action
+   can draw it again. */
+let BRIEF_VIEW='local';
+/* One row of a briefing (P3), AI's or the quick one made on this computer.
+   A row holds buttons of its own, so it is not one (axe's
+   nested-interactive): the part that opens the message is a button, and so
+   is each thing to do with it, each named in full. Built with DOM methods,
+   since the task is the AI's words and the sender a stranger's.
+   o: {m, task (the AI's), words (the quick version's sentence), important,
+   next, due, why (words), acts: which of reply, done, snooze, archive}. */
+function briefRow(o){
+  const m=o.m,who=msgFrom(m),acts=o.acts||[];
+  const row=document.createElement('div');row.className='as-item';row.dataset.mid=m.id;
+  const open=document.createElement('button');open.type='button';open.className='as-open';
+  const l1=document.createElement('span');l1.className='as-line1';
+  const b=document.createElement('b');b.className='as-who';b.textContent=who;l1.append(b);
+  const badge=(cls,t)=>{const s=document.createElement('span');s.className='badge '+cls;s.textContent=t;l1.append(s)};
+  if(o.important)badge('flag hot','Important');
+  if(m.unread)badge('trans','Unread');
+  const t=document.createElement('span');t.className='as-t';t.textContent=rel(m.ts);l1.append(t);
+  const text=document.createElement('span');text.className='as-text';text.textContent=o.task?'⚑ '+o.task:String(o.words||m.subj||'');
+  open.append(l1,text);
+  const said=[o.next&&NEXT_WORDS[o.next],o.due&&dueWords(o.due),...(o.why||[])].filter(Boolean).join(' · ');
+  if(said){const w=document.createElement('span');w.className='as-when';w.textContent=said;open.append(w)}
+  open.onclick=()=>{closeAssist();go('inbox');openMail(m.id)};
+  row.append(open);
+  if(!acts.length)return row;
+  const bar=document.createElement('div');bar.className='as-acts';
+  const btn=(label,name,run)=>{const x=document.createElement('button');x.type='button';x.className='btn';x.textContent=label;if(name)x.setAttribute('aria-label',name);if(run)x.onclick=run;return x};
+  /* Reply leaves the panel for the composer; the row goes with it. */
+  const reply=acts.includes('reply')&&window.__RATA_NATIVE__&&(m.replyTo||m.fromAddr)
+    ?btn('Reply to '+who,'',()=>{row.remove();closeAssist();go('inbox');openMail(m.id);replyTo(m)}):null;
+  if(reply&&o.next==='reply')bar.append(reply);
+  if(acts.includes('done'))bar.append(btn('Done','Done with the message from '+who,()=>{const at=briefSpot(row);markDone(m,'done');toast('Marked done');briefRedraw(at)}));
+  if(acts.includes('snooze')){
+    const s=btn('Snooze','Snooze the message from '+who,null);
+    s.setAttribute('aria-haspopup','menu');s.setAttribute('aria-expanded','false');
+    const menu=document.createElement('div');menu.className='md-sortmenu';menu.setAttribute('role','menu');menu.setAttribute('aria-label','Snooze until');
+    const pick=document.createElement('div');pick.className='snz-pick';pick.setAttribute('role','group');pick.setAttribute('aria-label','Snooze until a day you pick');pick.hidden=true;
+    bar.append(s,menu,pick);
+    wireSnooze(s,menu,pick,m,()=>briefRedraw(briefSpot(row)));
+  }
+  if(reply&&o.next!=='reply')bar.append(reply);
+  /* Archive goes the way the reading pane's does (takeOff): off the list at
+     once, and back, with the mailbox's reason, if the mailbox refused. */
+  if(acts.includes('archive')&&window.__RATA_NATIVE__&&canArchive(m))bar.append(btn('Archive','Archive the message from '+who,async()=>{
+    const at=briefSpot(row);
+    const out=await takeOff([m],'archive',()=>{renderMailFilters();renderMail();briefRedraw(at)});
+    if(out.back){toast('Nothing was changed — '+out.problems[0]);renderSyncAll();renderMailFilters();renderMail();briefRedraw(at);return}
+    audit('msg.archive',m.subj||m.prev.slice(0,40));toast('Archived');
+  }));
+  row.append(bar);
+  return row;
 }
+/* Where a row is among the briefing's rows, and the briefing drawn again
+   with the focus on the row that took its place, else on Run briefing. */
+const briefSpot=row=>[...document.querySelectorAll('#as-out .as-open')].indexOf(row.querySelector('.as-open'));
+async function briefRedraw(at){
+  if(BRIEF_VIEW==='ai')renderBrief();else await runLocalBrief();
+  const next=at>=0?document.querySelectorAll('#as-out .as-open')[at]:null;
+  (next||$('#as-run')).focus();
+}
+/* A briefing's rows, a section a mailbox, in Settings' order, each headed
+   by its address and how many: count(n) says how many in words. */
+function briefGroups(out,rows,count){
+  const by=new Map();
+  for(const r of rows){const a=mailEmailOf(r.m)||'';if(!by.has(a))by.set(a,[]);by.get(a).push(r)}
+  const order=S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase());
+  const place=a=>{const i=order.indexOf(a);return i<0?order.length:i};
+  let k=0;
+  for(const a of [...by.keys()].sort((x,y)=>place(x)-place(y))){
+    const sec=document.createElement('section');sec.className='as-group';
+    const h=document.createElement('h3');h.id='as-g'+(k++);h.textContent=(a?boxName(a):'Your mail')+' · '+count(by.get(a).length);
+    sec.setAttribute('aria-labelledby',h.id);
+    sec.append(h,...by.get(a).map(briefRow));
+    out.append(sec);
+  }
+}
+/* The quick briefing, made on this computer on every plan and sent nowhere:
+   the sentence of each recent message that asks something, by mailbox, as
+   the AI briefing is laid out (P3). In the app a row also has Done and
+   Snooze, what is done or snoozed is left out, and a mailbox picked in
+   #as-scope narrows it as it narrows Run briefing. */
 async function runLocalBrief(){
-  const items=await extractTodos();
-  const out=$('#as-out');
-  if(!items.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No open requests or to-dos detected in the last 14 days.</div>';return}
-  const dl=items.filter(i=>i.why.includes('deadline'));
-  const q=items.filter(i=>!i.why.includes('deadline')&&i.why.includes('question'));
-  const rest=items.filter(i=>!dl.includes(i)&&!q.includes(i));
-  const people=new Set(items.map(i=>i.who)).size;
-  const unread=items.filter(i=>i.unread).length;
-  out.innerHTML=`
-    <p class="as-sum"><b>${items.length}</b> open item${items.length===1?'':'s'} across <b>${people}</b> ${people===1?'person':'people'} — ${dl.length} time-sensitive, ${unread} still unread.</p>
-    ${dl.length?`<div class="sec-label">Time-sensitive</div>${dl.map(assistItemHTML).join('')}`:''}
-    ${q.length?`<div class="sec-label">Awaiting your reply</div>${q.map(assistItemHTML).join('')}`:''}
-    ${rest.length?`<div class="sec-label">Requests & actions</div>${rest.map(assistItemHTML).join('')}`:''}`;
-  out.querySelectorAll('.as-item').forEach(el=>{
-    el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)};
-    el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.click()}};
-  });
+  BRIEF_VIEW='local';
+  const held=new Map(S.messages.map(m=>[m.id,m])),now=Date.now(),scope=window.__RATA_NATIVE__?BRIEF_SCOPE:'';
+  const items=(await extractTodos()).filter(i=>{const m=held.get(i.mid);return m&&!isDone(m)&&!isSnoozed(m,now)&&(!scope||mailEmailOf(m)===scope)});
+  const out=$('#as-out');out.textContent='';
+  if(!items.length){
+    const e=document.createElement('div');e.className='empty as-clear';
+    const b=document.createElement('b');b.textContent='All clear';
+    e.append(b,'No open requests or to-dos detected in the last 14 days'+(scope?' in '+boxName(scope):'')+'.');
+    out.append(e);return}
+  const people=new Set(items.map(i=>i.who)).size,dl=items.filter(i=>i.why.includes('deadline')).length,unread=items.filter(i=>i.unread).length;
+  const sum=document.createElement('p');sum.className='as-sum';
+  sum.textContent=`${items.length} open item${items.length===1?'':'s'} across ${people} ${people===1?'person':'people'}: ${dl} time-sensitive, ${unread} still unread.`;
+  out.append(sum);
+  const acts=window.__RATA_NATIVE__?['done','snooze']:[];
+  briefGroups(out,items.map(i=>({m:held.get(i.mid),words:i.text,why:i.why.map(w=>LOCAL_WHY[w]||w),acts})),n=>`${n} to look at`);
   audit('assist.brief',`${items.length} items · ${people} people`);
 }
-/* The briefing, by AI: the start of the most recent mail — read or not, since
-   a message already read can still need doing — goes to the relay, which says which messages need the customer to do something, what,
-   and by when. Those are flagged in the list (m.flag) and listed here, the
-   important ones first. The panel opens on the quick version made on this
-   computer; only pressing Run briefing sends anything. */
+/* The briefing, by AI: the start of recent mail, read or not (a message
+   already read can still need doing), goes to the relay, which says which
+   messages need the customer to do something, what, of what kind (next),
+   and by when. Those are flagged in the list (m.flag, by 'brief') and
+   listed here by mailbox, the important ones first. The panel opens on the
+   quick version made on this computer; only pressing Run briefing, or Look
+   at the next 25, sends anything. */
 const BRIEF_MAX=25,BRIEF_DAYS=14;
+/* One mailbox's briefing (P3): fewer, as one mailbox's day holds fewer. */
+const BRIEF_ONE=12;
 /* Conversations, in one pass over what is held: messages linked by ids
-   alone (convoKeys, as conversationOf links them, with no cap), and the
-   newest message sent from here in each. comp(m) names m's conversation,
-   lastSent(c) is when the customer last wrote in it (0 for never). */
+   alone (convoKeys, as conversationOf links them, with no cap; a union-find
+   rather than a walk per message, which would be quadratic). comp(m) names
+   m's conversation (null for one with no ids); in it, lastSent(c) is when
+   the customer last wrote (0 for never) and latestSent(c) that message's
+   id, sentIn(c) everything the customer sent, lastOther(c) when anyone
+   else last did (mail from the customer's own addresses is not anyone
+   else). A send recorded here only (no mailbox linked) is not counted.
+   writtenTo: every address the customer's sent mail went to, in To or Cc,
+   but the customer's own. */
 function convoIndex(){
   const up=new Map(),at=new Map();
   const root=k=>{let r=k;while(up.get(r)!==r)r=up.get(r);while(up.get(k)!==r){const n=up.get(k);up.set(k,r);k=n}return r};
@@ -8448,110 +8880,272 @@ function convoIndex(){
     for(const k of ks.slice(1)){const a=root(ks[0]),b=root(k);if(a!==b)up.set(b,a)}
     at.set(m,ks[0]);
   }
-  const sent=new Map();
-  for(const [m,k] of at){if(!m.sent)continue;const c=root(k);if((m.ts||0)>(sent.get(c)||0))sent.set(c,m.ts||0)}
-  return {comp:m=>at.has(m)?root(at.get(m)):null,lastSent:c=>c==null?0:sent.get(c)||0};
+  const mine=new Set(S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase()));
+  const sent=new Map(),sentId=new Map(),sends=new Map(),other=new Map(),writtenTo=new Set();
+  for(const [m,k] of at){
+    const c=root(k),t=m.ts||0;
+    /* A send "recorded here only" (no mailbox linked) answered nobody. */
+    if(m.sent){
+      if(m.real===false)continue;
+      if(!sentId.has(c)||t>sent.get(c)){sent.set(c,t);sentId.set(c,m.id)}
+      if(!sends.has(c))sends.set(c,[]);
+      sends.get(c).push(m);
+    }
+    else if(!mine.has(String(m.fromAddr||'').toLowerCase())&&t>(other.get(c)||0))other.set(c,t);
+  }
+  for(const m of S.messages){
+    if(!m.sent||m.draft||!channelEnabled(m.ch))continue;
+    const all=Array.isArray(m.toAll)?m.toAll:[];
+    /* RATA's own record of a send keeps only the line as typed (toName). */
+    const typed=!m.toAddr&&!all.length?fieldAddrs(String(m.toName||'')):[];
+    for(const a of [...all,...(Array.isArray(m.cc)?m.cc:[]),m.toAddr,...typed]){
+      const x=String(a||'').trim().toLowerCase();
+      if(x.includes('@')&&!mine.has(x))writtenTo.add(x);
+    }
+  }
+  return {comp:m=>at.has(m)?root(at.get(m)):null,lastSent:c=>c==null?0:sent.get(c)||0,
+    latestSent:c=>c==null?null:sentId.get(c)||null,lastOther:c=>c==null?0:other.get(c)||0,
+    sentIn:c=>c==null?[]:sends.get(c)||[],writtenTo};
 }
 /* A mailing: a list's unsubscribe address, or what Sort files under Updates
    (a Sort rule the customer made wins, since categorize reads it first). */
 const briefMailing=m=>!!(m.unsub&&typeof m.unsub==='object'&&(m.unsub.https||m.unsub.mailto))||categorize(m)==='updates';
-/* What the briefing may send, from `list` (newest first): never a mailing,
-   never mail the customer has answered since (a message sent from here,
-   newer, in the same conversation), and, with the privacy check on, never
-   a message it finds something in, as the privacy page says. Texts are read
-   from disk only as far as it takes to find BRIEF_MAX, so what is counted as
-   left out is what would otherwise have gone. */
-async function briefPick(list){
-  const ix=convoIndex(),check=S.settings.aiCheck!==false;
-  const send=[],own=new Map(),left={mailings:0,answered:0,screened:0};
-  let i=0;
-  while(send.length<BRIEF_MAX&&i<list.length){
-    const batch=[];
-    for(;i<list.length&&batch.length<BRIEF_MAX-send.length;i++){
-      const m=list[i];
-      if(briefMailing(m)){left.mailings++;continue}
-      if(ix.lastSent(ix.comp(m))>(m.ts||0)){left.answered++;continue}
-      batch.push(m);
+/* Today, across every inbox (Assistant v1, P3). The briefing reads the
+   inbox mail of the last BRIEF_DAYS days of every mailbox, or of one
+   (BRIEF_SCOPE, from the pills in #as-scope; BRIEF_ONE messages then, not
+   BRIEF_MAX). What it would send, and what it leaves out, is said in
+   #as-pre before anything is pressed, and listed under What it leaves out;
+   neither sends anything. Left out, each with its reason: mailings (a
+   list's unsubscribe address, or what Sort files under Updates), mail
+   answered since (convoIndex), mail marked Done or snoozed, mail of a
+   mailbox kept from AI or not decided yet, and, with the privacy check
+   on, a message it finds something in. What is left is taken one message
+   from each mailbox in turn, the mailbox with the newest first, so a busy
+   mailbox cannot crowd a quiet one out. Texts are read from disk only as
+   far as it takes to fill the briefing. */
+let BRIEF_SCOPE='';
+/* What this panel's briefings have sent, so Look at the next 25 sends what
+   they have not; emptied when the panel opens and by Run briefing. */
+const BRIEF_SEEN=new Set();
+let BRIEF_LAST={total:0,rest:0,used:undefined,limit:BRIEF_MAX};
+const briefLimit=scope=>scope?BRIEF_ONE:BRIEF_MAX;
+/* The cheap part: what the briefing could look at in `scope`, and what it
+   leaves out without reading anything. Mail in `skip` was sent already. */
+function briefCandidates(scope,skip){
+  const ix=convoIndex(),now=Date.now(),cutoff=now-BRIEF_DAYS*864e5;
+  const recent=S.messages.filter(m=>inInbox(m)&&channelEnabled(m.ch)&&(m.ts||0)>=cutoff&&!isGone(m.id,m.uidvalidity)&&(!scope||mailEmailOf(m)===scope)).sort((a,b)=>b.ts-a.ts);
+  const left=[],kept={},undecided={},could=[],queues=new Map();
+  for(const m of recent){
+    const why=briefMailing(m)?'a mailing':ix.lastSent(ix.comp(m))>(m.ts||0)?'you answered it':isDone(m)?'marked Done':isSnoozed(m,now)?'snoozed':'';
+    if(why){left.push({m,why});continue}
+    could.push(m);
+    const a=mailEmailOf(m),v=aiBox(a);
+    if(v!=='on'){
+      left.push({m,why:v==='off'?'its mailbox is kept from AI':'its mailbox is not decided'});
+      const n=v==='off'?kept:undecided;n[a]=(n[a]||0)+1;continue;
     }
-    if(!batch.length)break;
+    if(skip&&skip.has(m.id))continue;
+    if(!queues.has(a))queues.set(a,[]);
+    queues.get(a).push(m);
+  }
+  /* One from each mailbox in turn. `recent` is newest first, so the
+     mailboxes are in the order of their newest message. */
+  const qs=[...queues.values()],turn=[];
+  for(let i=0;qs.some(q=>i<q.length);i++)for(const q of qs)if(i<q.length)turn.push(q[i]);
+  return {recent,left,kept,undecided,could,turn};
+}
+/* What Run briefing sends: {send, left: [{m, why}], kept: {address: n},
+   undecided, own: id → the words that go, total: recent mail in scope,
+   rest: what is left to look at after these}. */
+async function briefPick(scope,skip){
+  const c=briefCandidates(scope,skip),check=S.settings.aiCheck!==false,limit=briefLimit(scope);
+  const send=[],own=new Map();
+  let i=0;
+  while(send.length<limit&&i<c.turn.length){
+    const batch=c.turn.slice(i,i+limit-send.length);i+=batch.length;
     const texts=await bodiesOf(batch);
     for(const m of batch){
-      /* Each message's own words (not the mail quoted under them), the start
-         of them, as the privacy page says. */
+      /* Each message's own words (not the mail quoted under them), the
+         start of them, as the privacy page says. */
       const words=aiCut(newWords(texts.get(m.id)||'')||m.prev,AI_BRIEF_EACH);
-      if(check&&runDLP((m.subj||'')+'\n'+words,S.settings.profile).some(f=>f.sev==='block')){left.screened++;continue}
+      if(check&&runDLP((m.subj||'')+'\n'+words,S.settings.profile).some(f=>f.sev==='block')){c.left.push({m,why:'your privacy check found details in it'});continue}
       send.push(m);own.set(m.id,words);
     }
   }
-  return {send,own,left};
+  return {send,left:c.left,kept:c.kept,undecided:c.undecided,own,total:c.recent.length,rest:c.turn.length-i};
 }
-async function runAIBrief(){
+/* #as-pre in words: what Run briefing would send, from which mailboxes,
+   and what stays on this computer. */
+function briefPreText(p){
+  const n=p.send.length,by=new Map();
+  for(const m of p.send){const a=mailEmailOf(m);by.set(a,(by.get(a)||0)+1)}
+  const out=[n?`Run briefing will send the start of ${n} message${n===1?'':'s'}: ${[...by].map(([a,k])=>k+' from '+boxName(a)).join(', ')}.`
+    :'Run briefing has no recent mail it may send.'];
+  const c=w=>p.left.filter(x=>x.why===w).length;
+  const kinds=[[c('a mailing'),k=>k+' mailing'+(k===1?'':'s')],[c('you answered it'),k=>k+' you have answered'],[c('marked Done'),k=>k+' marked Done'],
+    [c('snoozed'),k=>k+' snoozed'],[c('your privacy check found details in it'),k=>k+' with details the privacy check found']].filter(([k])=>k).map(([k,f])=>f(k));
+  if(kinds.length)out.push('Left out on this computer: '+kinds.join(', ')+'.');
+  const per=o=>Object.entries(o).map(([a,k])=>`${boxName(a)} (${k} message${k===1?'':'s'})`).join(', ');
+  if(Object.keys(p.kept).length)out.push('Kept from AI: '+per(p.kept)+'.');
+  const open=Object.keys(p.undecided).length;
+  if(open)out.push('Not decided yet: '+per(p.undecided)+`. Run briefing asks about ${open===1?'it':'them'} first.`);
+  const u=S.settings.aiUsed;
+  if(u&&typeof u==='object'&&u.month===new Date().toISOString().slice(0,7)&&Number(u.used)>=0.9)out.push('This month’s AI allowance is nearly used.');
+  return out.join(' ');
+}
+/* Filled when the panel opens, when the scope changes and after a
+   briefing, with no request. */
+let PRE_N=0;
+async function fillPre(){
+  const pre=$('#as-pre'),n=++PRE_N;
+  if(!window.__RATA_NATIVE__||!aiPlanHas('ai')){pre.textContent='';renderLeft([]);return}
+  if(!aiOn()){pre.textContent=AI_OFF;renderLeft([]);return}
+  const p=await briefPick(BRIEF_SCOPE);
+  if(n!==PRE_N)return;
+  pre.textContent=briefPreText(p);
+  renderLeft(p.left);
+}
+/* What it leaves out, a line each, behind #as-left. */
+const LEFT_SHOW=100;
+function renderLeft(left){
+  const btn=$('#as-left'),list=$('#as-leftlist');
+  list.textContent='';btn.hidden=!left.length;
+  if(!left.length){list.hidden=true;btn.setAttribute('aria-expanded','false');return}
+  btn.textContent='What it leaves out ('+left.length+')';
+  const ul=document.createElement('ul');
+  for(const {m,why} of left.slice(0,LEFT_SHOW)){
+    const li=document.createElement('li'),b=document.createElement('b'),w=document.createElement('span');
+    b.textContent=msgFrom(m);w.className='why';w.textContent=': '+why;
+    li.append(b,document.createTextNode(' · '+(m.subj||'(no subject)')),w);ul.append(li);
+  }
+  list.append(ul);
+  if(left.length>LEFT_SHOW){const p=document.createElement('p');p.className='why';p.textContent='And '+(left.length-LEFT_SHOW)+' more.';list.append(p)}
+}
+$('#as-left').onclick=()=>{const l=$('#as-leftlist'),open=l.hidden;l.hidden=!open;$('#as-left').setAttribute('aria-expanded',String(open))};
+/* All mailboxes, or one: app only, and only with two or more linked. */
+function renderScope(){
+  const el=$('#as-scope');
+  const boxes=window.__RATA_NATIVE__?S.linked.filter(l=>l.type==='mail').map(l=>String(l.label).toLowerCase()):[];
+  if(BRIEF_SCOPE&&!boxes.includes(BRIEF_SCOPE))BRIEF_SCOPE='';
+  el.textContent='';el.hidden=boxes.length<2;
+  if(el.hidden)return;
+  [['','All mailboxes'],...boxes.map(a=>[a,boxName(a)])].forEach(([a,label],k)=>{
+    const b=document.createElement('button');b.type='button';b.className='pill';b.textContent=label;b.dataset.scope=a;
+    b.setAttribute('aria-pressed',String(BRIEF_SCOPE===a));
+    /* The panel shows the quick briefing for the mailboxes picked, at once
+       and sending nothing; an AI briefing of others gives way to it (its
+       flags stay on the messages, and in Needs me), and Run briefing is
+       what sends. */
+    b.onclick=()=>{BRIEF_SCOPE=a;BRIEF_SEEN.clear();renderScope();fillPre();runLocalBrief();const again=el.querySelectorAll('button')[k];if(again)again.focus()};
+    el.append(b);
+  });
+}
+/* The briefing, by AI. `more`: Look at the next 25, a second press and a
+   second request, never made on its own. */
+async function runAIBrief(more){
+  more=more===true;
   if(!window.__RATA_NATIVE__){await runLocalBrief();return}
   const out=$('#as-out'),btn=$('#as-run');
   /* Where AI cannot be used, the quick version made on this computer, and
      why. Nothing is sent. */
-  const local=async(why,also)=>{await runLocalBrief();if(why)out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(why)} Below is the quick version, made on this computer.</p>`+(also||''))};
+  const local=async why=>{
+    await runLocalBrief();
+    if(why){const p=document.createElement('p');p.className='as-sum';p.textContent=why+' Below is the quick version, made on this computer.';out.prepend(p)}
+    fillPre();
+  };
   if(!aiPlanHas('ai')){await local(needPlan('ai','The AI briefing'));return}
-  const cutoff=Date.now()-BRIEF_DAYS*864e5;
-  const recent=S.messages.filter(m=>inInbox(m)&&m.ts>=cutoff&&channelEnabled(m.ch)).sort((a,b)=>b.ts-a.ts);
-  if(!recent.length){out.innerHTML='<div class="empty" style="padding:30px 10px"><b>All clear</b>No mail from the last two weeks to look through.</div>';return}
+  if(!more)BRIEF_SEEN.clear();
+  const scope=BRIEF_SCOPE,c=briefCandidates(scope,more?BRIEF_SEEN:null);
+  if(!c.recent.length){out.innerHTML='<div class="empty as-clear"><b>All clear</b>No mail from the last two weeks to look through.</div>';fillPre();return}
+  if(!c.could.length){await local('There is no recent mail RATA’s AI may read.');return}
   /* Only mailboxes the customer lets AI read: those nobody has decided
-     about yet are asked about first, one box to tick each. Cancel sends
-     nothing and decides nothing. */
-  const gate=await aiGate('tasks',recent);
-  if(gate.cancelled)return;
+     about yet are asked about first, one box to tick each, and the pick is
+     made again after. Cancel sends nothing and decides nothing. */
+  const gate=await aiGate('tasks',c.could);
+  if(gate.cancelled){fillPre();return}
   if(!gate.ok){await local(gate.reason);return}
-  const keptFrom=[...new Set(recent.map(mailEmailOf).filter(a=>a&&!gate.allowed.has(a)))].map(boxName);
   btn.disabled=true;btn.textContent='Reading…';
-  let {send:pool,own,left}=await briefPick(recent.filter(m=>gate.allowed.has(mailEmailOf(m))));
-  /* What was left out on this computer, said under the answer. */
-  const skipped=[left.mailings&&`${left.mailings} mailing${left.mailings===1?'':'s'}`,left.answered&&`${left.answered} you have answered`].filter(Boolean);
-  const leftOut=(keptFrom.length?`<p class="as-sum">Kept from AI: ${esc(keptFrom.join(', '))}.</p>`:'')
-    +(skipped.length?`<p class="as-sum">Left out on this computer: ${skipped.join(', ')}.</p>`:'')
-    +(left.screened?`<p class="as-sum">${left.screened} message${left.screened===1?' was':'s were'} left out because the privacy check found details in ${left.screened===1?'it':'them'}.</p>`:'');
-  if(!pool.length){btn.disabled=false;btn.textContent='Run briefing';await local('There is no recent mail RATA’s AI may read.',leftOut);return}
+  const pick=await briefPick(scope,more?BRIEF_SEEN:null);
+  let pool=pick.send;
+  if(!pool.length){btn.disabled=false;btn.textContent='Run briefing';await local('There is no recent mail RATA’s AI may read.');return}
   /* Each message goes by its place in this list ("1" to "25"), never by
      m.id: an id is built from the mailbox's key, which comes from its
      address, and what is sent here reaches Anthropic. The relay takes any
      id string and answers only with ids it was sent (lib/ai.js). */
-  const sent=pool.map((m,i)=>({id:String(i+1),day:isoDay(m.ts),from:aiName(m),subject:aiCut(m.subj,AI_SUBJ),text:own.get(m.id)}));
-  /* Mail full of quotes or line breaks grows as JSON; the oldest go until
-     the request is well under what the relay takes, and only what was sent
-     is re-flagged below. */
+  const sent=pool.map((m,i)=>({id:String(i+1),day:isoDay(m.ts),from:aiName(m),subject:aiCut(m.subj,AI_SUBJ),text:pick.own.get(m.id)}));
+  /* Mail full of quotes or line breaks grows as JSON; the last taken go
+     until the request is well under what the relay takes, and only what
+     was sent is re-flagged below. */
   while(sent.length>1&&JSON.stringify(sent).length>AI_BRIEF_JSON)sent.pop();
   pool=pool.slice(0,sent.length);
   const r=await askAI({task:'tasks',today:isoDay(Date.now()),messages:sent},new Set(pool.map(mailEmailOf)));
   btn.disabled=false;btn.textContent='Run briefing';
-  /* A briefing that failed, or was cut short, says nothing about what needs
-     doing: every flag stays as it was. */
-  if(r.error){await runLocalBrief();out.insertAdjacentHTML('afterbegin',`<p class="as-sum">${esc(r.error)} Below is the quick version, made on this computer.${pool.some(m=>m.flag)?' Flags from earlier briefings are kept.':''}</p>`);return}
-  const found=new Map((r.tasks||[]).map(t=>[String(t.id),t]));
+  if(!document.activeElement||document.activeElement===document.body)btn.focus();
+  /* A briefing that failed, was cut short, or names none of the places it
+     was sent (a page-side guard: the relay already refuses that) says
+     nothing about what needs doing: every flag stays as it was. */
+  const named=Array.isArray(r.tasks)&&(!r.tasks.length||r.tasks.some(t=>t&&/^\d+$/.test(String(t.id))&&Number(t.id)>=1&&Number(t.id)<=pool.length));
+  if(r.error||!named){await local((r.error||'The briefing could not be read. Try again.')+' Flags from earlier briefings are kept.');return}
+  const found=new Map(r.tasks.map(t=>[String(t.id),t]));
   /* What the briefing looked at is re-flagged from its answer, so a message
-     that no longer needs anything loses its flag. The answer names each by
-     the place it was sent under. */
-  pool.forEach((m,i)=>{const t=found.get(String(i+1));if(t)m.flag={task:t.task,due:t.due,important:t.important,at:Date.now()};else delete m.flag});
-  save();renderMail();
-  const items=pool.filter(m=>m.flag).sort((a,b)=>(b.flag.important-a.flag.important)||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
-  if(!items.length){out.innerHTML=`<div class="empty" style="padding:30px 10px"><b>All clear</b>None of your ${pool.length} most recent messages needs anything from you.</div>`+leftOut;return}
-  out.innerHTML=`<p class="as-sum"><b>${items.length}</b> of your ${pool.length} most recent messages need${items.length===1?'s':''} something from you${items.some(m=>m.flag.important)?' \u2014 the important ones first':''}.</p>`
-    +items.map(m=>`<div class="as-item" data-mid="${esc(m.id)}" role="button" tabindex="0">
-      <div class="as-line1">${m.flag.important?'<span class="badge flag hot">important</span>':''}<b>${esc(msgFrom(m))}</b><span class="as-t">${rel(m.ts)}</span></div>
-      <div class="as-text">\u2691 ${esc(m.flag.task)}${m.flag.due?` <span class="as-chip deadline">by ${esc(m.flag.due)}</span>`:''}</div>
-      <div class="as-why">${esc(m.subj||'')}</div>
-    </div>`).join('')
-    +leftOut
-    +(allowanceNote(r.used)?`<p class="as-sum">${esc(allowanceNote(r.used))}</p>`:'');
-  out.querySelectorAll('.as-item').forEach(el=>{
-    el.onclick=()=>{closeAssist();go('inbox');openMail(el.dataset.mid)};
-    el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.click()}};
+     that no longer needs anything loses its flag; a flag the customer set
+     (by 'you') stays as it is. */
+  pool.forEach((m,i)=>{
+    BRIEF_SEEN.add(m.id);
+    if(m.flag&&m.flag.by==='you')return;
+    const t=found.get(String(i+1));
+    if(t)m.flag={task:String(t.task||''),due:/^\d{4}-\d{2}-\d{2}$/.test(String(t.due||''))?t.due:null,important:t.important===true,
+      next:Object.prototype.hasOwnProperty.call(NEXT_WORDS,t.next)?t.next:'do',at:Date.now(),by:'brief'};
+    else delete m.flag;
   });
-  audit('assist.brief.ai',`${items.length} of ${pool.length} flagged`);
+  BRIEF_LAST={total:pick.total,rest:pick.rest+(pick.send.length-pool.length),used:r.used,limit:briefLimit(scope)};
+  save();renderMail();needsNow();
+  renderBrief();
+  fillPre();
+  audit('assist.brief.ai',`${pool.filter(m=>m.flag).length} of ${pool.length} flagged`);
 }
-function openAssist(){dlgOpen($('#assist-ov'));$('#assist-ov').classList.add('open');runLocalBrief();$('#as-run').focus()}
-function closeAssist(){$('#assist-ov').classList.remove('open');dlgClose($('#assist-ov'))}
+/* The AI briefing on screen: what it flagged among what this panel's
+   briefings sent, less what is done, snoozed or gone since; by mailbox,
+   the important first, then by day due, then the newest. */
+function renderBrief(){
+  BRIEF_VIEW='ai';
+  const out=$('#as-out'),now=Date.now();out.textContent='';
+  const items=S.messages.filter(m=>BRIEF_SEEN.has(m.id)&&m.flag&&!isDone(m)&&!isSnoozed(m,now)&&!isGone(m.id,m.uidvalidity))
+    .sort((a,b)=>((b.flag.important===true)-(a.flag.important===true))||String(a.flag.due||'9999').localeCompare(String(b.flag.due||'9999'))||(b.ts-a.ts));
+  if(!items.length){
+    const e=document.createElement('div');e.className='empty as-clear';
+    const b=document.createElement('b');b.textContent='All clear';
+    e.append(b,`None of the ${BRIEF_SEEN.size} message${BRIEF_SEEN.size===1?'':'s'} it looked at needs anything from you.`);
+    out.append(e);
+  }else{
+    const boxes=new Set(items.map(mailEmailOf)).size,hot=items.filter(m=>m.flag.important===true).length;
+    const h=document.createElement('p');h.className='as-sum';
+    h.textContent=`${items.length} need${items.length===1?'s':''} you across ${boxes} mailbox${boxes===1?'':'es'}${hot?`, ${hot} important`:''}`;
+    out.append(h);
+    briefGroups(out,items.map(m=>({m,task:m.flag.task,important:m.flag.important===true,next:m.flag.next,due:m.flag.due,acts:['reply','done','snooze','archive']})),
+      n=>`${n} need${n===1?'s':''} you`);
+  }
+  const foot=document.createElement('p');foot.className='as-sum as-foot';
+  foot.textContent=`Looked at ${BRIEF_SEEN.size} of ${BRIEF_LAST.total} recent message${BRIEF_LAST.total===1?'':'s'}.`;
+  out.append(foot);
+  if(BRIEF_LAST.rest>0){
+    const more=document.createElement('button');more.type='button';more.className='btn';more.id='as-more';
+    more.textContent='Look at the next '+Math.min(BRIEF_LAST.limit,BRIEF_LAST.rest);
+    more.onclick=()=>runAIBrief(true);
+    out.append(more);
+  }
+  const note=allowanceNote(BRIEF_LAST.used);
+  if(note){const p=document.createElement('p');p.className='as-sum';p.textContent=note;out.append(p)}
+}
+function openAssist(){
+  dlgOpen($('#assist-ov'));$('#assist-ov').classList.add('open');
+  BRIEF_SEEN.clear();renderScope();fillPre();runLocalBrief();
+  $('#as-run').focus();
+}
+function closeAssist(){if(SNZ_OPEN)SNZ_OPEN.close(false);$('#assist-ov').classList.remove('open');dlgClose($('#assist-ov'))}
 $('#assist-fab').onclick=openAssist;
 $('#as-close').onclick=closeAssist;
-$('#as-run').onclick=runAIBrief;
+$('#as-run').onclick=()=>runAIBrief(false);
 $('#assist-ov').addEventListener('click',e=>{if(e.target===$('#assist-ov'))closeAssist()});
 
 /* ---------------- WELCOME (post-signup transfer) ---------------- */
@@ -8631,6 +9225,10 @@ function showWelcome(ob){
   /* Mailboxes linked on another device belong here too. */
   if(SESSION.mode==='supabase'&&S.linked.some(l=>l.type==='mail'))serverSync('mail');
   if(!S.audit.length){await audit('workspace.init','Rata standalone workspace created')}
+  /* Needs me and Waiting on them (P2): snoozes that ran out while RATA was
+     closed, then on their own timer; the guess itself; and whether mail
+     not judged yet asks something. Nothing is sent. */
+  if(window.__RATA_NATIVE__){wakeSnoozed();setInterval(wakeSnoozed,30e3);needsNow();scanAsks()}
   renderSyncAll();renderMailFilters();renderMail();
   $('#nc-docs').textContent=S.documents.length;
   save();

@@ -201,6 +201,10 @@ export default async function run(state) {
     check(max === LIMITS.briefing && P.includes(`up to ${max} recent messages in your inbox from the last ${days} days, leaving out mailings, mail you have already answered and any mailbox you keep from AI`)
       && P.includes('the day it arrived'),
       `the briefing: up to ${max} messages (relay takes ${LIMITS.briefing}) from the last ${days} days, what it leaves out, and the day each arrived`);
+    /* One mailbox's briefing (Assistant v1, P3) sends fewer, never more
+       than "up to" says. */
+    const one = app.match(/^const BRIEF_ONE=(\d+);$/m);
+    check(!!one && Number(one[1]) > 0 && Number(one[1]) <= max, `one mailbox's briefing sends at most ${one && one[1]}, within the ${max} the page promises`);
     check((app.includes(`.slice(0,${LIMITS.briefingEach})`) || app.includes(`AI_BRIEF_EACH=${LIMITS.briefingEach}`)) && P.includes(`the first ${thousands(LIMITS.briefingEach)} characters`),
       `the start of each: ${thousands(LIMITS.briefingEach)} characters`);
     check(app.includes(`AI_TEXT=${LIMITS.text},`) && P.includes(`up to the first ${thousands(LIMITS.text)} characters`), `a summary or translation: up to ${thousands(LIMITS.text)} characters, and the page cuts to exactly that`);

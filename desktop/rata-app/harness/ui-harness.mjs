@@ -1283,7 +1283,7 @@ console.log('\n— keyboard shortcuts (H4) —');
   const byI = (a) => JSON.stringify([...a].sort((x, y) => x.i - y.i).map(({ i, what, caps }) => ({ i, what, caps })));
   check(sheet.open && sheet.role === 'dialog' && sheet.focus === 'keys-close', `? shows the sheet, as a dialog with the focus on Close: ${JSON.stringify({ open: sheet.open, focus: sheet.focus })}`);
   check(sheet.rows.length === sheet.table.length && byI(sheet.rows) === byI(sheet.table), `the sheet lists exactly the table, every row once: ${sheet.rows.length} rows, ${sheet.table.length} in the table`);
-  const card = ['j', 'ArrowDown', 'k', 'ArrowUp', 'Enter', 'x', 'r', 'a', 'f', 'e', '#', 'Delete', 's', 'u', 'm', 'c', '/', 'g i', 'Escape', '?'];
+  const card = ['j', 'ArrowDown', 'k', 'ArrowUp', 'Enter', 'x', 'r', 'a', 'f', 'e', '#', 'Delete', 's', 'u', 'm', 'y', 'b', 'c', '/', 'g i', 'g n', 'g t', 'Escape', '?'];
   const keys = sheet.table.flatMap((t) => t.keys);
   check(keys.length === card.length && card.every((k) => keys.includes(k)), `the table holds the card's keys and no others: ${JSON.stringify(keys)}`);
   await press('j');
@@ -2706,11 +2706,15 @@ console.log('\n— the briefing sends each message by its place, never by its id
   check(leaked.length === 0 && held.ids.length >= 4, `and no message id, mailbox address or key is in what it sends: ${JSON.stringify(leaked)}`);
   check(held.flagged.length === 1 && held.flagged[0][0] === KEY + '_2' && held.flagged[0][1] === 'Pay the invoice',
     `the answer's "2" flags the second newest message, and only that one: ${JSON.stringify(held.flagged)}`);
-  /* An answer naming a real id flags nothing: only places are read. */
+  /* An answer naming a real id flags nothing: only places are read. It
+     names none of the places sent, so it is unreadable (Assistant v1, P3):
+     the earlier flag stays, and the briefing says it could not be read. */
   answer = { body: { tasks: [{ id: KEY + '_3', task: 'Reply to Ann', due: null, important: false }], used: 0.1 } };
   await pg.evaluate(async () => { await runAIBrief(); });
-  const after = await pg.evaluate(() => S.messages.filter((m) => m.flag).map((m) => m.id));
-  check(after.length === 0, `an answer naming a message by its id flags nothing: ${JSON.stringify(after)}`);
+  const after = await pg.evaluate(() => ({ flagged: S.messages.filter((m) => m.flag).map((m) => [m.id, m.flag.task]), said: document.querySelector('#as-out').textContent }));
+  check(after.flagged.length === 1 && after.flagged[0][0] === KEY + '_2' && after.flagged[0][1] === 'Pay the invoice'
+    && /The briefing could not be read\. Try again\. Flags from earlier briefings are kept\./.test(after.said),
+  `an answer naming a message by its id flags nothing, keeps the earlier flag and says the briefing could not be read: ${JSON.stringify({ ...after, said: after.said.slice(0, 120) })}`);
   await pg.close();
 }
 
@@ -2746,13 +2750,16 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
     __mock.refresh = null;
     go('inbox'); openMail('me@example.com_1');
     openAssist(); await new Promise((r) => setTimeout(r, 200)); closeAssist();
+    /* Needs me and Waiting on them are RATA's own guess (P2). */
+    mailFilter = 'needs'; renderMailFilters(); renderMail(); needsNow();
+    mailFilter = 'waiting'; renderMailFilters(); renderMail(); mailFilter = 'all'; renderMailFilters(); renderMail();
     await autoSync();
   }, [mk('me@example.com', 1, { from_name: 'Ann Lee (ann@example.org)', subject: 'Lunch on Friday', body: 'Can you make lunch on Friday?\n\nOn Mon, Ann wrote:\n> old words' }),
     mk('work@example.net', 2, { from_name: 'Bo Li', subject: 'Contract', body: 'Please sign the contract by Monday.' }),
     mk('me@example.com', 3, { subject: 'Call back', body: 'Please call about MRN 1234567 today.' }),
     mk('me@example.com', 4, { subject: 'Call back re MRN', body: '1234567 is the chart to pull.', ts: Date.now() - 20 * 86400e3 })]);
   check(pg.__ai.length === 0 && (await pg.evaluate(() => !S.settings.aiBoxes && !('aiOk' in S.settings))),
-    `starting, opening a message, opening Assist and a refresh send nothing, and nothing is decided for anyone: ${pg.__ai.length} requests`);
+    `starting, opening a message, opening Assist, Needs me, Waiting on them and a refresh send nothing, and nothing is decided for anyone: ${pg.__ai.length} requests`);
   check(await pg.evaluate(() => { const m = migrate({ v: 6, settings: { name: 'x', aiOk: true }, linked: [], rules: [], folders: [], contacts: [], messages: [], documents: [], audit: [], counters: {} }); return !('aiOk' in m.settings); }),
     'an old yes to AI for everything (aiOk) does not carry over');
 
@@ -2941,16 +2948,22 @@ console.log('\n— AI you can see and steer: the plan, the switch, each mailbox,
   await pg.click('#aiok-save');
   await settle();
   s = sent().at(-1) || {};
-  const brief = await pg.evaluate(() => ({ boxes: S.settings.aiBoxes, out: document.querySelector('#as-out').textContent }));
+  /* What was kept from AI and left out is said in #as-pre, above the
+     answer, and listed behind What it leaves out (P3). */
+  await pg.waitForFunction(() => /Kept from AI/.test(document.querySelector('#as-pre').textContent), null, { timeout: 3000 }).catch(() => {});
+  const brief = await pg.evaluate(() => ({ boxes: S.settings.aiBoxes, out: document.querySelector('#as-pre').textContent,
+    left: [...document.querySelectorAll('#as-leftlist li')].map((li) => li.textContent) }));
   check(brief.boxes['me@example.com'] === 'on' && brief.boxes['work@example.net'] === 'off', `Save and run records ticked as on and unticked as off: ${JSON.stringify(brief.boxes)}`);
   check(s.task === 'tasks' && s.messages.length === 1 && s.messages[0].subject === 'Lunch on Friday' && !JSON.stringify(s).includes('Contract') && !JSON.stringify(s).includes('MRN'),
     `only mail AI may read goes, and not a message the privacy check found something in: ${JSON.stringify(s.messages && s.messages.map((m) => m.subject))}`);
   check(s.today === today && s.messages.every((m) => isDay(m.day) && !/@/.test(m.from)) && s.messages[0].text === 'Can you make lunch on Friday?',
     `with today, the day of each, no address, and a message's own words without the mail quoted under them: ${JSON.stringify(s.messages && s.messages[0])}`);
-  check(/Kept from AI: work@example\.net\./.test(brief.out) && /left out because the privacy check found details in it/.test(brief.out),
-    `and the answer says what was kept from AI: ${JSON.stringify(brief.out.slice(-200))}`);
-  check(!JSON.stringify(s).includes('hikes') && !JSON.stringify(s).includes('Room for Thursday') && /Left out on this computer: 1 mailing, 1 you have answered\./.test(brief.out),
-    `a mailing and mail answered since are left out, and the answer says so: ${JSON.stringify(brief.out.slice(-260))}`);
+  check(/Kept from AI: work@example\.net \(1 message\)\./.test(brief.out) && /1 with details the privacy check found/.test(brief.out)
+    && brief.left.some((t) => /Call back: your privacy check found details in it$/.test(t)),
+  `and the panel says what was kept from AI and what the check left out: ${JSON.stringify({ pre: brief.out.slice(-200), left: brief.left })}`);
+  check(!JSON.stringify(s).includes('hikes') && !JSON.stringify(s).includes('Room for Thursday') && /Left out on this computer: 1 mailing, 1 you have answered, /.test(brief.out)
+    && brief.left.some((t) => /Five autumn hikes: a mailing$/.test(t)) && brief.left.some((t) => /Room for Thursday: you answered it$/.test(t)),
+  `a mailing and mail answered since are left out, and the panel says so: ${JSON.stringify(brief.out.slice(-260))}`);
   await pg.evaluate(() => closeAssist());
 
   /* Settings, under AI: each mailbox, the check, this month, what each
@@ -3017,6 +3030,388 @@ console.log('\n— an AI request that never answers says it took too long —');
   const t = await toasts(pg);
   check(pg.__ai.length === 1 && t.includes('RATA’s AI service took too long to answer. Try again.'), `a relay that never answers is given up on, and said so: ${JSON.stringify(t)}`);
   await pg.close();
+}
+
+/* axe-core for Assistant v1's screens, as the H10 section runs it: any
+   serious or critical rule fails. */
+const { default: AxeBuilderV1 } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+async function assistAxe(pg, where) {
+  const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
+  await pg.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]));
+  const r = await new AxeBuilderV1({ page: pg }).analyze();
+  if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
+  const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+  check(bad.length === 0, `axe, ${where}: no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+}
+
+console.log('\n— Needs me and Waiting on them: RATA’s guess, made on this computer (Assistant v1, P2) —');
+{
+  /* Every request the AI relay would get is in pg.__ai: none here. */
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx, ai: () => ({ status: 500, body: { error: 'not asked' } }) });
+  const DAY = 86400e3, now = Date.now();
+  const ME = 'me@example.com';
+  const mk = (folder, uid, extra) => Object.assign({ id: ME + '_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: ME, acct_label: 'Example',
+    from_name: 'Sender ' + uid, from_addr: 's' + uid + '@example.org', to_name: '', to_addr: ME, to_all: [ME], cc: [], in_reply_to: '', subject: 'Subject ' + uid,
+    preview: 'Preview ' + uid, body: 'Body ' + uid, ts: now - uid * 60_000, unread: false, starred: false, uid, uidvalidity: 7,
+    message_id: 'p2-' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const sentTo = (uid, to, extra) => mk('sent', uid, Object.assign({ from_name: 'Me', from_addr: ME, to_name: to.split('@')[0], to_addr: to, to_all: [to] }, extra));
+  const id = (folder, uid) => ME + '_' + (folder === 'inbox' ? '' : folder + '_') + uid;
+  /* A refresh, then the scan of what asks something and the guess, so
+     each check sees them settled. */
+  const sync = (msgs) => pg.evaluate(async (msgs) => {
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true); __mock.refresh = null;
+    for (let k = 0; k < 100 && ASKS_BUSY; k++) await new Promise((r) => setTimeout(r, 20));
+    await scanAsks(); needsNow();
+  }, msgs);
+  const state = () => pg.evaluate(() => ({ needs: [...NEEDS].sort(), waiting: [...WAITING].sort(),
+    chips: [...document.querySelectorAll('#mail-filters [data-f="needs"], #mail-filters [data-f="waiting"]')].map((b) => [b.textContent, b.getAttribute('aria-label')]),
+    digest: (document.querySelector('#digest') || {}).textContent || '' }));
+  await pg.evaluate(() => { S.contacts.push({ id: 'cdee', name: 'Dee Ray', nick: '', addr: 'dee@example.org' }); go('inbox'); });
+  await sync([
+    /* (b) someone the customer wrote to, asking something */
+    mk('inbox', 1, { from_name: 'Cy Park', from_addr: 'cy@example.org', subject: 'Room for Thursday', body: 'Can you book the room for Thursday?', ts: now - 2 * DAY }),
+    sentTo(2, 'cy@example.org', { subject: 'Lunch plans', body: 'See you at noon.', ts: now - 10 * DAY }),
+    /* (b) someone saved in People, asking something */
+    mk('inbox', 3, { from_name: 'Dee Ray', from_addr: 'dee@example.org', subject: 'Slides', body: 'Could you send the slides?', ts: now - 1 * DAY }),
+    /* a stranger asking: not the customer's to answer */
+    mk('inbox', 4, { from_name: 'Stranger', from_addr: 'stranger@example.org', subject: 'Are you free?', body: 'Are you free to talk?', ts: now - 1 * DAY }),
+    /* (c) starred */
+    mk('inbox', 5, { from_name: 'Eve Long', from_addr: 'eve@example.org', subject: 'Photos', body: 'Here are the photos.', starred: true, ts: now - 3 * DAY }),
+    /* (a) flagged, below */
+    mk('inbox', 6, { from_name: 'Staff Office', from_addr: 'office@example.org', subject: 'Packet', body: 'The packet is attached.', ts: now - 4 * DAY }),
+    /* a mailing from an address written to, asking: still a mailing */
+    mk('inbox', 7, { from_name: 'List', from_addr: 'list@example.org', subject: 'Will you come?', body: 'Will you come to the meetup?', ts: now - 1 * DAY,
+      unsubscribe: { https: 'https://example.org/leave' } }),
+    sentTo(8, 'list@example.org', { subject: 'Join', body: 'subscribe', ts: now - 20 * DAY }),
+    /* answered since */
+    mk('inbox', 9, { from_name: 'Cy Park', from_addr: 'cy@example.org', subject: 'Budget', body: 'Can you check the budget?', ts: now - 3 * DAY }),
+    sentTo(10, 'cy@example.org', { subject: 'Re: Budget', body: 'Done, all checked.', ts: now - 2 * DAY, in_reply_to: 'p2-9@example.org' }),
+    /* waits on them: asked four days ago, no answer */
+    sentTo(11, 'jo@example.org', { subject: 'Dates for the course?', body: 'Could you send me the dates?', ts: now - 4 * DAY }),
+    /* asked two and a half days ago: not yet, at three */
+    sentTo(12, 'kim@example.org', { subject: 'Venue', body: 'Which venue works for you?', ts: now - 2.5 * DAY }),
+    /* older than thirty days: not RATA's guess at all */
+    mk('inbox', 13, { from_name: 'Cy Park', from_addr: 'cy@example.org', subject: 'Old one', body: 'Can you look?', ts: now - 40 * DAY }),
+  ]);
+  await pg.evaluate((pid) => { const m = S.messages.find((x) => x.id === pid); m.flag = { task: 'Return the packet', due: null, important: true, at: Date.now(), by: 'brief' }; save(); needsNow(); }, id('inbox', 6));
+  let s = await state();
+  check(JSON.stringify(s.needs) === JSON.stringify([id('inbox', 1), id('inbox', 3), id('inbox', 5), id('inbox', 6)].sort()),
+    `Needs me: someone written to who asks (b), someone in People who asks (b), a starred one (c) and a flagged one (a); not a stranger, a mailing, one answered since or one over 30 days old: ${JSON.stringify(s.needs)}`);
+  check(JSON.stringify(s.waiting) === JSON.stringify([id('sent', 11)]), `Waiting on them: the question asked four days ago, not the one asked two and a half days ago: ${JSON.stringify(s.waiting)}`);
+  check(JSON.stringify(s.chips) === JSON.stringify([['Needs me · 4', 'Needs me, 4 messages'], ['Waiting on them · 1', 'Waiting on them, 1 message']]),
+    `each chip carries its count in its name: ${JSON.stringify(s.chips)}`);
+  check(/4 need you/.test(s.digest) && /1 waiting on others/.test(s.digest) && /Open briefing/.test(s.digest), `the strip counts them: ${JSON.stringify(s.digest)}`);
+  check(pg.__ai.length === 0, 'and nothing went to the AI relay');
+
+  /* The views: the guess's own words, and why each is there. */
+  await pg.click('#mail-filters [data-f="needs"]');
+  await pg.waitForTimeout(150);
+  let v = await pg.evaluate(() => ({ rows: [...document.querySelectorAll('#mail-scroll .mail-row')].map((r) => [r.dataset.id, r.querySelector('.m-prev').textContent]),
+    note: (document.querySelector('#mail-scroll .vl-note') || {}).textContent, imp: [...document.querySelectorAll('#mail-scroll .badge.flag')].map((b) => b.textContent) }));
+  const why = Object.fromEntries(v.rows);
+  check(v.rows.length === 4 && why[id('inbox', 1)] === 'Asked you a question · 2 days' && why[id('inbox', 5)] === 'You starred it' && why[id('inbox', 6)] === 'Briefing: Return the packet',
+    `Needs me lists the four, each saying why: ${JSON.stringify(v.rows)}`);
+  check(v.note === 'RATA’s guess, made on this computer from mail it holds from the last 30 days. Done and Snooze take a message out.' && v.imp.includes('Important') && v.imp.some((t) => /^⚑ Return the packet$/.test(t)),
+    `and says it is RATA’s guess; an important flag says Important in a word: ${JSON.stringify(v)}`);
+  await assistAxe(pg, 'the Needs me view');
+  await pg.click('#mail-filters [data-f="waiting"]');
+  await pg.waitForTimeout(150);
+  v = await pg.evaluate(() => [...document.querySelectorAll('#mail-scroll .mail-row')].map((r) => r.dataset.id));
+  check(JSON.stringify(v) === JSON.stringify([id('sent', 11)]), `Waiting on them lists mail sent, not the inbox's: ${JSON.stringify(v)}`);
+  await assistAxe(pg, 'the Waiting on them view');
+  await pg.emulateMedia({ colorScheme: 'dark' });
+  await pg.waitForTimeout(300);
+  await assistAxe(pg, 'the Waiting on them view, dark');
+  await pg.click('#mail-filters [data-f="needs"]');
+  await pg.waitForTimeout(300);
+  await assistAxe(pg, 'the Needs me view, dark');
+  await pg.emulateMedia({ colorScheme: 'light' });
+
+  /* Settings: after how many days a question waits on them. */
+  await pg.evaluate(() => go('set'));
+  check(await pg.evaluate(() => !document.querySelector('#wait-row').hidden && document.querySelector('#set-wait').value === '3'), 'Settings offers Waiting on them after, three days unless set');
+  await pg.selectOption('#set-wait', '2');
+  s = await state();
+  check(s.waiting.includes(id('sent', 12)) && (await pg.evaluate(() => S.settings.waitDays)) === 2, `at two days the venue question waits on them too: ${JSON.stringify(s.waiting)}`);
+
+  /* Write follow-up: from the same mailbox, to everyone it went to, as a
+     reply to the customer's own message. */
+  await pg.evaluate((wid) => { go('inbox'); openMail(wid); }, id('sent', 12));
+  await pg.waitForTimeout(200);
+  const pane = await pg.evaluate(() => ({ done: document.querySelector('#md-done')?.textContent, follow: !!document.querySelector('#md-follow') }));
+  check(pane.done === 'Got an answer' && pane.follow, `mail that waits on them offers Got an answer and Write follow-up: ${JSON.stringify(pane)}`);
+  await pg.click('#md-follow');
+  await pg.waitForTimeout(200);
+  const fu = await pg.evaluate(() => ({ from: document.querySelector('#cmp-from').value, mine: S.linked.find((l) => l.label === 'me@example.com').id, to: document.querySelector('#cmp-to').value,
+    subj: document.querySelector('#cmp-subj').value, body: document.querySelector('#cmp-body').value, replying: REPLYING }));
+  check(fu.from === fu.mine && fu.to === 'kim@example.org' && fu.subj === 'Re: Venue' && /^Just following up on my note below\.\n\n/.test(fu.body) && /> Which venue works for you\?/.test(fu.body)
+    && fu.replying && fu.replying.id === id('sent', 12) && fu.replying.messageId === 'p2-12@example.org',
+  `Write follow-up opens from the same mailbox, to them, with the message quoted and REPLYING set: ${JSON.stringify({ ...fu, body: fu.body.slice(0, 80) })}`);
+  /* Sent, it marks nothing done (it answers the customer's own message),
+     and once it is old enough itself the question still waits on them,
+     though the follow-up's own words ask nothing. */
+  await pg.evaluate(() => { window.__toasts.length = 0; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(400);
+  const fol = await pg.evaluate(async (vid) => {
+    const own = S.messages.find((m) => m.sent && !m.folder && m.subj === 'Re: Venue');
+    if (!own) return null;
+    own.ts = Date.now() - 2.2 * 86400e3; delete own.asksV; save();
+    await scanAsks(); needsNow();
+    return { toasts: window.__toasts.slice(), asks: own.asks, waiting: [...WAITING], own: own.id, venue: (S.messages.find((m) => m.id === vid) || {}).track || null };
+  }, id('sent', 12));
+  check(fol && fol.toasts.includes('Sent from me@example.com') && !fol.toasts.some((t) => /Marked done/.test(t)) && fol.venue === null
+    && fol.asks === false && fol.waiting.includes(fol.own) && !fol.waiting.includes(id('sent', 12)),
+  `a follow-up sent marks nothing done, and the question waits on them under it: ${JSON.stringify(fol)}`);
+
+  /* A later message from them takes the question out of Waiting on them,
+     and puts their question in Needs me. The conversation says who wrote
+     last. */
+  await sync([mk('inbox', 14, { from_name: 'Jo Park', from_addr: 'jo@example.org', subject: 'Re: Dates for the course?', body: 'The 4th or the 11th. Which suits you?', ts: now - 1 * DAY, in_reply_to: 'p2-11@example.org' })]);
+  s = await state();
+  check(!s.waiting.includes(id('sent', 11)) && s.needs.includes(id('inbox', 14)), `an answer takes it out of Waiting on them, and its question is in Needs me: ${JSON.stringify(s)}`);
+  await pg.evaluate((rid) => { go('inbox'); openMail(rid); }, id('inbox', 14));
+  await pg.waitForTimeout(200);
+  const last = await pg.evaluate(() => document.querySelector('#md-convo .convo-last')?.textContent);
+  check(last === 'Last word: Jo Park, 1 day ago · waiting on you', `the conversation says who wrote last, and that it waits on you: ${JSON.stringify(last)}`);
+
+  /* The keys: y is Done, b is Snooze. */
+  const press = async (k) => { await pg.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur()); await pg.keyboard.press(k); await pg.waitForTimeout(120); };
+  await pg.evaluate((did) => { go('inbox'); mailFilter = 'all'; renderMailFilters(); openMail(did); }, id('inbox', 3));
+  await press('y');
+  s = await state();
+  const dee = await pg.evaluate((did) => S.messages.find((m) => m.id === did).track, id('inbox', 3));
+  check(dee && dee.done === 'done' && !s.needs.includes(id('inbox', 3)), `y is Done: ${JSON.stringify(dee)}`);
+  await pg.evaluate((eid) => openMail(eid), id('inbox', 5));
+  await press('b');
+  const menu = await pg.evaluate(() => ({ open: document.querySelector('#md-snoozemenu').classList.contains('open'), expanded: document.querySelector('#md-snooze').getAttribute('aria-expanded'),
+    items: [...document.querySelectorAll('#md-snoozemenu [role=menuitem]')].map((b) => b.textContent), focus: document.activeElement && document.activeElement.textContent }));
+  check(menu.open && menu.expanded === 'true' && menu.items[0] === 'Tomorrow 7:00' && menu.items[1] === 'Monday 7:00' && menu.items.at(-1) === 'Pick a date…' && menu.focus === 'Tomorrow 7:00',
+    `b opens Snooze, with the focus on its first choice: ${JSON.stringify(menu)}`);
+  await pg.keyboard.press('ArrowDown');
+  check((await pg.evaluate(() => document.activeElement.textContent)) === 'Monday 7:00', 'the arrows move between its choices');
+  await pg.keyboard.press('ArrowUp');
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(150);
+  s = await state();
+  const eve = await pg.evaluate((eid) => S.messages.find((m) => m.id === eid).track, id('inbox', 5));
+  const tmr = new Date(); tmr.setDate(tmr.getDate() + 1); tmr.setHours(7, 0, 0, 0);
+  check(eve && eve.snooze === tmr.getTime() && !s.needs.includes(id('inbox', 5)), `Enter snoozes it until 7:00 tomorrow, out of Needs me: ${JSON.stringify(eve)}`);
+  /* Snoozed until its time comes, then back. */
+  const woke = await pg.evaluate((eid) => {
+    const m = S.messages.find((x) => x.id === eid);
+    const before = wakeSnoozed();
+    m.track.snooze = Date.now() - 1000;
+    const after = wakeSnoozed();
+    return { before, after, track: m.track || null, back: NEEDS.has(eid) };
+  }, id('inbox', 5));
+  check(woke.before === 0 && woke.after === 1 && woke.track === null && woke.back, `a snooze holds until its time, and wakeSnoozed brings it back: ${JSON.stringify(woke)}`);
+  /* Pick a date: a day field, and never a day gone by. */
+  await pg.evaluate((eid) => openMail(eid), id('inbox', 5));
+  await pg.click('#md-snooze');
+  await pg.click('#md-snoozemenu [role=menuitem]:last-child');
+  const picker = await pg.evaluate(() => ({ shown: !document.querySelector('#md-snoozepick').hidden, field: document.activeElement && document.activeElement.type, menu: document.querySelector('#md-snoozemenu').classList.contains('open') }));
+  check(picker.shown && picker.field === 'date' && !picker.menu, `Pick a date shows a day field in place of the menu: ${JSON.stringify(picker)}`);
+  await pg.keyboard.press('Escape');
+  check(await pg.evaluate(() => document.querySelector('#md-snoozepick').hidden && document.activeElement.id === 'md-snooze'), 'Escape puts it away and gives the focus back to Snooze');
+
+  /* A reply that goes marks what it answered done, and says so. */
+  await pg.evaluate((cid) => openMail(cid), id('inbox', 1));
+  await pg.click('#md-reply');
+  await pg.waitForTimeout(200);
+  await pg.evaluate(() => { window.__toasts.length = 0; });
+  await pg.click('#cmp-send');
+  await pg.waitForTimeout(400);
+  const replied = await pg.evaluate((cid) => ({ track: S.messages.find((m) => m.id === cid).track, toasts: window.__toasts.slice(), needs: NEEDS.has(cid) }), id('inbox', 1));
+  check(replied.track && replied.track.done === 'replied' && !replied.needs && replied.toasts.includes('Sent from me@example.com. Marked done: you replied'),
+    `deliver() on a reply marks it done and says so: ${JSON.stringify(replied)}`);
+  /* Done is kept with the message, across a restart. */
+  await pg.waitForTimeout(400);
+  const pg2 = await open(true, { context: ctx });
+  await pg2.waitForTimeout(500);
+  const kept = await pg2.evaluate((ids) => ({ dee: (S.messages.find((m) => m.id === ids[0]) || {}).track, cy: (S.messages.find((m) => m.id === ids[1]) || {}).track,
+    needs: [...NEEDS] }), [id('inbox', 3), id('inbox', 1)]);
+  check(kept.dee && kept.dee.done === 'done' && kept.cy && kept.cy.done === 'replied' && !kept.needs.includes(id('inbox', 3)) && kept.needs.includes(id('inbox', 6)),
+    `Done is still done after RATA starts again: ${JSON.stringify(kept)}`);
+  await pg2.close();
+  /* Everything done: the guess says nothing needs you. */
+  await pg.evaluate(() => { for (const id of [...NEEDS]) { const m = S.messages.find((x) => x.id === id); m.track = { done: 'done', at: Date.now() }; } save(); needsNow(); go('inbox'); mailFilter = 'needs'; renderMailFilters(); renderMail(); });
+  const empty = await pg.evaluate(() => document.querySelector('#mail-scroll .empty')?.textContent || '');
+  check(/^Nothing needs you\./.test(empty) && /RATA’s guess/.test(empty), `with nothing left, Needs me says so: ${JSON.stringify(empty)}`);
+  /* g n goes to Needs me; nothing in all this went to the relay. */
+  await pg.evaluate(() => { mailFilter = 'all'; go('set'); });
+  await press('g');
+  await pg.keyboard.press('n');
+  await pg.waitForTimeout(150);
+  check(await pg.evaluate(() => currentView === 'inbox' && mailFilter === 'needs'), 'g then n goes to Needs me');
+  check(pg.__ai.length === 0, `Needs me, Waiting on them, Done, Snooze and a follow-up sent nothing to the relay: ${pg.__ai.length}`);
+  await pg.close();
+  await ctx.close();
+}
+
+console.log('\n— Today, across every inbox: the briefing by mailbox (Assistant v1, P3) —');
+{
+  const ctx = await browser.newContext();
+  const DAY = 86400e3, now = Date.now();
+  const DUE = (() => { const d = new Date(now + 2 * DAY); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+  let reply = (b) => ({ body: { tasks: b.messages.filter((m) => /^(Me 1|Me 2|Work 1)$/.test(m.subject)).map((m) => ({ id: m.id, task: 'Task for ' + m.subject,
+    due: m.subject === 'Me 1' ? DUE : null, important: m.subject === 'Me 1', next: m.subject === 'Work 1' ? 'sign' : m.subject === 'Me 2' ? 'nonsense' : 'reply' })), used: 0.2 } });
+  const pg = await open(true, { context: ctx, ai: (b) => reply(b) });
+  const mk = (who, folder, uid, extra) => Object.assign({ id: who + '_' + (folder === 'inbox' ? '' : folder + '_') + uid, folder, acct: who, acct_label: who,
+    from_name: 'Person ' + uid, from_addr: 'p' + uid + '@example.org', to_name: '', to_addr: who, to_all: [who], cc: [], in_reply_to: '', subject: 'Subject ' + uid,
+    preview: 'Preview ' + uid, body: 'Please reply about item ' + uid + '.', ts: now - uid * 60 * 60_000, unread: false, starred: false, uid, uidvalidity: 7,
+    message_id: 'p3-' + uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false }, extra || {});
+  const ME = 'me@example.com', WORK = 'work@example.net', OFF = 'off@example.org';
+  const msgs = [];
+  for (let i = 1; i <= 30; i++) msgs.push(mk(ME, 'inbox', i, { subject: 'Me ' + i }));
+  for (let i = 1; i <= 3; i++) msgs.push(mk(WORK, 'inbox', 100 + i, { subject: 'Work ' + i, ts: now - (i * 90 + 30) * 60_000 }));
+  msgs.push(mk(ME, 'inbox', 40, { subject: 'Weekly news', from_addr: 'news@example.org', unsubscribe: { https: 'https://example.org/leave' }, ts: now - 2 * 60_000 }));
+  msgs.push(mk(WORK, 'inbox', 110, { subject: 'Work answered', ts: now - 3 * 60_000 }));
+  msgs.push(mk(WORK, 'sent', 111, { subject: 'Re: Work answered', from_addr: WORK, to_addr: 'p110@example.org', to_all: ['p110@example.org'], ts: now - 60_000, in_reply_to: 'p3-110@example.org' }));
+  msgs.push(mk(OFF, 'inbox', 200, { subject: 'Off one', ts: now - 4 * 60_000 }), mk(OFF, 'inbox', 201, { subject: 'Off two', ts: now - 5 * 60_000 }));
+  await pg.evaluate(async (msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' }, { email: 'off@example.org', host: 'imap.example.org', port: 993, label: 'Off' });
+    S.settings.aiBoxes = { 'me@example.com': 'on', 'work@example.net': 'on', 'off@example.org': 'off' };
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true); __mock.refresh = null;
+    go('inbox');
+  }, msgs);
+  const sent = () => pg.__ai.map((raw) => JSON.parse(raw));
+  const isDay = (x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x));
+
+  /* Opening Assist says what Run briefing would send, and what it leaves
+     out, and sends nothing. */
+  await pg.evaluate(() => openAssist());
+  await pg.waitForFunction(() => /Run briefing will send/.test(document.querySelector('#as-pre').textContent), null, { timeout: 3000 }).catch(() => {});
+  const pre = await pg.evaluate(() => ({ text: document.querySelector('#as-pre').textContent, live: document.querySelector('#as-pre').getAttribute('aria-live'),
+    scope: [...document.querySelectorAll('#as-scope button')].map((b) => [b.textContent, b.getAttribute('aria-pressed')]), left: document.querySelector('#as-left').textContent }));
+  check(pre.text.startsWith('Run briefing will send the start of 25 messages: 22 from me@example.com, 3 from work@example.net.')
+    && pre.text.includes('Left out on this computer: 1 mailing, 1 you have answered.') && pre.text.includes('Kept from AI: off@example.org (2 messages).') && pre.live === 'polite',
+  `opening Assist says what would go and what stays, by mailbox: ${JSON.stringify(pre.text)}`);
+  check(JSON.stringify(pre.scope) === JSON.stringify([['All mailboxes', 'true'], [ME, 'false'], [WORK, 'false'], [OFF, 'false']]) && pre.left === 'What it leaves out (4)',
+    `with a pill per mailbox and the list of what it leaves out behind a button: ${JSON.stringify(pre)}`);
+  check(pg.__ai.length === 0, 'and opening Assist sent nothing');
+
+  /* Run briefing: both mailboxes get places, the day of each and today go,
+     and nothing from a mailbox kept from AI, a mailing or mail answered. */
+  await pg.click('#as-run');
+  await pg.waitForFunction(() => document.querySelector('#as-out .as-group'), null, { timeout: 5000 }).catch(() => {});
+  let r = sent().at(-1) || { messages: [] };
+  const subs = r.messages.map((m) => m.subject);
+  check(pg.__ai.length === 1 && r.task === 'tasks' && r.messages.length === 25 && ['Work 1', 'Work 2', 'Work 3'].every((w) => subs.includes(w)) && subs.slice(0, 6).filter((x) => /^Work/.test(x)).length === 3,
+    `30 messages in one mailbox and 3 in the other: the briefing takes them in turn, so all 3 go: ${JSON.stringify(subs.slice(0, 8))}`);
+  check(isDay(r.today) && r.messages.every((m) => isDay(m.day) && !/@/.test(m.from)) && !subs.some((x) => /^(Off|Weekly news|Work answered)/.test(x)),
+    `with today and the day of each, and nothing kept from AI, no mailing and nothing answered: ${JSON.stringify({ today: r.today, day: r.messages[0] && r.messages[0].day })}`);
+  let out = await pg.evaluate(() => ({ head: document.querySelector('#as-out .as-sum')?.textContent, groups: [...document.querySelectorAll('#as-out .as-group h3')].map((h) => h.textContent),
+    rows: [...document.querySelectorAll('#as-out .as-item')].map((r) => ({ open: r.querySelector('.as-open').textContent, acts: [...r.querySelectorAll('.as-acts button:not([role=menuitem])')].map((b) => b.textContent),
+      names: [...r.querySelectorAll('.as-acts > button')].map((b) => b.getAttribute('aria-label') || b.textContent) })),
+    nested: document.querySelectorAll('#as-out button button, #as-out [role=button] button').length, foot: document.querySelector('#as-out .as-foot')?.textContent, more: document.querySelector('#as-more')?.textContent,
+    flags: S.messages.filter((m) => m.flag).map((m) => [m.subj, m.flag.next, m.flag.by]) }));
+  check(out.head === '3 need you across 2 mailboxes, 1 important' && JSON.stringify(out.groups) === JSON.stringify(['me@example.com · 2 need you', 'work@example.net · 1 needs you']),
+    `the answer is grouped by mailbox, each headed by its address and count: ${JSON.stringify({ head: out.head, groups: out.groups })}`);
+  const me1 = out.rows.find((x) => /Task for Me 1/.test(x.open)), w1 = out.rows.find((x) => /Task for Work 1/.test(x.open)), me2 = out.rows.find((x) => /Task for Me 2/.test(x.open));
+  check(me1 && /Important/.test(me1.open) && /asks you to reply/.test(me1.open) && /due .+, in 2 days/.test(me1.open) && me1.acts[0] === 'Reply to Person 1'
+    && w1 && /asks you to sign/.test(w1.open) && w1.acts.join() === 'Done,Snooze,Reply to Person 101,Archive' && me2 && /asks you to do something/.test(me2.open),
+  `each row says Important, what kind of step and when, in words; Reply comes first when the step is a reply: ${JSON.stringify(out.rows)}`);
+  check(out.nested === 0 && w1.names.includes('Done with the message from Person 101') && w1.names.includes('Archive the message from Person 101'),
+    `no button sits in another, and each action is named in full: ${JSON.stringify(w1 && w1.names)}`);
+  check(out.foot === 'Looked at 25 of 37 recent messages.' && out.more === 'Look at the next 8' && out.flags.every(([, , by]) => by === 'brief')
+    && out.flags.some(([s, next]) => s === 'Me 2' && next === 'do'),
+  `it says how much it looked at and offers the next, and a step it does not know is "do": ${JSON.stringify({ foot: out.foot, more: out.more, flags: out.flags })}`);
+  /* What it leaves out, listed. */
+  await pg.click('#as-left');
+  const leftList = await pg.evaluate(() => ({ expanded: document.querySelector('#as-left').getAttribute('aria-expanded'), rows: [...document.querySelectorAll('#as-leftlist li')].map((l) => l.textContent) }));
+  check(leftList.expanded === 'true' && leftList.rows.length === 4 && leftList.rows.some((t) => /Weekly news: a mailing$/.test(t)) && leftList.rows.some((t) => /Work answered: you answered it$/.test(t))
+    && leftList.rows.filter((t) => /: its mailbox is kept from AI$/.test(t)).length === 2,
+  `What it leaves out lists each, with its reason: ${JSON.stringify(leftList)}`);
+  await assistAxe(pg, 'Assist with a briefing by mailbox and what it leaves out open');
+
+  /* Look at the next 8: a second press, a second request, none sent twice. */
+  await pg.click('#as-more');
+  await pg.waitForFunction(() => /Looked at 33 of 37/.test(document.querySelector('#as-out .as-foot')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  r = sent().at(-1) || { messages: [] };
+  const first = sent()[0].messages.map((m) => m.subject);
+  check(pg.__ai.length === 2 && r.messages.length === 8 && !r.messages.some((m) => first.includes(m.subject)) && !(await pg.evaluate(() => !!document.querySelector('#as-more'))),
+    `Look at the next 8 is a second request, of what the first did not send: ${JSON.stringify(r.messages.map((m) => m.subject))}`);
+
+  /* Done, Snooze and Archive on a row: the row goes, the focus goes on. */
+  await pg.evaluate(() => { const b = [...document.querySelectorAll('#as-out .as-item')].find((r) => /Task for Me 1/.test(r.textContent)).querySelector('.as-acts button[aria-label^="Done"]'); b.focus(); b.click(); });
+  await pg.waitForTimeout(200);
+  let row = await pg.evaluate(() => ({ me1: S.messages.find((m) => m.subj === 'Me 1').track, gone: ![...document.querySelectorAll('#as-out .as-item')].some((r) => /Task for Me 1/.test(r.textContent)),
+    focus: document.activeElement && document.activeElement.className, head: document.querySelector('#as-out .as-sum')?.textContent }));
+  check(row.me1 && row.me1.done === 'done' && row.gone && row.focus === 'as-open' && row.head === '2 need you across 2 mailboxes',
+    `Done marks it done, takes the row away and moves the focus to the next: ${JSON.stringify(row)}`);
+  await pg.evaluate(() => [...document.querySelectorAll('#as-out .as-item')].find((r) => /Task for Me 2/.test(r.textContent)).querySelector('.as-acts button[aria-label^="Snooze"]').click());
+  await pg.waitForTimeout(100);
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(200);
+  row = await pg.evaluate(() => ({ me2: S.messages.find((m) => m.subj === 'Me 2').track, gone: ![...document.querySelectorAll('#as-out .as-item')].some((r) => /Task for Me 2/.test(r.textContent)) }));
+  check(row.me2 && row.me2.snooze > Date.now() && row.gone, `Snooze puts it away until then, and the row goes: ${JSON.stringify(row)}`);
+  await pg.evaluate(() => { __mock.calls = []; [...document.querySelectorAll('#as-out .as-item')].find((r) => /Task for Work 1/.test(r.textContent)).querySelector('.as-acts button[aria-label^="Archive"]').click(); });
+  await pg.waitForTimeout(400);
+  row = await pg.evaluate(() => ({ asked: __mock.calls.filter(([c]) => c === 'change_messages').map(([, a]) => [a.email, a.action, a.uids]), held: S.messages.some((m) => m.subj === 'Work 1'),
+    rows: document.querySelectorAll('#as-out .as-item').length, focus: document.activeElement && document.activeElement.id }));
+  check(JSON.stringify(row.asked) === JSON.stringify([['work@example.net', 'archive', [101]]]) && !row.held && row.rows === 0 && row.focus === 'as-run',
+    `Archive goes the reading pane's way, and with no row left the focus goes to Run briefing: ${JSON.stringify(row)}`);
+
+  /* One mailbox: at most 12, all its own. */
+  reply = () => ({ body: { tasks: [], used: 0.25 } });
+  await pg.click(`#as-scope button[data-scope="${WORK}"]`);
+  await pg.waitForFunction(() => /Run briefing will send the start of/.test(document.querySelector('#as-pre').textContent), null, { timeout: 3000 }).catch(() => {});
+  await pg.click(`#as-scope button[data-scope="${ME}"]`);
+  await pg.waitForFunction(() => /from me@example\.com\./.test(document.querySelector('#as-pre').textContent) && !/work@/.test(document.querySelector('#as-pre').textContent), null, { timeout: 3000 }).catch(() => {});
+  const one = await pg.evaluate(() => ({ pre: document.querySelector('#as-pre').textContent, pressed: [...document.querySelectorAll('#as-scope button[aria-pressed="true"]')].map((b) => b.textContent) }));
+  check(one.pre.startsWith('Run briefing will send the start of 12 messages: 12 from me@example.com.') && JSON.stringify(one.pressed) === JSON.stringify([ME]),
+    `one mailbox's briefing says it sends 12 of its own: ${JSON.stringify(one)}`);
+  /* [] clears the flags of what was sent, and only those; the customer's
+     own flags stay. */
+  await pg.evaluate(() => {
+    const by = (s) => S.messages.find((m) => m.subj === s);
+    by('Me 3').flag = { task: 'Mine', due: null, important: false, at: Date.now(), by: 'you' };
+    by('Me 4').flag = { task: 'Old brief', due: null, important: false, at: Date.now(), by: 'brief' };
+    by('Me 29').flag = { task: 'Outside the twelve', due: null, important: false, at: Date.now(), by: 'brief' };
+    by('Work 2').flag = { task: 'Other mailbox', due: null, important: false, at: Date.now(), by: 'brief' };
+    save();
+  });
+  await pg.click('#as-run');
+  await pg.waitForFunction(() => /Looked at/.test(document.querySelector('#as-out')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  r = sent().at(-1) || { messages: [] };
+  const flags = await pg.evaluate(() => Object.fromEntries(['Me 3', 'Me 4', 'Me 29', 'Work 2'].map((s) => [s, (S.messages.find((m) => m.subj === s).flag || {}).task || null])));
+  check(pg.__ai.length === 3 && r.messages.length <= 12 && r.messages.every((m) => /^Me /.test(m.subject)) && r.messages.some((m) => m.subject === 'Me 4') && !r.messages.some((m) => m.subject === 'Me 29'),
+    `one-mailbox scope sends at most 12 messages, all from that mailbox: ${JSON.stringify(r.messages.map((m) => m.subject))}`);
+  check(flags['Me 3'] === 'Mine' && flags['Me 4'] === null && flags['Me 29'] === 'Outside the twelve' && flags['Work 2'] === 'Other mailbox',
+    `an empty answer clears only the flags of what it was sent, and keeps the customer's own: ${JSON.stringify(flags)}`);
+  /* An answer that names none of the places sent changes nothing. */
+  reply = () => ({ body: { tasks: [{ id: '99', task: 'Nobody', due: null, important: false, next: 'do' }], used: 0.25 } });
+  await pg.click('#as-run');
+  await pg.waitForFunction(() => /could not be read/.test(document.querySelector('#as-out')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  const unread = await pg.evaluate(() => ({ said: document.querySelector('#as-out .as-sum')?.textContent, mine: (S.messages.find((m) => m.subj === 'Me 3').flag || {}).task }));
+  check(/^The briefing could not be read\. Try again\. Flags from earlier briefings are kept\./.test(unread.said || '') && unread.mine === 'Mine',
+    `a briefing naming none of the places it was sent is unreadable, and every flag stays: ${JSON.stringify(unread)}`);
+  /* The quick briefing, on every plan: by mailbox too, with Done and
+     Snooze, what is done or snoozed left out, and only the mailbox picked. */
+  await pg.evaluate(() => runLocalBrief());
+  const quick = await pg.evaluate(() => ({ groups: [...document.querySelectorAll('#as-out .as-group h3')].map((h) => h.textContent),
+    acts: [...(document.querySelector('#as-out .as-item .as-acts') || { children: [] }).children].filter((b) => b.tagName === 'BUTTON').map((b) => b.textContent),
+    done: [...document.querySelectorAll('#as-out .as-item')].some((r) => /Person 1\b/.test(r.querySelector('.as-who').textContent)) }));
+  check(quick.groups.length === 1 && /^me@example\.com · \d+ to look at$/.test(quick.groups[0]) && quick.acts.join() === 'Done,Snooze' && !quick.done,
+    `the quick briefing is grouped the same way, with Done and Snooze, leaving out what is done, for the mailbox picked: ${JSON.stringify(quick)}`);
+  /* All mailboxes again: the quick briefing follows at once, sending nothing. */
+  const asked = pg.__ai.length;
+  await pg.click('#as-scope button[data-scope=""]');
+  await pg.waitForFunction(() => document.querySelectorAll('#as-out .as-group h3').length === 3, null, { timeout: 3000 }).catch(() => {});
+  const all = await pg.evaluate(() => ({ groups: [...document.querySelectorAll('#as-out .as-group h3')].map((h) => h.textContent.split(' · ')[0]),
+    pressed: [...document.querySelectorAll('#as-scope button[aria-pressed="true"]')].map((b) => b.textContent), focus: document.activeElement && document.activeElement.textContent }));
+  check(JSON.stringify(all.groups) === JSON.stringify([ME, WORK, OFF]) && JSON.stringify(all.pressed) === '["All mailboxes"]' && all.focus === 'All mailboxes' && pg.__ai.length === asked,
+    `All mailboxes shows the quick briefing of every mailbox, keeps the focus on the pill and sends nothing: ${JSON.stringify(all)}`);
+  await pg.close();
+  await ctx.close();
 }
 
 console.log('\n— a feed with nothing for this computer is not "the newest version" —');
