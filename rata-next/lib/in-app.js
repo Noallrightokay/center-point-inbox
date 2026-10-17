@@ -27,15 +27,23 @@
          no copy is made until somebody decides what the store copy says
          instead. The marks can stand at a section's edges, away from the
          sentences they change.
+       <!-- in-app:add ID
+         HTML
+       -->
+         Something only the store copy says, such as where to write for
+         help where the website sends people to GitHub. On the website it is
+         a comment, so the page's look and words do not change.
 
      Every ID is in STORE_CUTS, and every ID there is in its page. No mark
      sits inside another.
    - Nothing in a copy sells (SELLING): no price, no "a month", no Stripe,
      billing portal, licence page, releases page, installer, "Choose a
-     plan", "Upgrade", "Buy", or a call to subscribe or sign in at
-     mailrata.org. Each OLD must carry one of these and its NEW none, and a
-     copy that still carries one anywhere, in its text or in an attribute,
-     is not made.
+     plan", "Upgrade", "Buy", no saying that mailrata.org sells RATA or
+     that it was bought "here", no "pay with" an address or at a place, and
+     no call to subscribe or sign in at mailrata.org. Each OLD must carry
+     one of these and its NEW none, what a store copy adds carries none, and
+     a copy that still carries one anywhere, in its text, in an attribute
+     or in a quoted string of its stylesheet, is not made.
    - Every link is judged, its attributes read as a browser reads them, and
      only these stay links: a place on the same page, another in-app page
      (sent to /in-app/<name>), mailto:, an outside service's policy page in
@@ -44,7 +52,9 @@
      becomes its own text, so a link added to a source later is safe without
      anyone remembering this file. A tag that could take somebody elsewhere
      and is not a link (a form, a frame, a base address, a <link> that is
-     not an icon or a stylesheet, a handler) makes no copy at all.
+     not an icon or a stylesheet, a handler), and one whose contents a
+     browser may show without reading them as tags (noscript, xmp, noembed,
+     noframes, plaintext), makes no copy at all.
    - Comments go, the stylesheet's own notes too (they name the site's
      other pages), and the page's files (fonts, icons) are asked for from
      the root, since the copy is served one folder down.
@@ -66,11 +76,11 @@ export const DELETE_PAGE = 'delete-account';
 /* Every cut and every piece of store wording, by page. A mark whose ID is not
    here makes no copy, and nor does an ID here that its page has lost. */
 export const STORE_CUTS = {
-  help: ['footer', 'get', 'install-steps', 'key'],
+  help: ['footer', 'get', 'install-steps', 'key', 'write'],
   privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
     'how', 'records', 'live', 'pending'],
-  terms: ['footer', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page', 'new-key', 'stop',
-    'unsigned'],
+  terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
+    'new-key', 'stop', 'unsigned'],
 };
 
 /* What a store build may never show, in a page's text or its attributes:
@@ -86,7 +96,16 @@ export const SELLING = [
   ["an installer's file", /\bRATA_<version>_\S*\.(?:exe|dmg|deb|AppImage|msi)\b/i],
   ['Choose a plan', /\bchoose (?:a|your) plan\b/i],
   ['Upgrade', /\bupgrad(?:e|es|ed|ing)\b/i],
-  ['Buy', /\bbuy\b/i],
+  /* "Buy", and buying a plan, a subscription, a licence or RATA ("By
+     buying a plan …"); not "asking again is not buying again". */
+  ['Buy', /\bbuy\b|\bbu(?:ys|ying)\s+(?:(?:a|the|your)\s+)?(?:plans?|subscriptions?|licen[cs]es?|RATA)\b/i],
+  /* "mailrata.org sells the plans", "sold at mailrata.org", "Bought here"
+     and "also sold": on a page of mailrata.org, "here" is the website, and
+     "also" is the website besides the store. */
+  ['Sold at mailrata.org', /\b(?:sells?|sold|selling|bought)\b[^.]{0,60}?\bmailrata\.org\b|\bmailrata\.org\b[^.]{0,20}?\b(?:sells?|sold|selling)\b|\b(?:bought|sold|buy)\s+here\b|\b(?:also|too)\s+(?:sold|bought)\b/i],
+  /* "Pay with the same address as your account": no store payment is made
+     with an address, so it can only mean paying somewhere else. */
+  ['Pay with or at', /\bpay(?:s|ing)?\s+(?:with|at|on)\b/i],
   ['Subscribe at mailrata.org', /\bsubscribe\b[^.]{0,40}?\b(?:at|on)\s+mailrata\.org\b/i],
   ['Sign in at mailrata.org', /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b[^.]{0,20}?\bat\s+mailrata\.org\b/i],
 ];
@@ -256,13 +275,19 @@ function tokens(html) {
   return out;
 }
 
-/* Every word a page can show, and every attribute value, for the check on
-   what it says. */
+/* Every word a page can show, every attribute value and every quoted
+   string in its stylesheet (CSS's `content: "…"` draws words too), for the
+   check on what it says. */
 function wordsOf(html) {
   const parts = [];
+  let inStyle = false;
   for (const t of tokens(html)) {
     if (t.kind === 'text') parts.push(html.slice(t.start, t.end));
     if (t.kind === 'start') for (const a of t.attrs) if (a.raw) parts.push(a.raw);
+    if (t.kind === 'raw' && inStyle) {
+      for (const m of html.slice(t.start, t.end).matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g)) parts.push(m[1] ?? m[2]);
+    }
+    if (t.kind === 'start' || t.kind === 'end') inStyle = t.kind === 'start' && t.name === 'style';
   }
   return readable(parts.join(' ')).replace(/\s+/g, ' ');
 }
@@ -296,6 +321,21 @@ function applyMarks(name, file, html) {
   for (;;) {
     const s = html.indexOf(MARK, at);
     if (s < 0) break;
+    const add = /^<!-- in-app:add ([a-z0-9-]+)\n/.exec(html.slice(s, s + 80));
+    if (add) {
+      named(add[1]);
+      const close = html.indexOf('-->', s);
+      if (close < 0) throw new Error(`${file}: an in-app addition that never closes`);
+      const put = html.slice(s + add[0].length, close).trim();
+      if (!put) throw new Error(`${file}: the in-app addition "${add[1]}" adds nothing`);
+      if (put.includes(MARK)) throw new Error(`${file}: an in-app mark inside another`);
+      const said = sells(textOf(put));
+      if (said) throw new Error(`${file}: what the store copy adds as "${add[1]}" names ${said}: ${put}`);
+      out += html.slice(at, s) + put;
+      at = close + 3;
+      marks++;
+      continue;
+    }
     const head = /^<!-- in-app:(brand|cut ([a-z0-9-]+)|words) -->/.exec(html.slice(s, s + 80));
     if (!head) throw new Error(`${file}: an in-app mark without its other half, or one this file does not know: ${html.slice(s, s + 40)}`);
     const from = s + head[0].length;
@@ -344,8 +384,12 @@ function applyMarks(name, file, html) {
 
 /* ---- the copy ------------------------------------------------------------- */
 
+/* Tags a copy may not carry. noscript, xmp, noembed, noframes and
+   plaintext are read here as raw text, as script and style are, so their
+   contents (which a browser may show, or read as tags after all) are never
+   judged; a page that holds one makes no copy. */
 const REFUSED = new Set(['form', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'area', 'base', 'script',
-  'svg', 'math', 'portal']);
+  'svg', 'math', 'portal', 'noscript', 'xmp', 'noembed', 'noframes', 'plaintext']);
 /* Attributes that hold an address. */
 const ADDRESS = /^(?:href|src|srcset|action|formaction|data|poster|ping|background|cite|longdesc|codebase|archive|classid|usemap|lowsrc|dynsrc|manifest|icon|profile|itemtype|xmlns)$|:href$/;
 const PART_OF_THE_PAGE = new Set(['icon', 'apple-touch-icon', 'stylesheet']);

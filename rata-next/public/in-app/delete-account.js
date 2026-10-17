@@ -10,11 +10,19 @@
 
    Nothing is kept in the browser: the client holds its session in memory
    only, Cancel ends that one session at the sign-in service, and it goes
-   with the page. Every word is drawn with textContent. */
+   with the page. The session is never renewed here, so a person who comes
+   back to the page after it has run out (an hour) signs in again: any
+   answer but a deletion or a refusal ends it and goes back to the sign-in,
+   rather than repeating a sentence meant for the operator ("Backend not
+   configured") or for the app ("Session invalid"). Every word is drawn
+   with textContent. */
 (() => {
   'use strict';
   const LIB = '/vendor/supabase-js-2.112.4.js';
   const UNREACHABLE = 'Could not reach mailrata.org. Check your connection and try again.';
+  const NO_SIGN_IN = 'Could not reach the sign-in service. Check your connection and try again.';
+  const ENDED = 'Your sign-in has ended. Sign in again to delete the account.';
+  const UNFINISHED = 'mailrata.org could not finish deleting the account. Sign in again to try once more.';
   const $ = id => document.getElementById(id);
   const cfg = window.RATA_CONFIG || {};
   const form = $('del-signin');
@@ -80,7 +88,7 @@
       if (error || !data || !data.session) {
         /* A sign-in service that could not be reached says so in its own
            terms ("Failed to fetch"); everything else is its own sentence. */
-        say(error && error.status !== 0 && error.message ? error.message : UNREACHABLE);
+        say(error && error.status !== 0 && error.message ? error.message : NO_SIGN_IN);
         password.focus();
         return;
       }
@@ -92,13 +100,31 @@
       ask.hidden = false;
       $('del-confirm-h').focus();
     } catch {
-      say(UNREACHABLE);
+      say(NO_SIGN_IN);
       password.focus();
     } finally {
       busy = false;
       signIn.disabled = false;
     }
   });
+
+  /* Back to the sign-in form, this page's session ended at the sign-in
+     service first (at most five seconds), and `why` said. Only this page's
+     session: the library's default scope, 'global', would end every sign-in
+     the person has, on mailrata.org and every other device. */
+  async function signInAgain(why) {
+    const c = sb;
+    session = null;
+    if (c) await Promise.race([c.auth.signOut({ scope: 'local' }).catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
+    say(why);
+    $('del-who').textContent = '';
+    ask.hidden = true;
+    form.hidden = false;
+    go.disabled = false;
+    cancel.disabled = false;
+    busy = false;
+    (email.value.trim() ? password : email).focus();
+  }
 
   go.addEventListener('click', async () => {
     if (busy || !session) return;
@@ -107,6 +133,7 @@
     cancel.disabled = true;
     say('');
     let answer = null;
+    let status = 0;
     try {
       const r = await fetch('/api/account', {
         method: 'DELETE',
@@ -116,6 +143,7 @@
            in the words a store build may show (lib/account.js). */
         body: JSON.stringify({ confirm: $('del-who').textContent, words: 'store' }),
       });
+      status = r.status;
       answer = await r.json().catch(() => null);
       if (r.ok && answer && answer.ok === true) {
         session = null;
@@ -126,33 +154,29 @@
         return;
       }
     } catch { /* said below */ }
-    say(answer && typeof answer.error === 'string' && answer.error ? answer.error : UNREACHABLE);
+    /* A refusal (409) is the rules' own sentence, in the store's words, and
+       the question stays, to delete once the subscription is cancelled. No
+       answer at all is the connection. Anything else (the session has run
+       out, or the deletion stopped part way) needs a sign-in again. */
+    if (status && status !== 409) {
+      await signInAgain(status >= 500 ? UNFINISHED : ENDED);
+      return;
+    }
+    say(status === 409 && answer && typeof answer.error === 'string' && answer.error ? answer.error : UNREACHABLE);
     go.disabled = false;
     cancel.disabled = false;
     go.focus();
     busy = false;
   });
 
+  /* Ended at the sign-in service before the form comes back, so the next
+     sign-in is never ended by this one. */
   cancel.addEventListener('click', async () => {
     if (busy) return;
     busy = true;
     go.disabled = true;
     cancel.disabled = true;
-    const c = sb;
-    session = null;
-    /* Ended at the sign-in service before the form comes back, so the next
-       sign-in is never ended by this one; at most five seconds. Only this
-       page's session: the library's default scope, 'global', would end
-       every sign-in the person has, on mailrata.org and every other device,
-       for backing out of a deletion. */
-    if (c) await Promise.race([c.auth.signOut({ scope: 'local' }).catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
-    say('');
-    $('del-who').textContent = '';
-    ask.hidden = true;
-    form.hidden = false;
-    go.disabled = false;
-    cancel.disabled = false;
-    busy = false;
+    await signInAgain('');
     email.focus();
   });
 })();

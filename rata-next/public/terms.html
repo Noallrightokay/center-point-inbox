@@ -121,7 +121,7 @@ footer a:hover{color:var(--ink)}
     </ol>
   </aside>
 
-  <article>
+  <article><!-- in-app:words -->
     <h1>Terms of service</h1>
     <p class="stamp">Last updated 6 October 2026</p>
     <p class="lede">These terms are the agreement between you and [OWNER: legal entity name] (&ldquo;we&rdquo;) for using RATA, the desktop app, and mailrata.org. By creating an account, buying a plan or using RATA, you agree to them.</p>
@@ -131,15 +131,20 @@ footer a:hover{color:var(--ink)}
       <h2 id="what-h">What RATA is</h2>
       <p>RATA is a desktop mail client for Windows, macOS and Linux. It connects to the mailboxes you already have, over IMAP and SMTP, and reads and sends your mail on your own computer. Your mailbox passwords stay in your computer&rsquo;s keychain. mailrata.org sells the plans, issues the licence that unlocks the app, and runs the AI features you ask for.</p>
       <p>Your mail stays with your mail provider, under that provider&rsquo;s own terms. RATA is not made by, or connected with, any mail provider. When you delete, archive or move a message in RATA, it does that in your real mailbox, as you asked.</p>
-    </section>
+    </section><!-- in-app:end
+      agree: By creating an account, buying a plan or using RATA, you agree to them. => By creating an account or using RATA, you agree to them.
+      sells: mailrata.org sells the plans, issues the licence that unlocks the app, and runs the AI features you ask for. => mailrata.org issues the licence that unlocks the app, and runs the AI features you ask for.
+    -->
 
-    <section id="account" aria-labelledby="account-h">
+    <!-- in-app:words --><section id="account" aria-labelledby="account-h">
       <h2 id="account-h">Your account</h2>
       <ul>
         <li>Use an email address that is yours, and keep your password to yourself. You are responsible for what is done with your account.</li>
         <li>Pay with the same address as your account. The subscription and the licence are matched by that address, so a payment made with another one does not reach your account.</li>
       </ul>
-    </section>
+    </section><!-- in-app:end
+      pay-with: <li>Pay with the same address as your account. The subscription and the licence are matched by that address, so a payment made with another one does not reach your account.</li> =>
+    -->
 
     <!-- in-app:words --><section id="plans" aria-labelledby="plans-h">
       <h2 id="plans-h">Plans and payment</h2>
@@ -167,8 +172,8 @@ footer a:hover{color:var(--ink)}
         <li>The key is issued to you. Keep it to yourself: anyone with it can run RATA as you, and use your AI allowance, until it expires.</li>
       </ul>
     </section><!-- in-app:end
-      licence-page: Once your payment is confirmed, your licence page at mailrata.org shows a licence key. Paste it into RATA once. => Once your payment is confirmed, you get a licence key, which RATA needs once.
-      new-key: Sign in at mailrata.org to get a new one. => RATA then says how to get a new one.
+      licence-page: Once your payment is confirmed, your licence page at mailrata.org shows a licence key. Paste it into RATA once. => Once your payment is confirmed, RATA gets a licence key for your plan.
+      new-key: Sign in at mailrata.org to get a new one => RATA then says how to get a new one
     -->
 
     <section id="ai" aria-labelledby="ai-h">

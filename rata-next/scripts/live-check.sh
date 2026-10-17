@@ -12,7 +12,8 @@
 # from the app's own origins is allowed, and from a stranger's is not), the
 # security headers are on, /api/config publishes no service-role key, the
 # landing page's screenshots are there, the privacy policy, the terms and the
-# deletion page are served with every [OWNER: ...] placeholder filled in, and
+# deletion page are served with every [OWNER: ...] placeholder filled in (and
+# the help page's store copy, which says where to write), and
 # the store-safe pages under /in-app/ are there and lead nowhere, and say
 # nothing, that sells.
 # It cannot sign up, pay or link a mailbox: those are the owner's steps in
@@ -138,11 +139,12 @@ echo "- the privacy policy, terms and deletion page (LAUNCH.md, before §6) -"
 # Each must be served, be the page it says, and carry none of the owner's
 # placeholders: a live page that still says [OWNER: ...] names nobody. The
 # store-safe copies under /in-app/ are made from them, so they say the same,
-# and the deletion page names the privacy policy's contact address for
-# someone who cannot sign in (tests/in-app.test.mjs keeps the two equal).
+# and the deletion page and the help page's store copy name the privacy
+# policy's contact address, for someone who cannot sign in and for help
+# without GitHub (tests/in-app.test.mjs keeps them equal).
 for page_of in "privacy.html:Privacy policy:privacy policy" "terms.html:Terms of service:terms of service" \
   "in-app/privacy:Privacy policy:privacy policy" "in-app/terms:Terms of service:terms of service" \
-  "in-app/delete-account:Delete your RATA account:deletion page"; do
+  "in-app/delete-account:Delete your RATA account:deletion page" "in-app/help:Help:help page"; do
   p="${page_of%%:*}"; rest="${page_of#*:}"; want="${rest%%:*}"; what="${rest#*:}"
   s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
@@ -157,7 +159,7 @@ for p in in-app/help in-app/privacy in-app/terms in-app/delete-account; do
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
   ! printf '%s' "$page" | grep -qiE '#pricing|stripe\.com|/releases|(index|account|app|auth)\.html|="/(account|app|auth)"|<nav|<footer'; check $? "/$p has no site navigation and no link that sells"
   # Nor a word that sells, as plain text (lib/in-app.js SELLING, in short).
-  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|sign(ed)? in at mailrata\.org' | sort -u | tr '\n' ' ')
+  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|\bbu(ys|ying) ((a|the|your) )?(plans?|subscriptions?|licen[cs]es?|rata)\b|\b(bought|sold|buy) here\b|\b(also|too) (sold|bought)\b|mailrata\.org (sells?|sold)\b|\b(sells?|sold) [^.<]{0,40}at mailrata\.org|\bpay(s|ing)? (with|at|on)\b|sign(ed)? in at mailrata\.org' | sort -u | tr '\n' ' ')
   [ -z "$sold" ]; check $? "/$p says nothing that sells${sold:+ (still: $sold)}"
 done
 

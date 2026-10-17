@@ -64,10 +64,11 @@ const isProvider = within(PROVIDERS);
 
 /* What none of them may say, in its text or in an attribute: a price, a
    price by the month or year, Stripe, the billing portal, the licence
-   page, the releases page or an installer, and the calls to choose a plan,
-   upgrade, buy, or subscribe or sign in at mailrata.org. Written here as
-   well as in lib/in-app.js (SELLING), which will not make a copy that says
-   one. */
+   page, the releases page or an installer, the calls to choose a plan,
+   upgrade, buy, or subscribe or sign in at mailrata.org, that mailrata.org
+   sells RATA or that it is bought "here", and paying with an address or at
+   a place. Written here as well as in lib/in-app.js (SELLING), which will
+   not make a copy that says one. */
 const BUYING = [
   ['a price', /[$€£¥]\s*\d|\b\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|dollars?|euros?)\b|\b(?:USD|EUR|GBP)\s*\d/i],
   ['a price by the month or year', /\b(?:a|per)\s+(?:month|year)\b|\b(?:billed|charged|paid)\s+(?:monthly|yearly|annually)\b|\/\s?(?:mo|month|yr|year)\b/i],
@@ -79,7 +80,9 @@ const BUYING = [
   ["an installer's file", /\bRATA_<version>_\S*\.(?:exe|dmg|deb|AppImage|msi)\b/i],
   ['Choose a plan', /\bchoose (?:a|your) plan\b/i],
   ['Upgrade', /\bupgrad(?:e|es|ed|ing)\b/i],
-  ['Buy', /\bbuy\b/i],
+  ['Buy', /\bbuy\b|\bbu(?:ys|ying)\s+(?:(?:a|the|your)\s+)?(?:plans?|subscriptions?|licen[cs]es?|RATA)\b/i],
+  ['Sold at mailrata.org', /\b(?:sells?|sold|selling|bought)\b[^.]{0,60}?\bmailrata\.org\b|\bmailrata\.org\b[^.]{0,20}?\b(?:sells?|sold|selling)\b|\b(?:bought|sold|buy)\s+here\b|\b(?:also|too)\s+(?:sold|bought)\b/i],
+  ['Pay with or at', /\bpay(?:s|ing)?\s+(?:with|at|on)\b/i],
   ['Subscribe at mailrata.org', /\bsubscribe\b[^.]{0,40}?\b(?:at|on)\s+mailrata\.org\b/i],
   ['Sign in at mailrata.org', /\b(?:sign(?:ed)?|log(?:ged)?)[ -]?in\b[^.]{0,20}?\bat\s+mailrata\.org\b/i],
 ];
@@ -89,10 +92,11 @@ const sellsIn = text => BUYING.filter(([, re]) => re.test(text)).map(([what]) =>
    STORE_CUTS names them; a new one is added here too, by somebody deciding
    the store copy may say those words differently. */
 const CUTS = {
-  help: ['footer', 'get', 'install-steps', 'key'],
+  help: ['footer', 'get', 'install-steps', 'key', 'write'],
   privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
     'how', 'records', 'live', 'pending'],
-  terms: ['footer', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page', 'new-key', 'stop', 'unsigned'],
+  terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
+    'new-key', 'stop', 'unsigned'],
 };
 
 /* Where nothing on these pages may lead, written as URL strings, wherever
@@ -122,14 +126,16 @@ const mainOf = html => (html.match(/<main\b[\s\S]*<\/main>/i) || [''])[0];
    each does), read here on their own. */
 const CUT = /<!-- in-app:cut ([a-z0-9-]+) -->([\s\S]*?)<!-- in-app:end -->/g;
 const WORDS = /<!-- in-app:words -->([\s\S]*?)<!-- in-app:end\n([\s\S]*?)-->/g;
+const ADD = /<!-- in-app:add ([a-z0-9-]+)\n([\s\S]*?)-->/g;
 const wordingOf = tail => tail.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
   const w = /^([a-z0-9-]+): (.+?) =>(?: (.*))?$/.exec(l);
   return w ? { id: w[1], old: w[2], now: w[3] || '' } : { id: null, old: l, now: '' };
 });
-/* The page as its store copy should read: what it cuts left out, and its
-   store wording in place of the words it replaces. */
+/* The page as its store copy should read: what it cuts left out, its
+   store wording in place of the words it replaces, and what only the store
+   copy says added. */
 const asCopy = html => html.replace(CUT, '').replace(WORDS, (all, body, tail) =>
-  wordingOf(tail).reduce((b, { old, now }) => b.replace(old, () => now), body));
+  wordingOf(tail).reduce((b, { old, now }) => b.replace(old, () => now), body)).replace(ADD, (all, id, put) => put.trim());
 /* Each paragraph, list item, heading and quote, as a reader sees it. */
 const blocksOf = html => [...html.replace(/<!--[\s\S]*?-->/g, '')
   .matchAll(/<(p|li|h[1-4]|dt|dd|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map(m => visible(m[2])).filter(Boolean);
@@ -376,7 +382,8 @@ export default async function run(state) {
       /* Every mark is one somebody decided on: named here and in
          lib/in-app.js. */
       const wording = [...source.matchAll(WORDS)].flatMap(m => wordingOf(m[2]));
-      const ids = [...[...source.matchAll(CUT)].map(m => m[1]), ...wording.map(w => w.id)].sort();
+      const added = [...source.matchAll(ADD)].map(m => [m[1], m[2]]);
+      const ids = [...[...source.matchAll(CUT)].map(m => m[1]), ...wording.map(w => w.id), ...added.map(([id]) => id)].sort();
       check(JSON.stringify(ids) === JSON.stringify([...CUTS[name]].sort())
         && JSON.stringify([...STORE_CUTS[name]].sort()) === JSON.stringify([...CUTS[name]].sort()),
         `${file}: its cuts and store wording are the ${CUTS[name].length} named here and in lib/in-app.js: ${ids.join(', ')}`);
@@ -389,6 +396,8 @@ export default async function run(state) {
       const badWords = wording.filter(w => !w.id || !sellsIn(visible(w.old)).length || sellsIn(visible(w.now)).length);
       check(wording.length > 0 && badWords.length === 0,
         `${file}: each of its ${wording.length} pieces of store wording replaces words that sell with words that do not${badWords.length ? `: ${badWords.map(w => w.id || w.old).join(', ')}` : ''}`);
+      const badAdds = added.filter(([, put]) => !visible(put) || sellsIn(visible(put)).length);
+      check(badAdds.length === 0, `${file}: what its store copy adds (${added.length}) sells nothing${badAdds.length ? `, but ${badAdds.map(([id]) => id).join(', ')} does` : ''}`);
       /* What a reader of the page's main part sees is the same, word for
          word, but for what the page marks for the store. */
       const want = visible(mainOf(asCopy(source)));
@@ -424,6 +433,24 @@ export default async function run(state) {
         `/in-app/privacy#delete sends a reader to the deletion page: ${JSON.stringify(visible((del.match(/<p>[\s\S]*?<\/p>/) || [''])[0]))}`);
       const ending = ((pages.get('/in-app/terms') || '').match(/<section id="ending"[\s\S]*?<\/section>/) || [''])[0];
       check(/<a href="\/in-app\/delete-account">/.test(ending), '/in-app/terms#ending does too');
+      /* The terms' store copy says neither that mailrata.org sells the plans
+         nor to pay with the account's address (no store payment is made
+         with an address), and agreeing to them needs no purchase. */
+      const terms = visible(pages.get('/in-app/terms') || '');
+      check(/By creating an account or using RATA, you agree to them\./.test(terms) && /mailrata\.org issues the licence that unlocks the app/.test(terms)
+        && !/buying a plan|sells the plans|Pay with the same address|matched by that address|licence page|Paste it/i.test(terms),
+        '/in-app/terms says nothing of buying at mailrata.org, of paying with the account\'s address, or of pasting a key from a page');
+      /* A store build's Report a bug opens /in-app/help#report, where the
+         website's link to GitHub is only words. The copy names where to
+         write instead, the privacy policy's own address, as a mailto: link
+         (Apple 1.5: an easy way to reach the developer); live-check.sh
+         refuses to see its placeholder on the live site. */
+      const contact = (visible(read('privacy.html')).match(/For anything on this page, write to (.+?)\.(?:\s|$)/) || [])[1];
+      const report = (help.match(/<section id="report"[\s\S]*?<\/section>/) || [''])[0];
+      check(!!contact && report.includes(`<a href="mailto:${contact}">${contact}</a>`) && /write to/.test(visible(report))
+        && !/github\.com/.test(report) && !visible(read('help.html')).includes(`write to ${contact} with the same details`),
+        `/in-app/help#report says where to write, the privacy policy's address (${contact}), and the website's help page does not change`);
+      check(!/If RATA asks for your licence key|paste it in: one line/.test(visible(help)), '/in-app/help asks nobody to paste a licence key');
     }
 
     console.log('\n— a link added to a page later is judged too, its attributes read as a browser reads them —');
@@ -468,6 +495,9 @@ export default async function run(state) {
       check(/still names Buy/.test(threw), `the reviewers' link with its own word, "buy", makes no copy at all: "${threw}"`);
 
       for (const [what, bad] of [['a script', '<script>location="/"</script>'], ['a handler', '<p onclick="go()">x</p>'],
+        ['a <noscript>', '<noscript><a href="/account">Get RATA Pro now</a> for $12.99 a month</noscript>'],
+        ['an <xmp>', '<xmp>RATA Pro, $23.99 a month</xmp>'], ['a <noembed>', '<noembed><a href="/app">x</a></noembed>'],
+        ['a <noframes>', '<noframes><a href="/app">x</a></noframes>'], ['a <plaintext>', '<plaintext>RATA Pro, $23.99 a month'],
         ['a refresh', '<meta http-equiv="refresh" content="0;url=/">'], ['a form', '<form action="/"></form>'],
         ['a <link rel="prev">', '<link rel="prev" href="index.html">'], ['a <link> to another site', '<link rel="stylesheet" href="https://fonts.example/x.css">'],
         ['an address on another tag', '<blockquote cite="/app">x</blockquote>'], ['an outside picture', '<img src="https://example.org/x.png" alt="">'],
@@ -487,22 +517,52 @@ export default async function run(state) {
       check(/marks nothing/.test(threw), `a page that loses its marks makes no copy at all: "${threw}"`);
       threw = refused('privacy', privacy.replace('<!-- in-app:cut footer --><footer>', '<footer>'));
       check(/without its other half|footer/.test(threw), `nor one whose footer is no longer marked: "${threw}"`);
-      /* What claude/iap-server does to this sentence: the website's words
-         change, so the store's must be decided again. */
-      threw = refused('privacy', privacy.replace('<li><b>Your card.</b> Stripe takes the payment;', '<li><b>Your card.</b> Stripe takes the payment, or Apple in the iPhone app;'));
+      /* The card's store wording, read from the page, so these hold
+         whatever the sentence says now. */
+      const card = [...privacy.matchAll(WORDS)].flatMap(m => wordingOf(m[2])).find(w => w.id === 'card');
+      check(!!card && privacy.split(card.old).length === 3, `privacy.html has its "card" store wording: ${card && card.old}`);
+      /* As claude/iap-server did to this sentence ("…, or Apple in the
+         iPhone app;"): the website's words change, so the store's must be
+         decided again. Only the page's own sentence changes, not the mark. */
+      threw = refused('privacy', privacy.replace(card.old, card.old.replace(/;$/, ', or Apple in the iPhone app;').replace(/payment$/, 'payment, or Apple')));
       check(/"card" finds its words 0 times[\s\S]*decide what the store copy says now/.test(threw), `nor one whose sentence changed under its store wording: "${threw}"`);
-      threw = refused('privacy', privacy.replace('  card: Stripe takes', '  kard: Stripe takes'));
+      threw = refused('privacy', privacy.replace('  card: ', '  kard: '));
       check(/"kard" is not in STORE_CUTS/.test(threw), `nor one with a mark nobody named: "${threw}"`);
       threw = refused('privacy', privacy.replace(/\n *pending: [^\n]*/, ''));
       check(/STORE_CUTS\.privacy names pending, which the page no longer marks/.test(threw), `nor one that lost a named piece of wording: "${threw}"`);
-      threw = refused('privacy', privacy.replace('=> The store or payment processor you pay through takes the payment;', '=> Stripe takes the card;'));
+      threw = refused('privacy', privacy.replace(`=> ${card.now}`, '=> Stripe takes the card;'));
       check(/"card" still names Stripe/.test(threw), `nor store wording that still sells: "${threw}"`);
-      threw = refused('privacy', privacy.replace('  card: Stripe takes the payment; =>', '  card: we never see the card number. =>'));
+      threw = refused('privacy', privacy.replace(`  card: ${card.old} =>`, '  card: we never see the card number. =>'));
       check(/"card" changes words that sell nothing/.test(threw), `nor store wording that changes what sells nothing: "${threw}"`);
       threw = refused('privacy', privacy.replace('<h1>Privacy policy</h1>', '<h1>Privacy policy</h1><p>Pay with Stripe.</p>'));
       check(/still names Stripe/.test(threw), `nor a copy whose page gains a word that sells: "${threw}"`);
       threw = refused('terms', read('terms.html').replace('<h1>Terms of service</h1>', '<h1 title="RATA Pro, $23.99 a month">Terms of service</h1>'));
       check(/still names a price/.test(threw), `in an attribute too: "${threw}"`);
+      threw = refused('terms', read('terms.html').replace('</style>', '.lede::after{content:"RATA Pro, $23.99 a month"}</style>'));
+      check(/still names a price/.test(threw), `or in a stylesheet's words: "${threw}"`);
+      for (const [what, said] of [['sells the plans', 'mailrata.org sells the plans.'], ['bought here', 'Bought here, both renew.'],
+        ['also sold', 'Both are also sold in the iPhone app.'], ['pay with', 'Pay with the address on your account.'],
+        ['buying', 'By buying a plan you agree.']]) {
+        threw = refused('terms', read('terms.html').replace('<h1>Terms of service</h1>', `<h1>Terms of service</h1><p>${said}</p>`));
+        check(/still names (Sold at mailrata\.org|Pay with or at|Buy)/.test(threw), `nor "${what}": "${threw}"`);
+      }
+      threw = refused('help', read('help.html').replace('with the same details.</p>\n  -->', 'with the same details, or buy RATA Pro.</p>\n  -->'));
+      check(/adds as "write" names Buy/.test(threw), `nor what a store copy adds, when it sells: "${threw}"`);
+      /* claude/iap-server adds a sentence to the licence paragraph and to
+         the 90-day line. Their store wording still finds its words, so the
+         copy is still made, with what was added; its other changes need
+         store wording of their own, and make no copy until they have it.
+         (Once it is merged the page says these already, and the
+         replacements below change nothing.) */
+      const iap = read('terms.html')
+        .replace('so RATA works offline.</p>', 'so RATA works offline. In the iPhone app there is no key to paste.</p>')
+        .replace('Sign in at mailrata.org to get a new one.</li>', 'Sign in at mailrata.org to get a new one, or, for a subscription bought in the iPhone app, press Restore purchases there.</li>');
+      let made = '';
+      try { made = visible(storeSafe('terms', iap)); } catch (e) { made = e.message; }
+      const licence = made.slice(Math.max(0, made.indexOf('Once your payment')), made.indexOf('Without a current licence'));
+      check(/^Once your payment is confirmed, RATA gets a licence key for your plan\. The app checks it on your computer, so RATA works offline\. In the iPhone app there is no key to paste[.:]/.test(licence)
+        && /RATA then says how to get a new one, or, for a subscription bought in the iPhone app, press Restore purchases there\./.test(licence),
+        `claude/iap-server's additions to the licence section keep their store wording: ${JSON.stringify(licence.slice(0, 160) || made.slice(0, 160))}`);
     }
 
     console.log('\n— the website\'s service worker leaves them to the network —');
@@ -708,6 +768,59 @@ async function deletesForReal(check) {
     check(await pg.evaluate(() => !document.querySelector('#del-confirm').hidden && !document.querySelector('#del-go').disabled),
       'the question stays, to try again once the subscription is cancelled');
     await axe(pg, 'a refusal');
+
+    const backToSignIn = async () => {
+      await pg.waitForFunction(() => !document.querySelector('#del-signin').hidden);
+      await pg.waitForFunction(() => document.activeElement && document.activeElement.id === 'del-password');
+      return pg.evaluate(() => ({
+        confirmHidden: document.querySelector('#del-confirm').hidden,
+        who: document.querySelector('#del-who').textContent,
+        email: document.querySelector('#del-email').value,
+        said: (a => (a && !a.hidden ? { role: a.getAttribute('role'), text: a.textContent.trim() } : null))(document.querySelector('#del-msg')),
+      }));
+    };
+    const signInAgain = async () => {
+      await pg.keyboard.type(fake.password);
+      await pg.keyboard.press('Enter');
+      await pg.waitForFunction(() => !document.querySelector('#del-confirm').hidden);
+      return pg.evaluate(() => document.querySelector('#del-msg').hidden && document.activeElement.id === 'del-confirm-h');
+    };
+
+    console.log('\n— a sign-in that has run out goes back to the form, and says so in the page\'s words —');
+    {
+      /* The page never renews its session, so an hour on the route answers
+         200 with "Session invalid — sign in again" (lib/server.js), a
+         sentence for the app, with an em dash. Here the stand-in forgets the
+         page's session, as GoTrue does once it expires. */
+      for (const t of [...fake.tokens]) if (t !== 'a-session') fake.tokens.delete(t);
+      fake.sub = null;
+      fake.calls = [];
+      await pg.focus('#del-go');
+      await pg.keyboard.press('Enter');
+      const ended = await backToSignIn();
+      check(ended.said?.role === 'alert' && ended.said.text === 'Your sign-in has ended. Sign in again to delete the account.',
+        `it goes back to the sign-in and says why: ${JSON.stringify(ended.said)}`);
+      check(ended.confirmHidden && ended.who === '' && ended.email === 'leaver@example.com',
+        'the question is gone, the email is still filled in, and the focus is on the password');
+      check(fake.calls.includes('GET /auth/v1/user') && !fake.calls.some(c => c.startsWith('DELETE ')), 'nothing was deleted');
+      await axe(pg, 'a sign-in that ran out');
+      check(await signInAgain(), 'signing in again asks the question once more, with nothing left over');
+    }
+
+    console.log('\n— a deletion that stops part way says so, without the database\'s words, and asks for a sign-in again —');
+    {
+      fake.aiUsage = 'broken';
+      fake.calls = [];
+      await pg.focus('#del-go');
+      await pg.keyboard.press('Enter');
+      const stopped = await backToSignIn();
+      check(stopped.said?.role === 'alert' && stopped.said.text === 'mailrata.org could not finish deleting the account. Sign in again to try once more.',
+        `it says the deletion did not finish: ${JSON.stringify(stopped.said)}`);
+      check(fake.calls.some(c => c.startsWith('DELETE /rest/v1/ai_usage')) && !fake.calls.some(c => c.startsWith('DELETE /auth/v1/admin')),
+        `the login was not deleted, so signing in again works (${fake.calls.filter(c => c.startsWith('DELETE ')).join(', ')})`);
+      fake.aiUsage = 'rows';
+      check(await signInAgain(), 'and signing in again asks the question once more');
+    }
 
     console.log('\n— and once nothing is in the way, the account goes, and the page says so —');
     fake.sub = null;
