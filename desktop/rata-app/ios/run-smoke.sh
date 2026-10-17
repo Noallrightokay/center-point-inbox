@@ -3,7 +3,9 @@
 # feature, already installed on the booted simulator SIMULATOR), wait for
 # its self-test's smoke.json, and keep it, the app's output and a
 # screenshot in OUT as NAME.smoke.json, NAME.stdout.log, NAME.stderr.log
-# and NAME.png. Exit 0 when every check passed and RATA is still running.
+# and NAME.png. Exit 0 when every check passed, the page is shown in the
+# appearance the simulator is set to (light or dark: set it before this
+# runs, so RATA starts in it), and RATA is still running.
 #
 # What the app is given at launch goes in SIMCTL_CHILD_ variables, which
 # simctl hands to it without the prefix:
@@ -61,13 +63,22 @@ echo "$name: smoke.json after $(( $(date +%s) - started )) s"
 cp "$smoke" "$out/$name.smoke.json"
 xcrun simctl io "$sim" screenshot "$out/$name.png"
 cat "$out/$name.smoke.json"
+# light or dark; anything else (an older simctl) is not held to.
+appearance="$(xcrun simctl ui "$sim" appearance 2>/dev/null | tr -d '[:space:]')"
 
-python3 - "$out/$name.smoke.json" "$name" <<'PY'
+python3 - "$out/$name.smoke.json" "$name" "$appearance" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
+name, appearance = sys.argv[2], sys.argv[3]
 for c in doc.get('checks', []):
-    print(f"{sys.argv[2]}: {'pass' if c.get('ok') else 'FAIL'}: {c.get('name')}")
-sys.exit(0 if doc.get('ok') is True else 1)
+    print(f"{name}: {'pass' if c.get('ok') else 'FAIL'}: {c.get('name')}")
+ok = doc.get('ok') is True
+page = doc.get('page')
+if appearance in ('light', 'dark') and isinstance(page, dict):
+    shown = 'dark' if page.get('dark') is True else 'light'
+    print(f"{name}: {'pass' if shown == appearance else 'FAIL'}: shown {shown}, the simulator {appearance}")
+    ok = ok and shown == appearance
+sys.exit(0 if ok else 1)
 PY
 verdict=$?
 if ! running; then

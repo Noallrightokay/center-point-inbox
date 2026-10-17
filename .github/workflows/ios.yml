@@ -205,11 +205,13 @@ jobs:
   # system's resolver, discovery, a TLS greeting through the guard, what a
   # phone answers where a computer has more, where saves go, the page, and
   # that the list and the mail are kept out of the phone's backups. It runs
-  # three times, each with a screenshot: the first screen;
+  # four times, each with a screenshot: the first screen;
   # the workspace, signed up on the first screen's own form and licensed
   # with a Pro licence from a throwaway key made here (never the real one:
-  # the build trusts only that key's public half); and Settings. The job
-  # fails when a check fails or RATA stops.
+  # the build trusts only that key's public half); the workspace again in
+  # dark appearance; and Settings. The job fails when a check fails, the
+  # page is not shown in the appearance the simulator is set to, or RATA
+  # stops.
   simulator:
     name: iOS app in the Simulator
     runs-on: macos-latest
@@ -376,10 +378,12 @@ jobs:
           # 2. Signed up on that screen's own form and licensed, in the inbox.
           SIMCTL_CHILD_RATA_SMOKE_LICENCE="$SMOKE_LICENCE" SIMCTL_CHILD_RATA_SMOKE_VIEW=inbox \
             bash "$smoke_run" "$SIM" "$out" 2-workspace || failed=1
-          # 3. The same, in dark appearance.
+          # 3. The same, in dark appearance: RATA started again under it,
+          # since a switch while it runs reached the page in one run and not
+          # in the next. run-smoke.sh fails a page not shown dark.
           xcrun simctl ui "$SIM" appearance dark
-          sleep 3
-          xcrun simctl io "$SIM" screenshot "$out/3-workspace-dark.png" || failed=1
+          SIMCTL_CHILD_RATA_SMOKE_VIEW=inbox \
+            bash "$smoke_run" "$SIM" "$out" 3-workspace-dark || failed=1
           xcrun simctl ui "$SIM" appearance light
           # 4. Settings, with the account and the licence the second run kept.
           SIMCTL_CHILD_RATA_SMOKE_VIEW="set" bash "$smoke_run" "$SIM" "$out" 4-settings || failed=1
