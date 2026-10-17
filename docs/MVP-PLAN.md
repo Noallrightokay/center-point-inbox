@@ -1306,7 +1306,7 @@ The plan, the store rules behind it and the owner's decisions are in
 first public launch is the desktop direct download, sold through Stripe,
 and the App Store builds come after it, iOS first, then Google Play; when
 a Mac App Store build ships is still open (D10). The same day, D9: the
-iPhone and Mac App Store builds share the bundle id `org.mailrata.app`
+iPhone and Mac App Store builds share the bundle id `org.mailrata.mail`
 (Universal Purchase, so one subscription covers both), and the direct
 download keeps `org.mailrata.desktop`. On 2026-10-15 the owner chose Apple
 In-App Purchase (option A1) for iOS and consumption-only (G1) for Google

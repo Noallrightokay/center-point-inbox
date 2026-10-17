@@ -138,7 +138,7 @@ trader details can start now; the rest wait for the app.
    email that Apple shows publicly; without them RATA is not sold in the
    EU).
 2. The App Store Small Business Program, for the lower commission.
-3. The app record, with the bundle id `org.mailrata.app` (decision D9,
+3. The app record, with the bundle id `org.mailrata.mail` (decision D9,
    2026-10-17: the iPhone and Mac App Store builds share it, so one
    subscription covers both; the direct download keeps
    `org.mailrata.desktop`). It is permanent once the first build is
@@ -154,7 +154,7 @@ trader details can start now; the rest wait for the app.
 6. A sandbox tester account.
 7. On the server: `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list it
    once the in-app purchase server, #167, has merged). `APPLE_BUNDLE_ID`
-   is optional: it defaults to `org.mailrata.app`.
+   is optional: it defaults to `org.mailrata.mail`.
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
 10. The App Privacy answers ("nutrition label"), the age rating, the

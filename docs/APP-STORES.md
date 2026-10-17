@@ -23,20 +23,20 @@ affected by any of it, except the two outbound-guard changes of #163 and
   Store first, then Google Play. When a Mac App Store build ships is still
   open (D10 below). Nothing in this file holds the desktop launch up.
 - **Store identifiers (D9), decided 2026-10-17:** the iPhone and Mac App
-  Store builds share the bundle id `org.mailrata.app`, so they are one app
+  Store builds share the bundle id `org.mailrata.mail`, so they are one app
   record in App Store Connect and one subscription covers both (Universal
   Purchase: Apple has every platform of a record use the iOS app's bundle
   id, and one purchase covers the app and its in-app purchases on each).
   The direct-download desktop app keeps `org.mailrata.desktop`, which
   `tauri.conf.json` names today. The owner makes the App Store Connect
-  app record with `org.mailrata.app`. The Tauri CLI (2.12.0) warns, but
-  does not refuse, when an identifier ends in `.app`, the extension of a
-  macOS app bundle. The warning is printed by every build given that id,
-  the iOS and TestFlight builds included, where it is harmless; the clash
-  it warns about could matter only to a Mac App Store build, and none has
-  been made yet. The in-app purchase server (#167) and #170's
-  `RATA_IOS_BUNDLE_ID` both default to `org.mailrata.app`. The store version (1.x, no
-  "beta") is still open under D9.
+  app record with `org.mailrata.mail`. The owner first chose
+  `org.mailrata.mail` and changed it the same day, before anything was
+  registered with Apple: Tauri names the macOS app-data folder after the
+  identifier, a folder ending in `.app` shows in Finder as a broken app,
+  and the Tauri CLI (2.12.0) warns about such an identifier on every build.
+  The in-app purchase server (#167) and #170's `RATA_IOS_BUNDLE_ID` both
+  default to `org.mailrata.mail`. The store version (1.x, no "beta") is
+  still open under D9.
 - **Apple: In-App Purchase (option A1), decided 2026-10-15.** Base and Pro
   are sold inside the iOS app as two monthly auto-renewable subscriptions
   in one subscription group, "RATA":
@@ -186,8 +186,8 @@ What they leave for stage 3, before submission:
 | `claude/store-page` | #165 | Stage 1: the store build of the interface: in-page dialogs, no buy links, Privacy and Terms in Settings, safe areas. Both steps pushed; not to be merged until the lead says so (its description). |
 | `claude/store-pages` | #162 | Stage 1: store-safe help, privacy and terms at `/in-app/…`, and a public account-deletion page. |
 | `claude/ios-app` | #166 | Stage 3: the shell as a library a phone can start, the `self-update` feature, single instance limited to Windows and Linux, links through the opener plugin, and what needs a computer switched off on a phone; then the Xcode project, made afresh each run (`tauri ios init`, `ios/prepare.sh`; nothing under `gen/apple` committed), `tauri.ios.conf.json`, a `smoke` self-test feature, and `.github/workflows/ios.yml`: *iOS app in the Simulator* (the self-test, three runs and screenshots) and *iOS app for a device, unsigned* (a release build checked against the privacy manifest). Both steps in, checks green, ready for review. |
-| `claude/ios-testflight` | #170 | Stage 3: signed builds to TestFlight (`.github/workflows/ios-testflight.yml`, job *iOS app to TestFlight*, its steps in `desktop/rata-app/ios/testflight.sh`) once the owner sets the App Store Connect key's three secrets (`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8`), all or none, with `APPLE_TEAM_ID` beside them. `APPLE_TEAM_ID` alone, which macOS notarisation in `release.yml` already uses, sets nothing up: with the key's secrets unset the job says TestFlight is not set up yet and ends green, and with all four set it also requires the real `RATA_LICENCE_PUBLIC_KEY`. The bundle id comes from the repository variable `RATA_IOS_BUNDLE_ID`, default `org.mailrata.app` (D9's decided id, so the owner need not set it); `tauri.conf.json` keeps `org.mailrata.desktop`. Stacked on #166 (its diff includes #166's): merge #166 first. No upload has run. |
-| `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. Its `APPLE_BUNDLE_ID` defaults to `org.mailrata.app` (D9), so the owner sets it only if the app record uses another id; a transaction signed for any other bundle id, `org.mailrata.desktop` included, is refused. |
+| `claude/ios-testflight` | #170 | Stage 3: signed builds to TestFlight (`.github/workflows/ios-testflight.yml`, job *iOS app to TestFlight*, its steps in `desktop/rata-app/ios/testflight.sh`) once the owner sets the App Store Connect key's three secrets (`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8`), all or none, with `APPLE_TEAM_ID` beside them. `APPLE_TEAM_ID` alone, which macOS notarisation in `release.yml` already uses, sets nothing up: with the key's secrets unset the job says TestFlight is not set up yet and ends green, and with all four set it also requires the real `RATA_LICENCE_PUBLIC_KEY`. The bundle id comes from the repository variable `RATA_IOS_BUNDLE_ID`, default `org.mailrata.mail` (D9's decided id, so the owner need not set it); `tauri.conf.json` keeps `org.mailrata.desktop`. Stacked on #166 (its diff includes #166's): merge #166 first. No upload has run. |
+| `claude/iap-server` | #167 | The in-app purchase server on mailrata.org: Apple's signed purchases checked with Apple's own library against Apple's committed root certificates, `POST /api/licence/apple`, App Store Server Notifications V2 at `/api/apple/notifications`, `database.sql` §7 (`apple_subscriptions`), and renewal of an `apple:` licence. Its `APPLE_BUNDLE_ID` defaults to `org.mailrata.mail` (D9), so the owner sets it only if the app record uses another id; a transaction signed for any other bundle id, `org.mailrata.desktop` included, is refused. |
 | `claude/iap-native` | #172 | Stage 3: the StoreKit 2 bridge, a local Tauri plugin for iOS only (`desktop/rata-app/plugins/storekit/`), called only from Rust (`appstore.rs`: products, buy, restore, manage and renewal through `/api/licence/apple`, each transaction finished only after the licence is kept), and `ios/RATA.storekit` for testing in Xcode. Stacked on #166. |
 
 Still to come: the purchase screen and Settings rows in the page
@@ -208,8 +208,8 @@ included, until mobile sign-in exists.
 | D5 | What Anthropic keeps of AI text | Settles the consent wording, the privacy policy and the "Emails" answer on both forms. | Zero data retention, or a clear statement of Anthropic's retention. |
 | D7 | New mail in the background on phones | Phones suspend RATA; there is no push without credentials on a server. | IDLE while in front, plus `BGAppRefreshTask` (iOS) and WorkManager (Android, 15 minutes or more). No promise of instant mail. |
 | D8 | Phone backups | Backups would copy mail and the list off the device. | Exclude them: `isExcludedFromBackup` and keychain items "this device only" on iOS; no backup on Android. |
-| D9 | The store version (the identifiers were decided on 2026-10-17: `org.mailrata.app` for the iPhone and Mac App Store builds, `org.mailrata.desktop` for the direct download; above) | "beta" belongs in TestFlight. | Ship stores at 1.x; a 1024 px icon without alpha. |
-| D10 | When the Mac App Store build ships | Sandboxed, no licence screen; customers moving from the `.dmg` relink. Under D9 it shares the iPhone app's record and `org.mailrata.app`, so one subscription covers both. | Last, or never: the `.dmg` already serves Macs. |
+| D9 | The store version (the identifiers were decided on 2026-10-17: `org.mailrata.mail` for the iPhone and Mac App Store builds, `org.mailrata.desktop` for the direct download; above) | "beta" belongs in TestFlight. | Ship stores at 1.x; a 1024 px icon without alpha. |
+| D10 | When the Mac App Store build ships | Sandboxed, no licence screen; customers moving from the `.dmg` relink. Under D9 it shares the iPhone app's record and `org.mailrata.mail`, so one subscription covers both. | Last, or never: the `.dmg` already serves Macs. |
 | D11 | Legal entity, address, contact, governing law | Fills `privacy.html` and `terms.html`; Apple's EU trader status publishes them. | Needed before any store submission. |
 
 ## The owner's steps in App Store Connect
@@ -219,7 +219,7 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
 1. The Apple Developer Program, then the Paid Apps agreement, banking and
    tax in App Store Connect.
 2. The Small Business Program, for the lower commission.
-3. The app record, with the bundle id `org.mailrata.app` (D9, decided
+3. The app record, with the bundle id `org.mailrata.mail` (D9, decided
    2026-10-17), and its numeric App ID for `APPLE_APP_ID`.
 4. The subscription group "RATA" and the two products above, with prices,
    names and descriptions in each language, and the review screenshot
@@ -228,7 +228,7 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
    `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester.
 7. `APPLE_APP_ID` on the server (`APPLE_BUNDLE_ID` is optional: it
-   defaults to `org.mailrata.app`).
+   defaults to `org.mailrata.mail`).
 8. Run `database.sql` §7.
 9. Redeploy mailrata.org.
 10. The App Privacy ("nutrition label") answers.
