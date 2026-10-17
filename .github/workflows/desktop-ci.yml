@@ -281,6 +281,14 @@ jobs:
           cargo test --lib -- vault:: store:: tests::at_start
         working-directory: desktop/rata-app/src-tauri
 
+      # The tests above build only the library's test program. This builds
+      # and links what an installer is made from: rata-app.exe, and the
+      # library in each of its kinds (a .dll and a static library too,
+      # which iOS needs), as a release build compiles them all.
+      - name: The program and the library build
+        run: cargo build --lib --bins
+        working-directory: desktop/rata-app/src-tauri
+
   # The interface, driven. ui-harness.mjs opens ui/ exactly as sync-ui.sh
   # assembles it, under the app's own CSP from tauri.conf.json, with a fake
   # Tauri backend, and clicks through what the bridge promises. Until this job
