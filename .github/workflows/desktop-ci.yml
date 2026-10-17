@@ -235,8 +235,8 @@ jobs:
 
       # The self-test a Simulator build runs as it starts (src/smoke.rs, the
       # `smoke` feature), built as the iOS job builds it: without
-      # self-update. Never in a release; ios.yml and verify-release.sh see
-      # to that.
+      # self-update. Never in a release: build.rs refuses one, and ios.yml
+      # and verify-release.sh check. release.yml's gate runs these tests too.
       - name: Clippy, with the smoke self-test
         run: cargo clippy --all-targets --no-default-features --features smoke -- -D warnings
         working-directory: desktop/rata-app/src-tauri

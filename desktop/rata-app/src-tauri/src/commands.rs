@@ -78,8 +78,13 @@ pub async fn discover_mailbox(app: App<'_>, email: String) -> Result<Found, Stri
 
 /// Whether this copy is paid for. Checked locally against the key compiled
 /// into the build — no network, so it answers on a train.
+///
+/// The page asks this once its mail store is open and before any mail is
+/// fetched, so on a phone it is also when that store, new on a first run,
+/// is kept out of the phone's backups (`backup`). Nothing anywhere else.
 #[tauri::command]
-pub fn licence_status(app: App<'_>) -> Standing {
+pub fn licence_status(handle: AppHandle, app: App<'_>) -> Standing {
+    crate::backup::keep_out(&handle);
     app.standing()
 }
 
@@ -363,7 +368,7 @@ pub async fn save_attachment(
 
 /// Where saves go (`core::save_folder`): the Downloads folder on a
 /// computer, the app's own Documents folder on iOS.
-fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
+pub(crate) fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
     let paths = handle.path();
     crate::core::save_folder(
         cfg!(target_os = "ios"),

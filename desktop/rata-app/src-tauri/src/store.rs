@@ -132,7 +132,7 @@ pub const CREATED_KEEP: usize = 500;
 ///
 /// Start forgets keychain entries the list does not account for, and does
 /// that only in a file of this schema or older ([`Store::accounts`]):
-/// `open_store` (main.rs) forgets a Slack, OneDrive or Google Drive sign-in
+/// `open_store` (lib.rs) forgets a Slack, OneDrive or Google Drive sign-in
 /// whose link it cannot find, and on Windows `vault::settle_windows`
 /// deletes every entry under `vault::SERVICE` and `vault::PIECE_SERVICE`
 /// whose address is not in `mailboxes`. So raise it when any field that
@@ -268,7 +268,7 @@ impl Store {
     /// It holds the licence token and every linked address, so on Unix the
     /// file is readable by this account only (0600), and so is the folder
     /// when RATA is the one making it (0700). Windows keeps the ACL of the
-    /// folder it is in: Local AppData (main.rs, [`moved`]), the account's
+    /// folder it is in: Local AppData (lib.rs, [`moved`]), the account's
     /// own and never copied to a roaming profile's share. Where the whole
     /// profile travels in a container (FSLogix, User Profile Disks), Local
     /// AppData travels inside it, with the rest of that profile.

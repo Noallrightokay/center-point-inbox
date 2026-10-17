@@ -16,6 +16,7 @@
 //! asks for) is `cfg(desktop)` here, and on a phone the features that need
 //! one answer as a build without them does.
 
+mod backup;
 mod cloud;
 mod commands;
 mod core;
@@ -275,10 +276,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // A smoke build's self-test (`smoke`), begun before anything it
-            // checks: the last run's answers go at once.
+            // checks: the last run's answers go at once. In the app's cache
+            // folder, never its data folder, which on a phone is the list's
+            // own and must be made by the list (`store::hold`) as on a first
+            // start, or the test would only find what it made itself.
             #[cfg(feature = "smoke")]
             let smoke = {
-                let smoke = smoke::Smoke::begin(app.path().app_data_dir()?, smoke::asked_view());
+                let smoke = smoke::Smoke::begin(app.path().app_cache_dir()?, smoke::asked_view());
                 app.manage(smoke.clone());
                 smoke
             };
@@ -290,6 +294,8 @@ pub fn run() {
             // `vault`.
             let local = app.path().app_local_data_dir()?.join("mailboxes.json");
             let roaming = app.path().app_data_dir()?.join("mailboxes.json");
+            #[cfg(feature = "smoke")]
+            let made_now = local.parent().is_some_and(|folder| !folder.exists());
             // One RATA per list (review R5; see `run`), before the list or
             // the keychain is read.
             let guarded = match store::hold(&local, HOLD_WAIT) {
@@ -312,8 +318,12 @@ pub fn run() {
                 store::Hold::Unguarded => false,
             };
             #[cfg(feature = "smoke")]
-            smoke.record(smoke::store(&local, guarded));
+            smoke.record(smoke::store(&local, guarded, made_now));
             let store = open_store(&roaming, &local, &Keychain, guarded);
+            // On a phone, the list's folder and the mail WebKit keeps stay
+            // out of its backups (`backup`, D8); again each time the page
+            // asks for the licence, once its mail store is open.
+            backup::keep_out(app.handle());
             // Windows only: keychain entries an earlier build wrote to roam
             // stay on this computer from now on, and a mailbox's that Unlink
             // or Delete account left in a roamed copy goes (review R6). The
@@ -386,7 +396,7 @@ pub fn run() {
             app.manage(live.clone());
             watch::start(app.handle().clone(), live);
             #[cfg(feature = "smoke")]
-            smoke::start(smoke);
+            smoke::start(smoke, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

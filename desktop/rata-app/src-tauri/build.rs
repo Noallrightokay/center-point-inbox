@@ -12,7 +12,35 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RATA_GOOGLE_CLIENT_ID");
     println!("cargo:rerun-if-env-changed=RATA_GOOGLE_CLIENT_SECRET");
     without_self_update();
+    smoke_only_where_it_runs();
     tauri_build::build()
+}
+
+/// The `smoke` self-test (src/smoke.rs) takes a licence from its
+/// environment at launch and looks real names up at every start: built for
+/// the iOS Simulator's job alone (ios.yml), as a debug build. So a build
+/// that could ship stops here, whatever workflow asks for it: any release
+/// build (a store's archive is one), and any build for an iPhone itself
+/// rather than the Simulator, which only a phone could install. This is
+/// rata-mail's `loopback-tests` rule, for this crate; verify-release.sh
+/// checks the published programs after the fact as well.
+fn smoke_only_where_it_runs() {
+    if std::env::var_os("CARGO_FEATURE_SMOKE").is_none() {
+        return;
+    }
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let abi = std::env::var("CARGO_CFG_TARGET_ABI").unwrap_or_default();
+    if profile == "release" {
+        panic!(
+            "RATA's smoke self-test is never built for release: build it without --release, for the Simulator."
+        );
+    }
+    if target_os == "ios" && abi != "sim" {
+        panic!(
+            "RATA's smoke self-test is built for the iOS Simulator only, never for a phone: build it for aarch64-apple-ios-sim."
+        );
+    }
 }
 
 /// A build without the `self-update` feature (an app store's, a phone's)

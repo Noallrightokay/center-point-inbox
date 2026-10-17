@@ -2,12 +2,19 @@
 //! can watch: the iOS Simulator on GitHub's Macs (.github/workflows/ios.yml).
 //!
 //! It checks, on the device itself, each thing RATA leans on there and that
-//! no test on a computer can stand in for: the keychain, the app's folder
-//! and the list's lock, names looked up through the system's resolver (the
-//! records discovery and L1 read), discovery of a real address, a TLS
-//! connection to a real mail server through the guard, and the page itself.
-//! Each answer goes into `smoke.json` in the app's data folder, written once
-//! and whole when the last check is done, for the job to read.
+//! no test on a computer can stand in for: the keychain, and that its
+//! entries stay on this phone; the app's folder, made private by the list
+//! on a first start, and the list's lock; names looked up through the
+//! system's resolver (the records discovery and L1 read), discovery of a
+//! real address, a TLS connection to a real mail server through the guard;
+//! what a phone answers where a computer has more (connected services,
+//! Create file, updates, Microsoft sign-in, the system's opener); the
+//! folder saves go to; the page itself; and, once the page has opened its
+//! mail store, that the list's folder and the mail are kept out of the
+//! phone's backups. Each answer goes into `smoke.json` in the app's cache
+//! folder (never its data folder, which the list must be the first to
+//! make), written once and whole when the last check is done, for the job
+//! to read.
 //!
 //! Never on by default, never built by release.yml, and
 //! harness/verify-release.sh fails any published binary that holds the
@@ -33,12 +40,12 @@ use tokio::sync::Notify;
 
 use crate::core::Rata;
 use crate::store::{self, Hold};
-use crate::vault::{Keychain, SMOKE_SERVICE, Unreadable};
+use crate::vault::{Held, Keychain, SMOKE_SERVICE, Unreadable};
 
 /// In every `smoke.json`, and so in every smoke build: one of the words
 /// harness/verify-release.sh looks for in what is published.
 pub const MARK: &str = "rata-smoke-self-test";
-/// The file the job reads, in the app's data folder.
+/// The file the job reads, in the app's cache folder.
 pub const FILE: &str = "smoke.json";
 /// A licence to store at start, as the licence box would.
 pub const LICENCE_VAR: &str = "RATA_SMOKE_LICENCE";
@@ -251,8 +258,11 @@ fn view_named(raw: Option<String>) -> Option<String> {
 
 /// The app's folder and the list's lock. `held` is whether this RATA got
 /// the lock at start (`store::hold`); a second try must then find it taken,
-/// which is what makes it a lock and not a file.
-pub fn store(list: &Path, held: bool) -> Check {
+/// which is what makes it a lock and not a file. `made_now` is whether the
+/// folder was not there before (a first start), so that the list made it.
+/// On Unix it must be this account's alone (0700), on a first start and on
+/// every one after: nothing else may make it first.
+pub fn store(list: &Path, held: bool, made_now: bool) -> Check {
     let Some(folder) = list.parent() else {
         return Check::new("store", false, json!({ "error": "the list has no folder" }));
     };
@@ -265,19 +275,24 @@ pub fn store(list: &Path, held: bool) -> Check {
         Hold::Unguarded => "unguarded",
     };
     #[cfg(unix)]
-    let mode = {
+    let (mode, private) = {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(folder)
-            .map(|m| format!("{:o}", m.permissions().mode() & 0o777))
-            .unwrap_or_default()
+        let mode = std::fs::metadata(folder)
+            .map(|m| m.permissions().mode() & 0o777)
+            .ok();
+        (
+            mode.map(|m| format!("{m:o}")).unwrap_or_default(),
+            mode == Some(0o700),
+        )
     };
     #[cfg(not(unix))]
-    let mode = String::new();
+    let (mode, private) = (String::new(), true);
     Check::new(
         "store",
-        held && is_folder && writable && again == "taken",
+        held && is_folder && writable && again == "taken" && private,
         json!({
             "folder": folder.display().to_string(),
+            "made by this start": made_now,
             "mode": mode,
             "writable": writable,
             "lock at start": if held { "held" } else { "not held" },
@@ -413,9 +428,10 @@ pub fn smoke_page(smoke: State<'_, Arc<Smoke>>, page: Page) {
     smoke.heard(page);
 }
 
-/// The rest, once the window is up: the keychain, the network, then the
-/// page's report (waited for), and `smoke.json`.
-pub fn start(smoke: Arc<Smoke>) {
+/// The rest, once the window is up: the keychain, the network, what a
+/// phone answers and where it saves, then the page's report (waited for),
+/// the backups once the page has opened its mail store, and `smoke.json`.
+pub fn start(smoke: Arc<Smoke>, handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let secret = fresh_secret();
         let kept = tauri::async_runtime::spawn_blocking(move || keychain(&InKeychain, &secret))
@@ -423,8 +439,11 @@ pub fn start(smoke: Arc<Smoke>) {
             .unwrap_or_else(|e| Check::new("keychain", false, json!({ "error": e.to_string() })));
         smoke.record(kept);
         network(&smoke).await;
+        smoke.record(judge_phone(&phone_answers(&handle).await));
+        smoke.record(saves(&handle));
         let page = smoke.wait_for_page(PAGE_WAIT).await;
         smoke.record(judge_page(page.as_ref(), smoke.view.as_deref()));
+        smoke.record(backups(&handle, page.as_ref()));
         if let Err(e) = smoke.finish(page) {
             eprintln!("{MARK}: {FILE} could not be written: {e}");
         }
@@ -442,9 +461,15 @@ fn fresh_secret() -> String {
 /// One keychain entry, as the check sees it: [`SMOKE_SERVICE`]'s in a
 /// smoke build, a map in the tests.
 trait Slot {
+    /// Written as RATA writes one (`vault`).
     fn put(&self, secret: &str) -> Result<(), String>;
+    /// Written as `keyring` writes one, which on iOS is to travel: what
+    /// RATA's own writer must write over.
+    fn put_as_keyring(&self, secret: &str) -> Result<(), String>;
     fn get(&self) -> Result<String, Unreadable>;
     fn forget(&self) -> Result<(), String>;
+    /// How the keychain holds it, which only iOS says.
+    fn held(&self) -> Result<Held, String>;
 }
 
 struct InKeychain;
@@ -453,27 +478,53 @@ impl Slot for InKeychain {
     fn put(&self, secret: &str) -> Result<(), String> {
         Keychain::put_smoke(ENTRY, secret)
     }
+    fn put_as_keyring(&self, secret: &str) -> Result<(), String> {
+        Keychain::put_smoke_as_keyring(ENTRY, secret)
+    }
     fn get(&self) -> Result<String, Unreadable> {
         Keychain::get_smoke(ENTRY)
     }
     fn forget(&self) -> Result<(), String> {
         Keychain::forget_smoke(ENTRY)
     }
+    fn held(&self) -> Result<Held, String> {
+        Keychain::held_smoke(ENTRY)
+    }
 }
 
-/// Written, read back, deleted, and then really gone. An entry an earlier
-/// run left (one stopped halfway) is cleared first. The secret is never in
-/// what is reported.
+/// On iOS, where RATA writes its own entries to stay on the phone (vault.rs).
 fn keychain(slot: &dyn Slot, secret: &str) -> Check {
-    let run = || -> Result<(), String> {
+    keychain_where(slot, secret, cfg!(target_os = "ios"))
+}
+
+/// Written over an entry `keyring` wrote, read back, deleted, and then
+/// really gone; where `stays_here`, also held as one entry that stays on
+/// this phone (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) and is
+/// never synchronized. An entry an earlier run left (one stopped halfway)
+/// is cleared first. The secret is never in what is reported.
+fn keychain_where(slot: &dyn Slot, secret: &str, stays_here: bool) -> Check {
+    let mut held: Option<Held> = None;
+    let mut run = || -> Result<(), String> {
         slot.forget()
             .map_err(|e| format!("an earlier run's entry could not be cleared: {e}"))?;
+        slot.put_as_keyring("written to travel")
+            .map_err(|e| format!("an entry could not be written as keyring writes one: {e}"))?;
         slot.put(secret)
             .map_err(|e| format!("it could not be written: {e}"))?;
         match slot.get() {
             Ok(s) if s == secret => {}
             Ok(_) => return Err("it read back as something else".into()),
             Err(e) => return Err(format!("it could not be read back: {e}")),
+        }
+        if stays_here {
+            let h = slot
+                .held()
+                .map_err(|e| format!("how it is kept could not be read: {e}"))?;
+            let fine = h.here && h.entries == 1 && !h.synchronized;
+            held = Some(h);
+            if !fine {
+                return Err("it is not kept as one entry on this phone alone".into());
+            }
         }
         slot.forget()
             .map_err(|e| format!("it could not be deleted: {e}"))?;
@@ -485,18 +536,236 @@ fn keychain(slot: &dyn Slot, secret: &str) -> Check {
             }
         }
     };
-    match run() {
-        Ok(()) => Check::new(
-            "keychain",
-            true,
-            json!({ "service": SMOKE_SERVICE, "written, read back and deleted": true }),
-        ),
-        Err(e) => Check::new(
-            "keychain",
-            false,
-            json!({ "service": SMOKE_SERVICE, "error": e }),
-        ),
+    let ran = run();
+    let mut detail = json!({
+        "service": SMOKE_SERVICE,
+        "written over keyring's, read back and deleted": ran.is_ok(),
+    });
+    if let Some(h) = held {
+        detail["entries"] = json!(h.entries);
+        detail["accessible"] = json!(h.classes);
+        detail["this device only"] = json!(h.here);
+        detail["synchronized"] = json!(h.synchronized);
     }
+    if let Err(e) = &ran {
+        detail["error"] = json!(e);
+    }
+    Check::new("keychain", ran.is_ok(), detail)
+}
+
+// ------------------------------------------------------- what a phone has
+
+/// What a phone answers where a computer has more, each found the way the
+/// page asks for it.
+#[derive(Debug, Clone)]
+struct PhoneAnswers {
+    /// Each connected service and whether it is offered (STAGE 3 items 7
+    /// and 9: none is, on a phone).
+    connections: Vec<(&'static str, bool)>,
+    /// Create file's list: refused, with its kind (item 7).
+    create_file: Result<usize, &'static str>,
+    /// Microsoft mailbox sign-in (item 9).
+    microsoft: bool,
+    /// An update key, and whether a check would ask anything (the store
+    /// updates a phone's RATA).
+    update_key: bool,
+    update_check: bool,
+    /// The opener plugin's mobile half, which opens a web address for RATA
+    /// (`links::open_web`), is set up.
+    opener: bool,
+}
+
+async fn phone_answers(handle: &tauri::AppHandle) -> PhoneAnswers {
+    use tauri::Manager;
+    let rata = handle.state::<Arc<Rata>>();
+    PhoneAnswers {
+        connections: rata
+            .connections_status()
+            .into_iter()
+            .map(|s| (s.service, s.available))
+            .collect(),
+        create_file: rata.created_listing().map(|l| l.len()).map_err(|r| r.kind),
+        microsoft: rata.microsoft_ready(),
+        update_key: crate::update::has_key(handle.config()),
+        update_check: crate::update::check(handle).await.enabled,
+        opener: handle
+            .try_state::<tauri_plugin_opener::Opener<tauri::Wry>>()
+            .is_some(),
+    }
+}
+
+/// Nothing a phone cannot do is offered, and the opener is there.
+fn judge_phone(a: &PhoneAnswers) -> Check {
+    let mut wrong: Vec<String> = Vec::new();
+    if a.connections.is_empty() {
+        wrong.push("no connected services were listed".into());
+    }
+    for (service, available) in &a.connections {
+        if *available {
+            wrong.push(format!("{service} is offered"));
+        }
+    }
+    if a.create_file != Err("unavailable") {
+        wrong.push(format!("Create file answered {:?}", a.create_file));
+    }
+    if a.microsoft {
+        wrong.push("Microsoft sign-in is offered".into());
+    }
+    if a.update_key || a.update_check {
+        wrong.push("this copy would check for updates of its own".into());
+    }
+    if !a.opener {
+        wrong.push("the opener is not set up".into());
+    }
+    Check::new(
+        "phone answers",
+        wrong.is_empty(),
+        json!({
+            "connections": a.connections
+                .iter()
+                .map(|(s, on)| format!("{s}: {}", if *on { "offered" } else { "not offered" }))
+                .collect::<Vec<_>>(),
+            "create file": match a.create_file {
+                Ok(n) => format!("lists {n}"),
+                Err(kind) => format!("refused: {kind}"),
+            },
+            "microsoft sign-in": a.microsoft,
+            "update key": a.update_key,
+            "update check": a.update_check,
+            "opener": a.opener,
+            "problems": wrong,
+        }),
+    )
+}
+
+/// Where saves go (`commands::downloads`), and that a file can be written
+/// there and removed again.
+fn saves(handle: &tauri::AppHandle) -> Check {
+    use tauri::Manager;
+    let folder = crate::commands::downloads(handle);
+    let home = handle.path().home_dir().ok();
+    let wrote = match &folder {
+        Some(f) => {
+            let probe = f.join(".rata-smoke-probe");
+            std::fs::write(&probe, b"RATA")
+                .and_then(|()| std::fs::remove_file(&probe))
+                .map_err(|e| e.to_string())
+        }
+        None => Err("there is no folder".into()),
+    };
+    judge_saves(folder.as_deref(), home.as_deref(), wrote)
+}
+
+/// On iOS a save goes to the app's own Documents folder, inside its
+/// container, which the Files app shows (prepare.sh's Info.plist keys), and
+/// takes a file.
+fn judge_saves(folder: Option<&Path>, home: Option<&Path>, wrote: Result<(), String>) -> Check {
+    let inside = match (folder, home) {
+        (Some(f), Some(h)) => f.strip_prefix(h).ok().map(|r| r.display().to_string()),
+        _ => None,
+    };
+    let ok = inside.as_deref() == Some("Documents") && wrote.is_ok();
+    Check::new(
+        "saves",
+        ok,
+        json!({
+            "folder in the container": inside,
+            "folder": folder.map(|f| f.display().to_string()),
+            "written and removed": wrote.is_ok(),
+            "error": wrote.err(),
+        }),
+    )
+}
+
+// ------------------------------------------------------------- backups
+
+/// Once the page has opened its mail store: RATA's folder and each folder
+/// WebKit keeps IndexedDB in, as `backup` finds them, each read back from
+/// the system as kept out of backups. Read only: what this checks is what
+/// RATA's start and the page's licence question already did.
+fn backups(handle: &tauri::AppHandle, page: Option<&Page>) -> Check {
+    use tauri::Manager;
+    let paths = handle.path();
+    let (Ok(app), Ok(home)) = (paths.app_local_data_dir(), paths.home_dir()) else {
+        return Check::new("backups", false, json!({ "error": "no folders" }));
+    };
+    let webkit = crate::backup::webkit_in(&home);
+    let found: Vec<(String, Result<bool, String>)> = crate::backup::folders(&app, &webkit)
+        .iter()
+        .map(|f| {
+            let shown = f.strip_prefix(&home).unwrap_or(f).display().to_string();
+            (shown, crate::backup::excluded(f))
+        })
+        .collect();
+    let mail_open = page.is_some_and(|p| p.path == "app.html");
+    let mut check = judge_backups(&found, mail_open);
+    if found.len() < 2 {
+        check.detail["webkit holds"] = json!(listing(&webkit, &home, 5));
+    }
+    check
+}
+
+/// RATA's folder (first) is kept out, and so is each IndexedDB folder;
+/// where the page has opened its mail store, there is one at least.
+fn judge_backups(found: &[(String, Result<bool, String>)], mail_open: bool) -> Check {
+    let mut wrong: Vec<String> = Vec::new();
+    if found.is_empty() {
+        wrong.push("RATA's folder was not found".into());
+    }
+    if mail_open && found.len() < 2 {
+        wrong.push("no folder of WebKit's holds the mail".into());
+    }
+    for (folder, excluded) in found {
+        match excluded {
+            Ok(true) => {}
+            Ok(false) => wrong.push(format!("{folder} is backed up")),
+            Err(e) => wrong.push(format!("{folder}: {e}")),
+        }
+    }
+    Check::new(
+        "backups",
+        wrong.is_empty(),
+        json!({
+            "kept out": found
+                .iter()
+                .map(|(f, e)| format!("{f}: {}", match e {
+                    Ok(true) => "kept out".to_string(),
+                    Ok(false) => "BACKED UP".to_string(),
+                    Err(why) => why.clone(),
+                }))
+                .collect::<Vec<_>>(),
+            "mail store open": mail_open,
+            "problems": wrong,
+        }),
+    )
+}
+
+/// The folders under `dir`, no deeper than `depth`, relative to `home`, at
+/// most 80: what WebKit made, when no mail store was found in it.
+fn listing(dir: &Path, home: &Path, depth: usize) -> Vec<String> {
+    fn walk(dir: &Path, home: &Path, depth: usize, out: &mut Vec<String>) {
+        if depth == 0 || out.len() >= 80 {
+            return;
+        }
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = read.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            if out.len() >= 80 {
+                return;
+            }
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                let p = e.path();
+                out.push(p.strip_prefix(home).unwrap_or(&p).display().to_string());
+                walk(&p, home, depth - 1, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, home, depth, &mut out);
+    out
 }
 
 // ------------------------------------------------------------- network
@@ -513,9 +782,11 @@ async fn network(smoke: &Smoke) {
     };
     smoke.record(judge_mx(&r.mx("gmail.com").await));
     smoke.record(judge_srv(r.srv_imaps("gmail.com").await));
-    // The TXT question first: a CNAME question holds up later ones about
-    // the name it was asked of (Resolver::cname), and nothing more is asked
-    // about the autodiscover name.
+    // The SPF record, then the autodiscover alias. On iOS the alias is
+    // never a CNAME question, which held up later questions reaching the
+    // name: the system follows the alias on its way to the name's addresses
+    // and hands it back (Resolver::cname, rata-mail's dns_sd), and this
+    // proves that path on the device.
     let txt = r.txt(L1_DOMAIN).await;
     let alias = r.cname(&format!("autodiscover.{L1_DOMAIN}")).await;
     smoke.record(judge_l1(&txt, alias));
@@ -706,17 +977,30 @@ mod tests {
         assert!(set.contains("'smoke_page'"));
     }
 
-    /// An entry in a map, which can be made to misbehave.
+    /// An entry in a map, which can be made to misbehave. Its class is what
+    /// the iOS keychain would say: `ak` (when unlocked, and into backups) as
+    /// `keyring` writes one, `cku` (after first unlock, this device only) as
+    /// RATA's own writer does, unless the fake writes as `keyring` does.
     #[derive(Default)]
     struct Fake {
         held: Mutex<Option<String>>,
+        class: Mutex<&'static str>,
         reads_wrong: bool,
         keeps_on_forget: bool,
+        writes_as_keyring: bool,
     }
 
     impl Slot for Fake {
         fn put(&self, secret: &str) -> Result<(), String> {
             *self.held.lock().unwrap() = Some(secret.into());
+            if !self.writes_as_keyring {
+                *self.class.lock().unwrap() = "cku";
+            }
+            Ok(())
+        }
+        fn put_as_keyring(&self, secret: &str) -> Result<(), String> {
+            *self.held.lock().unwrap() = Some(secret.into());
+            *self.class.lock().unwrap() = "ak";
             Ok(())
         }
         fn get(&self) -> Result<String, Unreadable> {
@@ -732,6 +1016,16 @@ mod tests {
             }
             Ok(())
         }
+        fn held(&self) -> Result<Held, String> {
+            let class = *self.class.lock().unwrap();
+            let there = self.held.lock().unwrap().is_some();
+            Ok(Held {
+                entries: usize::from(there),
+                classes: vec![class.to_string()],
+                here: there && class == "cku",
+                synchronized: false,
+            })
+        }
     }
 
     #[test]
@@ -741,7 +1035,7 @@ mod tests {
         let good = Fake::default();
         // Left by an earlier run that stopped halfway: cleared first.
         good.put("left behind").unwrap();
-        let c = keychain(&good, &secret);
+        let c = keychain_where(&good, &secret, false);
         assert!(c.ok, "{c:?}");
         assert!(good.held.lock().unwrap().is_none());
 
@@ -749,7 +1043,7 @@ mod tests {
             reads_wrong: true,
             ..Fake::default()
         };
-        let c = keychain(&wrong, &secret);
+        let c = keychain_where(&wrong, &secret, false);
         assert!(
             !c.ok && c.detail.to_string().contains("something else"),
             "{c:?}"
@@ -759,15 +1053,159 @@ mod tests {
             keeps_on_forget: true,
             ..Fake::default()
         };
-        let c = keychain(&sticky, &secret);
+        let c = keychain_where(&sticky, &secret, false);
         assert!(
             !c.ok && c.detail.to_string().contains("still there"),
             "{c:?}"
         );
         // The secret is never what is reported.
-        for c in [keychain(&wrong, &secret), keychain(&sticky, &secret)] {
+        for c in [
+            keychain_where(&wrong, &secret, true),
+            keychain_where(&sticky, &secret, true),
+        ] {
             assert!(!c.detail.to_string().contains(&secret), "{c:?}");
         }
+    }
+
+    /// On iOS the entry RATA writes over one `keyring` wrote must then be
+    /// one entry, kept on this phone alone and never synchronized; a writer
+    /// that leaves `keyring`'s class (into backups) fails the check there,
+    /// and only there.
+    #[test]
+    fn on_ios_an_entry_must_be_kept_on_this_phone_alone() {
+        let secret = fresh_secret();
+        let good = Fake::default();
+        let c = keychain_where(&good, &secret, true);
+        assert!(c.ok, "{c:?}");
+        assert_eq!(c.detail["accessible"][0], "cku");
+        assert_eq!(c.detail["entries"], 1);
+        assert_eq!(c.detail["this device only"], true);
+
+        let travels = Fake {
+            writes_as_keyring: true,
+            ..Fake::default()
+        };
+        let c = keychain_where(&travels, &secret, true);
+        assert!(!c.ok, "{c:?}");
+        assert_eq!(c.detail["accessible"][0], "ak");
+        assert!(
+            c.detail["error"]
+                .as_str()
+                .unwrap()
+                .contains("on this phone alone")
+        );
+        assert!(keychain_where(&travels, &secret, false).ok);
+    }
+
+    /// What a phone answers where a computer has more: every service not
+    /// offered, Create file refused as unavailable, no Microsoft sign-in, no
+    /// update of its own, and the opener set up. Any one otherwise fails.
+    #[test]
+    fn a_phone_offers_nothing_it_cannot_do() {
+        let phone = PhoneAnswers {
+            connections: vec![("apple", false), ("slack", false), ("google", false)],
+            create_file: Err("unavailable"),
+            microsoft: false,
+            update_key: false,
+            update_check: false,
+            opener: true,
+        };
+        let c = judge_phone(&phone);
+        assert!(c.ok, "{c:?}");
+        assert_eq!(c.detail["create file"], "refused: unavailable");
+
+        let mut slack = phone.clone();
+        slack.connections[1].1 = true;
+        let mut create = phone.clone();
+        create.create_file = Ok(0);
+        let mut plan = phone.clone();
+        plan.create_file = Err("plan");
+        let mut microsoft = phone.clone();
+        microsoft.microsoft = true;
+        let mut updates = phone.clone();
+        updates.update_check = true;
+        let mut opener = phone.clone();
+        opener.opener = false;
+        let mut none = phone.clone();
+        none.connections.clear();
+        for (why, answers) in [
+            ("slack is offered", slack),
+            ("Create file answered Ok(0)", create),
+            ("Create file answered Err(\"plan\")", plan),
+            ("Microsoft sign-in is offered", microsoft),
+            ("check for updates", updates),
+            ("opener is not set up", opener),
+            ("no connected services", none),
+        ] {
+            let c = judge_phone(&answers);
+            assert!(!c.ok, "{why}: {c:?}");
+            let said = c.detail["problems"].as_array().unwrap();
+            assert!(
+                said.iter().any(|p| p.as_str().unwrap().contains(why)),
+                "{why}: {c:?}"
+            );
+        }
+    }
+
+    /// A save goes to the container's own Documents folder, which takes a
+    /// file; anywhere else, or a folder refusing the file, fails.
+    #[test]
+    fn a_phone_saves_into_its_own_documents() {
+        let home = Path::new("/var/mobile/Containers/Data/Application/A1");
+        let docs = home.join("Documents");
+        let c = judge_saves(Some(&docs), Some(home), Ok(()));
+        assert!(c.ok, "{c:?}");
+        assert_eq!(c.detail["folder in the container"], "Documents");
+        assert!(!judge_saves(Some(&docs), Some(home), Err("read-only".into())).ok);
+        let downloads = home.join("Downloads");
+        assert!(!judge_saves(Some(&downloads), Some(home), Ok(())).ok);
+        let outside = Path::new("/var/mobile/Documents");
+        assert!(!judge_saves(Some(outside), Some(home), Ok(())).ok);
+        assert!(!judge_saves(None, Some(home), Err("no folder".into())).ok);
+    }
+
+    /// RATA's folder must be kept out of backups, and so must every folder
+    /// WebKit keeps IndexedDB in; once the page has opened its mail store,
+    /// there must be one.
+    #[test]
+    fn the_list_and_the_mail_are_kept_out_of_backups() {
+        let ours = (
+            "Library/Application Support/org.mailrata.desktop".to_string(),
+            Ok(true),
+        );
+        let mail = ("Library/WebKit/WebsiteData/IndexedDB".to_string(), Ok(true));
+        assert!(judge_backups(&[ours.clone(), mail.clone()], true).ok);
+        // The first screen opens no mail store.
+        assert!(judge_backups(std::slice::from_ref(&ours), false).ok);
+        let c = judge_backups(std::slice::from_ref(&ours), true);
+        assert!(!c.ok && c.detail["problems"].to_string().contains("holds the mail"));
+        let backed = (mail.0.clone(), Ok(false));
+        let c = judge_backups(&[ours.clone(), backed], true);
+        assert!(!c.ok && c.detail["problems"].to_string().contains("is backed up"));
+        let unread = (ours.0.clone(), Err("the system would not say".into()));
+        assert!(!judge_backups(&[unread, mail], true).ok);
+        assert!(!judge_backups(&[], false).ok);
+    }
+
+    #[test]
+    fn a_listing_of_webkit_is_short_and_relative() {
+        let home = tmpdir("listing");
+        let webkit = crate::backup::webkit_in(&home);
+        std::fs::create_dir_all(webkit.join("WebsiteData/Default/a")).unwrap();
+        std::fs::write(webkit.join("WebsiteData/file"), b"").unwrap();
+        assert_eq!(
+            listing(&webkit, &home, 5),
+            vec![
+                "Library/WebKit/WebsiteData",
+                "Library/WebKit/WebsiteData/Default",
+                "Library/WebKit/WebsiteData/Default/a",
+            ]
+        );
+        for n in 0..100 {
+            std::fs::create_dir_all(webkit.join(format!("many/{n:03}"))).unwrap();
+        }
+        assert_eq!(listing(&webkit, &home, 5).len(), 80);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -777,17 +1215,49 @@ mod tests {
         let Hold::Mine(lock) = store::hold(&list, Duration::ZERO) else {
             panic!("the lock should be free");
         };
-        let c = store(&list, true);
+        let c = store(&list, true, true);
         assert!(c.ok, "{c:?}");
         assert_eq!(c.detail["lock tried again"], "taken");
         assert_eq!(c.detail["writable"], true);
+        assert_eq!(c.detail["made by this start"], true);
         assert!(!list.parent().unwrap().join(".smoke-probe").exists());
         drop(lock);
         // Let go of: a second try gets it, which is no lock at all.
-        let c = store(&list, true);
+        let c = store(&list, true, false);
         assert!(!c.ok && c.detail["lock tried again"] == "free", "{c:?}");
         // Not held at start (another copy had it, or locks are refused).
-        assert!(!store(&list, false).ok);
+        assert!(!store(&list, false, false).ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list makes its folder this account's alone (0700). A folder
+    /// something else made first, open to others, fails the check: it
+    /// would describe what made it, not RATA.
+    #[cfg(unix)]
+    #[test]
+    fn the_store_check_needs_the_folder_to_be_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmpdir("store-mode");
+        let list = dir.join("org.mailrata.desktop/mailboxes.json");
+        let Hold::Mine(lock) = store::hold(&list, Duration::ZERO) else {
+            panic!("the lock should be free");
+        };
+        let c = store(&list, true, true);
+        assert!(c.ok && c.detail["mode"] == "700", "{c:?}");
+        drop(lock);
+
+        let other = dir.join("made-first/mailboxes.json");
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::set_permissions(
+            other.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let Hold::Mine(_lock) = store::hold(&other, Duration::ZERO) else {
+            panic!("the lock should be free");
+        };
+        let c = store(&other, true, false);
+        assert!(!c.ok && c.detail["mode"] == "755", "{c:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

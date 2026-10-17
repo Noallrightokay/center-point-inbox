@@ -3592,6 +3592,8 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 name = "rata-app"
 version = "0.1.52"
 dependencies = [
+ "core-foundation 0.9.4",
+ "core-foundation-sys",
  "ed25519-dalek",
  "flate2",
  "futures",
@@ -3599,6 +3601,7 @@ dependencies = [
  "keyring",
  "rata-mail",
  "reqwest",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2 0.11.0",
