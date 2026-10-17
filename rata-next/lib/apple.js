@@ -51,7 +51,7 @@ export const APPLE_ROOT_FILES = ['AppleRootCA-G3.cer', 'AppleRootCA-G2.cer', 'Ap
    APPLE_APP_ID. The desktop app downloaded from mailrata.org is
    org.mailrata.desktop, sells nothing through Apple, and has nothing to do
    with this path: a transaction signed for it is another app's. */
-export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.app';
+export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.mail';
 
 /* What /api/licence/apple takes: the app's current entitlements, at most
    ten signed transactions of at most 16 KiB each. A real one is roughly 5

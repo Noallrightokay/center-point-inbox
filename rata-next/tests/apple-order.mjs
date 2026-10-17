@@ -40,7 +40,7 @@ const freshId = () => `5${RUN}${String(++made).padStart(7, '0')}`;
 
 /* A transaction of the subscription `id`, as Apple signs it at `signed`. */
 const txOf = (id, signed, over) => ({
-  transactionId: `${id}${String(Math.round(signed / 1000) % 100000)}`, originalTransactionId: id, bundleId: 'org.mailrata.app',
+  transactionId: `${id}${String(Math.round(signed / 1000) % 100000)}`, originalTransactionId: id, bundleId: 'org.mailrata.mail',
   productId: PRO, type: 'Auto-Renewable Subscription', inAppOwnershipType: 'PURCHASED', environment: 'Production', signedDate: signed, ...over,
 });
 /* A notification, carrying renewal info when `grace` is given (null for

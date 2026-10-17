@@ -165,7 +165,7 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_DOMAIN` | **leave unset** — there is no domain add-on to sell (step 3) |
 | `APPLE_APP_ID` | the App Store app's numeric Apple ID (one app record for the iPhone and the Mac), from App Store Connect once it exists (§11). Without it only sandbox purchases (TestFlight, App Review) are accepted; a real one is answered "not switched on" |
-| `APPLE_BUNDLE_ID` | optional; the bundle id of RATA's App Store app, which the iPhone and Mac App Store apps share (Universal Purchase), so one subscription covers both. Default `org.mailrata.app`; set it only if the app record uses another. (The desktop app downloaded from mailrata.org stays `org.mailrata.desktop` and has nothing to do with this.) |
+| `APPLE_BUNDLE_ID` | optional; the bundle id of RATA's App Store app, which the iPhone and Mac App Store apps share (Universal Purchase), so one subscription covers both. Default `org.mailrata.mail`; set it only if the app record uses another. (The desktop app downloaded from mailrata.org stays `org.mailrata.desktop` and has nothing to do with this.) |
 
 Public — these are emitted to every visitor, which is correct for all of them:
 
@@ -467,7 +467,7 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    App Store Small Business Program), so Apple's commission is 15% rather
    than 30% while proceeds stay under its limit.
 3. **The app record**: App Store Connect → Apps → New App, with the bundle
-   id `org.mailrata.app`, for iOS and macOS alike: the iPhone and Mac App
+   id `org.mailrata.mail`, for iOS and macOS alike: the iPhone and Mac App
    Store apps share it (Universal Purchase), so one subscription covers
    both and purchases from either reach the site the same way. Its
    **Apple ID**, a number under App Information, is `APPLE_APP_ID`.
@@ -505,7 +505,7 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
 6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
    address that is not an Apple Account already.
 7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
-   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.app`
+   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.mail`
    (§4).
 8. **The database**: run `database.sql` again (§1); section 7 adds
    `apple_subscriptions`.

@@ -256,7 +256,7 @@ export default async function run(state) {
        to an account later; the page says no address is kept, so nothing may
        write either yet. */
     const t = { originalTransactionId: '2000000000000001', productId: Object.keys(APPLE_PRODUCTS)[0], expiresDate: Date.now() + 86400e3,
-      signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.app', environment: 'Production' };
+      signedDate: Date.now(), type: 'Auto-Renewable Subscription', bundleId: 'org.mailrata.mail', environment: 'Production' };
     const written = [apple.appleRowOf(t, 'Production'), ...[apple.applePurchase(t, 'Production'), ...apple.APPLE_ACTED.map((type) =>
       apple.appleChange({ notificationType: type, subtype: 'GRACE_PERIOD', signedDate: Date.now() }, t, { gracePeriodExpiresDate: Date.now() }, 'Production'))]
       .flatMap((c) => (c ? [c.core, c.insert, ...(c.grace ? [c.grace] : [])] : []))];

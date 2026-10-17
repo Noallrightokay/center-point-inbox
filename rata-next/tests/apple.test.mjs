@@ -41,7 +41,7 @@ const PINNED = {
 };
 
 const DAY = 86400e3;
-const BUNDLE = 'org.mailrata.app';
+const BUNDLE = 'org.mailrata.mail';
 const APP_ID = 1234567890;
 const PRO = 'org.mailrata.pro.monthly';
 const BASE = 'org.mailrata.base.monthly';
@@ -343,8 +343,8 @@ export default async function run(state) {
     check(!desktop.ok && desktop.status === 'INVALID_APP_IDENTIFIER',
       `so is one signed for org.mailrata.desktop, the downloaded desktop app's id, which sells nothing through Apple: ${desktop.status}`);
     const shared = await apple.verifyApple('transaction', signJws(txn(), chain), made);
-    check(shared.ok && shared.payload.bundleId === 'org.mailrata.app',
-      'and one carrying org.mailrata.app verifies, whether bought on the iPhone or the Mac (Universal Purchase: one bundle id, and a transaction names no platform)');
+    check(shared.ok && shared.payload.bundleId === 'org.mailrata.mail',
+      'and one carrying org.mailrata.mail verifies, whether bought on the iPhone or the Mac (Universal Purchase: one bundle id, and a transaction names no platform)');
 
     const xcode = txn({ environment: 'Xcode' });
     const noFlag = await apple.verifyApple('transaction', unsignedJws(xcode), made);
@@ -360,8 +360,8 @@ export default async function run(state) {
     check(!forged.ok && !forged.noAppId && forged.status === 'VERIFICATION_FAILURE', 'and a forged one is still reported as forged');
     check(apple.appleSettings({ APPLE_APP_ID: '12ab' }).appId === null && apple.appleSettings({ APPLE_APP_ID: '12ab' }).appIdUnreadable,
       'an APPLE_APP_ID that is not a number is not used');
-    check(apple.APPLE_DEFAULT_BUNDLE_ID === 'org.mailrata.app' && apple.appleSettings({}).bundleId === 'org.mailrata.app' && apple.appleSettings({ APPLE_BUNDLE_ID: ' org.example.rata ' }).bundleId === 'org.example.rata',
-      `the bundle id is org.mailrata.app, the iPhone and Mac App Store apps' (D9), unless APPLE_BUNDLE_ID says otherwise`);
+    check(apple.APPLE_DEFAULT_BUNDLE_ID === 'org.mailrata.mail' && apple.appleSettings({}).bundleId === 'org.mailrata.mail' && apple.appleSettings({ APPLE_BUNDLE_ID: ' org.example.rata ' }).bundleId === 'org.example.rata',
+      `the bundle id is org.mailrata.mail, the iPhone and Mac App Store apps' (D9), unless APPLE_BUNDLE_ID says otherwise`);
     const broken = apple.appleVerifiers({ APPLE_TEST_ROOT: 'bm90IGEgY2VydGlmaWNhdGU=' });
     check(!!broken.off, `a root that cannot be read switches App Store purchases off: ${broken.off}`);
 
