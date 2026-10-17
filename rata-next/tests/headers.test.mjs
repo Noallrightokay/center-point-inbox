@@ -24,6 +24,8 @@ export default async function run(state) {
     for (const [path, init] of [
       ['/', {}],
       ['/app', {}],
+      ['/in-app/help', {}],
+      ['/in-app/delete-account', {}],
       ['/api/config', {}],
       ['/config.js', {}],
       ['/api/stripe/webhook', {}],

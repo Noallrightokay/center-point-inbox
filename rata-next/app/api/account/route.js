@@ -45,10 +45,12 @@ export async function DELETE(req) {
   }
 
   /* event_at and updated_at: when an ended subscription ended, which bounds
-     how long a licence it issued still works (blocksDeletion). */
+     how long a licence it issued still works (blocksDeletion). The deletion
+     page a store build opens asks for its refusal in the store's words
+     (`words: 'store'`): the same rule, naming no billing portal. */
   const { data: sub } = await sb.from('subscriptions')
     .select('plan,status,event_at,updated_at').eq('email', email).maybeSingle();
-  const blocked = blocksDeletion(sub);
+  const blocked = blocksDeletion(sub, Date.now(), { store: body.words === 'store' });
   if (blocked) return NextResponse.json({ error: blocked, subscription: sub?.status }, { status: 409 });
 
   const removed = {};

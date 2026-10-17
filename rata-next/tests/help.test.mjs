@@ -135,7 +135,9 @@ export default async function run(state) {
     const outside = Object.values(blocks).reduce((h, b) => h.replace(b, ''), html);
     const links = [];
     for (const [where, part] of [...Object.entries(blocks), ['elsewhere', outside]]) {
-      for (const m of part.matchAll(/\b(?:href|src)="([^"]+)"/g)) {
+      /* A comment is no link on this page. What the store copy adds from
+         one (lib/in-app.js, in-app:add) is judged by in-app.test.mjs. */
+      for (const m of part.replace(/<!--[\s\S]*?-->/g, '').matchAll(/\b(?:href|src)="([^"]+)"/g)) {
         links.push({ where, url: entities(m[1]) });
       }
     }

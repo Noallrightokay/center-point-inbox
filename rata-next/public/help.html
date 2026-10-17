@@ -127,11 +127,14 @@ footer a:hover{color:var(--ink)}
   .prov{padding:20px}
 }
 </style>
+<!-- in-app:add gutter
+<style>.layout{padding-left:var(--gutter);padding-right:var(--gutter)}</style>
+-->
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<nav aria-label="Main"><div class="wrap nav-in">
+<!-- in-app:brand --><nav aria-label="Main"><div class="wrap nav-in">
   <a class="logo" href="index.html" aria-label="RATA home">
     <img class="mk" src="icons/mark-256.png" alt="" width="30" height="30">
     <b>RATA</b>
@@ -140,7 +143,7 @@ footer a:hover{color:var(--ink)}
   <a class="plain opt" href="account.html">Licence</a>
   <a class="plain" href="auth.html?mode=login">Log in</a>
   <a class="btn primary" href="index.html#download">Download</a>
-</div></nav>
+</div></nav><!-- in-app:end -->
 
 <main id="main">
 <header class="head"><div class="wrap">
@@ -178,10 +181,12 @@ footer a:hover{color:var(--ink)}
 
 <article>
 
-<section id="install" aria-labelledby="install-h">
+<!-- in-app:words --><section id="install" aria-labelledby="install-h">
   <h2 id="install-h">Install</h2>
   <p>Every installer is on the <a href="https://github.com/Noallrightokay/center-point-inbox/releases">releases page</a>, with its version in the file name. RATA is in beta and the installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. That is expected.</p>
-  <div class="rows">
+  <!-- in-app:end
+    get: Every installer is on the <a href="https://github.com/Noallrightokay/center-point-inbox/releases">releases page</a>, with its version in the file name. RATA is in beta and the installers are not code-signed yet, so Windows and macOS ask you to confirm the first time you open it. That is expected. => The store you got RATA from installs it and keeps it up to date.
+  --><!-- in-app:cut install-steps --><div class="rows">
     <div class="row">
       <b>Windows 10 and 11</b>
       <div>
@@ -204,10 +209,12 @@ footer a:hover{color:var(--ink)}
         <p>On other distributions, make the AppImage executable, then run it: <code>chmod +x RATA_&lt;version&gt;_amd64.AppImage</code>, then <code>./RATA_&lt;version&gt;_amd64.AppImage</code></p>
       </div>
     </div>
-  </div>
+  </div><!-- in-app:end --><!-- in-app:words -->
   <p>The first time RATA opens it asks for your licence key. Copy it from your <a href="account.html">licence page</a> and paste it in: one line, no spaces.</p>
   <p><b>Your version</b> is in the window's title bar, as <code>RATA &lt;version&gt; beta</code>. Put it in every bug report.</p>
-</section>
+</section><!-- in-app:end
+  key: <p>The first time RATA opens it asks for your licence key. Copy it from your <a href="account.html">licence page</a> and paste it in: one line, no spaces.</p> =>
+-->
 
 <section id="link" aria-labelledby="link-h">
   <h2 id="link-h">Link a mailbox</h2>
@@ -475,6 +482,9 @@ footer a:hover{color:var(--ink)}
 <section id="report" aria-labelledby="report-h">
   <h2 id="report-h">Report a bug</h2>
   <p>Open an issue with the <a href="https://github.com/Noallrightokay/center-point-inbox/issues/new?template=beta-bug.md">Beta bug template</a> on GitHub. It asks for everything below.</p>
+  <!-- in-app:add write
+  <p>If you would rather not use GitHub, or need help with anything else, write to <a href="mailto:[OWNER: contact email]">[OWNER: contact email]</a> with the same details.</p>
+  -->
   <ol class="steps">
     <li><b>The exact error text</b>, copied, not retold. RATA's messages name the servers it tried and what each said, which is what makes a bug quick to find. The message at the bottom of the window fades, so copy it or take a screenshot at once.</li>
     <li><b>Your provider</b>: Gmail, iCloud, a work domain on Google Workspace, and so on.</li>
@@ -497,13 +507,13 @@ footer a:hover{color:var(--ink)}
 </div>
 </main>
 
-<footer><div class="wrap">
+<!-- in-app:cut footer --><footer><div class="wrap">
   <span class="brand"><img class="mk" src="icons/mark-256.png" alt="" width="22" height="22"><b>RATA</b></span>
   <a href="account.html">Licence</a>
   <a href="help.html">Help</a>
   <a href="https://github.com/Noallrightokay/center-point-inbox/blob/main/BETA.md">Beta guide</a>
   <a href="https://github.com/Noallrightokay/center-point-inbox/releases">Releases</a>
   <span>© 2026 RATA</span>
-</div></footer>
+</div></footer><!-- in-app:end -->
 </body>
 </html>

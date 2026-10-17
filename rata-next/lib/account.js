@@ -35,16 +35,27 @@ import { LICENCE_DAYS } from './licence.js';
    that was written) bounds when the last licence was issued; a status that
    was never live (incomplete_expired) issued none. Chosen over keeping this
    month's usage row after deletion, which would keep an address RATA was
-   asked to forget, with nothing to remove it later. `now` is for tests. */
-export function blocksDeletion(sub, now = Date.now()) {
+   asked to forget, with nothing to remove it later. `now` is for tests.
+
+   `store` asks for the same refusals in words a store build may show: the
+   deletion page it opens (/in-app/delete-account) names no billing portal
+   and no Stripe (lib/in-app.js, SELLING). The rules are the same. */
+export function blocksDeletion(sub, now = Date.now(), { store = false } = {}) {
   if (!sub) return null;
   const status = String(sub.status || '').toLowerCase();
   if (LIVE_STATUSES.includes(status)) {
     return `Your${sub.plan ? ' ' + sub.plan : ''} subscription is still ${status}. `
-      + 'Cancel it in the billing portal first, or Stripe keeps charging for an account that no longer exists. '
+      + (store
+        ? 'Cancel it where you subscribed first, or you keep being charged for an account that no longer exists. '
+        : 'Cancel it in the billing portal first, or Stripe keeps charging for an account that no longer exists. ')
       + 'Then come back and delete.';
   }
   if (status === PENDING) {
+    if (store) {
+      return 'Your subscription is waiting for its payment to be confirmed, as it does while a bank transfer clears. '
+        + 'Deleted now, it would start once confirmed for an account that no longer exists, and you would be charged for it. '
+        + 'Once it is confirmed, cancel it where you subscribed and then delete; if the payment fails, you can delete then.';
+    }
     return 'Your subscription is waiting for Stripe to confirm it, as it does while a bank transfer clears. '
       + 'Deleted now, it would start once confirmed for an account that no longer exists, and Stripe keeps charging for it. '
       + 'Once it is confirmed, cancel it in the billing portal and then delete; if the payment fails, you can delete then.';

@@ -11,9 +11,13 @@
 # lacked answer), the app can talk to it cross-origin (the OPTIONS preflight
 # from the app's own origins is allowed, and from a stranger's is not), the
 # security headers are on, /api/config publishes no service-role key, the
-# landing page's screenshots are there, and the privacy policy and terms are
-# served with every [OWNER: ...] placeholder filled in. It cannot sign up, pay or link a
-# mailbox: those are the owner's steps in LAUNCH.md §6.
+# landing page's screenshots are there, the privacy policy, the terms and the
+# deletion page are served with every [OWNER: ...] placeholder filled in (and
+# the help page's store copy, which says where to write), and
+# the store-safe pages under /in-app/ are there and lead nowhere, and say
+# nothing, that sells.
+# It cannot sign up, pay or link a mailbox: those are the owner's steps in
+# LAUNCH.md §6.
 set -u
 BASE="${1:-https://mailrata.org}"
 BASE="${BASE%/}"
@@ -131,16 +135,32 @@ printf '%s' "$body" | grep -q 'Your mail, on your machine'; check $? "landing pa
 ! printf '%s' "$body" | grep -qE 'fonts\.(googleapis|gstatic)\.com'; check $? "landing page loads no Google font"
 printf '%s' "$body" | grep -q 'href="privacy.html"' && printf '%s' "$body" | grep -q 'href="terms.html"'; check $? "landing page links the privacy policy and the terms"
 
-echo "- the privacy policy and terms (LAUNCH.md, before §6) -"
+echo "- the privacy policy, terms and deletion page (LAUNCH.md, before §6) -"
 # Each must be served, be the page it says, and carry none of the owner's
-# placeholders: a live page that still says [OWNER: ...] names nobody.
-for pair in "privacy.html:Privacy policy" "terms.html:Terms of service"; do
-  p="${pair%%:*}"; want="${pair#*:}"
+# placeholders: a live page that still says [OWNER: ...] names nobody. The
+# store-safe copies under /in-app/ are made from them, so they say the same,
+# and the deletion page and the help page's store copy name the privacy
+# policy's contact address, for someone who cannot sign in and for help
+# without GitHub (tests/in-app.test.mjs keeps them equal).
+for page_of in "privacy.html:Privacy policy:privacy policy" "terms.html:Terms of service:terms of service" \
+  "in-app/privacy:Privacy policy:privacy policy" "in-app/terms:Terms of service:terms of service" \
+  "in-app/delete-account:Delete your RATA account:deletion page" "in-app/help:Help:help page"; do
+  p="${page_of%%:*}"; rest="${page_of#*:}"; want="${rest%%:*}"; what="${rest#*:}"
   s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
   page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
-  printf '%s' "$page" | grep -q "<h1>$want</h1>"; check $? "/$p is the $want"
+  printf '%s' "$page" | grep -q "<h1>$want</h1>"; check $? "/$p is the $what"
   left=$(printf '%s' "$page" | grep -o '\[OWNER:[^]]*\]' | sort -u | tr '\n' ' ')
   [ -z "$left" ]; check $? "/$p has every [OWNER: ...] filled in${left:+ (still: $left)}"
+done
+
+echo "- the store-safe pages a store build opens (lib/in-app.js) -"
+for p in in-app/help in-app/privacy in-app/terms in-app/delete-account; do
+  s=$(status "$BASE/$p"); [ "$s" = 200 ]; check $? "/$p is served ($s)"
+  page=$(curl -sS --max-time 20 "$BASE/$p" 2>/dev/null)
+  ! printf '%s' "$page" | grep -qiE '#pricing|stripe\.com|/releases|(index|account|app|auth)\.html|="/(account|app|auth)"|<nav|<footer'; check $? "/$p has no site navigation and no link that sells"
+  # Nor a word that sells, as plain text (lib/in-app.js SELLING, in short).
+  sold=$(printf '%s' "$page" | grep -oiE '\$ ?[0-9]|€ ?[0-9]|£ ?[0-9]|\b(a|per) (month|year)\b|stripe|billing portal|licen[cs]e page|releases page|\binstallers?\b|choose (a|your) plan|\bupgrad(e|es|ed|ing)\b|\bbuy\b|\bbu(ys|ying) ((a|the|your) )?(plans?|subscriptions?|licen[cs]es?|rata)\b|\b(bought|sold|buy) here\b|\b(also|too) (sold|bought)\b|mailrata\.org (sells?|sold)\b|\b(sells?|sold) [^.<]{0,40}at mailrata\.org|\bpay(s|ing)? (with|at|on)\b|\b(sign|log)(s|ed|ged|ing|ging)?[ -]?(in|on)\b[^.<]{0,20}\b(at|to|on|into|through|via) (https?://)?(www\.)?mailrata\.org|\bsubscri(be|bes|bed|bing|ption)\b[^.<]{0,40}\b(at|on|to|through|via) (https?://)?(www\.)?mailrata\.org' | sort -u | tr '\n' ' ')
+  [ -z "$sold" ]; check $? "/$p says nothing that sells${sold:+ (still: $sold)}"
 done
 
 echo
