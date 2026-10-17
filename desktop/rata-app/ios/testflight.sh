@@ -5,15 +5,21 @@
 # rehearsal with made-up values, which runs on every pull request, goes
 # through the very code a real upload does. Tests: testflight-test.sh.
 #
-# Four repository secrets go together, all or none, like the release
-# workflow's signing secrets:
+# Four repository secrets, all or none, like the release workflow's signing
+# secrets:
 #
 #   APPLE_API_KEY_ID     the App Store Connect API key's Key ID
 #   APPLE_API_ISSUER_ID  the Issuer ID shown above the keys table
 #   APPLE_API_KEY_P8     the key's .p8 file, whole
 #   APPLE_TEAM_ID        the developer team's Team ID
 #
-# and the repository variable RATA_IOS_BUNDLE_ID, the bundle id of the App
+# The key's three decide whether TestFlight is set up. APPLE_TEAM_ID is not
+# TestFlight's alone: release.yml's macOS notarisation reads the same secret
+# (NOTARY_TEAM), so it may well be set while TestFlight is not. Alone it is
+# no sign of TestFlight; once any of the key's three is set, it is required.
+# No message here ever tells the owner to delete it.
+#
+# And the repository variable RATA_IOS_BUNDLE_ID, the bundle id of the App
 # Store Connect app record (org.mailrata.app when unset). The desktop's
 # identifier, org.mailrata.desktop, stays in tauri.conf.json: this build is
 # given the store's through Tauri's --config, never by editing the config.
@@ -22,22 +28,33 @@
 #
 # Steps, in the order the workflow runs them:
 #
-#   check          Is TestFlight set up? None of the four: say so and stop,
-#                  green. Some: fail, naming the missing ones, before
+#   check          Is TestFlight set up? None of the key's three: say so
+#                  and stop, green, whether or not APPLE_TEAM_ID is set.
+#                  Some of the four: fail, naming the missing ones, before
 #                  anything is built. All: check each one's shape. Never
 #                  prints a value. Writes `build` (true or false) and
 #                  `bundle_id` to $GITHUB_OUTPUT; on a pull request
 #                  (RATA_CHECK_ONLY=1) `build` stays false.
-#   rehearse CASE  The same with made-up values, for CI: `none`, `half` and
+#   rehearse CASE  The same with made-up values, for CI: `none` (nothing,
+#                  then APPLE_TEAM_ID alone, as notarisation leaves it),
+#                  `half` (part of the key, without and with the team) and
 #                  `made-up` run `check` and assert what it must say;
 #                  `apple` runs `sign` and `upload` with a made-up key,
 #                  which Apple must refuse, and asserts that the job says
-#                  plainly what to fix and prints none of the values.
+#                  plainly what to fix and prints none of the values (when
+#                  Apple does not answer at all, it warns instead);
+#                  `inspect` runs `inspect` on the unsigned build, as it is
+#                  and with made-up profiles of both kinds, which it must
+#                  refuse, each time for exactly the reasons it has. On a
+#                  fork's pull request (RATA_FORK=1), which GitHub gives no
+#                  secrets, `made-up` checks with a made-up licence key and
+#                  builds nothing.
 #   xcode          Selects the newest Xcode on the runner; App Store Connect
 #                  takes only builds made with Xcode 26 and its iOS 26 SDK.
 #   licence-key    Hands RATA_LICENCE_PUBLIC_KEY to the Rust build.
 #   project        Makes the Xcode project (tauri ios init, prepare.sh)
-#                  with the store's bundle id and this run's build number.
+#                  with the store's bundle id and this run's build number,
+#                  which the export is told to keep (export-options).
 #   archive        Builds RATA, release, unsigned, for a generic iOS device,
 #                  and checks the app: no Apple value is in the environment
 #                  while the Rust code and its build scripts compile.
@@ -65,7 +82,10 @@ OVERRIDE="$WORK/override.json"
 
 DEFAULT_BUNDLE="org.mailrata.app"
 XCODE_MIN=26
-SECRETS="APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8 APPLE_TEAM_ID"
+# The App Store Connect key's three, which decide whether TestFlight is set
+# up, and with them the team, which macOS notarisation shares (above).
+KEY_SECRETS="APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8"
+SECRETS="$KEY_SECRETS APPLE_TEAM_ID"
 SETUP="docs/APP-STORES.md"
 
 die() { echo "::error::$*"; exit 1; }
@@ -102,23 +122,31 @@ ok_licence() {
 
 check() {
   load
-  local name set=0 missing="" bad=0
-  for name in $SECRETS; do
+  local name set=0 missing="" bad=0 keep=""
+  for name in $KEY_SECRETS; do
     if [ -n "$(trim "${!name:-}")" ]; then
       set=$((set + 1))
     else
       missing="${missing:+$missing, }$name"
     fi
   done
+  [ -n "$TEAM" ] || missing="${missing:+$missing, }APPLE_TEAM_ID"
   put bundle_id "$BUNDLE"
   if [ "$set" -eq 0 ]; then
     echo "::notice::TestFlight is not set up yet: $SETUP"
-    echo "None of $SECRETS is set, so this job builds nothing and uploads nothing."
+    echo "None of APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8 is set, so this job builds nothing and uploads nothing."
+    if [ -n "$TEAM" ]; then
+      echo "APPLE_TEAM_ID is set. The desktop release's macOS notarisation uses it, and TestFlight will use the same secret once the App Store Connect key's three are added."
+    fi
+    if [ "${RATA_FORK:-}" = 1 ]; then
+      echo "This pull request comes from a fork, and GitHub gives a fork's pull request none of this repository's secrets, so this says nothing of whether they are set."
+    fi
     put build false
     return 0
   fi
   if [ -n "$missing" ]; then
-    echo "::error::TestFlight is half set up. Missing: $missing. The four secrets APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_API_KEY_P8 and APPLE_TEAM_ID go together: add the missing ones in the repository's Settings > Secrets and variables > Actions, or delete the others to switch TestFlight off ($SETUP)."
+    [ -z "$TEAM" ] || keep=" Keep APPLE_TEAM_ID either way: the desktop release's macOS notarisation uses it too."
+    echo "::error::TestFlight is half set up. Missing: $missing. The App Store Connect key's three secrets, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8, go together, and with them APPLE_TEAM_ID, the same Team ID macOS notarisation uses. Add the missing ones in the repository's Settings > Secrets and variables > Actions, or delete the key's three to switch TestFlight off ($SETUP).$keep"
     put build false
     return 1
   fi
@@ -153,7 +181,7 @@ check() {
     put build false
     return 1
   fi
-  echo "TestFlight is set up: the four App Store Connect secrets are present and each has the right shape. Bundle id: $BUNDLE."
+  echo "TestFlight is set up: the App Store Connect key's three secrets and APPLE_TEAM_ID are present, and each has the right shape. Bundle id: $BUNDLE."
   if [ "${RATA_CHECK_ONLY:-}" = 1 ]; then
     echo "::notice::On a pull request this job stops after the configuration check; it builds, signs and uploads only from main or when started by hand."
     put build false
@@ -178,6 +206,9 @@ made_up() {
   openssl pkcs8 -topk8 -nocrypt -in "$dir/ec.pem" -out "$dir/made-up.p8"
   rm -f "$dir/ec.pem"
   MU_P8="$(cat "$dir/made-up.p8")"
+  # A licence key of the right shape, for a fork's pull request only, which
+  # GitHub gives no secrets: it is never compiled into anything.
+  MU_LICENCE="$(openssl pkey -in "$dir/made-up.p8" -pubout 2>/dev/null)"
   echo "::add-mask::$MU_KEY_ID"
   echo "::add-mask::$MU_TEAM"
   echo "::add-mask::$MU_ISSUER"
@@ -214,63 +245,104 @@ rehearse() {
   case "${1:-}" in
     none | half | made-up) rehearse_check "$1" ;;
     apple) rehearse_apple ;;
-    *) die "rehearse what? none, half, made-up or apple" ;;
+    inspect) rehearse_inspect ;;
+    *) die "rehearse what? none, half, made-up, apple or inspect" ;;
   esac
 }
 
-rehearse_check() {
-  local case="$1" log="$WORK/rehearsal-$1.log" outputs="$WORK/rehearsal-$1.out" status
-  mkdir -p "$WORK"
+# Runs `check` as the workflow would with only the NAME=VALUE pairs given
+# among the four secrets, into $WORK/rehearsal-LABEL.log and .out, shows
+# what it printed, and leaves its status in $status.
+run_check() {
+  local label="$1"
+  shift
+  log="$WORK/rehearsal-$label.log"
+  outputs="$WORK/rehearsal-$label.out"
   : > "$outputs"
-  made_up
   set +e
   (
     # shellcheck disable=SC2086 # the four names, split on purpose
-    unset $SECRETS RATA_CHECK_ONLY
+    unset $SECRETS RATA_CHECK_ONLY RATA_FORK
     export GITHUB_OUTPUT="$outputs"
-    case "$case" in
-      half) export APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_KEY_P8="$MU_P8" ;;
-      made-up)
-        export APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_ISSUER_ID="$MU_ISSUER" \
-          APPLE_API_KEY_P8="$MU_P8" APPLE_TEAM_ID="$MU_TEAM"
-        ;;
-    esac
+    # NAME=VALUE pairs; the count first, for the bash 3.2 of macOS, whose
+    # set -u calls an empty "$@" unbound.
+    # shellcheck disable=SC2163
+    [ "$#" -eq 0 ] || export "$@"
     exec bash "$self" check
   ) > "$log" 2>&1
   status=$?
   set -e
-  show "$log" "check, $case"
-  local bad=0
+  show "$log" "check, $label"
+}
+
+# Each sentence the check says, by what it must and must not say.
+says() { grep -qF -- "$1" "$log" || { echo "::error::$2"; bad=1; }; }
+never_says() { if grep -qiE -- "$1" "$log"; then echo "::error::$2"; bad=1; fi; }
+ends() {
+  [ "$status" -eq "$1" ] || { echo "::error::$3 the check must end $1, and it ended $status."; bad=1; }
+  grep -qx "build=$2" "$outputs" || { echo "::error::$3 the check must say build=$2."; bad=1; }
+  none_of_them_in "$log" "$outputs" || bad=1
+}
+
+rehearse_check() {
+  local case="$1" log outputs status bad=0 licence="${RATA_LICENCE_PUBLIC_KEY:-}" fork="${RATA_FORK:-}"
+  mkdir -p "$WORK"
+  made_up
   case "$case" in
     none)
-      [ "$status" -eq 0 ] || { echo "::error::With nothing set the check must pass, and it said $status."; bad=1; }
-      grep -qxF "::notice::TestFlight is not set up yet: $SETUP" "$log" || { echo "::error::With nothing set the check must say \"TestFlight is not set up yet: $SETUP\"."; bad=1; }
-      grep -qx 'build=false' "$outputs" || { echo "::error::With nothing set the check must not build."; bad=1; }
+      run_check none
+      ends 0 false "With nothing set"
+      says "::notice::TestFlight is not set up yet: $SETUP" "With nothing set the check must say \"TestFlight is not set up yet: $SETUP\"."
+      # As the desktop release's notarisation leaves it: the team, no key.
+      run_check team-alone APPLE_TEAM_ID="$MU_TEAM"
+      ends 0 false "With APPLE_TEAM_ID alone, as macOS notarisation sets it,"
+      says "::notice::TestFlight is not set up yet: $SETUP" "With APPLE_TEAM_ID alone the check must still say \"TestFlight is not set up yet: $SETUP\"."
+      says "macOS notarisation uses it" "With APPLE_TEAM_ID alone the check must say that notarisation uses it."
+      never_says '^::error::' "With APPLE_TEAM_ID alone the check must find nothing wrong."
       ;;
     half)
-      [ "$status" -eq 1 ] || { echo "::error::Half set up, the check must fail, and it said $status."; bad=1; }
-      grep -qF "Missing: APPLE_API_ISSUER_ID, APPLE_TEAM_ID." "$log" || { echo "::error::Half set up, the check must name exactly the two missing secrets."; bad=1; }
-      grep -qx 'build=false' "$outputs" || { echo "::error::Half set up, the check must not build."; bad=1; }
+      run_check half APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_KEY_P8="$MU_P8"
+      ends 1 false "Half set up,"
+      says "::error::TestFlight is half set up. Missing: APPLE_API_ISSUER_ID, APPLE_TEAM_ID." "Half set up, the check must name exactly the two missing secrets."
+      # The owner with notarisation set up, adding the key one secret at a
+      # time: told what is missing, and to keep the team.
+      run_check half-with-team APPLE_TEAM_ID="$MU_TEAM" APPLE_API_KEY_ID="$MU_KEY_ID"
+      ends 1 false "With APPLE_TEAM_ID and one of the key's three,"
+      says "::error::TestFlight is half set up. Missing: APPLE_API_ISSUER_ID, APPLE_API_KEY_P8." "With APPLE_TEAM_ID and the Key ID, the check must name the issuer and the .p8 as missing, and nothing else."
+      says "Keep APPLE_TEAM_ID either way" "With APPLE_TEAM_ID set, the check must say to keep it."
+      never_says "delete (the others|APPLE_TEAM_ID|all four)" "The check must never tell the owner to delete APPLE_TEAM_ID, which notarisation uses."
       ;;
     made-up)
-      [ "$status" -eq 0 ] || { echo "::error::With all four set the check must pass, and it said $status."; bad=1; }
-      grep -qx 'build=true' "$outputs" || { echo "::error::With all four set the check must build."; bad=1; }
+      # A fork's pull request gets no secrets, the licence key's included.
+      [ "$fork" != 1 ] || licence="$MU_LICENCE"
+      run_check made-up APPLE_API_KEY_ID="$MU_KEY_ID" APPLE_API_ISSUER_ID="$MU_ISSUER" \
+        APPLE_API_KEY_P8="$MU_P8" APPLE_TEAM_ID="$MU_TEAM" RATA_LICENCE_PUBLIC_KEY="$licence"
+      ends 0 true "With all four set"
       ;;
   esac
-  none_of_them_in "$log" "$outputs" || bad=1
   [ "$bad" -eq 0 ] || exit 1
   echo "The check said what it must with $case values, and printed none of them."
   put bundle_id "$(sed -n 's/^bundle_id=//p' "$outputs" | tail -n 1)"
   # The made-up rehearsal goes on to build, sign and upload; the other two
-  # end here, as a real run would.
-  if [ "$case" = made-up ]; then put build true; else put build false; fi
+  # end here, as a real run would. So does the made-up one on a fork's pull
+  # request: without the real licence key nothing is built.
+  if [ "$case" = made-up ] && [ "$fork" = 1 ]; then
+    echo "::notice::This pull request comes from a fork, which GitHub gives none of this repository's secrets, so the made-up rehearsal ends after the check. The build, the signing with a made-up key and the checks of the signed app run on the pull requests of this repository's own branches."
+    put build false
+  elif [ "$case" = made-up ]; then
+    put build true
+  else
+    put build false
+  fi
 }
 
 # Signing and uploading with a made-up key: both reach Apple, which refuses
 # the key. The job must say so in words the owner can act on, and print none
-# of the values.
+# of the values. When Apple does not answer at all, the rehearsal cannot see
+# that and says so in a warning, rather than failing a pull request for
+# Apple's servers.
 rehearse_apple() {
-  local bad=0 status log
+  local bad=0 status log errors unanswered=""
   [ -f "$OVERRIDE" ] || die "rehearse apple runs after project and archive"
   [ -f "$WORK/unsigned/RATA.ipa" ] || die "rehearse apple needs the unsigned .ipa archive makes"
   made_up
@@ -286,6 +358,14 @@ rehearse_apple() {
     status=$?
     set -e
     show "$log" "$step, with a made-up key"
+    none_of_them_in "$log" || bad=1
+    # grep -c ends 1 when it counts none, which set -e would take for a failure.
+    errors="$(grep -c '^::error::' "$log" || true)"
+    if [ "$status" -ne 0 ] && [ "$errors" -eq 1 ] && grep -qF "::error::$NO_ANSWER" "$log"; then
+      echo "::warning::Apple's servers did not answer $step, so this run could not see Apple refuse the made-up key. That is Apple's side, not this change: the next run tries again."
+      unanswered="$unanswered $step"
+      continue
+    fi
     [ "$status" -ne 0 ] || { echo "::error::$step with a made-up key must fail, and it passed."; bad=1; }
     grep -qF "::error::$KEY_REFUSED" "$log" || {
       echo "::error::$step with a made-up key must say that Apple did not accept the key."
@@ -294,14 +374,128 @@ rehearse_apple() {
     # And nothing else: what else Apple refused follows from the key, and an
     # owner told to register the bundle id or wait for Apple would look in
     # the wrong place.
-    [ "$(grep -c '^::error::' "$log")" -eq 1 ] || {
-      echo "::error::$step with a made-up key must say only that Apple did not accept the key, and it said $(grep -c '^::error::' "$log") things."
+    [ "$errors" -eq 1 ] || {
+      echo "::error::$step with a made-up key must say only that Apple did not accept the key, and it said $errors things."
       bad=1
     }
-    none_of_them_in "$log" || bad=1
   done
   [ "$bad" -eq 0 ] || exit 1
-  echo "Signing and uploading with a made-up key failed as they must, said why, and printed none of the values."
+  if [ -n "$unanswered" ]; then
+    echo "Apple did not answer:$unanswered. What did run failed as it must, said why, and printed none of the values."
+  else
+    echo "Signing and uploading with a made-up key failed as they must, said why, and printed none of the values."
+  fi
+}
+
+# A provisioning profile for the rehearsal of inspect: Apple's plist, signed
+# (CMS, as Apple's are) with a certificate made here, which nothing trusts.
+# KIND is `store` (what an App Store profile holds) or `development` (a
+# debuggable profile listing a device, for another app).
+made_up_profile() {
+  local kind="$1" out="$2" dir
+  dir="$(dirname "$out")"
+  mkdir -p "$dir"
+  KIND="$kind" TEAM="$MU_TEAM" BUNDLE="$BUNDLE" python3 -c '
+import datetime, os, plistlib, sys, uuid
+team, bundle, store = os.environ["TEAM"], os.environ["BUNDLE"], os.environ["KIND"] == "store"
+p = {
+    "AppIDName": "RATA rehearsal",
+    "Name": "Made up for the rehearsal, by nobody at Apple",
+    "TeamIdentifier": [team],
+    "UUID": str(uuid.uuid4()),
+    "ExpirationDate": datetime.datetime(2030, 1, 1),
+    "Entitlements": {
+        "application-identifier": team + "." + (bundle if store else "org.example.other"),
+        "com.apple.developer.team-identifier": team,
+        "get-task-allow": not store,
+    },
+}
+if not store:
+    p["ProvisionedDevices"] = ["00008110-000A1B2C3D4E5F6A"]
+with open(sys.argv[1], "wb") as fh:
+    plistlib.dump(p, fh)
+' "$dir/$kind.plist"
+  [ -f "$dir/signer.pem" ] || openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=RATA rehearsal, not Apple" \
+    -keyout "$dir/signer.key" -out "$dir/signer.pem" 2>/dev/null
+  openssl smime -sign -binary -nodetach -outform DER -in "$dir/$kind.plist" \
+    -signer "$dir/signer.pem" -inkey "$dir/signer.key" -out "$out"
+}
+
+# The .ipa at $1 with the profile at $2 inside its app, as $3.
+with_profile() {
+  local d="$WORK/repack" app
+  rm -rf "$d" && mkdir -p "$d"
+  ditto -x -k "$1" "$d"
+  app="$(find "$d/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+  cp "$2" "$app/embedded.mobileprovision"
+  rm -f "$3"
+  (cd "$d" && ditto -c -k --keepParent Payload "$3")
+  rm -rf "$d"
+}
+
+# inspect, on GitHub's Macs, against the unsigned build: as it is (no
+# signature, no profile), and with made-up profiles of both kinds, so that
+# each of its macOS commands (ditto, codesign, security cms, plutil) runs
+# on a real app and each finding it can make is seen. Every run must fail,
+# for exactly the reasons the build has.
+rehearse_inspect() {
+  local unsigned="$WORK/unsigned/RATA.ipa" dir="$WORK/made-up-profiles" bad=0 status log run ipa allowed line
+  local not_signed="::error::The app is not signed with an Apple Distribution certificate." \
+    no_seal="::error::The app's signature does not verify." \
+    no_profile="::error::The signed app has no provisioning profile" \
+    debug="::error::The provisioning profile allows debugging" \
+    devices="::error::The provisioning profile lists devices" \
+    other_app="::error::The provisioning profile is not for"
+  [ -f "$unsigned" ] || die "rehearse inspect needs the unsigned .ipa archive makes"
+  load
+  made_up
+  rm -rf "$dir"
+  made_up_profile store "$dir/store.mobileprovision"
+  made_up_profile development "$dir/development.mobileprovision"
+  with_profile "$unsigned" "$dir/store.mobileprovision" "$WORK/with-store-profile.ipa"
+  with_profile "$unsigned" "$dir/development.mobileprovision" "$WORK/with-development-profile.ipa"
+  for run in as-built store development; do
+    log="$WORK/rehearsal-inspect-$run.log"
+    ipa="$unsigned"
+    [ "$run" = as-built ] || ipa="$WORK/with-$run-profile.ipa"
+    set +e
+    (export IPA="$ipa" && exec bash "$self" inspect) > "$log" 2>&1
+    status=$?
+    set -e
+    show "$log" "inspect, the unsigned build, $run"
+    [ "$status" -eq 1 ] || { echo "::error::inspect must refuse the unsigned build ($run), and it ended $status."; bad=1; }
+    # What the archive step found, it finds again in the unpacked .ipa.
+    grep -qF "The licence's public key is compiled in." "$log" || { echo "::error::inspect did not judge the app in the .ipa ($run) as the archive step does."; bad=1; }
+    grep -qxF "$not_signed" "$log" || { echo "::error::inspect must say the unsigned build ($run) is not signed with a distribution certificate."; bad=1; }
+    # Each ::error:: line must be one this run explains.
+    allowed="$not_signed|$no_seal"
+    case "$run" in
+      as-built)
+        grep -qF "$no_profile" "$log" || { echo "::error::inspect must say the unsigned build has no provisioning profile."; bad=1; }
+        allowed="$allowed|$no_profile"
+        ;;
+      store)
+        grep -qxF "The provisioning profile is a distribution one (get-task-allow false)." "$log" \
+          && grep -qxF "The profile is for $BUNDLE." "$log" \
+          || { echo "::error::inspect must read an App Store profile as one, for $BUNDLE."; bad=1; }
+        ;;
+      development)
+        for line in "$debug" "$devices" "$other_app"; do
+          grep -qF "$line" "$log" || { echo "::error::inspect must find in a development profile: ${line#::error::}"; bad=1; }
+        done
+        allowed="$allowed|$debug|$devices|$other_app"
+        ;;
+    esac
+    if grep '^::error::' "$log" | grep -vF "$(printf '%s\n' "$allowed" | tr '|' '\n')" | grep -q .; then
+      echo "::error::inspect said something of the unsigned build ($run) that is not so:"
+      grep '^::error::' "$log" | grep -vF "$(printf '%s\n' "$allowed" | tr '|' '\n')" | sed 's/^::error::/  | /'
+      bad=1
+    fi
+    none_of_them_in "$log" || bad=1
+  done
+  rm -rf "$dir" "$WORK"/with-*-profile.ipa
+  [ "$bad" -eq 0 ] || exit 1
+  echo "inspect refused the unsigned build, as built and with made-up profiles of both kinds, for exactly the reasons it has, and printed none of the values."
 }
 
 # --- The build ---------------------------------------------------------------
@@ -368,6 +562,29 @@ project() {
   write_override
   (cd "$TAURI_DIR" && cargo tauri ios init --ci --skip-targets-install --config "$OVERRIDE")
   bash "$here/prepare.sh"
+  export_options
+}
+
+# The export's options. The Tauri CLI merges gen/apple/ExportOptions.plist
+# into what it gives xcodebuild -exportArchive, and neither says
+# manageAppVersionAndBuildNumber, which for App Store Connect defaults to
+# YES: Xcode asks App Store Connect for the build numbers it holds and may
+# raise CFBundleVersion past this run's number (on a re-run, or after a
+# build uploaded by hand). Then inspect would find a number this run did not
+# give, rather than Apple refusing a number it has, which explain() says
+# how to fix. So the run's number is what ships, or Apple says why not.
+export_options() {
+  local plist="$TAURI_DIR/gen/apple/ExportOptions.plist"
+  [ -f "$plist" ] || die "tauri ios init made no gen/apple/ExportOptions.plist, which the Tauri CLI merges into the export's options."
+  python3 -c '
+import plistlib, sys
+with open(sys.argv[1], "rb") as fh:
+    options = plistlib.load(fh)
+options["manageAppVersionAndBuildNumber"] = False
+with open(sys.argv[1], "wb") as fh:
+    plistlib.dump(options, fh)
+' "$plist"
+  echo "gen/apple/ExportOptions.plist: manageAppVersionAndBuildNumber is NO, so Xcode keeps this run's build number."
 }
 
 # What every iOS build of RATA for the store must be, signed or not.
@@ -461,6 +678,7 @@ redact() {
 # --- Saying what to fix ------------------------------------------------------
 
 KEY_REFUSED="Apple did not accept the App Store Connect API key."
+NO_ANSWER="Apple's servers did not answer."
 explain() {
   local what="${1:?sign or upload}" log="${2:?a log}" said=0 v
   load
@@ -492,7 +710,7 @@ explain() {
     return 0
   fi
   if hit 'timed out|network connection was lost|could not connect to|Internet connection appears to be offline'; then
-    tell "Apple's servers did not answer. Nothing needs fixing in RATA or its secrets: run this job again in a while (developer.apple.com/system-status says whether Apple knows)."
+    tell "$NO_ANSWER Nothing needs fixing in RATA or its secrets: run this job again in a while (developer.apple.com/system-status says whether Apple knows)."
     return 0
   fi
   if [ "$what" = sign ] && hit "No App ID|No profiles for|An App ID with Identifier|(App ID|identifier)[^.]{0,80}(is not available|cannot be registered|unavailable)"; then
@@ -571,18 +789,26 @@ inspect() {
   [ -f "$ipa" ] || die "no signed .ipa to inspect"
   load
   rm -rf "$dir" && mkdir -p "$dir"
-  ditto -x -k "$ipa" "$dir"
-  app="$(find "$dir/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)"
-  [ -n "$app" ] || die "no .app in the signed .ipa"
+  ditto -x -k "$ipa" "$dir" || die "The signed .ipa could not be unpacked: it is not the zip an .ipa is. The signing step made it; read that step's log."
+  app="$(find "$dir/Payload" -maxdepth 1 -type d -name '*.app' 2>/dev/null | head -n 1)"
+  [ -n "$app" ] || die "The signed .ipa holds no app under Payload/. The signing step made it; read that step's log."
   judge "$app" || bad=1
   if codesign --verify --deep --strict "$app"; then echo "The signature verifies."; else echo "::error::The app's signature does not verify."; bad=1; fi
   # Printed as the kind of certificate only: the line also names the team.
-  authority="$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)"
+  # An app signed by nobody makes codesign fail, which is an answer here.
+  authority="$(codesign -dvv "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1 || true)"
   case "$authority" in
     "Apple Distribution"* | "iPhone Distribution"*) echo "Signed with a distribution certificate." ;;
     *) echo "::error::The app is not signed with an Apple Distribution certificate."; bad=1 ;;
   esac
-  security cms -D -i "$app/embedded.mobileprovision" > "$profile"
+  if [ ! -f "$app/embedded.mobileprovision" ]; then
+    echo "::error::The signed app has no provisioning profile (embedded.mobileprovision), so it was not signed for the App Store and App Store Connect would refuse it. The signing step made it; read that step's log."
+    return 1
+  fi
+  if ! security cms -D -i "$app/embedded.mobileprovision" > "$profile"; then
+    echo "::error::The app's provisioning profile could not be read (security cms -D): it is not a signed profile. The signing step made it; read that step's log."
+    return 1
+  fi
   if [ "$(plutil -extract Entitlements.get-task-allow raw -o - "$profile" 2>/dev/null)" = false ]; then
     echo "The provisioning profile is a distribution one (get-task-allow false)."
   else
@@ -635,6 +861,7 @@ case "${1:-}" in
   licence-key) licence_key ;;
   override) write_override ;;
   project) project ;;
+  export-options) export_options ;;
   archive) archive ;;
   sign) sign ;;
   inspect) inspect ;;
@@ -643,7 +870,7 @@ case "${1:-}" in
   redact) redact ;;
   explain) shift; explain ${1+"$@"} ;;
   *)
-    echo "usage: testflight.sh check|rehearse CASE|xcode|licence-key|override|project|archive|sign|inspect|upload|forget|redact|explain sign|upload LOG" >&2
+    echo "usage: testflight.sh check|rehearse CASE|xcode|licence-key|override|project|export-options|archive|sign|inspect|upload|forget|redact|explain sign|upload LOG" >&2
     exit 2
     ;;
 esac

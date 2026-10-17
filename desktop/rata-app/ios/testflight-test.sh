@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # testflight-test.sh — the tests of testflight.sh: the configuration check in
-# every case, that no value is ever printed, the build's --config, the
-# signing and upload steps against stand-in `cargo` and `xcrun` (what they
-# are given, the key file's permissions, the words a failure ends with),
-# `redact`, `explain` and `forget`. Runs on Linux and macOS with bash,
-# python3, perl and openssl; nothing reaches Apple. Exit 1 on any failure.
-# The workflow runs it on GitHub's Macs (ios-testflight.yml, the made-up
-# rehearsal).
+# every case (APPLE_TEAM_ID alone, which macOS notarisation shares, among
+# them), that no value is ever printed, the build's --config and export
+# options, the signing and upload steps against stand-in `cargo` and `xcrun`
+# (what they are given, the key file's permissions, the words a failure ends
+# with), `redact`, `explain`, `forget`, and the rehearsals of the check and
+# of signing and uploading. Runs on Linux and macOS with bash, python3, perl
+# and openssl; nothing reaches Apple. Exit 1 on any failure. The workflow
+# runs it on GitHub's Macs (ios-testflight.yml, the made-up rehearsal),
+# which also rehearse `inspect` itself, on a real unsigned build.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,24 +123,75 @@ grep -qx "bundle_id=org.mailrata.app" "$tmp/out" && pass "the bundle id is org.m
 
 check_case "nothing set, no licence key either" 0 false
 check_case "blank values count as unset" 0 false APPLE_API_KEY_ID="  " APPLE_API_KEY_P8=$'\n'
+check_case "nothing set, on a fork's pull request" 0 false RATA_FORK=1
+grep -qF "comes from a fork, and GitHub gives a fork's pull request none of this repository's secrets" "$tmp/log" \
+  && pass "a fork's pull request says why nothing is set" || fail "a fork's pull request must say it gets no secrets"
 
+# APPLE_TEAM_ID is also the desktop release's notarisation team (release.yml,
+# NOTARY_TEAM). Set for that alone, it is no sign of TestFlight: the check
+# says "not set up yet", unchanged, and ends green, and never says to
+# delete it.
+team_alone() { # name, then env
+  local name="$1"
+  shift
+  check_case "$name" 0 false ${1+"$@"}
+  if grep -qxF "::notice::TestFlight is not set up yet: docs/APP-STORES.md" "$tmp/log" \
+    && grep -qF "APPLE_TEAM_ID is set. The desktop release's macOS notarisation uses it" "$tmp/log" \
+    && ! grep -q '^::error::' "$tmp/log" && ! grep -qi 'delete' "$tmp/log"; then
+    pass "$name: not set up yet, the notice unchanged, and the team is notarisation's too"
+  else
+    fail "$name: must say only that TestFlight is not set up yet, and that notarisation uses the team"
+    sed 's/^/    /' "$tmp/log"
+  fi
+}
+team_alone "APPLE_TEAM_ID alone, as macOS notarisation sets it" RATA_LICENCE_PUBLIC_KEY="$LICENCE" APPLE_TEAM_ID="$TEAM"
+team_alone "APPLE_TEAM_ID alone, on a pull request" RATA_CHECK_ONLY=1 RATA_LICENCE_PUBLIC_KEY="$LICENCE" APPLE_TEAM_ID="$TEAM"
+team_alone "APPLE_TEAM_ID alone, with no licence key" APPLE_TEAM_ID="$TEAM"
+team_alone "APPLE_TEAM_ID alone, of a shape TestFlight would refuse" APPLE_TEAM_ID="team 1"
+
+# Half set up: what is missing is named, and the way out is to add it or to
+# delete the key's three, never APPLE_TEAM_ID, which notarisation uses.
+half_says() { # name, then what it must name as missing
+  local name="$1" missing="$2"
+  if ! grep -qF "::error::TestFlight is half set up. Missing: $missing. " "$tmp/log"; then
+    fail "$name must name $missing as missing, and nothing else"
+    sed 's/^/    /' "$tmp/log"
+  elif ! grep -qF "or delete the key's three to switch TestFlight off" "$tmp/log" \
+    || grep -qiE "delete (the others|all four|APPLE_TEAM_ID)" "$tmp/log"; then
+    fail "$name must say to delete the key's three, never APPLE_TEAM_ID"
+    sed 's/^/    /' "$tmp/log"
+  elif [ "$(grep -c '^::error::' "$tmp/log")" -ne 1 ]; then
+    fail "$name must say one thing"
+    sed 's/^/    /' "$tmp/log"
+  else
+    pass "$name names $missing, and keeps APPLE_TEAM_ID out of what to delete"
+  fi
+}
 for missing in APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8 APPLE_TEAM_ID; do
   given=()
   for kv in "${all_four[@]}"; do
     [ "${kv%%=*}" = "$missing" ] || given+=("$kv")
   done
   check_case "all but $missing" 1 false RATA_LICENCE_PUBLIC_KEY="$LICENCE" "${given[@]}"
-  if grep -qF "::error::TestFlight is half set up. Missing: $missing. " "$tmp/log"; then
-    pass "all but $missing names $missing alone"
+  half_says "all but $missing" "$missing"
+  if [ "$missing" = APPLE_TEAM_ID ]; then
+    ! grep -qF "Keep APPLE_TEAM_ID" "$tmp/log" && pass "all but APPLE_TEAM_ID does not speak of keeping a team that is not there" \
+      || fail "all but APPLE_TEAM_ID must not say to keep it"
   else
-    fail "all but $missing must name $missing alone"
-    sed 's/^/    /' "$tmp/log"
+    grep -qF "Keep APPLE_TEAM_ID either way: the desktop release's macOS notarisation uses it too." "$tmp/log" \
+      && pass "all but $missing says to keep APPLE_TEAM_ID" || fail "all but $missing must say to keep APPLE_TEAM_ID"
   fi
 done
 
-check_case "two of four" 1 false APPLE_API_KEY_ID="$KEY_ID" APPLE_API_KEY_P8="$P8"
-grep -qF "Missing: APPLE_API_ISSUER_ID, APPLE_TEAM_ID." "$tmp/log" \
-  && pass "two of four names the other two, in order" || fail "two of four must name the other two"
+check_case "the Key ID and the .p8, no team" 1 false APPLE_API_KEY_ID="$KEY_ID" APPLE_API_KEY_P8="$P8"
+half_says "the Key ID and the .p8, no team" "APPLE_API_ISSUER_ID, APPLE_TEAM_ID"
+check_case "the team and the Key ID: notarisation's team, then the key begun" 1 false RATA_LICENCE_PUBLIC_KEY="$LICENCE" \
+  APPLE_TEAM_ID="$TEAM" APPLE_API_KEY_ID="$KEY_ID"
+half_says "the team and the Key ID" "APPLE_API_ISSUER_ID, APPLE_API_KEY_P8"
+grep -qF "Keep APPLE_TEAM_ID either way" "$tmp/log" && pass "the team and the Key ID says to keep APPLE_TEAM_ID" \
+  || fail "the team and the Key ID must say to keep APPLE_TEAM_ID"
+check_case "the team and the .p8 alone, on a pull request" 1 false RATA_CHECK_ONLY=1 APPLE_TEAM_ID="$TEAM" APPLE_API_KEY_P8="$P8"
+half_says "the team and the .p8, on a pull request" "APPLE_API_KEY_ID, APPLE_API_ISSUER_ID"
 
 check_case "all four" 0 true RATA_LICENCE_PUBLIC_KEY="$LICENCE" "${all_four[@]}"
 check_case "all four, with the blank space a paste leaves" 0 true RATA_LICENCE_PUBLIC_KEY="$LICENCE" \
@@ -171,6 +224,8 @@ grep -qF "::error::RATA_LICENCE_PUBLIC_KEY does not look like a PEM public key."
 check_case "every value wrong at once" 1 false APPLE_API_KEY_ID=a APPLE_API_ISSUER_ID=b APPLE_API_KEY_P8=c APPLE_TEAM_ID=d RATA_IOS_BUNDLE_ID=e
 [ "$(grep -c '^::error::' "$tmp/log")" -eq 6 ] && pass "every value wrong at once is said once each" \
   || fail "every value wrong at once must give six errors, not $(grep -c '^::error::' "$tmp/log")"
+check_case "the key's three wrong, no team" 1 false APPLE_API_KEY_ID=a APPLE_API_ISSUER_ID=b APPLE_API_KEY_P8=c
+half_says "the key's three wrong, no team" "APPLE_TEAM_ID"
 
 # --- The build's --config ----------------------------------------------------
 
@@ -186,6 +241,35 @@ run RATA_BUILD_NUMBER=0
 [ $? -eq 1 ] && pass "a build number of 0 is refused" || fail "a build number of 0 must be refused"
 run RATA_BUILD_NUMBER=1.2
 [ $? -eq 1 ] && pass "a build number with a dot is refused" || fail "a build number with a dot must be refused"
+
+# The export keeps this run's build number: Tauri's own ExportOptions.plist,
+# as `tauri ios init` writes it, told not to let Xcode manage the number.
+ARGS=(export-options)
+run
+[ $? -eq 1 ] && grep -qF "tauri ios init made no gen/apple/ExportOptions.plist" "$tmp/log" \
+  && pass "no ExportOptions.plist is said plainly" || fail "no ExportOptions.plist must be said plainly"
+mkdir -p "$TAURI/gen/apple"
+cat > "$TAURI/gen/apple/ExportOptions.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>debugging</string>
+</dict>
+</plist>
+PLIST
+for round in first second; do
+  run
+  status=$?
+  if [ "$status" -eq 0 ] && python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); assert d == {"method": "debugging", "manageAppVersionAndBuildNumber": False}, d' "$TAURI/gen/apple/ExportOptions.plist"; then
+    pass "export-options, $round time: Xcode may not manage the build number, and the rest of Tauri's options stay"
+  else
+    fail "export-options, $round time: ExportOptions.plist must say manageAppVersionAndBuildNumber NO and keep method"
+    sed 's/^/    /' "$tmp/log"
+  fi
+done
+rm -rf "$TAURI/gen"
 
 # --- Signing -----------------------------------------------------------------
 
@@ -407,6 +491,34 @@ for case in none half made-up; do
   fi
 done
 grep -qx "build=true" "$tmp/out" && pass "the made-up rehearsal goes on to build" || fail "the made-up rehearsal must build"
+ARGS=(rehearse none)
+run RATA_LICENCE_PUBLIC_KEY="$LICENCE"
+grep -qF -- "--- what the owner would see (check, team-alone) ---" "$tmp/log" \
+  && pass "the rehearsal with nothing set also has APPLE_TEAM_ID alone, as notarisation leaves it" \
+  || fail "the rehearsal with nothing set must also try APPLE_TEAM_ID alone"
+ARGS=(rehearse half)
+run RATA_LICENCE_PUBLIC_KEY="$LICENCE"
+grep -qF -- "--- what the owner would see (check, half-with-team) ---" "$tmp/log" \
+  && pass "the half rehearsal also has the team with one of the key's three" \
+  || fail "the half rehearsal must also try the team with one of the key's three"
+
+# A fork's pull request gets none of the repository's secrets, the licence
+# key's included: the made-up rehearsal checks with a made-up licence key,
+# ends green, and builds nothing.
+ARGS=(rehearse made-up)
+run RATA_FORK=1
+if [ $? -eq 0 ] && ! grep -q '^::error::' "$tmp/log" && grep -qx "build=false" "$tmp/out" \
+  && grep -qF "::notice::This pull request comes from a fork" "$tmp/log"; then
+  pass "on a fork's pull request the made-up rehearsal checks, says why it stops, and builds nothing"
+else
+  fail "on a fork's pull request the made-up rehearsal must end green after the check"
+  sed 's/^/    /' "$tmp/log"
+fi
+run
+[ $? -eq 1 ] && ! grep -q "build=true" "$tmp/out" \
+  && grep -qF "::error::RATA_LICENCE_PUBLIC_KEY is not set." "$tmp/log" \
+  && pass "on this repository's own pull request the made-up rehearsal needs the real licence key" \
+  || { fail "the made-up rehearsal without a licence key, not on a fork, must fail"; sed 's/^/    /' "$tmp/log"; }
 
 # The rehearsal with Apple, against stand-ins: it passes when they answer as
 # Apple answered the made-up key on GitHub's Macs, and fails when they sign,
@@ -431,6 +543,31 @@ run STUB_IPA="$TAURI/gen/apple/build/arm64/RATA.ipa" STUB_SAY="UPLOAD SUCCEEDED 
   && grep -qF "::error::upload with a made-up key must fail, and it passed." "$tmp/log" \
   && pass "rehearse apple fails when a made-up key signs and uploads" \
   || { fail "rehearse apple must fail when a made-up key signs and uploads"; sed 's/^/    /' "$tmp/log"; }
+rm -f "$TAURI/gen/apple/build/arm64/RATA.ipa"
+
+# Apple's servers not answering is not this change's failure: the rehearsal
+# warns and ends green, for that step alone.
+run STUB_STATUS=1 STUB_SAY_cargo="$SIGN_REFUSED" STUB_SAY_xcrun="ERROR: [altool] APP STORE CONNECT API list-apps: The request timed out.\n"
+if [ $? -eq 0 ] && ! grep -q '^::error::' "$tmp/log" \
+  && [ "$(grep -c "^::warning::Apple's servers did not answer" "$tmp/log")" -eq 1 ] \
+  && grep -qF "::warning::Apple's servers did not answer upload" "$tmp/log"; then
+  pass "rehearse apple warns, and passes, when Apple does not answer the upload"
+else
+  fail "rehearse apple must warn, not fail, when Apple does not answer"
+  sed 's/^/    /' "$tmp/log"
+fi
+run STUB_STATUS=1 STUB_SAY="error: exportArchive: The request timed out.\n"
+[ $? -eq 0 ] && [ "$(grep -c "^::warning::Apple's servers did not answer" "$tmp/log")" -eq 2 ] \
+  && grep -qF "Apple did not answer: sign upload." "$tmp/log" \
+  && pass "rehearse apple says which steps Apple did not answer" \
+  || { fail "rehearse apple must name the steps Apple did not answer"; sed 's/^/    /' "$tmp/log"; }
+run STUB_STATUS=1 STUB_SAY="error: exportArchive: The request timed out.\nerror: No profiles for 'org.mailrata.app' were found\n"
+[ $? -eq 0 ] && pass "a timeout with what follows from it is still no answer" \
+  || { fail "a timeout explained alone must still count as no answer"; sed 's/^/    /' "$tmp/log"; }
+run STUB_STATUS=0 STUB_SAY="The request timed out.\n"
+[ $? -eq 1 ] && grep -qF "::error::upload with a made-up key must fail, and it passed." "$tmp/log" \
+  && pass "an upload that passes is still a failure of the rehearsal, whatever it printed" \
+  || { fail "a made-up key that signs must fail the rehearsal"; sed 's/^/    /' "$tmp/log"; }
 
 echo
 if [ "$failures" -eq 0 ]; then echo "testflight-test.sh: all passed"; else echo "testflight-test.sh: $failures failed"; fi
