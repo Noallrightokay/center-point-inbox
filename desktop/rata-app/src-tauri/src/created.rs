@@ -51,8 +51,8 @@
 //!    Word saves by writing a new file and renaming it over the old one.
 //!
 //! Then the recorded path alone goes to the system's opener (`system_open`,
-//! the `open` crate, the same one `links` uses for the browser): as an
-//! argument, never in a shell string. Opening is asked for, never needed:
+//! the opener plugin's Rust side, the same one `links` uses for the
+//! browser): as an argument, never in a shell string. Opening is asked for, never needed:
 //! a file that could not be opened is still made, and the answer says so.
 //!
 //! The files are the customer's own documents from their first byte, so
@@ -80,6 +80,25 @@ pub const NEED_PRO_FILES: &str = "Create file comes with RATA Pro. Upgrade at ma
 
 /// The folder inside Documents that Create file uses.
 pub const DOCUMENTS_FOLDER: &str = "RATA";
+
+/// Said where Create file is not offered (`offered`).
+pub const NO_CREATE: &str = "Create file is not switched on in this copy of RATA yet.";
+
+/// Whether this copy offers Create file: on a computer only. A phone has
+/// no app RATA could hand the file to from here, nor a folder another app
+/// opens it from, until the share sheet comes (STAGE 3 items 5 and 7).
+const HERE: bool = cfg!(desktop);
+
+/// Create file where it is not offered: every part refused, the list
+/// included, which the page reads as Create file not being there at all
+/// (bridge.js, `/api/created`).
+fn offered(here: bool) -> Result<(), FileRefusal> {
+    if here {
+        Ok(())
+    } else {
+        Err(refuse("unavailable", NO_CREATE))
+    }
+}
 
 /// RATA's blank Office files, written by `templates/make.py` and checked
 /// by the tests below (`check_body`, nothing that reaches outside the file).
@@ -296,13 +315,17 @@ pub struct Contents {
 /// the tests launch nothing.
 pub type Opener<'a> = dyn Fn(&Path) -> std::io::Result<()> + Sync + 'a;
 
-/// The system's own opener: Launch Services through `open` on a Mac,
-/// `Invoke-Item -LiteralPath` with the path in an environment variable on
-/// Windows (no shell string), `xdg-open` and its kin on Linux, each given
-/// the path as one argument. Only ever called with a recorded path that has
-/// just passed `checked`.
+/// The system's own opener, through the opener plugin's Rust side (the
+/// page is granted none of it): Launch Services through `open` on a Mac,
+/// the shell's own `ShellExecuteExW` on Windows (no shell string, no
+/// command line), `xdg-open` and its kin on Linux, each given the path as
+/// one argument. Only ever called with a recorded path that has just passed
+/// `checked`, and only on a computer: a phone has no Create file (`offered`).
 pub fn system_open(path: &Path) -> std::io::Result<()> {
-    open::that_detached(for_opener(path))
+    tauri_plugin_opener::open_path(for_opener(path), None::<&str>).map_err(|e| match e {
+        tauri_plugin_opener::Error::Io(e) => e,
+        other => std::io::Error::other(other),
+    })
 }
 
 /// The path as a program expects it. On Windows a canonical path is a
@@ -674,7 +697,9 @@ impl Rata {
     /// making a file, opening one and reading one for Send with RATA. No
     /// licence at all says what the licence box says. Listing and
     /// forgetting are not asked, so a lapsed licence can still tidy up.
+    /// Where Create file is not offered at all (`offered`), nothing is.
     fn may_create(&self) -> Result<(), FileRefusal> {
+        offered(HERE)?;
         let standing = self.standing();
         match standing.plan {
             Some(p) if p.connect => Ok(()),
@@ -820,6 +845,14 @@ impl Rata {
             place: shown(&rec.place),
             name: rec.name,
         })
+    }
+
+    /// What the page lists: [`Rata::created_list`] where Create file is
+    /// offered, refused where it is not (`offered`), so that the page
+    /// shows none of it there.
+    pub fn created_listing(&self) -> Result<Vec<Listed>, FileRefusal> {
+        offered(HERE)?;
+        Ok(self.created_list())
     }
 
     /// Every file RATA made and remembers, newest first, with whether it is
@@ -1910,6 +1943,23 @@ mod tests {
             .unwrap();
         a.open_created(&made.id, &|_| Ok(())).unwrap();
         a.created_read(&made.id).unwrap();
+    }
+
+    /// Where Create file is not offered (a phone, STAGE 3 items 5 and 7),
+    /// every part is refused with one sentence, the page's list included,
+    /// so the page shows none of it. On a computer the list answers.
+    #[test]
+    fn where_create_file_is_not_offered_every_part_is_refused() {
+        let refused = offered(false).unwrap_err();
+        assert_eq!(refused.kind, "unavailable");
+        assert_eq!(
+            refused.error,
+            "Create file is not switched on in this copy of RATA yet."
+        );
+        assert_eq!(offered(true), Ok(()));
+        let s = Scratch::new();
+        let (a, _, _) = one(&s);
+        assert_eq!(a.created_listing().map(|l| l.len()), Ok(1));
     }
 
     #[test]

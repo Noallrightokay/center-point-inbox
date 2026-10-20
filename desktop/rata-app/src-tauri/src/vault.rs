@@ -52,6 +52,13 @@ pub const ONEDRIVE_SERVICE: &str = "org.mailrata.desktop.onedrive";
 /// for `drive.file` alone, so nothing else ever names an entry here.
 pub const GOOGLE_SERVICE: &str = "org.mailrata.desktop.google";
 
+/// Where a smoke build's self-test (`crate::smoke`) writes, reads back and
+/// deletes its one entry: a service of its own, which nothing else in RATA
+/// names, so the test can never touch a mailbox's password or a sign-in.
+/// Only in a build with the `smoke` feature.
+#[cfg(feature = "smoke")]
+pub const SMOKE_SERVICE: &str = "org.mailrata.desktop.smoke";
+
 /// Every service RATA keeps anything under.
 #[cfg(any(windows, test))]
 const SERVICES: [&str; 5] = [
@@ -219,6 +226,21 @@ impl Keychain {
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(explain(e)),
         }
+    }
+}
+
+/// The self-test's own entry, in [`SMOKE_SERVICE`], written, read and
+/// deleted exactly as a mailbox's password is.
+#[cfg(feature = "smoke")]
+impl Keychain {
+    pub fn put_smoke(name: &str, secret: &str) -> Result<(), String> {
+        Self::put_in(SMOKE_SERVICE, name, secret)
+    }
+    pub fn get_smoke(name: &str) -> Result<String, Unreadable> {
+        Self::get_in(SMOKE_SERVICE, name)
+    }
+    pub fn forget_smoke(name: &str) -> Result<(), String> {
+        Self::forget_in(SMOKE_SERVICE, name)
     }
 }
 

@@ -78,8 +78,8 @@ use crate::store::{SlackLink, Store, now};
 use crate::vault::{self, Unreadable};
 
 /// The Slack app's client id, from the build. Empty or unset: no Slack in
-/// this build.
-pub const CLIENT_ID: Option<&str> = option_env!("RATA_SLACK_CLIENT_ID");
+/// this build. None on a phone (`desktop_only`).
+pub const CLIENT_ID: Option<&str> = crate::desktop_only(option_env!("RATA_SLACK_CLIENT_ID"));
 
 pub const AUTHORIZE_URL: &str = "https://slack.com/oauth/v2/authorize";
 /// Every Web API method is `<API_URL>/<method>`.

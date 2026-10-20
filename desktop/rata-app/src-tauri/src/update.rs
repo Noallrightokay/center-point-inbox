@@ -23,22 +23,30 @@
 //! copies up to 0.1.42 read. The release workflow writes both
 //! (`harness/feed.cjs`). Checking asks GitHub for one or two files; nothing
 //! about the customer goes with it beyond what any download does.
+//!
+//! All of that is the `self-update` feature's, on in the desktop
+//! installers. A build without it (for an app store or a phone, which the
+//! store updates) has no updater plugin, and no feed address or key in its
+//! config either (build.rs); its page asks the same two questions and is
+//! answered as a build without the key is ([`unkeyed`], [`cannot_update`]).
 
 use serde::Serialize;
 use tauri::{AppHandle, Runtime};
+#[cfg(feature = "self-update")]
 use tauri_plugin_updater::{Error, UpdaterExt};
 
 /// Whether this build carries a key to check updates against. The committed
 /// config has an empty one; only a release build with the key configured has
-/// anything here.
+/// anything here, and never one without self-update.
 pub fn has_key(config: &tauri::Config) -> bool {
-    config
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|u| u.get("pubkey"))
-        .and_then(|k| k.as_str())
-        .is_some_and(|k| !k.trim().is_empty())
+    cfg!(feature = "self-update")
+        && config
+            .plugins
+            .0
+            .get("updater")
+            .and_then(|u| u.get("pubkey"))
+            .and_then(|k| k.as_str())
+            .is_some_and(|k| !k.trim().is_empty())
 }
 
 /// Where to get RATA by hand, when this copy cannot update itself.
@@ -66,13 +74,25 @@ pub struct Offer {
     pub releases: &'static str,
 }
 
-/// Is there a newer RATA? Never downloads anything.
-pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Offer {
-    let mut offer = Offer {
-        current: app.package_info().version.to_string(),
+/// What a copy that cannot update itself answers a check with: its own
+/// version, nothing on offer, and where to get RATA by hand.
+pub fn unkeyed(current: String) -> Offer {
+    Offer {
+        current,
         releases: RELEASES,
         ..Offer::default()
-    };
+    }
+}
+
+/// What it answers Install with.
+pub fn cannot_update() -> String {
+    format!("This copy of RATA cannot update itself. Download the new version from {RELEASES}")
+}
+
+/// Is there a newer RATA? Never downloads anything.
+#[cfg(feature = "self-update")]
+pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Offer {
+    let mut offer = unkeyed(app.package_info().version.to_string());
     if !has_key(app.config()) {
         return offer;
     }
@@ -99,20 +119,26 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Offer {
     offer
 }
 
+/// Without self-update: as a build without the key, nothing checked.
+#[cfg(not(feature = "self-update"))]
+pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Offer {
+    unkeyed(app.package_info().version.to_string())
+}
+
 /// The feed has a release, but nothing for this computer's platform and
 /// installer. The plugin answers that even when there is nothing newer, since
 /// it looks for this computer's entry before comparing versions.
+#[cfg(feature = "self-update")]
 pub fn not_here_yet(e: &Error) -> bool {
     matches!(e, Error::TargetNotFound(_) | Error::TargetsNotFound(_))
 }
 
 /// Download the newer version, check its signature, and install it. Returns
 /// the version installed; the caller restarts into it.
+#[cfg(feature = "self-update")]
 pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
     if !has_key(app.config()) {
-        return Err(format!(
-            "This copy of RATA cannot update itself. Download the new version from {RELEASES}"
-        ));
+        return Err(cannot_update());
     }
     let updater = app.updater().map_err(|e| explain(&e))?;
     let update = updater
@@ -127,7 +153,14 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
     Ok(update.version)
 }
 
+/// Without self-update: as a build without the key, nothing installed.
+#[cfg(not(feature = "self-update"))]
+pub async fn install<R: Runtime>(_app: &AppHandle<R>) -> Result<String, String> {
+    Err(cannot_update())
+}
+
 /// An updater failure as a sentence the customer can act on.
+#[cfg(feature = "self-update")]
 pub fn explain(e: &Error) -> String {
     match e {
         Error::Minisign(_)
@@ -168,6 +201,7 @@ pub fn explain(e: &Error) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "self-update")]
     #[test]
     fn a_bad_signature_is_never_worded_as_anything_else() {
         for e in [
@@ -184,6 +218,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "self-update")]
     #[test]
     fn a_platform_missing_from_the_feed_is_no_update_yet_not_an_error() {
         let missing = [
@@ -254,6 +289,7 @@ mod tests {
     /// Each installation reads its own feed first and `latest.json` after,
     /// and the release workflow writes one file per key the plugin can fill
     /// in (`harness/feed.cjs`, `BUNDLES`), never a bare `linux-x86_64`.
+    #[cfg(feature = "self-update")]
     #[test]
     fn each_installation_reads_its_own_feed_first() {
         let committed: tauri::Config =
@@ -314,9 +350,12 @@ mod tests {
         assert!(!has_key(&committed));
         assert!(!has_key(&with(serde_json::json!({ "pubkey": "  " }))));
         assert!(!has_key(&with(serde_json::json!({}))));
-        assert!(has_key(&with(
-            serde_json::json!({ "pubkey": "dW50cnVzdGVk" })
-        )));
+        // A real key, in a build with self-update. One without it (an app
+        // store's) never checks, whatever a config says.
+        assert_eq!(
+            has_key(&with(serde_json::json!({ "pubkey": "dW50cnVzdGVk" }))),
+            cfg!(feature = "self-update")
+        );
         // And the committed config insists the signature names its version.
         let updater = &committed.plugins.0["updater"];
         assert_eq!(updater["requireSignedVersion"], true);
@@ -325,6 +364,25 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .starts_with("https://github.com/")
+        );
+    }
+
+    /// A copy that cannot update itself, word for word as the page has
+    /// always been told: a build without the key, and every build without
+    /// self-update, whose page is the same and asks the same.
+    #[test]
+    fn a_copy_that_cannot_update_itself_answers_as_before() {
+        assert_eq!(
+            serde_json::to_value(unkeyed("0.1.51".into())).unwrap(),
+            serde_json::json!({
+                "enabled": false,
+                "current": "0.1.51",
+                "releases": "https://github.com/Noallrightokay/center-point-inbox/releases",
+            })
+        );
+        assert_eq!(
+            cannot_update(),
+            "This copy of RATA cannot update itself. Download the new version from https://github.com/Noallrightokay/center-point-inbox/releases"
         );
     }
 }

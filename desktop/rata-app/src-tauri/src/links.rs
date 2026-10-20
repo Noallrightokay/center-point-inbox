@@ -103,9 +103,36 @@ fn decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Hands a web address to the customer's browser.
+/// Hands a web address to the customer's browser: the opener plugin's
+/// Rust side, which starts the system's own opener with the address as one
+/// argument (the `open` crate, underneath). Only ever called with what
+/// [`classify`] made a [`Link::Web`]; the page is granted none of the
+/// plugin.
 pub fn open_in_browser(url: &Url) -> Result<(), String> {
-    open::that_detached(url.as_str()).map_err(|e| format!("Your browser could not be opened: {e}"))
+    tauri_plugin_opener::open_url(url.as_str(), None::<&str>).map_err(not_opened)
+}
+
+/// The same, for the app's own window and the interface's links, which
+/// have the app at hand. On a phone, where an app cannot start a program,
+/// the system opens the address (the opener plugin's mobile half, set up
+/// in `run`); on a computer this is [`open_in_browser`].
+pub fn open_web<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &Url) -> Result<(), String> {
+    #[cfg(mobile)]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(url.as_str(), None::<&str>)
+            .map_err(not_opened)
+    }
+    #[cfg(desktop)]
+    {
+        let _ = app;
+        open_in_browser(url)
+    }
+}
+
+fn not_opened(e: tauri_plugin_opener::Error) -> String {
+    format!("Your browser could not be opened: {e}")
 }
 
 /// Where the app's own window may go.
