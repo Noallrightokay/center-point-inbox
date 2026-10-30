@@ -1359,6 +1359,44 @@ licence dialogs, plus the inbox and a message in dark and the icons-only
 rail, and fails on any serious or critical rule; no rule or selector is
 excluded. Not seen in a packaged build (markup, CSS and page JS only, no
 new inline `style=`).
+**The mailboxes line, and choosing one (#174).** Above the category and
+filter chips the inbox has one line (`#sources`, `renderSources`), as tall
+as a chip: a dot, what the list shows ("N mailboxes", the one address
+when one is linked, or the address chosen, cut with an ellipsis) and "·
+synced …". It opens a card (`#src-panel`, a disclosure, not a menu:
+`aria-expanded`, `role=group` "Linked mailboxes", `SRC_OPEN`), redrawn in
+place on every sync so an open card and a focused row stay. Its rows are
+**All mailboxes** (with two or more), then every linked entry with its
+dot, whole address and sync; a row chooses (`chooseScope`), is marked
+(`aria-current`, `--tint-soft`, a tick; with one mailbox nothing is), and
+closes the card with the focus on the button. **Sync now** at its foot
+refreshes every mailbox. It replaced a wrapping chip per mailbox
+(`.src-chip`, a press synced) and the filters' `acct:<id>` chip per
+mailbox; neither is left. The choice (`SCOPE`) lasts the session and is
+never stored; `mailScope()` drops it when that mailbox is no longer linked
+or fewer than two are (no All row could undo it, and it would hide what
+Remove keeps, I6), and `shownScope()` is empty Side by side, whose columns
+are a mailbox each and where the line is hidden. Inside it: the list
+(`mailPool`, which matches a mailbox by `ofMailbox`, its id or its address
+through `linkedOf`, Side by side columns too), Unread, Starred, Sent, the
+categories and their counts, the Drafts, Archive and Spam chips (offered
+only when that mailbox has some), the digest strip, the top bar's eyebrow
+(its address), Folders (`boxShown`: only its folders are asked for, a
+sign-in each; a folder of another mailbox gives way to the chosen one's
+inbox, and opening one chooses its mailbox), and Load older mail
+(`olderCandidates(only)`, `gapsOf(only)`, `loadOlder(only)`,
+`fillGaps(only)`: offered, paged and gap-filled for that mailbox alone).
+The resting pane's mailbox boxes choose too, keep the focus through the
+redraw, and mark the chosen one. The nav's unread count, the briefing and
+the resting pane's overview stay every mailbox's. A choice with nothing in
+the current view says so and offers **Show all mailboxes**. Keys: Tab
+through the rows and Sync now, Up, Down, Home and End between rows, Escape
+closes it with the focus on the button. Message shortcuts hold back only
+while the focus is inside the card, which closes when the focus goes
+elsewhere, when the window loses it (a press inside a formatted message's
+frame reaches no handler here) or at a press outside; a click puts the
+focus on the button, since WebKit on macOS focuses no button it clicks.
+Harness: *the linked mailboxes* section. Not seen in a packaged build.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an
