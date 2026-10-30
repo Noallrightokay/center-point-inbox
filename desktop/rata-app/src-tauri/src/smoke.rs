@@ -9,9 +9,11 @@
 //! real address, a TLS connection to a real mail server through the guard;
 //! what a phone answers where a computer has more (connected services,
 //! Create file, updates, Microsoft sign-in, the system's opener); the
-//! folder saves go to; the page itself; and, once the page has opened its
-//! mail store, that the list's folder and the mail are kept out of the
-//! phone's backups. Each answer goes into `smoke.json` in the app's cache
+//! folder saves go to; the page itself; once the page has opened its mail
+//! store, that the list's folder and the mail are kept out of the phone's
+//! backups; and, when asked at launch, that a web address handed to the
+//! system the way RATA hands one on a phone (`links::open_web`) is taken.
+//! Each answer goes into `smoke.json` in the app's cache
 //! folder (never its data folder, which the list must be the first to
 //! make), written once and whole when the last check is done, for the job
 //! to read.
@@ -22,12 +24,14 @@
 //! mail or keeps anything: the keychain entry is its own service's and is
 //! deleted again, and the one address it discovers is never dialled.
 //!
-//! Two things are taken at launch, for the job's screenshots: a licence in
+//! Three things are taken at launch, for the job's runs: a licence in
 //! `RATA_SMOKE_LICENCE`, stored through the licence box's own path
-//! (`Rata::set_licence`), and a view in `RATA_SMOKE_VIEW`, which the page
+//! (`Rata::set_licence`); a view in `RATA_SMOKE_VIEW`, which the page
 //! script opens as a person would: it fills the real sign-up form for an
 //! RFC 2606 address on the first screen, closes the welcome, and presses the
-//! view's own button.
+//! view's own button; and `RATA_SMOKE_OPEN=1`, which has the self-test open
+//! [`OPEN_URL`] last of all, so the job can see the system's browser come
+//! up (ios/run-smoke.sh).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -51,6 +55,36 @@ pub const FILE: &str = "smoke.json";
 pub const LICENCE_VAR: &str = "RATA_SMOKE_LICENCE";
 /// A view for the page script to open (`set` is Settings).
 pub const VIEW_VAR: &str = "RATA_SMOKE_VIEW";
+/// `1` has the self-test open [`OPEN_URL`] once every other check is done.
+pub const OPEN_VAR: &str = "RATA_SMOKE_OPEN";
+/// The address it opens: IANA's reserved example (RFC 2606), which no mail
+/// names and which answers. Fixed here: the launch only says whether.
+pub const OPEN_URL: &str = "https://example.com/";
+
+/// The variables a computer's build gives the services that sign in through
+/// a listener on the loopback (Microsoft for a mailbox and OneDrive, Slack,
+/// Google Drive), each with whether this build was given it: a phone must
+/// answer as a build without them (`desktop_only`, lib.rs), and that shows
+/// only where they were given, which the job holds every run to. The names
+/// alone: never a value.
+const SIGN_IN_GIVEN: [(&str, bool); 4] = [
+    (
+        "RATA_MS_CLIENT_ID",
+        option_env!("RATA_MS_CLIENT_ID").is_some(),
+    ),
+    (
+        "RATA_SLACK_CLIENT_ID",
+        option_env!("RATA_SLACK_CLIENT_ID").is_some(),
+    ),
+    (
+        "RATA_GOOGLE_CLIENT_ID",
+        option_env!("RATA_GOOGLE_CLIENT_ID").is_some(),
+    ),
+    (
+        "RATA_GOOGLE_CLIENT_SECRET",
+        option_env!("RATA_GOOGLE_CLIENT_SECRET").is_some(),
+    ),
+];
 
 /// How long the page is given to load, sign up and report. Well inside the
 /// job's three minutes, and far longer than a page that works needs.
@@ -252,6 +286,15 @@ pub fn asked_view() -> Option<String> {
     view_named(std::env::var(VIEW_VAR).ok())
 }
 
+/// Whether the launch asked for [`OPEN_URL`] to be opened.
+fn asked_open() -> bool {
+    open_asked(std::env::var(OPEN_VAR).ok())
+}
+
+fn open_asked(raw: Option<String>) -> bool {
+    raw.is_some_and(|v| v.trim() == "1")
+}
+
 /// A view's name as the page names it (`inbox`, `set`): lowercase letters
 /// only, since it goes into the page script and a selector.
 fn view_named(raw: Option<String>) -> Option<String> {
@@ -435,7 +478,9 @@ pub fn smoke_page(smoke: State<'_, Arc<Smoke>>, page: Page) {
 
 /// The rest, once the window is up: the keychain, the network, what a
 /// phone answers and where it saves, then the page's report (waited for),
-/// the backups once the page has opened its mail store, and `smoke.json`.
+/// the backups once the page has opened its mail store, a web address
+/// opened when the launch asked (last, since the browser then comes in
+/// front of RATA and its page), and `smoke.json`.
 pub fn start(smoke: Arc<Smoke>, handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let secret = fresh_secret();
@@ -449,6 +494,13 @@ pub fn start(smoke: Arc<Smoke>, handle: tauri::AppHandle) {
         let page = smoke.wait_for_page(PAGE_WAIT).await;
         smoke.record(judge_page(page.as_ref(), smoke.view.as_deref()));
         smoke.record(backups(&handle, page.as_ref()));
+        if asked_open() {
+            let opener = handle.clone();
+            let opened = tauri::async_runtime::spawn_blocking(move || opens_a_link(&opener))
+                .await
+                .unwrap_or_else(|e| judge_open(OPEN_URL, Err(e.to_string())));
+            smoke.record(opened);
+        }
         if let Err(e) = smoke.finish(page) {
             eprintln!("{MARK}: {FILE} could not be written: {e}");
         }
@@ -578,6 +630,9 @@ struct PhoneAnswers {
     /// The opener plugin's mobile half, which opens a web address for RATA
     /// (`links::open_web`), is set up.
     opener: bool,
+    /// The sign-in variables this build was given, by name
+    /// ([`SIGN_IN_GIVEN`]).
+    given: Vec<&'static str>,
 }
 
 async fn phone_answers(handle: &tauri::AppHandle) -> PhoneAnswers {
@@ -596,10 +651,17 @@ async fn phone_answers(handle: &tauri::AppHandle) -> PhoneAnswers {
         opener: handle
             .try_state::<tauri_plugin_opener::Opener<tauri::Wry>>()
             .is_some(),
+        given: SIGN_IN_GIVEN
+            .iter()
+            .filter(|(_, given)| *given)
+            .map(|(name, _)| *name)
+            .collect(),
     }
 }
 
-/// Nothing a phone cannot do is offered, and the opener is there.
+/// Nothing a phone cannot do is offered, and the opener is there. Which
+/// sign-in variables the build was given is said, not judged: a build made
+/// by hand may have none, and the job holds its own builds to all four.
 fn judge_phone(a: &PhoneAnswers) -> Check {
     let mut wrong: Vec<String> = Vec::new();
     if a.connections.is_empty() {
@@ -638,7 +700,32 @@ fn judge_phone(a: &PhoneAnswers) -> Check {
             "update key": a.update_key,
             "update check": a.update_check,
             "opener": a.opener,
+            "given to the build": a.given,
             "problems": wrong,
+        }),
+    )
+}
+
+/// [`OPEN_URL`] handed to the system exactly as RATA hands a link on a
+/// phone: through `links::classify`, then `links::open_web`, which there is
+/// the opener plugin's mobile half. Whether the system's browser then came
+/// up is for the job to see (ios/run-smoke.sh).
+fn opens_a_link(handle: &tauri::AppHandle) -> Check {
+    let opened = match crate::links::classify(OPEN_URL) {
+        Some(crate::links::Link::Web(url)) => crate::links::open_web(handle, &url),
+        _ => Err("links::classify did not take it for a web address".into()),
+    };
+    judge_open(OPEN_URL, opened)
+}
+
+fn judge_open(url: &str, opened: Result<(), String>) -> Check {
+    Check::new(
+        "opens a link",
+        opened.is_ok(),
+        json!({
+            "address": url,
+            "handed to the system": opened.is_ok(),
+            "error": opened.err(),
         }),
     )
 }
@@ -1147,10 +1234,19 @@ mod tests {
             update_key: false,
             update_check: false,
             opener: true,
+            given: vec!["RATA_MS_CLIENT_ID", "RATA_GOOGLE_CLIENT_SECRET"],
         };
         let c = judge_phone(&phone);
         assert!(c.ok, "{c:?}");
         assert_eq!(c.detail["create file"], "refused: unavailable");
+        // Said by name, for the job; given or not, nothing fails on it.
+        assert_eq!(
+            c.detail["given to the build"],
+            json!(["RATA_MS_CLIENT_ID", "RATA_GOOGLE_CLIENT_SECRET"])
+        );
+        let mut nothing_given = phone.clone();
+        nothing_given.given.clear();
+        assert!(judge_phone(&nothing_given).ok);
 
         let mut slack = phone.clone();
         slack.connections[1].1 = true;
@@ -1183,6 +1279,50 @@ mod tests {
                 "{why}: {c:?}"
             );
         }
+    }
+
+    /// The variables named are the four the sign-in modules read, and the
+    /// address opened is one `links::classify` takes for the web, as every
+    /// link RATA opens must be.
+    #[test]
+    fn what_a_phone_is_given_and_opens_is_what_ratas_links_are() {
+        let names: Vec<&str> = SIGN_IN_GIVEN.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            [
+                "RATA_MS_CLIENT_ID",
+                "RATA_SLACK_CLIENT_ID",
+                "RATA_GOOGLE_CLIENT_ID",
+                "RATA_GOOGLE_CLIENT_SECRET"
+            ]
+        );
+        assert!(matches!(
+            crate::links::classify(OPEN_URL),
+            Some(crate::links::Link::Web(_))
+        ));
+    }
+
+    /// Opening is asked for by `1` alone, and judged on whether the system
+    /// took the address.
+    #[test]
+    fn a_link_is_opened_only_when_asked_and_judged_on_the_answer() {
+        assert!(open_asked(Some("1".into())));
+        assert!(open_asked(Some(" 1\n".into())));
+        for no in [
+            None,
+            Some(String::new()),
+            Some("0".into()),
+            Some("yes".into()),
+        ] {
+            assert!(!open_asked(no.clone()), "{no:?}");
+        }
+        let c = judge_open(OPEN_URL, Ok(()));
+        assert!(c.ok, "{c:?}");
+        assert_eq!(c.name, "opens a link");
+        assert_eq!(c.detail["address"], OPEN_URL);
+        let c = judge_open(OPEN_URL, Err("no browser".into()));
+        assert!(!c.ok);
+        assert_eq!(c.detail["error"], "no browser");
     }
 
     /// A save goes to the container's own Documents folder, which takes a

@@ -519,6 +519,93 @@ export default async function run(state) {
         `and when it opens again, both halves are one inbox (${merged.bulk + 1} + legacy), nothing lost`);
 
       await p2.evaluate(async () => { S.messages = S.messages.filter(m => !String(m.id).startsWith('t6-')); save(); await msFlush(); });
+
+      /* ---- what mail leaves in the workspace is kept beside the mail ---- */
+      console.log('\n— the audit trail, the Files list and folder names are kept beside the mail, not in localStorage —');
+      /* An iPhone backs up an app's LocalStorage and not its IndexedDB
+         (backup.rs): a subject opened, a document's text or a folder's name
+         in the localStorage entry would go to Apple's servers. */
+      const work = await p2.evaluate(async () => {
+        S.documents.unshift({ id: 'wk-doc', name: 'Lab results.pdf', fmt: 'PDF', origin: 'mail', prov: 'imap', size: '1 KB', bytes: 9,
+          ts: Date.now(), content: 'Converted attachment text wk-secret-1', hasFile: true });
+        S.boxes = Object.assign({}, S.boxes, { 'wk@example.com': { at: 1, list: [{ name: 'Clients/wk-secret-2', label: 'Clients / wk-secret-2' }] } });
+        await audit('msg.read', 'Subject wk-secret-3');
+        save(); await wkFlush();
+        const raw = localStorage.getItem(LS_KEY), meta = JSON.parse(raw);
+        const db = new Map((await new Promise((res) => { const tx = WK.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(k.result.map((x, i) => [x, v.result[i]])); })));
+        return { open: !!WK, name: WK_DB, leaked: ['wk-secret-1', 'wk-secret-2', 'wk-secret-3'].filter(x => raw.includes(x)),
+          entry: { audit: meta.audit, documents: meta.documents, boxes: meta.boxes },
+          stored: ['wk-secret-1', 'wk-secret-2', 'wk-secret-3'].filter(x => [...db.values()].some(j => j.includes(x))),
+          parts: [...db.keys()].sort() };
+      });
+      check(work.open && /^rata-work-/.test(work.name), `the work store opens: ${work.name}`);
+      check(!work.leaked.length && Array.isArray(work.entry.audit) && !work.entry.audit.length && Array.isArray(work.entry.documents)
+        && !work.entry.documents.length && JSON.stringify(work.entry.boxes) === '{}',
+      `the localStorage entry holds no subject, document text or folder name, and carries each part empty for an older build: ${JSON.stringify(work)}`);
+      check(work.stored.length === 3 && JSON.stringify(work.parts) === '["audit","boxes","documents"]',
+        `they are in IndexedDB instead: ${JSON.stringify(work.stored)} in ${JSON.stringify(work.parts)}`);
+
+      await p2.reload(); await boot(p2);
+      const wkBack = await p2.evaluate(async () => {
+        const out = { doc: (S.documents.find(d => d.id === 'wk-doc') || {}).content, box: !!(S.boxes || {})['wk@example.com'],
+          last: S.audit[S.audit.length - 1].detail };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(wkBack.doc === 'Converted attachment text wk-secret-1' && wkBack.box && wkBack.last === 'Subject wk-secret-3' && /\bok\b/.test(wkBack.chain),
+        `and come back from there after a restart, the audit chain still whole: ${JSON.stringify(wkBack)}`);
+
+      /* A workspace an older build saved holds them in its entry: they move
+         across, merged with what the store has, and the entry is emptied. */
+      await p2.evaluate(() => {
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        meta.documents = [{ id: 'wk-old', name: 'From 0.1.52.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 1, content: 'wk-secret-4', hasFile: false }];
+        meta.boxes = { 'old@example.com': { at: 2, list: [{ name: 'wk-secret-5', label: 'wk-secret-5' }] } };
+        meta.audit = [{ i: 0, ts: Date.now() + 1000, action: 'msg.read', detail: 'wk-secret-6', prev: '0'.repeat(64), hash: 'f'.repeat(64) }];
+        localStorage.setItem(LS_KEY, JSON.stringify(meta));
+      });
+      await p2.reload(); await boot(p2);
+      const wkMoved = await p2.evaluate(async () => {
+        await wkFlush();
+        const raw = localStorage.getItem(LS_KEY);
+        const out = { docs: S.documents.filter(d => /^wk-/.test(d.id)).map(d => d.id), boxes: Object.keys(S.boxes || {}).filter(k => /example\.com/.test(k)).sort(),
+          tail: S.audit.slice(-2).map(e => e.detail), leaked: ['wk-secret-4', 'wk-secret-5', 'wk-secret-6'].filter(x => raw.includes(x)) };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(JSON.stringify(wkMoved.docs) === '["wk-old","wk-doc"]' && JSON.stringify(wkMoved.boxes) === '["old@example.com","wk@example.com"]'
+        && JSON.stringify(wkMoved.tail) === '["Subject wk-secret-3","wk-secret-6"]' && /\bok\b/.test(wkMoved.chain) && !wkMoved.leaked.length,
+      `an older build's entry moves into the store and out of localStorage, merged, its audit entries chained on: ${JSON.stringify(wkMoved)}`);
+
+      /* Where that store will not open, they stay in the entry the old way. */
+      const p5 = await ctx.newPage();
+      p5.on('pageerror', e => errs.push('work fallback page: ' + e.message));
+      await p5.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (String(name).startsWith('rata-work-')) throw new Error('no IndexedDB here'); return o.call(this, name, ...a); }; });
+      await p5.goto(s.url + '/app.html'); await boot(p5);
+      const wkFallback = await p5.evaluate(() => {
+        S.documents.unshift({ id: 'wk-fb', name: 'Fallback.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 2, content: 'kept the old way', hasFile: false });
+        save();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { open: !!WK, inEntry: (meta.documents || []).some(d => d.id === 'wk-fb') };
+      });
+      await p5.close();
+      check(!wkFallback.open && wkFallback.inEntry, `without that store, the Files list is kept in localStorage the old way: ${JSON.stringify(wkFallback)}`);
+      await p2.reload(); await boot(p2);
+      const wkAgain = await p2.evaluate(async () => {
+        await wkFlush();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { docs: S.documents.filter(d => /^wk-/.test(d.id)).map(d => d.id), entryDocs: meta.documents.length };
+      });
+      check(wkAgain.docs.includes('wk-fb') && wkAgain.docs.includes('wk-doc') && wkAgain.entryDocs === 0,
+        `and when it opens again, both halves are one list, out of the entry: ${JSON.stringify(wkAgain)}`);
+
+      await p2.evaluate(async () => {
+        S.documents = S.documents.filter(d => !/^wk-/.test(d.id));
+        S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^(wk|old)@example\.com$/.test(k)));
+        save(); await wkFlush();
+      });
       await p2.close();
     }
 

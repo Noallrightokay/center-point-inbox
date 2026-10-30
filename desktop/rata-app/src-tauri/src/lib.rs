@@ -711,7 +711,14 @@ mod tests {
     /// (`create: false`), where it is told where it may go, and shows no
     /// link previews: a long press on a link in formatted mail would load
     /// the page in a preview, which nobody asked to open (a link goes to
-    /// the browser, and only once asked). iOS 15 or later. No updater,
+    /// the browser, and only once asked). iOS 16.4 or later: the page
+    /// splits sentences with regular expressions that look behind
+    /// (`(?<=…)`, app.html), which WebKit parses from 16.4, and before it
+    /// the whole script is a syntax error and nothing works; it also uses
+    /// `Array.prototype.at` (15.4). Nothing below iOS 26 has run RATA (the
+    /// Simulator job has only 26's runtimes), so 16.4 is the floor the page
+    /// sets, not one seen working; mail-apple.yml builds the engine for the
+    /// same. No updater,
     /// which a store's build must not have. The identifier is the
     /// desktop's: a store's build (the iPhone's, later the Mac App
     /// Store's) is `org.mailrata.mail`, set with `--config` when it is
@@ -728,7 +735,19 @@ mod tests {
         };
         let ios = read(Target::Ios);
         assert_eq!(ios.identifier, "org.mailrata.desktop");
-        assert_eq!(ios.bundle.ios.minimum_system_version, "15.0");
+        assert_eq!(ios.bundle.ios.minimum_system_version, "16.4");
+        // The engine's own job on Apple's systems builds for the same
+        // oldest iOS (its comment says why it must be set at all).
+        let mail_apple = dir.join("../../../.github/workflows/mail-apple.yml");
+        let mail_apple = std::fs::read_to_string(&mail_apple).expect("mail-apple.yml reads");
+        let target = format!(
+            "IPHONEOS_DEPLOYMENT_TARGET: \"{}\"",
+            ios.bundle.ios.minimum_system_version
+        );
+        assert!(
+            mail_apple.lines().any(|l| l.trim() == target),
+            "mail-apple.yml must say {target}"
+        );
         assert!(!ios.plugins.0.contains_key("updater"));
         let [window] = ios.app.windows.as_slice() else {
             panic!("one window: {:?}", ios.app.windows);

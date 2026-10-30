@@ -12,23 +12,39 @@
 //!   mailbox list, with every linked address and the licence token, the
 //!   list's lock and Create file's records.
 //! - Each folder WebKit keeps a site's IndexedDB in, under `Library/WebKit`:
-//!   the mail itself (`rata-mail-*`, every message and its text) and the
-//!   Files view's documents (`rata-files`).
+//!   the mail itself (`rata-mail-*`, every message and its text), the Files
+//!   view's files (`rata-files`), and what else of the workspace comes from
+//!   mail (`rata-work-*`: the audit trail, which names each unread message
+//!   opened by its subject or the start of its text and each attachment
+//!   saved or converted; the Files list, with the text the Format Bridge
+//!   read from each document; and each mailbox's folder names).
 //!
 //! Nothing in them is lost for good when a phone is restored or replaced:
 //! the mail is fetched again from the mailboxes, the licence again from
 //! mailrata.org, and the mailboxes linked again, which a new phone needs
 //! anyway, since their passwords never leave the old one (vault.rs). The
 //! Files view's documents are copies of attachments, of what the Bridge
-//! made from them, and of files the customer picked from elsewhere.
+//! made from them, and of files the customer picked from elsewhere; the
+//! audit trail starts again.
 //!
-//! Left in backups, on purpose: WebKit's LocalStorage, which holds the
-//! workspace (settings, People, signatures, the device account), none of it
-//! fetched from anywhere else; and the app's Documents folder, where saved
-//! attachments go for the Files app to show, the customer's own files as a
-//! computer's Downloads folder is. Mail is in LocalStorage only for a moment:
-//! a message waiting out Undo send, and the whole mailbox only where
-//! IndexedDB will not open. Those are the owner's to weigh (D8).
+//! Left in backups, on purpose: WebKit's LocalStorage, and the app's
+//! Documents folder, where saved attachments go for the Files app to show,
+//! the customer's own files as a computer's Downloads folder is. Whether
+//! LocalStorage should be left there is the owner's call (D8); what it
+//! holds, none of it fetched from anywhere else:
+//!
+//! - the workspace (app.html's `LS_KEY` entry): settings with the
+//!   signatures, People, the rules, the linked mailboxes' entries (each
+//!   address, and the sentence of its last error, which is the server's
+//!   own words), the ids of messages deleted here (each names its mailbox's
+//!   address) and of gaps not yet fetched, and counters;
+//! - the device account (`centra_session`, `centra_accounts`: the address
+//!   and its PBKDF2 verifier), and Apps' pins and the Google and Microsoft
+//!   addresses typed there (`rata_apps_*`);
+//! - mail, only in passing: a message waiting out Undo send (its text and
+//!   the files' base64, `rata_outbox_*`) until it has gone, and the whole
+//!   workspace, mail included, only in a session where IndexedDB would not
+//!   open (moved into IndexedDB at the next start that opens it).
 //!
 //! Marked at start (RATA's folder, and WebKit's from an earlier run), and
 //! each time the page asks for the licence (`commands::licence_status`):
@@ -41,9 +57,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-/// How deep under `Library/WebKit` an IndexedDB folder is looked for. iOS
-/// 15 and 16 keep one at `WebsiteData/IndexedDB`; iOS 17 and later one per
-/// site, at `WebsiteData/Default/<site>/<site>/IndexedDB`.
+/// How deep under `Library/WebKit` an IndexedDB folder is looked for, at
+/// any depth up to this. On iOS 26 (the only iOS RATA has run on: the
+/// Simulator job's) WebKit keeps both `<identifier>/WebsiteData/IndexedDB`
+/// and one per site, `<identifier>/WebsiteData/Default/<site>/<site>/
+/// IndexedDB` (smoke.json, 2026-10). Older iOS is not seen here; the
+/// per-site layout is said to date from iOS 17, and every IndexedDB folder
+/// within this depth is found whichever layout a phone has.
 #[cfg(any(target_os = "ios", feature = "smoke", test))]
 const WEBKIT_DEPTH: usize = 7;
 

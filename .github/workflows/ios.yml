@@ -45,6 +45,20 @@ env:
   # Homebrew's own housekeeping costs minutes and changes nothing here.
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  # Client ids and a secret no service ever issued, for the services that
+  # sign in through a listener on the loopback (Microsoft for a mailbox and
+  # OneDrive, Slack, Google Drive). Both app builds below are given them as
+  # RATA_MS_CLIENT_ID, RATA_SLACK_CLIENT_ID, RATA_GOOGLE_CLIENT_ID and
+  # RATA_GOOGLE_CLIENT_SECRET, so that a phone answering as a build without
+  # them (`desktop_only`, lib.rs) is shown with them given: each passes the
+  # check its module makes of a real one, so a computer's build given them
+  # would offer the service. The Simulator's self-test then finds none
+  # offered, and the device's program holds none but Google's client id,
+  # which a phone keeps (without the secret it turns nothing on).
+  MADE_UP_MS_CLIENT_ID: "rata-smoke-microsoft-client-0001"
+  MADE_UP_SLACK_CLIENT_ID: "1234567890.rata-smoke-slack-client"
+  MADE_UP_GOOGLE_CLIENT_ID: "rata-smoke-google-client.apps.googleusercontent.com"
+  MADE_UP_GOOGLE_CLIENT_SECRET: "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ret"
 
 jobs:
   # A store's build or a phone's must not carry RATA's own updater: the
@@ -149,7 +163,8 @@ jobs:
   # The shell compiled for iOS, as the library the app links, with clippy's
   # warnings as errors: what only a computer has is cfg(desktop), and a
   # phone's branches must compile and say nothing. Then the desktop shell
-  # for macOS, which otherwise is compiled only when a release is built.
+  # for macOS, checked with its tests and then built and linked, which
+  # otherwise happens only when a release is built.
   ios:
     name: Shell for iOS
     runs-on: macos-latest
@@ -195,6 +210,16 @@ jobs:
         run: cargo check --all-targets
         working-directory: desktop/rata-app/src-tauri
 
+      # The check above links nothing. This builds and links what the .dmg
+      # is made from: the rata-app program, and the library in each of its
+      # kinds (a dynamic and a static library too, which iOS needs), as the
+      # release's installer build compiles them all; the Windows jobs do the
+      # same. Without it the first macOS link of those kinds would be a
+      # release's.
+      - name: The program and the library build for macOS
+        run: cargo build --lib --bins
+        working-directory: desktop/rata-app/src-tauri
+
   # RATA itself in the iOS Simulator. The Xcode project is made afresh from
   # the committed sources on every run (`tauri ios init`, then
   # ios/prepare.sh, which adds the Info.plist keys and the privacy manifest)
@@ -205,13 +230,14 @@ jobs:
   # system's resolver, discovery, a TLS greeting through the guard, what a
   # phone answers where a computer has more, where saves go, the page, and
   # that the list and the mail are kept out of the phone's backups. It runs
-  # four times, each with a screenshot: the first screen;
+  # five times, each with a screenshot: the first screen;
   # the workspace, signed up on the first screen's own form and licensed
   # with a Pro licence from a throwaway key made here (never the real one:
   # the build trusts only that key's public half); the workspace again in
-  # dark appearance; and Settings. The job fails when a check fails, the
-  # page is not shown in the appearance the simulator is set to, or RATA
-  # stops.
+  # dark appearance; Settings; and RATA opening a web address, which must
+  # bring Safari up. The job fails when a check fails, the page is not
+  # shown in the appearance the simulator is set to, RATA stops, or the
+  # build was not given the made-up client ids its phone answers refuse.
   simulator:
     name: iOS app in the Simulator
     runs-on: macos-latest
@@ -304,12 +330,10 @@ jobs:
       # exactly as it signs a customer's, with OpenSSL 3.
       #
       # The public half reaches the Rust build as Cargo's own [env], where
-      # licence.rs's option_env! reads it: Xcode compiles the Rust code
-      # (`tauri ios xcode-script`), and the Tauri CLI hands that build only
-      # the variables named TAURI*, WRY*, CARGO_*, RUST_*, PATH and TMPDIR
-      # (tauri-cli's mobile/mod.rs, env_vars), so RATA_LICENCE_PUBLIC_KEY in
-      # the environment alone never arrives. The runner's Cargo home is
-      # thrown away with it.
+      # licence.rs's option_env! reads it (ios/cargo-env.py says why only
+      # that way arrives), with the made-up client ids above, which the
+      # self-test's "phone answers" must find refused. The runner's Cargo
+      # home is thrown away with it.
       - name: A throwaway licence key, and a Pro licence signed with it
         run: |
           openssl_bin="$(brew --prefix openssl@3)/bin"
@@ -321,13 +345,13 @@ jobs:
             echo "$pub"
             echo 'PEM'
           } >> "$GITHUB_ENV"
-          config="${CARGO_HOME:-$HOME/.cargo}/config.toml"
-          if grep -qs '^\[env\]' "$config"; then
-            echo "::error::$config already has an [env] table"; exit 1
-          fi
-          # A JSON string is a TOML basic string too.
-          python3 -c 'import json, sys; print("\n[env]\nRATA_LICENCE_PUBLIC_KEY = " + json.dumps(sys.argv[1]))' \
-            "$pub" >> "$config"
+          RATA_LICENCE_PUBLIC_KEY="$pub" \
+          RATA_MS_CLIENT_ID="$MADE_UP_MS_CLIENT_ID" \
+          RATA_SLACK_CLIENT_ID="$MADE_UP_SLACK_CLIENT_ID" \
+          RATA_GOOGLE_CLIENT_ID="$MADE_UP_GOOGLE_CLIENT_ID" \
+          RATA_GOOGLE_CLIENT_SECRET="$MADE_UP_GOOGLE_CLIENT_SECRET" \
+            python3 desktop/rata-app/ios/cargo-env.py RATA_LICENCE_PUBLIC_KEY \
+              RATA_MS_CLIENT_ID RATA_SLACK_CLIENT_ID RATA_GOOGLE_CLIENT_ID RATA_GOOGLE_CLIENT_SECRET
           licence=$(PATH="$openssl_bin:$PATH" RATA_LICENCE_KEY="$key" RATA_ANY_KEY=1 \
             bash infrastructure/licence/mint.sh smoke@example.com pro 2 2>/dev/null)
           case "$licence" in v1.*.*) ;; *) echo "::error::mint.sh made no licence"; exit 1 ;; esac
@@ -387,7 +411,33 @@ jobs:
           xcrun simctl ui "$SIM" appearance light
           # 4. Settings, with the account and the licence the second run kept.
           SIMCTL_CHILD_RATA_SMOKE_VIEW="set" bash "$smoke_run" "$SIM" "$out" 4-settings || failed=1
+          # 5. RATA opens a web address as a phone opens one for it
+          # (links::open_web, the opener plugin's mobile half): run-smoke.sh
+          # ends Safari first, and then wants it running, and RATA too.
+          SIMCTL_CHILD_RATA_SMOKE_OPEN=1 bash "$smoke_run" "$SIM" "$out" 5-opens-a-link || failed=1
           exit $failed
+
+      # Each run's "phone answers" passed with the made-up client ids given
+      # to the build: it names the variables that reached it (never their
+      # values), so a build they never reached cannot pass here unseen.
+      - name: The phone answered as a build without the client ids it was given
+        if: ${{ !cancelled() && env.OUT != '' }}
+        run: |
+          python3 - "$OUT"/*.smoke.json <<'PY'
+          import json, sys
+          want = ['RATA_MS_CLIENT_ID', 'RATA_SLACK_CLIENT_ID',
+                  'RATA_GOOGLE_CLIENT_ID', 'RATA_GOOGLE_CLIENT_SECRET']
+          bad = 0
+          for path in sys.argv[1:]:
+              checks = {c.get('name'): c for c in json.load(open(path)).get('checks', [])}
+              phone = checks.get('phone answers') or {}
+              given = (phone.get('detail') or {}).get('given to the build') or []
+              missing = [n for n in want if n not in given]
+              ok = phone.get('ok') is True and not missing
+              print(f"{path}: {'pass' if ok else 'FAIL'}: given {given}, phone answers ok: {phone.get('ok')}")
+              bad |= not ok
+          sys.exit(1 if bad or len(sys.argv) < 2 else 0)
+          PY
 
       - name: The device's log of RATA
         if: ${{ always() && env.SIM != '' && env.OUT != '' }}
@@ -413,8 +463,9 @@ jobs:
   # program is what the privacy manifest describes, so the required-reason
   # APIs are judged here: a release link keeps only what the program can
   # reach, where the Simulator's debug build keeps every binding. Then the
-  # same checks of the app as the Simulator's, and neither the updater nor
-  # the self-test in it.
+  # same checks of the app as the Simulator's, neither the updater nor the
+  # self-test in it, and none of the made-up client ids and secret it was
+  # given that a phone's program must not hold.
   device:
     name: iOS app for a device, unsigned
     runs-on: macos-latest
@@ -478,6 +529,25 @@ jobs:
       - name: RATA's changes to it
         run: bash desktop/rata-app/ios/prepare.sh
 
+      # The made-up client ids (top of this file), and a throwaway licence
+      # key, as the build's Cargo [env] (ios/cargo-env.py). The key is the
+      # proof that [env] reached the program, which keeps it whole (licence.rs
+      # reads it as it runs); a phone's program must then hold none of the
+      # values `desktop_only` keeps from it (the step after the build).
+      - name: Made-up client ids and a throwaway licence key, for the build
+        run: |
+          openssl_bin="$(brew --prefix openssl@3)/bin"
+          pub="$("$openssl_bin/openssl" genpkey -algorithm ed25519 | "$openssl_bin/openssl" pkey -pubout)"
+          # The key's own line of base64, as licence.rs holds the PEM.
+          echo "DEVICE_KEY_LINE=$(printf '%s\n' "$pub" | sed -n 2p)" >> "$GITHUB_ENV"
+          RATA_LICENCE_PUBLIC_KEY="$pub" \
+          RATA_MS_CLIENT_ID="$MADE_UP_MS_CLIENT_ID" \
+          RATA_SLACK_CLIENT_ID="$MADE_UP_SLACK_CLIENT_ID" \
+          RATA_GOOGLE_CLIENT_ID="$MADE_UP_GOOGLE_CLIENT_ID" \
+          RATA_GOOGLE_CLIENT_SECRET="$MADE_UP_GOOGLE_CLIENT_SECRET" \
+            python3 desktop/rata-app/ios/cargo-env.py RATA_LICENCE_PUBLIC_KEY \
+              RATA_MS_CLIENT_ID RATA_SLACK_CLIENT_ID RATA_GOOGLE_CLIENT_ID RATA_GOOGLE_CLIENT_SECRET
+
       - name: Build for a device, release, unsigned
         run: |
           cargo tauri ios build --target aarch64 --no-sign --ci -- --no-default-features
@@ -505,3 +575,27 @@ jobs:
         run: |
           bash desktop/rata-app/harness/verify-release.sh --no-updater "$DEVICE_APP/RATA"
           bash desktop/rata-app/harness/verify-release.sh --no-smoke "$DEVICE_APP/RATA"
+
+      # lib.rs: what a build gave the services that sign in through the
+      # loopback "is not in the program at all" on a phone, a Google Drive
+      # desktop client's secret above all. First that the build's [env]
+      # reached the program (the throwaway key is in it), or the rest would
+      # pass for a build given nothing.
+      - name: None of the desktop's sign-in ids or secret is in a phone's program
+        if: ${{ !cancelled() && env.DEVICE_APP != '' }}
+        run: |
+          program="$DEVICE_APP/RATA"
+          if grep -qaF -- "$DEVICE_KEY_LINE" "$program"; then
+            echo "The throwaway licence key is in the program: the build's [env] reached it."
+          else
+            echo "::error::the throwaway licence key is not in the program, so the build was given nothing and the checks below would show nothing"; exit 1
+          fi
+          bad=0
+          for name in MADE_UP_MS_CLIENT_ID MADE_UP_SLACK_CLIENT_ID MADE_UP_GOOGLE_CLIENT_SECRET; do
+            if grep -qaF -- "${!name}" "$program"; then
+              echo "::error::the value given for ${name#MADE_UP_} is in a phone's program"; bad=1
+            else
+              echo "${name#MADE_UP_}: not in the program"
+            fi
+          done
+          exit "$bad"

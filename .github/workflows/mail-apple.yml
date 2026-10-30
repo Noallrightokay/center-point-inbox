@@ -27,13 +27,15 @@ concurrency:
 env:
   # The toolchain desktop-ci.yml pins; bump the two together.
   RUST: "1.94.1"
-  # The oldest iOS the engine is built for, as Tauri's iOS build sets it
-  # (bundle.iOS.minimumSystemVersion, 14.0 unless the app says otherwise),
-  # for rustc and for the C that aws-lc-sys compiles alike. Without it a
-  # device build is linked for rustc's own default, iOS 10, while aws-lc's
-  # objects are built for the SDK's version and call ___chkstk_darwin,
-  # which that link cannot find. The Simulator's default is already 14.0.
-  IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+  # The oldest iOS the engine is built for: the app's own,
+  # bundle.iOS.minimumSystemVersion in desktop/rata-app/src-tauri/
+  # tauri.ios.conf.json (16.4, the oldest WebKit that runs the page's
+  # script), which Tauri's iOS build sets for rustc and for the C that
+  # aws-lc-sys compiles alike; a test of the shell (lib.rs) holds the two
+  # equal. Without it a device build is linked for rustc's own default,
+  # iOS 10, while aws-lc's objects are built for the SDK's version and call
+  # ___chkstk_darwin, which that link cannot find.
+  IPHONEOS_DEPLOYMENT_TARGET: "16.4"
 
 jobs:
   mail:

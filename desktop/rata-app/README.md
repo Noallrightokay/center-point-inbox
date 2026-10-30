@@ -195,24 +195,33 @@ The interface reaches the outside world through one function, `apiFetch`, and
 
 ## The attack surface from the page
 
-Thirty commands, the list in `main.rs`'s `generate_handler!`, and
-nothing else. No filesystem plugin, no shell plugin, no arbitrary HTTP. The
-notification and updater plugins are called from Rust only; the page holds no
-plugin permission. A script that somehow reached a rendered message can ask to
-refresh the mail; it cannot ask to read `~/.ssh`. The commands that write a
-file (`save_attachment`, `save_file`) choose the Downloads folder and clean the
-name in Rust, and `open_link` hands only http and https addresses to the
-browser.
+Forty-four commands, the list in `src/lib.rs`'s `generate_handler!` (`main.rs`
+only calls `rata_app_lib::run`), and nothing else; a `smoke` build, which only
+the iOS Simulator job makes and never a release (`harness/verify-release.sh
+--no-smoke`), adds a forty-fifth, `smoke_page`, for its self-test's report. No
+filesystem plugin, no shell plugin, no arbitrary HTTP. The notification
+plugin, the updater plugin (only in a build with the `self-update` feature, the
+desktop installers'), and on a phone the opener plugin (the system opens a web
+address there; its script that would send the page's link clicks to it is left
+out) are called from Rust only; the page holds no plugin permission. A script
+that somehow reached a rendered message can ask to refresh the mail; it cannot
+ask to read `~/.ssh`. The commands that write a file (`save_attachment`,
+`save_file`) choose the Downloads folder (on iOS the app's own Documents
+folder) and clean the name in Rust, and `open_link` hands only http and https
+addresses to the browser.
 
 ```
-licence_status   set_licence      link_mailbox     link_microsoft
-cancel_microsoft microsoft_ready  discover_mailbox list_mailboxes
-unlink_mailbox   forget_everything refresh_mail    send_mail
-save_draft       change_messages  older_mail       reread_mail
-list_folders     folder_mail      notify_mail      watching
-open_message     save_attachment  open_link        save_file
-read_attachment  read_pictures    search_mail      diagnostics
-check_update     install_update
+licence_status     set_licence        link_mailbox       link_microsoft
+cancel_microsoft   microsoft_ready    discover_mailbox   list_mailboxes
+unlink_mailbox     forget_everything  refresh_mail       send_mail
+save_draft         change_messages    older_mail         search_mail
+reread_mail        list_folders       folder_mail        notify_mail
+watching           open_message       save_attachment    open_link
+save_file          read_attachment    read_pictures      check_update
+install_update     diagnostics        connections_status connect_service
+disconnect_service cancel_connect     cloud_list         cloud_read
+cloud_save         slack_targets      slack_share        create_file
+open_created       created_list       created_read       forget_created
 ```
 
 Verified rather than assumed: `ui-src/probe.html` calls a few of them and also

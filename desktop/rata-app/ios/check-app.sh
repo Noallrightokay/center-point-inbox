@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # check-app.sh RATA.app [IDENTIFIER] — what a built iOS app must carry from
 # tauri.ios.conf.json and prepare.sh: RATA's identifier (IDENTIFIER, else
-# RATA_BUNDLE, else org.mailrata.desktop), iOS 15 as its minimum, iPhone
-# only, the Info.plist keys prepare.sh adds, the committed privacy manifest
-# at the top of the bundle, where iOS reads it, and RATA's own icon, not
-# Tauri's. Exit 1 on anything missing. For .github/workflows/ios.yml and a
-# store's build (TestFlight's names its identifier as the argument).
+# RATA_BUNDLE, else org.mailrata.desktop), iOS 16.4 as its minimum, iPhone
+# only, the Info.plist keys prepare.sh adds, ITSAppUsesNonExemptEncryption
+# as RATA_EXPORT_FRANCE says (left out unless it is left-out; prepare.sh
+# says why), the committed privacy manifest at the top of the bundle, where
+# iOS reads it, and RATA's own icon, not Tauri's. Exit 1 on anything
+# missing. For .github/workflows/ios.yml and a store's build (TestFlight's
+# names its identifier as the argument, and must give this the same
+# RATA_EXPORT_FRANCE as prepare.sh).
 set -uo pipefail
 app="${1:?give the built .app}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,10 +24,26 @@ want() {
 # The committed identifier, unless one is named: a store's build sets
 # org.mailrata.mail with --config (D9).
 want CFBundleIdentifier "${2:-${RATA_BUNDLE:-org.mailrata.desktop}}"
-want MinimumOSVersion 15.0
+want MinimumOSVersion 16.4
 want UIFileSharingEnabled true
 want LSSupportsOpeningDocumentsInPlace true
-want ITSAppUsesNonExemptEncryption false
+# NO only once the owner has left France out (prepare.sh); until then App
+# Store Connect must ask, so the key must not be there to answer for it.
+case "${RATA_EXPORT_FRANCE:-}" in
+  left-out) want ITSAppUsesNonExemptEncryption false ;;
+  "")
+    if got="$(get ITSAppUsesNonExemptEncryption)"; then
+      echo "::error::ITSAppUsesNonExemptEncryption is \"$got\", but no decision on France is recorded (RATA_EXPORT_FRANCE)"
+      bad=1
+    else
+      echo "ITSAppUsesNonExemptEncryption: left out, so App Store Connect asks"
+    fi
+    ;;
+  *)
+    echo "::error::RATA_EXPORT_FRANCE is \"$RATA_EXPORT_FRANCE\": only left-out is understood"
+    bad=1
+    ;;
+esac
 for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
   got="$(get "$key")"
   echo "$key = $got"

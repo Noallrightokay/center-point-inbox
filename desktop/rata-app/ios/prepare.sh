@@ -24,7 +24,13 @@
 #     saves attachments into the app's Documents folder (core::save_folder),
 #     and these make that folder show in the Files app. Without them a saved
 #     file is somewhere nobody can open.
-#   - ITSAppUsesNonExemptEncryption NO. Apple: "Set the value to NO if your
+#   - ITSAppUsesNonExemptEncryption: left out (removed if there), so that
+#     App Store Connect asks its export compliance questions of every build
+#     uploaded, until the owner has decided France (plan risk 17,
+#     docs/APP-STORES.md: "answer the questionnaire, then set the key").
+#     Written NO only when the build says that decision was made:
+#     RATA_EXPORT_FRANCE=left-out, which check-app.sh reads too. Why NO
+#     depends on France: Apple says "Set the value to NO if your
 #     app—including any third-party libraries it links against—doesn't use
 #     encryption, or if it only uses forms of encryption that are exempt
 #     from export compliance documentation requirements" ("Complying with
@@ -38,12 +44,14 @@
 #     no US documentation (that is for proprietary algorithms not accepted
 #     by IEEE, IETF or ITU), and "Upload your French encryption declaration
 #     in App Store Connect", which is "only required if you're distributing
-#     your app on the App Store in France". So NO holds for every App Store
-#     country but France; distributing in France means filing that
-#     declaration and setting the key as App Store Connect then directs.
-#     The owner answers this in App Store Connect (plan risk 17), along
-#     with the year-end self-classification report Apple says exempt
-#     encryption may still need.
+#     your app on the App Store in France". So NO is true only of a RATA
+#     not on the App Store in France: `left-out` records that the owner
+#     took France out of the app's territories in App Store Connect, which
+#     includes it by default. Distributing in France means filing that
+#     declaration and answering as App Store Connect then directs, which no
+#     value here stands for: leave the variable unset, and the key out.
+#     Either way the owner also owes the year-end self-classification
+#     report Apple says exempt encryption may still need.
 #   - NSCameraUsageDescription and NSMicrophoneUsageDescription: the
 #     composer's Attach is <input type="file" multiple> with no `accept`,
 #     and for such an input WKWebView offers "Take Photo or Video" beside
@@ -66,6 +74,11 @@ die() { echo "prepare.sh: $*" >&2; exit 1; }
 
 [ -f "$apple/project.yml" ] || die "no project at $apple: run \`cargo tauri ios init\` in src-tauri first"
 command -v xcodegen >/dev/null || die "xcodegen is not installed (brew install xcodegen)"
+# The owner's decision on France, before anything is changed.
+case "${RATA_EXPORT_FRANCE:-}" in
+  "" | left-out) ;;
+  *) die "RATA_EXPORT_FRANCE is \"$RATA_EXPORT_FRANCE\": only left-out (France not among the app's territories) is understood; otherwise leave it unset" ;;
+esac
 
 # The app target's folder, <name>_iOS, which holds Info.plist.
 shopt -s nullglob
@@ -140,7 +153,11 @@ fi
 # leaves the file as the first left it.
 plutil -replace UIFileSharingEnabled -bool YES "$plist"
 plutil -replace LSSupportsOpeningDocumentsInPlace -bool YES "$plist"
-plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$plist"
+if [ "${RATA_EXPORT_FRANCE:-}" = left-out ]; then
+  plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$plist"
+elif plutil -extract ITSAppUsesNonExemptEncryption raw -o - "$plist" >/dev/null 2>&1; then
+  plutil -remove ITSAppUsesNonExemptEncryption "$plist"
+fi
 plutil -replace NSCameraUsageDescription -string \
   "RATA uses the camera only when you choose Take Photo or Video to attach to a message." "$plist"
 plutil -replace NSMicrophoneUsageDescription -string \
@@ -150,5 +167,6 @@ plutil -lint "$plist" >/dev/null
 echo "prepare.sh: $(basename "$target_dir") is iPhone only, has RATA's icon, its privacy manifest and Info.plist keys:"
 for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace ITSAppUsesNonExemptEncryption \
   NSCameraUsageDescription NSMicrophoneUsageDescription; do
-  echo "  $key = $(plutil -extract "$key" raw -o - "$plist")"
+  echo "  $key = $(plutil -extract "$key" raw -o - "$plist" 2>/dev/null \
+    || echo '(left out: App Store Connect asks, until RATA_EXPORT_FRANCE records the owner'"'"'s decision)')"
 done
