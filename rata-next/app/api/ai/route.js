@@ -3,7 +3,7 @@ import { admin } from '../../../lib/server';
 import { check } from '../../../lib/licence';
 import { planDef } from '../../../lib/plan';
 import { corsHeaders, preflight } from '../../../lib/cors';
-import { APPLE_SAID, appleIdOf, appleSubject, appleRow, appleAiLive, appleAiPlan, appleTableBehind } from '../../../lib/apple';
+import { APPLE_SAID, appleIdOf, appleSubject, appleRow, appleLive, appleAiLive, appleAiPlan, appleTableBehind } from '../../../lib/apple';
 import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
 
 export const dynamic = 'force-dynamic';
@@ -50,7 +50,7 @@ export async function POST(req) {
   }
   const who = String(seen.licence.sub).toLowerCase();
 
-  const asked = validate(body, planDef(seen.licence.plan));
+  let asked = validate(body, planDef(seen.licence.plan));
   if (asked.error) return reply({ error: asked.error, reason: asked.reason }, asked.status);
 
   const key = process.env.ANTHROPIC_API_KEY;
@@ -81,10 +81,15 @@ export async function POST(req) {
 
      The plan is the lower of the licence's and the record's
      (appleAiPlan). When the record's is lower (Pro changed to Base since
-     the licence was issued) the answer is `expired` too, so the app renews
-     to the record's plan and asks again with it; otherwise the lower is
-     the licence's own, which `validate` has checked above. A record that
-     cannot be read refuses, as the cap does. */
+     the licence was issued) and the record is live, the answer is
+     `expired` too, so the app renews to the record's plan and asks again
+     with it. When the record is only inside its margin, renewal refuses
+     (no-subscription) and the app keeps the licence it has, so `expired`
+     would refuse every request until the next period reached the record;
+     the request is judged by the record's plan instead, and what that
+     plan allows is answered. Otherwise the lower is the licence's own,
+     which `validate` has checked above. A record that cannot be read
+     refuses, as the cap does. */
   if (appleSubject(who)) {
     const id = appleIdOf(who);
     const held = id ? await appleRow(sb, id) : { row: null };
@@ -97,8 +102,11 @@ export async function POST(req) {
       return reply({ error: 'AI is unavailable right now.' }, 503);
     }
     if (!appleAiLive(held.row)) return reply({ error: APPLE_SAID.nothingLive, reason: 'expired' }, 401);
-    if (appleAiPlan(seen.licence.plan, held.row) !== seen.licence.plan) {
-      return reply({ error: 'Your licence needs renewing — RATA does this itself when it is online.', reason: 'expired' }, 401);
+    const plan = appleAiPlan(seen.licence.plan, held.row);
+    if (plan !== seen.licence.plan) {
+      if (appleLive(held.row)) return reply({ error: 'Your licence needs renewing — RATA does this itself when it is online.', reason: 'expired' }, 401);
+      asked = validate(body, planDef(plan));
+      if (asked.error) return reply({ error: asked.error, reason: asked.reason }, asked.status);
     }
   }
 

@@ -580,8 +580,9 @@ export function appleLive(row, now = Date.now()) {
    Apple's test environment, which costs nothing, gets no 30-day licence.
 
    A refund does not shorten a licence already issued: Apple reports it as
-   a revocation, not as an earlier end of the period. Renewal stops then
-   (appleLive), and the AI relay stops answering at once (appleAiLive),
+   a revocation, not as an earlier end of the period. Renewal stops once
+   that reaches the row, which only Apple's REFUND or REVOKE notification
+   does (appleLive), and the AI relay stops answering at once (appleAiLive),
    but mail keeps working until that licence's own end.
 
    The margin lets a customer who is offline when one period ends and the
@@ -626,8 +627,11 @@ export function appleAiLive(row, now = Date.now()) {
 
 /* The plan the AI relay validates an `apple:` licence against: the lower
    of the licence's own and its row's. When the row's ranks lower (Pro
-   changed to Base since the licence was issued) the relay answers as for
-   an expired licence, so the app renews to the row's plan and asks again. */
+   changed to Base since the licence was issued) and the row is live
+   (appleLive), the relay answers as for an expired licence, so the app
+   renews to the row's plan and asks again. A row only inside its margin
+   cannot be renewed from, so then the relay answers what the row's plan
+   allows. */
 export function appleAiPlan(licencePlan, row) {
   const held = row && row.plan;
   return ORDER.indexOf(held) < ORDER.indexOf(licencePlan) ? held : licencePlan;

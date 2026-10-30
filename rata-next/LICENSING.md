@@ -121,9 +121,12 @@ which says when a billing grace period ends. A renewal info is used only
 with a transaction of the same request that has the same original
 transaction id and was verified in the same environment; the grace period
 it states is recorded under the same guard as a notification's, stamped
-with when Apple signed it. So the phone alone keeps a customer in Apple's
-billing grace period licensed, even when no notification reaches
-mailrata.org.
+with when Apple signed it. So a phone that sends it keeps a customer in
+Apple's billing grace period licensed by itself, even when no notification
+reaches mailrata.org. The StoreKit code (`claude/iap-native`) sends only
+`transactions` so far: until a build sends `renewalInfos` too, a grace
+period reaches the row only through Apple's notifications (`LAUNCH.md`
+§11, steps 4 and 5).
 
 **Before the Mac App Store build ships:** the App Store app's bundle id,
 `org.mailrata.mail`, is shared by the iPhone and Mac apps (Universal
@@ -168,7 +171,15 @@ It is not shorter after a refund. Apple reports a refund as a revocation,
 not as an earlier end of the period, so a licence issued before it keeps
 unlocking mail until its own end: after a refund on the first day of a
 monthly period, about 30 days. What a refund stops at once is AI (below,
-*Refunds, cancellations and revocation*), and the next renewal.
+*Refunds, cancellations and revocation*), and the next renewal, but only
+once Apple's REFUND or REVOKE notification for the period the row records
+has reached mailrata.org. Nothing else records a refund: StoreKit stops
+listing a refunded purchase, and `/api/licence/apple` drops one the phone
+sends with a `revocationDate` (`appleIgnored`, `revoked`). Without the
+notifications (`LAUNCH.md` §11, step 5) the row stays live to the end of
+the refunded period: the licence renews until then, one renewed at that
+end lasts the margin past it (3 days; an hour in the test environment),
+and the AI relay answers to the same end.
 
 In the test environment, a subscription bought in TestFlight renews once a
 day, up to six times a week (App Store Connect Help, *Subscription renewal
@@ -210,7 +221,8 @@ that licence's end (above, *Why 30 days*): mail keeps working, and the
 licence is not renewed. The AI relay, whose answers cost money, does ask:
 for an `apple:` licence it reads the subscription's row before anything is
 reserved (`app/api/ai`, `appleAiLive`), and refuses at once a row that is
-refunded or revoked, and a licence with no row. A row that has only
+refunded or revoked (which only Apple's notification records, above), and
+a licence with no row. A row that has only
 expired is still answered until the end a licence issued from it would
 have, its period's end (or its billing grace period's) and the margin, so
 a paying customer is not refused between a period's end and its renewal
@@ -220,9 +232,13 @@ is answered as an expired licence is (`reason: 'expired'`): the app renews
 once and asks again, the renewal of a refunded row is refused too, and the
 customer reads the App Store's sentence beside the summary or translation
 made on the device. The relay also validates the request against the lower
-of the licence's plan and the row's: when the row's is lower (Pro changed
-to Base), it answers `expired`, so the app renews to Base and asks again.
-A row that cannot be read refuses (503), as the AI cap does.
+of the licence's plan and the row's. When the row's is lower (Pro changed
+to Base) and the row is live, it answers `expired`, so the app renews to
+Base and asks again. When the row is only inside its margin, renewal is
+refused and the app keeps the Pro licence, so `expired` would refuse every
+request until the next period reached the row; the relay then answers what
+Base allows and refuses the rest (403 `plan`). A row that cannot be read
+refuses (503), as the AI cap does.
 
 ## What this does *not* protect against
 

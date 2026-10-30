@@ -465,7 +465,8 @@ period as Apple last reported it (or of its billing grace period), plus 3
 days (1 hour in Apple's test environment), and never more than 30 days;
 the app renews it as the subscription renews. A refund does not shorten a
 licence already issued: mail keeps working until its end, about 30 days
-after a refund on a period's first day. What a refund stops at once is AI:
+after a refund on a period's first day. What a refund stops at once, as
+soon as Apple's notification of it reaches mailrata.org (step 5), is AI:
 the relay reads the subscription's record before each request and refuses
 one that is refunded or revoked (`LICENSING.md`, *Refunds, cancellations
 and revocation*).
@@ -504,19 +505,26 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    a licence, and an AI allowance, of their own: one subscription can cost
    up to six times `AI_MONTHLY_CAP_USD` in AI. Turn on
    **Billing Grace Period** (on the same Subscriptions page): RATA then
-   keeps renewing the licence until it ends. The phone reports the grace
-   period itself, with its renewal info, so this works even without the
-   notifications of step 5; with them, the record knows of the grace period
-   too when the phone has not been opened.
+   keeps renewing the licence until it ends. The notifications of step 5
+   tell the record of the grace period, even when the phone has not been
+   opened. An app build that sends each subscription's signed renewal info
+   beside its purchases (`renewalInfos`) also reports it from the phone, so
+   with such a build it works without step 5 too. The StoreKit code
+   (`claude/iap-native`) does not send renewal info yet: until a build
+   that does is in the App Store, a customer in a grace period is licensed
+   past 3 days after their period's end only through step 5.
 5. **Server notifications**: the app → App Information → App Store Server
    Notifications. Version 2, the URL
    `https://mailrata.org/api/apple/notifications`, for **both** Production
-   and Sandbox. The phone alone renews a licence correctly, grace period
-   included, but this URL is still what records refunds and revocations
-   promptly: StoreKit stops listing a refunded purchase rather than sending
-   it, so without the notifications the record stays live to the end of the
-   refunded period, and the licence renews and the AI relay answers until
-   then. Types RATA has no use for are answered 200 and change nothing,
+   and Sandbox. The phone alone renews a licence correctly (a grace period
+   too, with a build that sends renewal info: step 4), but this URL is the
+   only thing that records a refund or a revocation: StoreKit stops listing
+   a refunded purchase rather than sending it, and mailrata.org ignores a
+   purchase the phone sends that says it was refunded. So without the
+   notifications the record stays live to the end of the refunded period:
+   the licence renews until then, one renewed at that end lasts 3 days
+   past it, and the AI relay answers until 3 days past it too (an hour, in
+   the sandbox). Types RATA has no use for are answered 200 and change nothing,
    among them `RESCIND_CONSENT` (a parent withdrew consent under the age
    laws Apple applies in Texas; Apple then stops the app launching on that
    child's device by itself).
@@ -535,15 +543,16 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
     tie to a person; answer *linked to the user* unless you are sure it is
     not. The privacy policy (§5) already says what is kept, under
     *Subscribing in the iPhone app*.
-11. **Test from TestFlight**, signed in to the App Store as the sandbox
-    tester: buy Base, upgrade to Pro, restore purchases on a second device,
-    and cancel. After each, Supabase → Table Editor →
+11. **Test from TestFlight** with your own Apple Account (TestFlight
+    purchases cost nothing), or with the step-6 sandbox tester on a
+    development build: buy Base, upgrade to Pro, restore purchases on a
+    second device, and cancel. After each, Supabase → Table Editor →
     `apple_subscriptions` shows the subscription's row with `environment`
     Sandbox and the plan you expect; a cancelled one stays live until its
     `expires_at`. A subscription bought in TestFlight renews once a day, up
     to six times a week (App Store Connect Help, *Subscription renewal rate
-    in TestFlight*); only a Sandbox Apple Account signed in on a device,
-    with a development build, renews every few minutes.
+    in TestFlight*); only the step-6 Sandbox Apple Account, signed in on a
+    device with a development build, renews every few minutes.
 
 **How to tell it worked:** `https://mailrata.org/api/apple/notifications`
 in a browser answers `"configured": true` once Apple's root certificates

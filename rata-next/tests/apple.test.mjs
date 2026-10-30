@@ -1517,6 +1517,31 @@ export default async function run(state) {
       const upSummary = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'summarize', text: 'Hello there', licence: seed({ licencePlan: 'base' }) }) });
       check(upSummary.status === 403, `and not for what only Pro allows (${upSummary.status})`);
 
+      /* A Pro licence whose row is now Base and has only reached its
+         period's end, the renewal not yet recorded: renewing is refused
+         (no-subscription), so the app keeps the Pro licence, and `expired`
+         would refuse every request until the next period reached the row.
+         So the relay answers what Base allows, and refuses only the rest. */
+      const lowEdge = (environment, ago) => seed({ plan: 'base', product_id: BASE, environment, expires_at: iso(Date.now() - ago) });
+      const sandboxLow = lowEdge('Sandbox', 10 * 60e3);
+      at = sbx.fake.calls.length;
+      const lowTranslate = await ask(sandboxLow);
+      check(reserved(at) && lowTranslate.status !== 401,
+        `a Pro licence, its Base row expired ten minutes ago in the sandbox: a translation is answered (${lowTranslate.status}, here a stand-in with no ai_reserve)`);
+      check(refusal((await renew(sandboxLow)).d, 'no-subscription'), 'while renewing it to Base is refused until the renewal is recorded');
+      const prodLow = lowEdge('Production', DAY);
+      at = sbx.fake.calls.length;
+      const prodTranslate = await ask(prodLow);
+      check(reserved(at) && prodTranslate.status !== 401, 'in Production a day after the period\'s end, too');
+      at = sbx.fake.calls.length;
+      const lowSummaryR = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'summarize', text: 'Hello there', licence: prodLow }) });
+      const lowSummary = { status: lowSummaryR.status, d: await lowSummaryR.json().catch(() => ({})) };
+      check(lowSummary.status === 403 && lowSummary.d.reason === 'plan' && !reserved(at),
+        `and a summary, which Base does not include: 403 plan, nothing reserved ("${lowSummary.d.error}")`);
+      at = sbx.fake.calls.length;
+      const lowPast = await ask(lowEdge('Production', 4 * DAY));
+      check(lowPast.status === 401 && lowPast.d.reason === 'expired' && !reserved(at), 'past the margin: 401 expired, as before');
+
       /* Too many requests are refused before the row is read. */
       const busy = issue({ email: 'apple:2999999999999997', plan: 'pro' }, keys.privateKey);
       for (let i = 0; i < 20; i++) await ask(busy);

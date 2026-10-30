@@ -303,8 +303,13 @@ export default async function run(state) {
       && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription has not been refunded or revoked'),
       'both pages: a refund or a revocation stops AI at once (app/api/ai, appleAiLive), and mail runs to the licence\'s end');
     check(P.includes('With them the app sends Apple\'s signed renewal information for each subscription')
-      && P.includes('nor anything in the renewal information but when a billing grace period ends'),
-      'privacy: the renewal information the app sends (renewalInfos), and that only the grace period\'s end is kept from it');
+      && P.includes('nor anything in the renewal information but when a billing grace period ends, and when Apple signed that'),
+      'privacy: the renewal information the app sends (renewalInfos), and that only the grace period\'s end, and when Apple signed it (grace_signed_at), are kept from it');
+    /* What a renewal info carries (the library's JWSRenewalInfoDecodedPayload)
+       beyond the grace period, said where the page lists what the app sends. */
+    check(['whether it will renew and when', 'whether Apple is still retrying a failed payment', 'when the subscription most recently began',
+      'Apple\'s numbers for it, and when Apple signed it'].every((w) => P.includes(w)),
+      'privacy: the renewal information is described whole: when it renews, a payment Apple is retrying, when it began, Apple\'s numbers and its signing date');
     check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
       'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }
