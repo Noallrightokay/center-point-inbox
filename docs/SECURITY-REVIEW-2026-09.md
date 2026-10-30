@@ -212,6 +212,55 @@ customer's typed server says.
   tests cover them. `check_resolved` refuses a name if any answer is
   private. It has no loopback exception at all: the exception is only in
   `check_literal`, and only for the literal `127.0.0.1`.
+- *Follow-up, 2026-10-16, after this review (#164, #163; on main, first in
+  the next release: 0.1.52 and earlier refuse all of `64:ff9b::/32` and
+  have the old private names).* NAT64's
+  well-known prefix `64:ff9b::/96` is no longer refused outright: an
+  address in it is judged by the IPv4 address in its last 32 bits, as 6to4
+  is, and passes exactly when that IPv4 address would (`64:ff9b::808:808`
+  passes; `64:ff9b::7f00:1`, `64:ff9b::a00:1`, `64:ff9b::a9fe:a9fe`,
+  `64:ff9b::6440:1` and `64:ff9b::c0a8:101`, which wrap 127.0.0.1,
+  10.0.0.1, 169.254.169.254, 100.64.0.1 and 192.168.1.1, are refused),
+  because on an IPv6-only network with DNS64 it is the only answer an
+  IPv4-only mail host has. Still refused: the
+  local-use `64:ff9b:1::/48` (RFC 8215), the rest of `64:ff9b::/32`, and a
+  /96 with anything but zeros before the IPv4 address. IPv4-mapped and
+  IPv4-compatible addresses are unchanged. The private names
+  (`is_private_name`) now also refuse the zones `local` and `internal`
+  themselves and all of `arpa`; before, `localhost` itself and names under
+  `.localhost`, `.local`, `.internal` and `.home.arpa`. Tests:
+  `nat64_is_judged_by_the_ipv4_address_inside`,
+  `the_rest_of_the_nat64_block_is_still_refused`,
+  `the_other_ipv4_embeddings_are_judged_as_before`,
+  `a_nat64_answer_is_judged_like_any_other`, `names_that_are_never_public`
+  (guard.rs, every build); the NAT64 tests in `resolve.rs`, `imap.rs` and
+  `smtp.rs` (a hostile answer refused on linking, a refresh, the watch and
+  sending, and a public one dialled; through a scripted hickory resolver,
+  so not in a `system_dns` build); and the loopback suite's
+  `guard_admits_only_the_literal_loopback_address` (`tests/loopback.rs`,
+  CI job *Mail layer against real servers*), which pins that
+  `64:ff9b::7f00:1` and `64:ff9b::127.0.0.1` stay refused with
+  `loopback-tests` on, as literals and as a resolved answer: that
+  feature's exception for the literal `127.0.0.1` is the guard's one
+  deliberate hole.
+- *For the next review part (#163).* `desktop/rata-mail/src/dns_sd.rs`,
+  compiled only for iOS (and on a Mac with the test-only `system-dns`
+  feature), holds the mail engine's first and only `unsafe` code: there
+  was none in `desktop/rata-mail` at v0.1.52 (`0c60aad`), and on main
+  there are nine uses, all in that file. They are the `unsafe extern "C"`
+  block declaring dns_sd's `DNSServiceQueryRecord`,
+  `DNSServiceRefSockFD`, `DNSServiceProcessResult` and
+  `DNSServiceRefDeallocate` and `poll`, and eight `unsafe` blocks, each
+  with a `SAFETY` comment: in the reply callback, the cast of its context
+  pointer back to the question's state, the rdata slice built from the
+  pointer and length dns_sd hands over, and the reply's name read as a C
+  string; then starting a question, freeing it, reading its socket,
+  `poll`, and `DNSServiceProcessResult`. The reply callback is an
+  `extern "C" fn` that must never panic, which across that boundary would
+  end the app. No part of this review has covered it yet; what it hands
+  on comes from the network's resolver, so it is a stranger's input.
+  `records.rs`, which parses that rdata, is safe Rust and tested on every
+  system.
 - Every socket in the engine's non-test code opens in `imap::dial`, which
   IMAP, the IDLE watch and SMTP all call with the addresses `resolve_public`
   returned, so there is one lookup and no rebinding window.
@@ -732,3 +781,68 @@ costs only one Trash entry per save.
 - Not done: real Gmail (P3-2 is for B2), a real Windows or Mac for the
   marks, and a packaged build. No page code was changed, and no claim here
   depends on the page beyond what the harness checks.
+
+## Part 4 (2026-10-14): connected accounts, Apps and the demo (SEC-11)
+
+Reviewers: fresh agent sessions with no part in writing the code. Each area had a finder; each finding was checked by three independent verifiers (one trying to refute it, one tracing it, one judging its impact) and kept only when two agreed; a completeness critic then sent two more rounds of hunts. Scope: Share to Slack (K3), OneDrive (K2), Google Drive (K4), the shared sign-in and keychain code (`oauth.rs`, `vault.rs`, `store.rs`, `core.rs`), the Apps view and Choose files (#149), the WebKit PDF fix (#151) and the demo builds (#150, #152). Checked on `main` at `f33cd9a`.
+
+**Result: no High.** 6 Medium and 20 Low, after merging duplicates. None of OneDrive, Google Drive or Share to Slack is switched on in any released build (no client id is compiled in), so the findings in those services reached no tester; the platform findings (R5, R6, R13, R14) and R16 did. Stage A fixes the platform, the demo, the page and every Low that one service's code holds; stage B, the connect and disconnect lifecycle across the three services, must land before the owner adds any registration to a build.
+
+Status on `main` at `39f879a` (2026-10-16): stage A has merged, for the demo (#155), the page (#156), Slack (#159), the platform (#160) and the drives (#157: R19, R20 and R18's OneDrive and Google half). Stage B has not; each row says which.
+
+| # | Area | Finding | Severity | Status |
+|---|---|---|---|---|
+| R1 | Sign-in to OneDrive, Google Drive, Slack | A local program that reads the sign-in URL can connect its own OneDrive, Google Drive or Slack account, so the customer's saves and shares go to it | Medium | Open: stage B, before any registration is added to a build. |
+| R2 | Slack sign-in listener | Slack's sign-in listener holds only 127.0.0.1 while the redirect is `localhost`, so a program on [::1] at the fixed port gets the callback and can phish a second consent for its own token | Medium | **Fixed in #159.** |
+| R3 | Disconnect | A stored Slack, OneDrive or Google Drive sign-in is hidden, with no Disconnect, on Base, after a lapse, when parked, or in a build without the client id | Medium | Open: stage B, before any registration is added to a build. |
+| R4 | Revoking at the provider | Disconnect and Delete account leave RATA's Slack and Google grants live at the provider | Medium | Open: stage B, before any registration is added to a build. |
+| R5 | Two copies of RATA | Two RATA processes can run at once: a stale process's whole-file save drops or restores connection links, and Disconnect or Delete account in one does not reach the other | Medium | **Fixed in #160:** a lock on the list (`store::hold`) on every system, single instance on Windows and Linux, and start forgetting a sign-in the list has no link for. The optional check at save time, that the file has not changed since it was read, was not done. |
+| R6 | Windows keychain | On Windows every keychain entry is written CRED_PERSIST_ENTERPRISE, so mail passwords and the Slack, OneDrive, Google and Microsoft tokens travel with a roaming profile, and Delete account removes only this PC's copy | Low | **Fixed in #160:** RATA writes its own entries CRED_PERSIST_LOCAL_MACHINE, and start rewrites older ones and deletes a mailbox's that the list no longer names. See the trade-off below. |
+| R7 | Share to Slack targets | Share to Slack's target list cannot tell the customer from a look-alike, a guest from a colleague, or an external Slack Connect channel from an internal one | Low | **Fixed in #159.** |
+| R8 | Saves in flight | An upload or share in flight is not bound to the connection it began on: after Disconnect it keeps sending and says 'Saved', and after Disconnect and Connect a retry can re-send the whole file into the newly connected account | Low | Open: stage B, before any registration is added to a build. |
+| R9 | Tokens in memory | Tokens held in memory are never checked against the keychain: a process keeps using and re-writing a sign-in another process disconnected, and with Slack rotation the second process to renew parks a working sign-in | Low | Open: stage B, before any registration is added to a build. |
+| R10 | Privacy policy | The privacy policy becomes untrue once RATA_MS_CLIENT_ID (or the Slack or Google variables) is set, and a test forbids it from naming the services | Low | Open: stage B, before any registration is added to a build. |
+| R11 | Delete account wording | Delete account in the app does not say it removes the Slack, OneDrive and Google Drive sign-ins and folder links, nor what stays granted at the provider, and Disconnect never says the provider was not told | Low | Open: stage B, before any registration is added to a build. |
+| R12 | Slack link previews | With files attached, the mail's text goes to Slack as initial_comment, which cannot turn link unfurling off | Low | **Fixed in #159.** |
+| R13 | Windows store folder | On Windows the store lives in Roaming AppData, so the licence token and account list go to a profile share in clear and two PCs overwrite each other's list | Low | **Fixed in #160.** |
+| R14 | Fields from a newer build | An older RATA sharing the same files drops the Slack, OneDrive and Google links on its first save, and this build will do the same to a newer build's fields | Low | **Fixed in #160.** |
+| R15 | Google Drive Disconnect | Disconnecting Google Drive on one computer ends Google Drive in every copy of RATA on that Google account, and the others are told Google signed RATA out | Low | Open: stage B, before any registration is added to a build. |
+| R16 | Apps, Your accounts | Website: Your accounts (rata_apps) is shared by every RATA account in the browser and survives Sign out | Low | **Fixed in #156:** the store is `rata_apps_<uid>`; the 0.1.51 entry moves once (in the app) or keeps only pins and recent (on the website). The file vault (IndexedDB `rata-files`) is still one per browser, deleted whole by any account's Delete account; keying it per account is a follow-up. |
+| R17 | Slack listing | Slack targets come from conversations.list, which spends a silent 15-page cap on every public channel, and one failed page throws the listing away | Low | **Fixed in #159.** |
+| R18 | Listing and error memory | Slack target listing keeps every raw page it reads: about 2 GiB from one hostile listing | Low | The Slack listing: **fixed in #159** (each page read straight into typed records, at most 200 items a page, names cut to 80 characters). The OneDrive and Google error bodies: **fixed in #157** (an answer that is not a success is read only to 64 KiB, `ERROR_MAX`, and parsed for Graph's `error.code` or Google's first reason, never kept as a `serde_json::Value`). |
+| R19 | OneDrive token rotation | A rotated OneDrive refresh token that the keychain only half-writes is not put back, so the next launch sends a spliced token and parks OneDrive | Low | **Fixed in #157:** a rotation the keychain refuses or half-writes gets back the token the keychain last held whole (`Kept::stored`), never the one held in memory; Google Drive the same. |
+| R20 | Large uploads | Large uploads are never resumed: one dropped connection or 5xx cancels the whole save, and OneDrive reports upload-host errors as 'not connected' or 'moved or deleted' | Low | **Fixed in #157:** a fragment or piece that fails part way is resumed from what the session holds (at most 3 resumes, each asking up to 4 times); a session that ended says so; when the last part may have arrived nothing is cancelled or sent again, and the save answers kind `unsure`, which the page says without inviting the retry that would make a second copy. The per-part timeout is unchanged (60 s plus 1 s per 64 KiB); the optional smaller part for slow lines was not done. |
+| R21 | Google file chooser | Choosing about 170 or more files in Google's chooser makes Connect fail silently after five minutes: the redirect does not fit the listener's 8 KiB request head | Low | **Fixed in #159.** |
+| D1 | Demo storage | Opening the single-file demo in Chrome or Edge wiped localStorage for every local HTML file | Medium | **Fixed in #155.** The single-file demo with this bug had already been sent to demo recipients before #155 fixed it; a copy they kept still clears every local HTML file's storage when opened, so they need the fixed file. |
+| D2 | Demo AI buttons | The demo's AI buttons called mailrata.org and always failed | Low | **Fixed in #155.** |
+| D3 | Demo addresses | Invented sample mail used addresses at real domains, including gmail.com | Low | **Fixed in #155.** |
+| D4 | Demo build folder | build.sh deleted whatever directory it was given as out-dir | Low | **Fixed in #155**, after three review rounds: a folder is emptied only when it holds `demo-backend.js` and nothing but build names, or is the demo's own `out/`. |
+| D5 | Demo sign-out | Sign out and Delete account in the demo went to auth.html, which the demo does not ship | Low | **Fixed in #155.** |
+
+### Notes on the fixes
+
+- **R6, a roaming profile shared with an older RATA.** Start deletes a
+  mailbox's Windows entry whose address is not on this computer's list.
+  While another PC on the same roaming profile still runs 0.1.51 or older,
+  that PC's mailbox entries roam in and are deleted here, and that PC asks
+  for them again. A second PC that shared the roaming list also starts
+  empty once the first has moved the list to Local AppData (R13), and links
+  its mailboxes and pastes its licence again. Both are as designed, and
+  `BETA.md` §4 tells testers.
+- **R2, Windows.** The Slack listeners do not set Windows'
+  `SO_EXCLUSIVEADDRUSE`, which keeps another socket from being bound to
+  the same address and port. A follow-up; it needs `socket2`.
+- **R16, the file vault.** Deferred on purpose (see its row). Whoever keys
+  `rata-files` per account must also change the I7 harness check that
+  expects it gone after Delete account.
+
+### How this was checked
+
+The reviewers' own runs are recorded in each fix's pull request. On `main`
+at `39f879a`, for this record: `cargo test` in `desktop/rata-mail`, 318
+tests (two ask real DNS for MX records, which the container this was run
+in cannot, and failed there);
+`./sync-ui.sh` then `cargo test` in `desktop/rata-app/src-tauri`, 326 passed
+on Linux; the driven interface (`ui-harness.mjs`), 579 checks passed; and
+`npm run build && npm test` in `rata-next`, 841 checks passed. CI's
+*Desktop shell on Windows* passed on the same commit.

@@ -25,16 +25,16 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4). 285 tests. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard (which judges a NAT64 address by the IPv4 address inside, since #164; first in the next release), server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`), and on iOS looking names up through the system's own resolver instead of hickory (`dns_sd.rs` asks, `records.rs` reads the answers; *Name lookups on iOS*, below). Standalone, knows nothing about the app. 343 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). CI job *Mail layer on macOS* (`.github/workflows/mail-apple.yml`, workflow *Mail on Apple systems*, on every change to the engine or that file; not part of the release gate) runs the 343 with hickory, as the macOS app has it; again with `--features system-dns`, as iOS looks names up (337: the six tests that need hickory do not exist in that build; and 12 that exist only in such a build, ignored there and run in a step of their own, one at a time, since ten of them ask real DNS); clippy with that feature and for `aarch64-apple-ios`; checks with `cargo tree` that neither iOS target builds hickory, System Configuration or resolv-conf; builds and links the tests for iOS and the iOS Simulator; and runs the library's tests in an iOS Simulator (337, then the 12) as a bare process (`xcrun simctl spawn`), outside any app's sandbox. Linux CI never compiles the iOS code: check it here with `cargo clippy --all-targets -- --cfg system_dns -D warnings` (*Name lookups on iOS*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 326 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (562 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (579 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
 | `infrastructure/monitoring/` | The uptime and alerting recipe (`/api/health`, healthchecks, Stripe failures). |
-| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's registrations for OneDrive, Slack and Google Drive), `OWNER-CHECKLIST.md` (every step only the owner can take, in the order that unblocks the most, each with where its full steps are), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
+| `docs/` | `MVP-PLAN.md` (the plan to MVP and its task cards), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` and `MVP-EVIDENCE.md` (the owner's live-provider checklist and its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's registrations for OneDrive, Slack and Google Drive), `OWNER-CHECKLIST.md` (every step only the owner can take, in the order that unblocks the most, each with where its full steps are), `APP-STORES.md` (RATA on the iOS App Store and Google Play: the owner's decisions, the store rules that shape the design with their sources, the stages and branches in flight, and the owner's App Store Connect steps; nothing in it has run on a phone), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 | `DESIGN.md` | How RATA looks, app and website: tokens, type, shape, copy. The CSS variables at the top of each page are its tokens. |
 
 There is no `src/`. Nine .NET microservices on Kubernetes were abandoned and
@@ -71,12 +71,20 @@ four through the GitHub UI, and an assistant session cannot do it at all.
 
 Nothing is built until `gate` (*Tests before a release*: `sync-ui.sh`, the
 engine and shell tests, the driven harness, the update feed's rules in
-`harness/feed.test.cjs`, and the demo's rules in `demo/check.mjs`) passes on the commit being released (BUG-R,
-v0.1.43); `create-release` and `installers` both need it, and `installers`
-names `needs.gate.result == 'success'` because its `always()` turns off the
-implicit check. A merge without a bump still stops at `plan`. Keep gate's
-steps in step with `desktop-ci.yml`. The first real run of the gate is
-v0.1.43's.
+`harness/feed.test.cjs`, and the demo's rules in `demo/check.mjs`) and its
+Windows half `gate_windows` (*Tests before a release (Windows)*, on
+`windows-latest`: `sync-ui.sh`, then `cargo test --bin rata-app -- vault::
+store:: tests::at_start`, since RATA writes its own Windows keychain
+entries and Credential Manager cannot be reached from Linux; SEC-11) pass
+on the commit being released (BUG-R, v0.1.43); `create-release` and
+`installers` both need both, and `installers` names
+`needs.gate.result == 'success'` and `needs.gate_windows.result ==
+'success'` because its `always()` turns off the implicit check. A merge
+without a bump still stops at `plan`. Keep gate's steps in step with
+`desktop-ci.yml`, and `gate_windows`'s with its job *Desktop shell on
+Windows*, step for step. The first real run of the gate is v0.1.43's;
+`gate_windows` first runs on the next release, while its Desktop CI twin
+has run on every change to the app since #160.
 
 apt never waits on a stalled download (#111, first released in v0.1.44).
 Before each of the seven steps that install with apt (`apt-get install`,
@@ -86,8 +94,9 @@ or `playwright install --with-deps`: three in `desktop-ci.yml`, one in
 `/etc/apt/apt.conf.d/80-rata-retries` (`Acquire::Retries "3"`, 30 s http
 and https timeouts), and each of those seven has `timeout-minutes: 8`, so
 a real hang fails under its own name instead of using up the job. The
-installed-app smoke's `xvfb` install runs later in the same installers job,
-so the settings cover it too, under that step's own 10 minutes. On #110 two
+installed-app smoke's install of `xvfb`, `xdotool` and `dbus` runs later in
+the same installers job, so the settings cover it too, under that step's
+own 10 minutes. On #110 two
 jobs had spent their whole 20 minutes in apt before any test ran, and a
 session here cannot re-run a job. A new apt step gets both.
 
@@ -105,7 +114,17 @@ the draft release and stay on the run as an artifact. A bump that forgets
 the window `title` fails here. The first real run is v0.1.39's; the macOS
 and Windows halves had never run before it, and on macOS a runner that will
 not let the title be read falls back to "stays up, clean log" with a
-warning. The build step also gets `RATA_MS_CLIENT_ID` from a repository
+warning. Each installer is then launched a second time while the first is
+up (SEC-11 R5): the second must exit 0 within 15 s (`AGAIN`, `-Again`),
+the first must stay up, and the second's log is checked for a panic too.
+On Windows and Linux single instance hands over to the first; on Linux
+that is a D-Bus name, which a runner has no session bus for, so
+`smoke-installed.sh` runs itself again under `dbus-run-session`
+(`RATA_SMOKE_BUS` stops it doing so twice) and the smoke step installs
+`dbus`. On macOS the list's lock stops the second copy once its three
+seconds' wait is up. The Windows smoke waits for a title beginning `RATA`,
+because single instance's own hidden window (`org.mailrata.desktop-siw`)
+can be taken for the main window until RATA's is up. The build step also gets `RATA_MS_CLIENT_ID` from a repository
 **variable** (not a secret: a public client id), which turns on Sign in
 with Microsoft; unset, the build has none (see *Sign in with Microsoft*).
 
@@ -226,7 +245,18 @@ K1 and K6's page (SEC-10); v0.1.51 adds the Apps view (pins, Recent,
 search, Your accounts), OneDrive and Google Drive (K2, K4, live in a
 build with the owner's registrations) and Choose files, and reads PDFs in
 WebKit (PDF.js's `for await` over a `ReadableStream`, which WebKit cannot
-iterate; `pdfLib` gives the stream an async iterator). An
+iterate; `pdfLib` gives the stream an async iterator); v0.1.52 is the
+security review's part 4, stage A (SEC-11): one RATA at a time through a
+lock on the list, the list and Windows keychain entries kept on this
+computer rather than a roaming profile, Slack's sign-in on both loopbacks
+with targets that say who they are and no link previews, OneDrive and
+Google Drive saves that resume and say when a file may already be there,
+and Apps' accounts kept per RATA account. On main and in no release yet,
+so first in the next one: the outbound guard judges a NAT64 address by
+the IPv4 address inside instead of refusing all of `64:ff9b::/32`
+(#164), refuses the zones `local`, `internal` and all of `arpa`
+themselves (#163), and the engine can look names up through the system
+on iOS (#163; no released build is for iOS). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -1680,13 +1710,25 @@ exists only in a build with `RATA_SLACK_CLIENT_ID` (a repository
 variable, passed like `RATA_MS_CLIENT_ID`; Copy diagnostics says "Slack
 sharing yes/no"); without it Slack answers `available: false` and every
 command refuses with `NO_SLACK`. A user token over PKCE, no client secret:
-the browser opens `slack.com/oauth/v2/authorize` with the seven user
-scopes in `docs/CONNECTIONS-SETUP.md`, a one-shot listener on 127.0.0.1 at
-the first free one of `PORTS` (28417 to 28419, which the owner registers
-as `http://localhost:<port>`; Slack matches the port, so change both
-together), and `oauth.v2.access` with the verifier; shared pieces with
-`oauth.rs` (one sign-in at a time, the listener, the HTTPS client),
-Microsoft unchanged. The token, refresh token and expiry live in the
+the browser opens `slack.com/oauth/v2/authorize` with the six user scopes
+of `USER_SCOPES` (`chat:write`, `files:write`, `im:write`,
+`channels:read`, `groups:read`, `users:read`; `im:read` was dropped in
+SEC-11, since no direct message is listed, so a leaked token does not say
+whom the customer writes to, and the owner's registration may keep or
+lose it: a request may ask for fewer scopes than are registered), a
+one-shot listener on both `127.0.0.1` and `::1` at the first of `PORTS`
+(28417 to 28419, which the owner registers as `http://localhost:<port>`;
+Slack matches the port, so change both together) where RATA can hold both
+(`slack::listen_on`, `oauth::Loopback`, `wait_for_code_on`; SEC-11 R2):
+browsers try `::1` first for `localhost`, so a port where another program
+holds either address is passed over, and only a computer with no IPv6
+loopback at all (`AddrNotAvailable`, `Unsupported`, EAFNOSUPPORT) makes do
+with `127.0.0.1`; no port at all says another program is using them. Then
+`oauth.v2.access` with the verifier; shared pieces with `oauth.rs` (one
+sign-in at a time, the listener, the HTTPS client), Microsoft and Google
+unchanged (one `127.0.0.1` listener: their redirect names the address).
+Windows' `SO_EXCLUSIVEADDRUSE` is not set on these listeners (a
+follow-up; it needs `socket2`). The token, refresh token and expiry live in the
 keychain under `org.mailrata.desktop.slack` (`workspace`, pieces
 `workspace#2…#8`, mark `rata-slack1:`); the store keeps only the team, the
 user id, when and whether it is parked. A rotation the keychain refuses is
@@ -1695,13 +1737,47 @@ keychain first under the list's lock and bump a Slack generation, so a
 sign-in or rotation answering later writes nothing (SEC-7/SEC-8's
 pattern); Delete account cancels a waiting sign-in and forgets Slack
 before the licence; Disconnect then calls `auth.revoke`, best effort.
-`slack_targets`: `conversations.list` (member channels, private, ims) and
-`users.list` (no deleted, bots or Slackbot), 200 a page, 15 pages at most.
-`slack_share`: `chat.postMessage` (no unfurls, `parse=none`), files by
-`files.getUploadURLExternal`, the bytes to `https://*.slack.com` only,
-then `files.completeUploadExternal`; at most 10 files, 25 MB, 40 000
-characters, no disguised program, text with `& < >` escaped and control,
-bidi and invisible characters removed. A revoked token parks Slack
+`slack_targets` (SEC-11 R7, R17, R18) answers `{targets, truncated}`:
+`users.conversations` (public and private channels, not archived; only the
+person's own, never every public channel of the workspace; no direct or
+group messages, since a person is reached through `conversations.open`)
+and `users.list` (no deleted people, bots, app users or Slackbot), 200 a
+page, 15 pages at most. Each page is read straight into typed records
+(`Page`, `Capped`, `Obj`; names cut to 80 characters as they are read, at
+most 200 items kept a page, no page ever held as a `serde_json::Value`), so
+a hostile listing cannot fill memory. `truncated` is set when the pages
+run out with a cursor pending, a page holds more than asked, a cursor is
+over 1 024 characters or repeats, or a later page is refused `offline`
+(what was read is kept); the first page failing fails the listing. Each
+target carries `me`, `handle`, `real_name` (when not the name shown),
+`standing` (`guest`, `single-channel guest`, `invited`) and `shared`
+(`external`, including a pending external share, or `org`; never from
+`is_shared` alone); the customer comes first as `me` (RATA writes nothing
+into a name), then channels by name with external ones last, then people
+by name. bridge.js still reads a bare list (the demo's backend answers
+one). `slack_share`: text always goes through one `post_text`
+(`chat.postMessage` with `unfurl_links` and `unfurl_media` false,
+`parse=none`, `link_names` false), so Slack's unfurler never fetches a
+tracking link from the mail; with files, the bytes go up first
+(`files.getUploadURLExternal`, to `https://*.slack.com` only), then the
+text as its own message, then `files.completeUploadExternal` with only
+`files` and `channel_id`, never `initial_comment` or `blocks`, which
+cannot turn unfurling off (SEC-11 R12). A completion that fails after the
+text went is refused with kind `partial` ("The message was posted to …,
+but the files were not: …"), never "Shared"; the page empties the message
+box, adds "Send again to share only the files.", and audits "the message
+only". At most 10 files, 25 MB, 40 000 characters, no disguised program,
+text with `& < >` escaped and control, bidi and invisible characters
+removed. **The dialog (SEC-11 R7):** each row says what it is (You, Guest,
+Single-channel guest, Invited, has not joined, Person, Channel; Channel,
+shared with another organization; Channel, shared across your
+organization: `slackKind`) and shows the full name and `@handle`; search
+reads the name, handle and full name. Choosing a guest, a single-channel
+guest or an external channel turns `#slack-lead` amber and says people
+outside the workspace will see what is sent and keep it (`slackOutside`,
+never for the customer's own row). A `truncated` listing says "Slack listed
+only part of your channels and people; one may be missing." The audit line
+and the toast name a target with what tells it apart (`slackWho`). A revoked token parks Slack
 ("Connect Slack again"); `token_expired` renews once; a rate limit of 10 s
 or less is waited out once. Nothing reads Slack. Not yet seen against a
 real Slack app (needs the owner's registration). **OneDrive (K2,
@@ -1718,7 +1794,13 @@ drive), no address. Refresh token in the keychain under
 `vault.rs`), access token in memory renewed 2 minutes early; a 401 renews
 once, `invalid_grant` parks ("Connect OneDrive again"), network errors
 never park; Disconnect and Delete account empty the keychain under the
-list's lock and bump a generation, as K3. Listing: `/children`, `$top=200`,
+list's lock and bump a generation, as K3. A rotated refresh token the
+keychain refuses, or takes only half of (the pieces but not the entry
+naming them), is held in memory for the session, and RATA writes back
+`Kept::stored`, the one the keychain last held whole, never the one held
+in memory, which after an earlier refusal the keychain never had (SEC-11
+R19, as `core.rs` does for a mailbox, security review L5); the keychain
+catches up at the next renewal it takes. Listing: `/children`, `$top=200`,
 `@odata.nextLink` followed only to Graph's own scheme, host, port and
 `/v1.0/` (else `truncated`), 10 pages and 2 000 items at most, folders
 and files only; the top's id is `""`. Reading: metadata first, refused
@@ -1730,11 +1812,47 @@ name) **without** the Authorization header. Saving: always an upload
 session with `conflictBehavior: rename`, because Graph's simple PUT
 replaces an existing file and documents no conflict behaviour; one
 fragment, or 10 MiB fragments (multiples of 320 KiB) above that, to the
-session's own content-host address without the token, cancelled with
-DELETE on a failure; `safe_file_name`, `confirmed` for a disguised
-program, no empty file, `SAVE_MAX`. Ids: letters, digits and `!._-`,
-alphanumeric first, at most 256. Errors are the status and Graph's error
-`code` only; nothing goes to Copy diagnostics. Only `/me/drive`: no
+session's own content-host address without the token; `safe_file_name`,
+`confirmed` for a disguised program, no empty file, `SAVE_MAX`. **A
+fragment that fails part way does not end the save (SEC-11 R20, #157):**
+after a transport error, a 5xx, a 429 or 503 whose Retry-After is at most
+`WAIT_MOST` (10 s), or a 416 (a range OneDrive already had), RATA asks
+the session where it stands (`session_stands`: `GET` on the upload
+address without the token, up to `ASKS` (4) times, waiting 1, 2, 4 and
+8 s, or Retry-After up to `WAIT_MOST`) and goes on from the first
+`nextExpectedRanges` offset, never past what was sent, at most `RESUMES`
+(3) times a save. Each fragment's own timeout is unchanged (60 s plus 1 s
+per 64 KiB). The upload address's 401, 403 without a Graph code, 404, 410
+and `itemNotFound` (`session_ended`) say "The upload to OneDrive stopped
+part way. Try again." (`UPLOAD_STOPPED`), never not connected or not
+found; 413, 507 and `quotaLimitReached` are said as before. A failed
+session is cancelled with DELETE, except when OneDrive may have made the
+file. Once an attempt at the last fragment went and its answer was lost
+(`NoAnswer::lost`: any transport failure but a connection never made,
+reqwest's `is_connect`) or was answered 416, the save is `made` for good:
+from then on only the session saying it still waits for bytes is a
+failure, and a session over, gone or silent is refused with kind
+`unsure` and `MAY_HAVE_SAVED` ("The connection to OneDrive was lost as the
+last of the file went up, so OneDrive may have saved it. Check the folder
+before saving it again."), with nothing cancelled or sent again, since a
+second session with `rename` would make `name 1.pdf`. A 5xx that gives no
+reason (not 507, a full drive) to the last fragment, with the session
+then over, is `unsure` too, in its own words (`MAY_HAVE_SAVED_AFTER_ERROR`:
+a front door's 502 or 504 can come after the file was made); a session
+still listing the range is gone on with, and one that cannot be asked is
+the 5xx as it is. After OneDrive's own answer every time (a 503 or 429
+throughout), or connections that were never made, the reason is said and
+the session cancelled; when the resumes run out after a lost last
+fragment, the session is asked once more to tell the two apart. The page
+says an `unsure` save as "<name>: <sentence>", never "Could not save",
+which invites the retry that makes a second copy, audits it as
+`cloud.save.unsure`, and reads the folder on show again (`cloudSave`;
+harness check). Ids: letters, digits and `!._-`, alphanumeric first, at
+most 256. An answer that is not a success is read only as far as
+`ERROR_MAX` (64 KiB; SEC-11 R18) and parsed for Graph's `error.code` alone
+(`GraphError`), never as a `serde_json::Value`, and said by its HTTP
+status when it does not parse; the rest is left unread. Errors are the
+status and that code only; nothing goes to Copy diagnostics. Only `/me/drive`: no
 SharePoint sites or Shared with me. Not yet seen against a real
 Microsoft account. **Google Drive (K4, `google.rs`)** exists only in a
 build with both `RATA_GOOGLE_CLIENT_ID` and `RATA_GOOGLE_CLIENT_SECRET`
@@ -1760,14 +1878,53 @@ redirect followed, `READ_MAX`; Google's own files through `files.export`
 (10 MB). `cloud_save`: always a new file in My Drive; multipart up to
 5 MB, else resumable in 8 MiB pieces following 308 `Range`, the session
 address required to match the upload address's scheme, host, port and
-path exactly (the token goes with the pieces, to that address only), a
-failed session deleted; `safe_file_name`, `confirmed`, 100 MB. Tokens,
-races and errors as K2: refresh token under `org.mailrata.desktop.google`,
-`invalid_grant` parks, Disconnect revokes at
-`oauth2.googleapis.com/revoke` best effort, the store keeps only the
-display name from `about.get`, when, and parked. `oauth.rs`'s listener
+path exactly (the token goes with the pieces, to that address only);
+`safe_file_name`, `confirmed`, 100 MB. **Resumed, as K2 (SEC-11 R20,
+#157):** a piece that fails the same ways (a transport error, a 5xx, a
+short Retry-After) is followed by a status question (`upload_stands`: an
+empty `PUT` with `Content-Range: bytes */<total>` and `Content-Length:
+0`, up to `ASKS` (4) times with the same waits); a 308 goes on from its
+`Range`, never past what was sent, and a 200 or 201 is the file; at most
+`RESUMES` (3) resumes, counted apart from the pieces. A 401 to a token
+Google took before is the token running out on a slow line (the session
+outlived it), so `Bearer` renews it for the same connection, at most
+`RENEWS` (2) times a save, asks what the session holds with the new token
+and goes on; only while the Google Drive connected when the save began is
+still connected, else "Google Drive was disconnected while RATA was
+saving the file, so nothing more was sent." and no other connection's
+token goes anywhere. Any other 401, or a 404 or 410, from a piece or a
+question is "Google Drive ended the upload part way. Try again."
+(`UPLOAD_ENDED`), never `Expired`, so `with_google` neither renews and
+begins again from byte 0 nor parks over it. A failed session is deleted,
+with the newest token, except when the last piece went and its answer was
+lost (`made`, kept for the rest of the save) and the session is then over
+or cannot say: that is kind `unsure` with `MAY_HAVE_SAVED` ("The
+connection to Google Drive was lost as the last of the file went up, so
+Google Drive may have saved it. Check your Google Drive before saving it
+again."), with nothing deleted or sent again, since Drive keeps two files
+of one name. A small save's one multipart request sent and its answer
+lost is `unsure` the same way; a connection never made is said as it is.
+The page treats `unsure` as for OneDrive. Tokens, races and errors as K2:
+refresh token under `org.mailrata.desktop.google`, the same `Kept::stored`
+write-back of a half-written rotation (R19), `invalid_grant` parks,
+Disconnect revokes at `oauth2.googleapis.com/revoke` best effort, the
+store keeps only the display name from `about.get`, when, and parked; an
+error answer is read to `ERROR_MAX` (64 KiB, R18) and parsed for Google's
+first `errors[].reason`, else its `status`, else the HTTP status. Still
+open for stage B (R8): neither service checks, before each fragment or
+piece, that the connection a save began on is still the one connected
+(only Google's token renewal does). `oauth.rs`'s listener
 can hand back extra redirect fields (`heard_with`, `wait_for_answer_from`;
-`heard_from` is gone). Not yet seen against a real Google account.
+`heard_from` is gone). It reads at most 64 KiB of a request (`HEAD_MAX`;
+8 KiB until SEC-11 R21, and Google's chooser puts every file picked into
+the address, about 47 characters each, so choosing some 170 files made
+Connect fail silently after five minutes) and parses only a request line
+whose CRLF arrived within it. A longer one gets a 414 page ("Too many files
+were chosen at once. Close this tab, choose fewer in RATA, and try again."
+for Google), its rest is read and dropped briefly so the page arrives, and
+the wait goes on: a line whose `state` cannot be checked never ends a
+sign-in, or another program could stop one. Not yet seen against a real
+Google account.
 **Create file (K6, SEC-9)**: the page sends
 only `{format, name, where}` (bridge.js drops anything else, and Rust has
 no parameter for `data`), and `created.rs` writes RATA's own blank docx,
@@ -1808,8 +1965,23 @@ a new tab on the website, never loaded in a RATA window (Google refuses
 sign-in in embedded webviews, and the main webview holds the bridge).
 Pins, Recent (last 4), search, and **Your accounts**: an optional Google
 and Microsoft address, refused unless one plain address, kept only in
-localStorage `rata_apps` (with pins and recent), never in `S` or what
-syncs, removed by Delete account; it adds Google's `authuser` (tiles then
+localStorage `rata_apps_<uid>` (`APPS_KEY`, one entry per RATA account,
+like the workspace's `LS_KEY` and the outbox's `OB_KEY`; SEC-11 R16), with
+pins and Recent, never in `S` or what syncs, so two people sharing a
+browser on mailrata.org never see each other's addresses or open Google as
+each other. Delete account removes only this account's entry. The
+browser-wide `rata_apps` of 0.1.51 is removed at the next load
+and moved once, only to an account with no entry of its own: all of it in
+the app (one person's computer), only pins and Recent on the website
+(nobody can tell whose those addresses were). The old entry goes before
+the new one is written, so a full localStorage loses the move rather than
+leaving the addresses where Delete account no longer looks. In the app, a
+second local account on the same computer keeps its own entry, as it does
+its workspace. The file vault (`FV_DB`, IndexedDB `rata-files`) is still
+one database for the browser, which any account's Delete account deletes
+whole (`wipeThisDevice`); keying it per account, with a move, is a
+follow-up, and the I7 harness check that expects `rata-files` gone after
+Delete account changes with it. Your accounts adds Google's `authuser` (tiles then
 use `docs.google.com/<kind>/create`, since `docs.new` drops a query) and,
 for Word, Excel and PowerPoint, `login_hint` through
 `m365.cloud.microsoft/launch/<app>`; sources in the comment above
@@ -1846,6 +2018,277 @@ own ports, the host and port that last worked for this mailbox first
 iCloud send waited out 465 on every address first. `Rata::send` goes
 through `usable` before anything is dialled, so a mailbox parked for its
 password sends nothing.
+**One RATA at a time, and a list and keychain that stay on this computer
+(SEC-11 R5, R6, R13, R14; #160).** Two RATA processes each held the whole
+list and saved it whole, so the last to save dropped the other's links,
+and Disconnect or Delete account in one never reached the other's held
+sign-ins. Now the first thing setup does, before the list or the keychain
+is read, is take an exclusive lock on `mailboxes.lock` beside the list
+(`store::hold`), waiting up to `HOLD_WAIT` (3 s) for one being let go; it
+is kept in `OneRata` and unlocked on `RunEvent::Exit`, so an update's
+restart finds it free. A RATA that finds it held (`Hold::Taken`) exits 0;
+where no lock can be had (`Hold::Unguarded`: a folder that cannot be made,
+a file system without locks) it starts unguarded, as before. The lock is
+the guard on all three systems because it is per account and per list (a
+`.deb` and an AppImage too); the file is never removed, since a lock on a
+file made again is a lock on a different file, and the system lets go when
+the process ends, however it ends. On Windows and Linux
+`tauri-plugin-single-instance` comes first, so a second launch in the same
+sign-in hands over (`show_main`: unminimise, show and focus, nothing else)
+and exits before its setup runs: a named mutex and a hidden window
+(`org.mailrata.desktop-siw`) on Windows, a D-Bus name on Linux. Not on
+macOS: the Finder and the Dock already bring a running RATA forward, and
+the plugin's guard there is one socket in /tmp for every account on the
+Mac, which another account can hold so that RATA never opens. On Linux the
+plugin unwraps zbus's reading of the session bus address, and one zbus
+cannot read (`disabled:`, `autolaunch:`, a `unix:` it does not know) made
+RATA panic at every start, so `single_instance_here` asks
+`zbus::Address::session()` first and leaves the plugin out then; with no
+address set zbus tries `$XDG_RUNTIME_DIR/bus`, and no bus there leaves the
+plugin without a guard, not a panic. Either way the lock still guards.
+Trap for mobile: the plugin is a dependency on every OS but macOS
+(`cfg(not(target_os = "macos"))`, so Android and iOS too, where
+`single_instance_here` does not exist), and `Hold::Taken` exits the
+process, which an iOS app must never do; a mobile build limits single
+instance to Windows and Linux and starts a phone without the lock instead
+(#166, in review; `docs/APP-STORES.md`). **Where the list
+lives (R13).** Setup opens `app_local_data_dir()/mailboxes.json`: on
+Windows Local AppData (`%LOCALAPPDATA%\org.mailrata.desktop`), which a
+roaming profile never copies to its share and which already holds the
+webview's data, the mail; on macOS and Linux the same folder as before.
+Until 0.1.52 it was Roaming AppData, copied to a file share in clear at
+every logoff, licence token and addresses and all, with each computer's
+copy overwriting the other's. `store::moved` moves it once, by its bytes
+and never through `Store::open` (which reads a file it cannot parse as an
+empty list): only a list that parses, only when the local folder holds
+none (a list there is never replaced, so one an older copy writes to the
+roaming folder later stays there), through `write_whole` (a fresh
+temporary file, 0600 on Unix, then the rename; `save` writes the same
+way), and the roaming copy, a half-done `.json.tmp` and the folder once
+empty go only afterwards. A roaming list that does not parse is left and
+RATA starts empty, as it would have; one that is there but cannot be read
+now (a redirected folder whose share is offline, a file another program
+holds) is opened where it is, since starting empty would make a local
+list that is never replaced; a failed move reads it where it was and tries
+again next start. A roaming copy that could not be removed is noted by its
+SHA-256 in `mailboxes.json.moved` and removed at a later start only while
+it is still exactly the list moved (`tidy_roaming`). Under FSLogix or User
+Profile Disks, Local AppData travels inside the profile container with the
+rest of that profile. **What start forgets (R5, R6).** `open_store`
+(main.rs) runs once, before `Rata` exists and with the lock held: any
+Slack, OneDrive or Google Drive sign-in the keychain holds (its entry or a
+piece a cut-short removal left) without a link in the list is forgotten
+(`vault::forget_unlinked`; nothing is sent to the provider), since nothing
+could use it or offer to disconnect it. Then, on Windows only,
+`vault::settle_windows` rewrites every RATA entry an earlier build wrote
+`CRED_PERSIST_ENTERPRISE` as `CRED_PERSIST_LOCAL_MACHINE`, and deletes a
+mailbox's entry or token piece (`SERVICE`, `PIECE_SERVICE`) whose address
+is not on the list: what Unlink or Delete account left in a roamed copy.
+Both act only on a list `Store::accounts()` vouches for (read, and of
+`store::SCHEMA` or older) and only under `Hold::Mine` (`listed`); a
+missing, unreadable or newer list, or no lock, forgets nothing. **The
+Windows keychain (R6).** keyring writes every Windows entry
+`CRED_PERSIST_ENTERPRISE`, which travels with a roaming profile to every
+computer the customer signs in to, and has no setting for it. So on
+Windows RATA writes its own (`vault::windows::write_here`, `CredWriteW`
+with `CRED_PERSIST_LOCAL_MACHINE`, `windows-sys` 0.60 as keyring uses) in
+keyring's form (target `<name>.<service>`, the name as user name, the
+secret as UTF-16 with no NUL), so keyring still reads and deletes it and
+reads what older builds wrote; a refused write is an error, never a
+roaming write. CI showed that a `LOCAL_MACHINE` write over an `ENTERPRISE`
+entry replaces it (one entry, not two). The two Windows-only tests run
+against the real Credential Manager under services of their own
+(`org.mailrata.desktop.test-*`, the start-up pass's deletions through
+`MailboxServices` stand-ins), so no real entry of RATA's is touched. The
+trade-offs, as designed: a second PC that shared the roaming list starts
+empty once the first has moved it, and links its mailboxes and pastes its
+licence again; and while another PC on the same roaming profile still runs
+0.1.51 or older, this PC's start pass deletes that PC's roamed mailbox
+entries for addresses not on this PC's list, and that PC asks for them
+again. **Fields from a newer build (R14).** `Contents::rest`
+(`serde(flatten)`) keeps every top-level field this build does not know
+and writes it back, so an older RATA sharing the file (a `.deb` and an
+AppImage of two versions) no longer drops a newer build's link while its
+sign-in stays in the keychain; Delete account leaves those fields (a field
+this build cannot read is one whose keychain entry it cannot empty, and
+the newer build still offers Disconnect while it is there), and `save`
+writes the larger of `SCHEMA` and the file's own version, never lowering a
+newer build's. **Raise `store::SCHEMA` whenever a field that says which
+keychain entries are in use moves, is renamed or changes shape**
+(`mailboxes` and each `email`, `slack`, `onedrive`, `google`, or a new
+field whose entries live under one of their services), or an older build
+reads the newer list as linking nothing and its start forgets the newer
+build's passwords and sign-ins; and keep the new shape readable by every
+older build (add a field beside the old one), since a build that cannot
+parse the file starts empty and saves its own list over it. A new field
+inside a mailbox or a link is not kept by `rest`; an older build's save
+drops it. Not done: R5's optional check at save time that the file has not
+changed since it was read. Tested by `tests::at_start_*` (main.rs) and the
+`store::` and `vault::` tests, which CI also runs on Windows.
+**Name lookups on iOS (#163; on main, in no release yet).** An iOS app
+cannot read the network's DNS settings (no `/etc/resolv.conf`, no System
+Configuration store), so there the engine asks the system's own resolver
+instead of hickory. No released build is for iOS; what #163 changed on
+the desktop, the private names below, is first in the next release. `build.rs`
+sets `cfg(system_dns)` for every iOS target, and on another Apple target
+only with the test-only `system-dns` feature, which the macOS app must
+never turn on; every other build keeps hickory. `hickory-resolver` is a
+`cfg(not(target_os = "ios"))` dependency, so iOS builds neither it nor
+System Configuration (*Mail layer on macOS* checks both iOS targets).
+Under `system_dns` SRV, MX and TXT go through dns_sd's
+`DNSServiceQueryRecord` (`dns_sd::ask`, each question on its own
+connection in a blocking task), their rdata is read by `records.rs` (plain
+Rust over bytes, compiled into every test build; a record cut short, run
+past its end or naming a host with anything but letters, digits, `-` and
+`_` is refused), and addresses come from getaddrinfo
+(`resolve::system_addresses`), which on an IPv6-only network is what
+makes a NAT64 address for an IPv4-only host. Ordering is shared
+(`by_preference`, `srv_choice`), so both resolvers' answers read alike.
+Each question gets `SYSTEM_WAIT` (10 s); one unanswered by then is a
+failed lookup and discovery goes on. Every question carries
+`FLAGS_RETURN_INTERMEDIATES`, so a name or record that does not exist is
+answered at once, empty; a "no such record" counts only with `FLAGS_ADD`
+and the type asked, and a cached one (`FLAGS_ANSWERED_FROM_CACHE`) only
+after `SETTLE` (1 s) with nothing fresher, since mDNSResponder can answer a
+cached "No Such Record" and then the real record. **No CNAME question,
+ever:** one about a name with no CNAME held up later questions reaching
+that name (getaddrinfo waited 10 s and more on macOS 15; a TXT question
+was waited out on macOS 26 and in the iOS 26.5 Simulator), and the
+system's cache is every app's. So L1's `autodiscover.<domain>` alias
+comes from an A question (`dns_sd::aliased`): the first CNAME the system
+hands back whose owner is the name asked. **Names never asked**
+(`records::question`, `Ended::NotAsked`): one with any byte outside
+`[A-Za-z0-9._-]` (dns_sd reads `\` as an escape: `loca\l` is `local`);
+anything under `local`, `localhost`, `internal`, `home.arpa`,
+`254.169.in-addr.arpa` and `8`/`9`/`a`/`b.e.f.ip6.arpa` (`UNASKED`: on
+Apple systems `local` and the link-local reverse zones go out by
+multicast DNS to the local network, which iOS asks the customer's leave
+for and which never says a name does not exist); and whatever
+`guard::check_literal` refuses, with `_` labels read as plain ones, and
+again for the domain under the service labels (`_imaps._tcp.192.168.1.1`).
+Any domain's SPF `redirect=` reaches this rule. A non-ASCII name is asked
+as `xn--…`. Every address getaddrinfo gives still goes through
+`resolve_public` and the guard, as hickory's do. Tests: `records::tests`
+and the shared `resolve` tests run everywhere;
+`resolve::tests::through_the_system` (10: MX, SRV, TXT, aliases, a name
+that does not exist, discovery, L1's evidence in time, `.local`, an IMAP
+greeting at the system's addresses) and `dns_sd::tests` (2: the deadline,
+and that every question frees its socket) exist only under `system_dns`,
+are `#[ignore]`d, and run only in *Mail layer on macOS*, on the Mac and in
+the Simulator, one at a time in a step of their own. They depend on outside
+servers as well as real DNS: Gmail's and Fastmail's IMAP (the dial and TLS
+greeting, no sign-in, through the platform verifier: the first sight of
+TLS verification in an iOS Simulator), gmail.com's `_imaps` SRV and SPF
+redirect, fastmail.com's SRV, and autodiscover.microsoft.com's alias to
+autodiscover.outlook.com; a change at Gmail, Fastmail or Microsoft can turn
+the job red with no fault in the change under test. All 12 exist only in
+a `system_dns` build, so only on an Apple system; ten ask real DNS, the
+deadline test asks only a `.local` name, by multicast DNS, which nobody
+answers, and the `.local` test asks nothing at all (every question ends
+`NotAsked` and the guard refuses every host before a lookup). The six
+tests that need hickory (`scripted::answering`, below) do not exist in
+that build, so the system-dns run and the Simulator run 337 of the 343,
+plus the 12. The Simulator runs
+the library's test program as a bare process (`xcrun simctl spawn`),
+outside any app's sandbox, so it does not show dns_sd and getaddrinfo
+working from a sandboxed app (#166's Simulator smoke does, once it
+merges), and nobody has seen iOS's Local Network prompt: `.local` is no
+longer asked, but whether anything else in the app raises it shows only in
+the app on a device. Trap: the macOS runners' DNS never answers a TXT set
+too big for one UDP reply (microsoft.com's), dig included, so no network
+test may ask one. Trap: linking anything that holds the engine for an
+iOS device by hand (its tests, `cargo test --no-run --target
+aarch64-apple-ios`, or an app that contains it) needs
+`IPHONEOS_DEPLOYMENT_TARGET`, as `mail-apple.yml` sets it; without it
+rustc links for its own default, iOS 10, while aws-lc-sys's C is built for
+the SDK's version and calls `___chkstk_darwin`, which that link cannot
+find. Building the engine alone links nothing (it is a library) and does
+not need it. The workflow sets 14.0, and its comment calls that Tauri's
+default `bundle.iOS.minimumSystemVersion`; it is not: tauri-utils 2.10.0
+(RATA's lock, and what tauri-cli 2.12.0 reads config with) defaults to
+15.0, and #166's `tauri.ios.conf.json` sets 15.0 as well (RATA's minimum,
+`docs/APP-STORES.md`). Keep `mail-apple.yml`'s value equal to the app's
+`minimumSystemVersion`: raise it to 15.0, comment and all, when #166
+merges. rustc's own default for the Simulator target is already 14.0.
+Still open: an IPv4 literal typed as the server on an IPv6-only network
+is dialled as typed, never synthesised to NAT64 (`resolve_public`'s
+literal branch; names are fine), which no GitHub runner can show; and TXT
+over TCP through dns_sd, never seen, which L1's SPF evidence for a big
+TXT set needs (check it on a device). Not seen on a phone or on a real
+IPv6-only network. `mail-apple.yml`'s `RUST` is `desktop-ci.yml`'s
+toolchain (1.94.1): bump the two together, with the version `release.yml`
+names inline. **Checking the iOS code on Linux.**
+Linux CI (*Mail layer*) never compiles `cfg(system_dns)`; only *Mail layer
+on macOS* does, outside the release gate, and only after a push: no
+session here can run it locally. So before pushing any engine change, run
+in `desktop/rata-mail`
+`cargo clippy --all-targets -- --cfg system_dns -D warnings` as well as
+the plain clippy: it type-checks `dns_sd.rs`, `records.rs` and the
+`system_dns` tests on Linux and links nothing (clean on main,
+2026-10-17). The rule it guards: engine code or a test that uses hickory
+(`HickoryResolver`, `Resolver.inner`, `scripted::answering`) carries
+`#[cfg(not(system_dns))]`, since hickory is not built for iOS at all; a
+merge of #164's first commit (`422cf77`) with #163 compiled on Linux and
+failed this check with E0432 (`super::HickoryResolver`) and E0560
+(`inner`), as #164's description shows.
+**`unsafe` (#163).** `dns_sd.rs` holds the engine's only `unsafe` code
+(none in `desktop/rata-mail` before #163, as at v0.1.52's `0c60aad`):
+nine uses, the `unsafe extern "C"` block declaring dns_sd's four
+functions and `poll`, and eight `unsafe` blocks, each with a `SAFETY`
+comment (the reply callback's context cast, its rdata slice and its
+`fullname` C string; starting a question, freeing it, its socket, `poll`
+and `DNSServiceProcessResult`). The reply callback is an `extern "C" fn`
+that must never panic, which across that boundary would end the app.
+It compiles only under `system_dns`. A later security review part, or
+anyone touching that file, starts there.
+**The outbound guard on IPv6-only networks (NAT64, #164), and its private
+names (#163). On main, first in the next release:** 0.1.52 and earlier
+refuse all of `64:ff9b::/32`, on every system, and do not refuse the
+zones `local`, `internal` and `arpa` themselves, nor any name under
+`arpa` except those under `home.arpa`. On an IPv6-only network with DNS64 (Guideline
+2.5.5: "Apps must be fully functional on IPv6-only networks"; Apple's
+*Supporting IPv6 DNS64/NAT64 Networks* sets "the one used during App
+Review" beside providers' DNS64/NAT64 networks, without saying it is
+IPv6-only; T-Mobile US runs one; `docs/APP-STORES.md` quotes both pages)
+an IPv4-only mail host answers only with an
+address in NAT64's well-known prefix `64:ff9b::/96`, and the gateway
+connects to the IPv4 address in its last 32 bits. So `guard::v6_public`
+judges such an address by that IPv4 address, as it judges 6to4:
+`64:ff9b::808:808` (8.8.8.8) passes, and `64:ff9b::7f00:1`,
+`64:ff9b::a00:1`, `64:ff9b::a9fe:a9fe`, `64:ff9b::6440:1` and
+`64:ff9b::c0a8:101` (127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1 and
+192.168.1.1) are refused like the IPv4 addresses inside them. Until #164
+all of `64:ff9b::/32` was refused, and linking such a host said "… is not
+a public mail server — it points inside a private network". The rest of `64:ff9b::/32` is still refused,
+the local-use `64:ff9b:1::/48` (RFC 8215) among it, and so is a /96 with
+anything but zeros before the IPv4 address: where an operator's IPv4
+address sits depends on its prefix length. IPv4-mapped and
+IPv4-compatible addresses are judged by the IPv4 address inside, as
+before. An operator-chosen NAT64 prefix (RFC 6052 §2.2) looks like
+ordinary global IPv6 and is judged as such; RFC 7050 discovery is not
+done, and adding it needs an exception: the name it asks,
+`ipv4only.arpa`, is refused by `is_private_name` (all of `arpa`, below),
+so `resolve_public` refuses it by name and `records::question` never asks
+it. `check_resolved` still condemns a name if any answer is private, a
+wrapped one included. `resolve::scripted::answering(ip)` is a test
+`Resolver` whose name server (UDP on 127.0.0.1) answers every AAAA
+question with `ip` and every other with nothing; the tests use it to show
+a hostile NAT64 answer refused on linking, a refresh, the watch and
+sending, and a public one dialled. It points hickory at a server, so it
+and the six tests using it are `#[cfg(not(system_dns))]`; the guard's own
+NAT64 tests (guard.rs) run in every build, and the loopback suite's
+`guard_admits_only_the_literal_loopback_address` pins that
+`64:ff9b::7f00:1` and `64:ff9b::127.0.0.1` stay refused with
+`loopback-tests` on, as literals and as a resolved answer, since that
+feature's one hole in the guard is the literal `127.0.0.1`.
+**Private names** (`is_private_name`,
+judged before any lookup): `localhost`, `local`, `internal` and `arpa`,
+each the zone itself and every name under it (#163; before, only
+`localhost` and names under `.localhost`, `.local`, `.internal` and
+`.home.arpa`). No mail server is named there, and on Apple systems the
+system's resolver answers `local` and the link-local reverse zones by
+asking the local network. No customer-facing sentence changed. Not yet
+seen on a real IPv6-only network.
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and
@@ -1865,10 +2308,19 @@ saved to the server*) and P3-7 (row 8). The store: on
 Unix `store.rs` writes `mailboxes.json` 0600 (a fresh temporary file, then
 the rename), tightens a file an older build left wider when it opens it,
 and makes the app folder 0700 when RATA creates it (an existing one is
-left alone); Windows keeps the profile's ACL. Still open: row 15's
+left alone); on Windows it keeps the ACL of its folder, Local AppData
+since 0.1.52 (*One RATA at a time*, above). Still open: row 15's
 in-window renewals (a business decision), the rest of P3-4's suggested
 lists (the owner's call), and one Medium waiting on the owner: email
-confirmation before paid launch (LAUNCH.md §7, D8). The `loopback-tests`
+confirmation before paid launch (LAUNCH.md §7, D8). Part 4 (SEC-11,
+2026-10-14) covers connected accounts, Apps and the demo: no High, 6
+Medium, 20 Low. Stage A has fixed the demo's five (D1 to D5, #155), Apps'
+Your accounts (R16, #156), Slack's (R2, R7, R12, R17, R21 and R18's Slack
+half, #159), the platform's (R5, R6, R13, R14, #160) and OneDrive and
+Google Drive's (R19, R20 and R18's other half, #157). Stage B, the connect
+and disconnect lifecycle of Slack, OneDrive and Google Drive (R1, R3, R4,
+R8, R9, R10, R11, R15), must land before the owner adds any of their
+registrations to a build; none is switched on in a released build. The `loopback-tests`
 gate is a `compile_error!` on the feature without `debug_assertions`, and
 `desktop/rata-mail/build.rs` also fails any build with the feature when
 `PROFILE` is `release`, whatever its assertions, with the same words (CI
@@ -1882,13 +2334,33 @@ certificates.
 opened yet; the engine runs against real Dovecot (IMAP) and GreenMail (SMTP,
 and IMAPS on 3993 for a server that declares no special-use folders) on
 every PR (`tests/loopback.rs`), but not against Gmail, Outlook or any hosted
-provider. Run them locally with `sudo
+provider with a sign-in (*Mail layer on macOS* only dials Gmail's and
+Fastmail's IMAP and reads the greeting). Run them locally with `sudo
 desktop/rata-mail/tests/loopback/servers.sh start /tmp/rata-lb`, then
 `SSL_CERT_FILE=/tmp/rata-lb/ca.crt cargo test --features loopback-tests
 --test loopback`. When a real connection fails, the three files to read are
 `resolve.rs` (discovery), `imap.rs` (handshake and auth classification) and
 `guard.rs` (host refusal). Errors are typed, so the message names the hosts
-tried and what each said.
+tried and what each said. On iOS, a lookup that comes back empty may also
+be `dns_sd.rs` (a question waited out at `SYSTEM_WAIT`, or a cached "no
+such record" taken after `SETTLE`) or `records.rs` (`question` declining
+the name, `Ended::NotAsked`, or a record naming a host with an odd label
+dropped); either way discovery just sees nothing. Testing trap: this
+container's resolvers (8.8.8.8 and 8.8.4.4, from `/etc/resolv.conf`)
+answer only A questions. MX, AAAA, TXT, SRV and CNAME questions all come
+back NOERROR with no records (measured 2026-10-17 with raw UDP queries:
+gmail.com's MX, AAAA and TXT, anthropic.com's, microsoft.com's and
+fastmail.com's MX, `_imaps._tcp.gmail.com` and `_imaps._tcp.fastmail.com`
+SRV, `autodiscover.microsoft.com` CNAME, example.com's and google.com's
+TXT; an A question about an alias still carries its CNAMEs on the way).
+So nothing here can check SRV, L1's SPF or autodiscover evidence, or IPv6
+answers against real DNS: an empty answer here is the container's, not
+the domain's. `cargo test` in `desktop/rata-mail` passes 341 of 343 here.
+The two that fail,
+`resolve::tests::a_domain_at_microsoft_365_is_found_by_its_mx` and
+`a_real_business_domain_resolves_through_its_mx`, need real MX records;
+they pass in CI (*Mail layer*, and *Mail layer on macOS*), so that is not
+a regression.
 
 ## Working style that earned its place here
 

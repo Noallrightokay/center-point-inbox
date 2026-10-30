@@ -14,10 +14,17 @@ use std::net::IpAddr;
 
 use std::future::Future;
 
+#[cfg(any(system_dns, test))]
+use std::time::Duration;
+
+#[cfg(not(system_dns))]
 use hickory_resolver::{
     Resolver as HickoryResolver, TokioResolver,
     proto::rr::{RData, RecordType},
 };
+
+#[cfg(system_dns)]
+use crate::{dns_sd, records};
 
 use crate::discover::{
     Candidate, IMAP_PORT, MS_SIGN_IN, MailHost, MxRule, Source, autodiscover_provider,
@@ -29,10 +36,33 @@ use crate::key::domain_of;
 
 /// A DNS resolver. Built once and shared — each one carries its own cache, so
 /// making a fresh one per lookup would throw that away.
+///
+/// On iOS it is the system's own resolver instead, and holds nothing: there
+/// are no DNS settings an app can read there, and the system keeps the cache
+/// (`crate::dns_sd`).
 pub struct Resolver {
+    #[cfg(not(system_dns))]
     inner: TokioResolver,
 }
 
+/// One SRV answer, from either resolver.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Srv {
+    pub(crate) priority: u16,
+    pub(crate) weight: u16,
+    pub(crate) port: u16,
+    /// With its final dot; the root alone, `.`, says there is no service.
+    pub(crate) target: String,
+}
+
+/// How long the system's resolver is given for one question on iOS: about
+/// what hickory takes at most on the desktop (two tries of five seconds). A
+/// question with no answer by then is a lookup that failed, and discovery
+/// goes on as after any other.
+#[cfg(any(system_dns, test))]
+pub(crate) const SYSTEM_WAIT: Duration = Duration::from_secs(10);
+
+#[cfg(not(system_dns))]
 impl Resolver {
     /// Use the machine's own DNS settings, which is what a desktop app should
     /// do: the customer's resolver may be the only one that can see their
@@ -54,12 +84,11 @@ impl Resolver {
         }
     }
 
-    /// MX records, lowest priority first — which is the order a sender would
-    /// try them, and therefore the order most likely to name the real provider.
-    pub async fn mx(&self, domain: &str) -> Vec<String> {
+    /// Every MX answer, as (preference, exchange).
+    async fn mx_answers(&self, domain: &str) -> Vec<(u16, String)> {
         // 0.26 returns a plain Lookup, and the rdata fields are public rather
         // than accessors.
-        let mut records: Vec<(u16, String)> = match self.inner.mx_lookup(domain).await {
+        match self.inner.mx_lookup(domain).await {
             Ok(r) => r
                 .answers()
                 .iter()
@@ -69,43 +98,31 @@ impl Resolver {
                 })
                 .collect(),
             Err(_) => vec![],
-        };
-        records.sort_by_key(|(p, _)| *p);
-        records.into_iter().map(|(_, e)| e).collect()
+        }
     }
 
-    /// RFC 6186: a domain may publish where its IMAP is, and its port with it.
-    /// Few do, but the ones that do are telling us the answer outright.
-    pub async fn srv_imaps(&self, domain: &str) -> Option<(String, u16)> {
-        let name = format!("_imaps._tcp.{domain}");
-        let lookup = self.inner.srv_lookup(&name).await.ok()?;
-        let mut best: Vec<_> = lookup
+    /// Every SRV answer at `name`.
+    async fn srv_answers(&self, name: &str) -> Vec<Srv> {
+        let Ok(lookup) = self.inner.srv_lookup(name).await else {
+            return vec![];
+        };
+        lookup
             .answers()
             .iter()
             .filter_map(|rec| match &rec.data {
-                RData::SRV(srv) => Some(srv),
+                RData::SRV(srv) => Some(Srv {
+                    priority: srv.priority,
+                    weight: srv.weight,
+                    port: srv.port,
+                    target: srv.target.to_utf8(),
+                }),
                 _ => None,
             })
-            .collect();
-        // Lowest priority wins; among equals, the heaviest. Only the winner is
-        // used — a second SRV record is a fallback for a mail client that
-        // cannot find the first, and RATA has the MX and the conventional names
-        // behind it for that.
-        best.sort_by_key(|s| (s.priority, std::cmp::Reverse(s.weight)));
-        let first = best.first()?;
-        let target = first.target.to_utf8();
-        let target = target.trim_end_matches('.').to_string();
-        // A root target means "explicitly no service here", which is an answer.
-        if target.is_empty() {
-            return None;
-        }
-        Some((target, first.port))
+            .collect()
     }
 
-    /// TXT records, each one's strings joined as RFC 7208 §3.3 says (a
-    /// long SPF record is published as several strings of at most 255
-    /// bytes). A failed lookup is no records.
-    pub async fn txt(&self, name: &str) -> Vec<String> {
+    /// Every TXT answer, each one's strings joined.
+    async fn txt_answers(&self, name: &str) -> Vec<String> {
         match self.inner.txt_lookup(name).await {
             Ok(r) => r
                 .answers()
@@ -124,15 +141,144 @@ impl Resolver {
         }
     }
 
-    /// Where a name is an alias for, if it is one: the first CNAME answer,
-    /// which is the name's own record. A failed lookup is no alias.
-    pub async fn cname(&self, name: &str) -> Option<String> {
+    /// The first CNAME answer, which is the name's own record.
+    async fn cname_answer(&self, name: &str) -> Option<String> {
         let lookup = self.inner.lookup(name, RecordType::CNAME).await.ok()?;
         lookup.answers().iter().find_map(|rec| match &rec.data {
-            RData::CNAME(c) => Some(c.0.to_utf8().trim_end_matches('.').to_string()),
+            RData::CNAME(c) => Some(c.0.to_utf8()),
             _ => None,
         })
     }
+}
+
+/// iOS: the system's own resolver answers, records through dns_sd and
+/// addresses through getaddrinfo (`crate::dns_sd`). On a Mac only the
+/// `system-dns` feature's tests use it.
+#[cfg(system_dns)]
+impl Resolver {
+    /// There are no settings to read first, so this cannot fail.
+    pub fn system() -> Result<Self, String> {
+        Ok(Self {})
+    }
+
+    /// Every address a name answers with, A and AAAA together, from
+    /// getaddrinfo ([`system_addresses`]).
+    pub async fn addresses(&self, host: &str) -> Vec<IpAddr> {
+        system_addresses(host).await
+    }
+
+    async fn mx_answers(&self, domain: &str) -> Vec<(u16, String)> {
+        let found = dns_sd::ask(domain, dns_sd::MX).await;
+        found
+            .iter()
+            .map(Vec::as_slice)
+            .filter_map(records::mx)
+            .collect()
+    }
+
+    async fn srv_answers(&self, name: &str) -> Vec<Srv> {
+        let found = dns_sd::ask(name, dns_sd::SRV).await;
+        found
+            .iter()
+            .map(Vec::as_slice)
+            .filter_map(records::srv)
+            .collect()
+    }
+
+    async fn txt_answers(&self, name: &str) -> Vec<String> {
+        let found = dns_sd::ask(name, dns_sd::TXT).await;
+        found
+            .iter()
+            .map(Vec::as_slice)
+            .filter_map(records::txt)
+            .collect()
+    }
+
+    /// Never a CNAME question: the alias the system hands back on the way
+    /// to the name's addresses (`dns_sd::alias`).
+    async fn cname_answer(&self, name: &str) -> Option<String> {
+        let alias = dns_sd::alias(name).await?;
+        records::cname(&alias)
+    }
+}
+
+/// What both resolvers answer, read the same way.
+impl Resolver {
+    /// MX records, lowest priority first — which is the order a sender would
+    /// try them, and therefore the order most likely to name the real provider.
+    pub async fn mx(&self, domain: &str) -> Vec<String> {
+        by_preference(self.mx_answers(domain).await)
+    }
+
+    /// RFC 6186: a domain may publish where its IMAP is, and its port with it.
+    /// Few do, but the ones that do are telling us the answer outright.
+    pub async fn srv_imaps(&self, domain: &str) -> Option<(String, u16)> {
+        let name = format!("_imaps._tcp.{domain}");
+        srv_choice(self.srv_answers(&name).await)
+    }
+
+    /// TXT records, each one's strings joined as RFC 7208 §3.3 says (a
+    /// long SPF record is published as several strings of at most 255
+    /// bytes). A failed lookup is no records.
+    pub async fn txt(&self, name: &str) -> Vec<String> {
+        self.txt_answers(name).await
+    }
+
+    /// Where a name is an alias for, if it is one: the name's own CNAME
+    /// record. A failed lookup is no alias.
+    ///
+    /// On iOS this is never a CNAME question, which would leave the system's
+    /// resolver holding up later questions that reach the name, from RATA
+    /// or any other app: the system follows the alias on the way to the
+    /// name's addresses, and hands it back (`crate::dns_sd`).
+    pub async fn cname(&self, name: &str) -> Option<String> {
+        let target = self.cname_answer(name).await?;
+        Some(target.trim_end_matches('.').to_string())
+    }
+}
+
+/// MX exchanges, lowest preference first; equals keep the order they came in.
+fn by_preference(mut records: Vec<(u16, String)>) -> Vec<String> {
+    records.sort_by_key(|(p, _)| *p);
+    records.into_iter().map(|(_, e)| e).collect()
+}
+
+/// The SRV answer to use, as host and port.
+fn srv_choice(mut best: Vec<Srv>) -> Option<(String, u16)> {
+    // Lowest priority wins; among equals, the heaviest. Only the winner is
+    // used — a second SRV record is a fallback for a mail client that
+    // cannot find the first, and RATA has the MX and the conventional names
+    // behind it for that.
+    best.sort_by_key(|s| (s.priority, std::cmp::Reverse(s.weight)));
+    let first = best.first()?;
+    let target = first.target.trim_end_matches('.').to_string();
+    // A root target means "explicitly no service here", which is an answer.
+    if target.is_empty() {
+        return None;
+    }
+    Some((target, first.port))
+}
+
+/// Every address the system's resolver gives a name, A and AAAA alike, in
+/// the order it gives them, each once (iOS). This is getaddrinfo, by way of
+/// tokio's `lookup_host`: the only way to the network's own DNS on iOS, and
+/// on an IPv6-only network what makes an IPv6 address (NAT64) for a name
+/// that has only IPv4 ones. [`resolve_public`] still judges every address it
+/// hands back, exactly as it judges hickory's. Nothing when the name does not
+/// resolve, or not within [`SYSTEM_WAIT`].
+#[cfg(any(system_dns, test))]
+async fn system_addresses(host: &str) -> Vec<IpAddr> {
+    let asked = tokio::net::lookup_host((host, 0));
+    let Ok(Ok(found)) = tokio::time::timeout(SYSTEM_WAIT, asked).await else {
+        return vec![];
+    };
+    let mut out: Vec<IpAddr> = Vec::new();
+    for ip in found.map(|a| a.ip()) {
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
+    }
+    out
 }
 
 /// What discovery asks DNS. The machine's resolver answers in the app, a
@@ -461,12 +607,27 @@ async fn found_elsewhere<D: Lookup + Sync>(dns: &D, domain: &str) -> Vec<Candida
     out
 }
 
-/// A DNS that answers from a script, and remembers what it was asked.
+/// A DNS that answers from a script, and remembers what it was asked; and a
+/// [`Resolver`] whose name server answers every address question one way.
+///
+/// The second half points hickory at a name server of its own, so it is
+/// left out of a build that sets `system_dns` (declared in build.rs), which
+/// looks names up through the system's resolver, one that cannot be pointed
+/// anywhere. The tests that use it carry the same gate.
 #[cfg(test)]
 pub(crate) mod scripted {
+    #[cfg(not(system_dns))]
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket};
     use std::sync::Mutex;
 
+    #[cfg(not(system_dns))]
+    use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+    #[cfg(not(system_dns))]
+    use hickory_resolver::net::runtime::TokioRuntimeProvider;
+
     use super::Lookup;
+    #[cfg(not(system_dns))]
+    use super::{HickoryResolver, Resolver};
 
     #[derive(Default)]
     pub(crate) struct Dns {
@@ -531,6 +692,62 @@ pub(crate) mod scripted {
                 .find(|(n, _)| n == name)
                 .map(|(_, t)| t.clone())
         }
+    }
+
+    /// A [`Resolver`] whose name server answers every AAAA question with
+    /// `ip` and every other question with nothing: what a hostile name
+    /// server, or DNS64, can say about any name. The server is a real one
+    /// on 127.0.0.1, so the answer reaches the guard through hickory exactly
+    /// as the machine's own resolver's would, on every path that dials.
+    #[cfg(not(system_dns))]
+    pub(crate) fn answering(ip: Ipv6Addr) -> Resolver {
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = sock.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                if let Some(answer) = answer(&buf[..n], ip) {
+                    let _ = sock.send_to(&answer, from);
+                }
+            }
+        });
+        let mut udp = ConnectionConfig::udp();
+        udp.port = port;
+        let server = NameServerConfig::new(IpAddr::V4(Ipv4Addr::LOCALHOST), true, vec![udp]);
+        let inner = HickoryResolver::builder_with_config(
+            ResolverConfig::from_name_servers(vec![server]),
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .unwrap();
+        Resolver { inner }
+    }
+
+    /// The reply to one query: its own header and question back, an AAAA
+    /// question answered with `ip`, any other with no records.
+    #[cfg(not(system_dns))]
+    fn answer(query: &[u8], ip: Ipv6Addr) -> Option<Vec<u8>> {
+        // The name runs from byte 12 to a zero length; type and class follow.
+        let mut end = 12;
+        loop {
+            let len = usize::from(*query.get(end)?);
+            end += 1 + len;
+            if len == 0 {
+                break;
+            }
+        }
+        let aaaa = u16::from_be_bytes([*query.get(end)?, *query.get(end + 1)?]) == 28;
+        let mut out = query.get(..end + 4)?.to_vec();
+        out[2] = 0x80 | (query[2] & 0x79); // a response, same opcode and RD
+        out[3] = 0x80; // recursion available, no error
+        out[6..8].copy_from_slice(&u16::from(aaaa).to_be_bytes());
+        out[8..12].fill(0); // no authority, no additional records
+        if aaaa {
+            // The name by pointer to the question, AAAA, IN, a minute, 16 bytes.
+            out.extend_from_slice(&[0xc0, 12, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
+            out.extend_from_slice(&ip.octets());
+        }
+        Some(out)
     }
 }
 
@@ -706,6 +923,37 @@ mod tests {
             );
             let missing = format!("nx-{}.invalid", std::process::id());
             assert_eq!(check_host(&r, &missing).await, HostVerdict::NotFound);
+        });
+    }
+
+    #[test]
+    #[cfg(not(system_dns))] // scripted::answering is hickory's
+    fn a_nat64_answer_is_judged_by_the_ipv4_address_inside() {
+        rt().block_on(async {
+            // An IPv4-only mail host seen from an IPv6-only network with
+            // DNS64: the address handed back is the very one judged.
+            let ip: std::net::Ipv6Addr = "64:ff9b::808:808".parse().unwrap();
+            let r = scripted::answering(ip);
+            assert_eq!(
+                resolve_public(&r, "imap.dns64.test").await,
+                Ok(("imap.dns64.test".to_string(), vec![IpAddr::V6(ip)]))
+            );
+            // The same answer wrapping somewhere private.
+            for inside in [
+                "64:ff9b::7f00:1",
+                "64:ff9b::a00:1",
+                "64:ff9b::a9fe:a9fe",
+                "64:ff9b::6440:1",
+                "64:ff9b::c0a8:101",
+                "64:ff9b:1::a00:1",
+            ] {
+                let r = scripted::answering(inside.parse().unwrap());
+                assert_eq!(
+                    resolve_public(&r, "imap.dns64.test").await,
+                    Err(HostVerdict::NotPublic),
+                    "{inside}"
+                );
+            }
         });
     }
 
@@ -1113,5 +1361,520 @@ mod tests {
             rt().block_on(discover_with(&dns, "ann@acme.com", None)),
             Discovery::Refuse(_)
         ));
+    }
+
+    // ------------------------------- what hickory and the system's share
+
+    fn srv(priority: u16, weight: u16, port: u16, target: &str) -> Srv {
+        Srv {
+            priority,
+            weight,
+            port,
+            target: target.into(),
+        }
+    }
+
+    #[test]
+    fn mx_answers_are_tried_lowest_preference_first() {
+        let answers = vec![
+            (20, "alt2.example.".to_string()),
+            (5, "first.example.".to_string()),
+            (20, "alt3.example.".to_string()),
+            (10, "alt1.example.".to_string()),
+        ];
+        assert_eq!(
+            by_preference(answers),
+            [
+                "first.example.",
+                "alt1.example.",
+                "alt2.example.",
+                "alt3.example."
+            ]
+        );
+        assert!(by_preference(vec![]).is_empty());
+    }
+
+    #[test]
+    fn the_srv_answer_used_is_the_lowest_priority_then_the_heaviest() {
+        let answers = vec![
+            srv(10, 100, 993, "backup.example.com."),
+            srv(5, 1, 993, "light.example.com."),
+            srv(5, 9, 9993, "heavy.example.com."),
+        ];
+        assert_eq!(
+            srv_choice(answers),
+            Some(("heavy.example.com".to_string(), 9993))
+        );
+        // The root alone says there is no IMAP here, and that is the answer
+        // even with another record behind it.
+        assert_eq!(srv_choice(vec![srv(0, 0, 0, ".")]), None);
+        assert_eq!(
+            srv_choice(vec![srv(0, 0, 0, "."), srv(1, 0, 993, "imap.example.com.")]),
+            None
+        );
+        assert_eq!(srv_choice(vec![]), None);
+    }
+
+    #[test]
+    fn the_systems_addresses_are_each_given_once_and_judged_like_any_others() {
+        // getaddrinfo, as iOS uses it; it answers on every system, so this
+        // runs everywhere.
+        rt().block_on(async {
+            let local = system_addresses("localhost").await;
+            assert!(!local.is_empty(), "localhost has no address");
+            assert!(local.iter().all(IpAddr::is_loopback), "{local:?}");
+            let mut once = local.clone();
+            once.sort();
+            once.dedup();
+            assert_eq!(once.len(), local.len(), "{local:?}");
+            assert_eq!(check_resolved(&local), HostVerdict::NotPublic);
+
+            let missing = format!("nx-{}.invalid", std::process::id());
+            assert!(system_addresses(&missing).await.is_empty());
+        });
+    }
+
+    // ----------------------------- iOS: the system's resolver, real DNS
+    //
+    // These ask real DNS the way an iOS build does, through dns_sd and
+    // getaddrinfo, so they need an Apple system and the network. They are
+    // ignored by default; .github/workflows/mail-apple.yml runs them on
+    // macOS with the `system-dns` feature, under which every other test in
+    // this crate that looks a name up goes the same way too, and again in
+    // an iOS Simulator, built for it.
+    #[cfg(system_dns)]
+    mod through_the_system {
+        use std::time::{Duration, Instant};
+
+        use tokio::io::AsyncReadExt;
+
+        use super::*;
+        use crate::discover::{MS_IMAP, spf_provider};
+        use crate::guard::is_public;
+
+        /// Well inside `SYSTEM_WAIT`: an answer that takes longer was waited
+        /// out, not given.
+        const QUICK: Duration = Duration::from_secs(5);
+
+        fn system() -> Resolver {
+            Resolver::system().expect("the system's resolver")
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn mx_records_come_from_the_system_lowest_preference_first() {
+            rt().block_on(async {
+                let r = system();
+                for (domain, imap) in [
+                    ("gmail.com", "imap.gmail.com"),
+                    ("fastmail.com", "imap.fastmail.com"),
+                ] {
+                    let answers = r.mx_answers(domain).await;
+                    assert!(answers.len() >= 2, "{domain}: {answers:?}");
+                    let exchanges = r.mx(domain).await;
+                    assert_eq!(exchanges.len(), answers.len(), "{domain}");
+                    let preference = |e: &String| {
+                        answers
+                            .iter()
+                            .find(|(_, x)| x == e)
+                            .map(|(p, _)| *p)
+                            .unwrap()
+                    };
+                    assert!(
+                        exchanges
+                            .windows(2)
+                            .all(|w| preference(&w[0]) <= preference(&w[1])),
+                        "{domain}: {answers:?}"
+                    );
+                    for e in &exchanges {
+                        assert!(e.ends_with('.'), "{e}");
+                        match mx_rule(e) {
+                            Some(MxRule::Serves(h)) => assert_eq!(h.host, imap, "{e}"),
+                            other => panic!("{domain}: {e}: {other:?}"),
+                        }
+                    }
+                }
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn srv_records_come_from_the_system() {
+            rt().block_on(async {
+                let r = system();
+                assert_eq!(
+                    r.srv_imaps("gmail.com").await,
+                    Some(("imap.gmail.com".to_string(), 993))
+                );
+                assert_eq!(
+                    r.srv_imaps("fastmail.com").await,
+                    Some(("imap.fastmail.com".to_string(), 993))
+                );
+                // fastmail.com's `_submission._tcp` names the root alone, RFC
+                // 6186's way of saying there is no such service: read, and
+                // taken as no service.
+                let none = r.srv_answers("_submission._tcp.fastmail.com").await;
+                assert!(none.iter().any(|s| s.target == "."), "{}", none.len());
+                assert_eq!(srv_choice(none), None);
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn txt_records_come_from_the_system_whole() {
+            rt().block_on(async {
+                let r = system();
+                // gmail.com's SPF record, and the one it redirects to.
+                let txt = r.txt("gmail.com").await;
+                let spf = spf_record(&txt)
+                    .and_then(parse_spf)
+                    .expect("gmail.com's SPF");
+                let next = spf.redirect.expect("gmail.com's SPF redirects");
+                assert!(spf_record(&r.txt(&next).await).is_some(), "{next}");
+                // gmail.com publishes several, each its own reply: all of
+                // them are gathered, not just the first.
+                let (raw, ended) = dns_sd::asked("gmail.com", dns_sd::TXT).await;
+                let all: Vec<String> = raw.iter().filter_map(|r| records::txt(r)).collect();
+                assert!(
+                    all.len() >= 2 && all.len() == raw.len() && ended == dns_sd::Ended::Answered,
+                    "{} records ({} read), {ended:?}",
+                    raw.len(),
+                    all.len()
+                );
+                assert_eq!(spf_record(&all), spf_record(&txt));
+                // A record of several strings arriving as one is
+                // `records::txt`'s, tested with bytes on every system.
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn a_cname_comes_from_the_system() {
+            rt().block_on(async {
+                let r = system();
+                let quick = |what: &str, t: Instant| {
+                    let took = t.elapsed();
+                    assert!(took < QUICK, "{what}: {took:?}");
+                };
+                // microsoft.com's autodiscover name is an alias for
+                // Outlook's: L1's evidence of Microsoft 365. It is the
+                // first of a chain of several, and only the name's own
+                // alias is taken.
+                let t = Instant::now();
+                let alias = r.cname("autodiscover.microsoft.com").await;
+                quick("autodiscover.microsoft.com", t);
+                assert_eq!(alias.as_deref(), Some("autodiscover.outlook.com"));
+                assert!(alias.as_deref().and_then(autodiscover_provider).is_some());
+                let (alias, ended) = dns_sd::aliased("autodiscover.microsoft.com").await;
+                assert!(
+                    alias.is_some() && ended == dns_sd::Ended::Answered,
+                    "{ended:?}"
+                );
+                // It was an address question, never a CNAME one, so what
+                // is asked about the name next is answered at once.
+                let t = Instant::now();
+                let addrs = system_addresses("autodiscover.microsoft.com").await;
+                quick("addresses of autodiscover.microsoft.com", t);
+                assert!(!addrs.is_empty());
+
+                // Names that exist but are no alias: nothing, at once.
+                // github.com's own records are addresses, and www.github.com
+                // is an alias for it: a host reached through a name whose
+                // alias was asked about, which a CNAME question about
+                // github.com would leave the system holding up.
+                for name in ["gmail.com", "github.com"] {
+                    let t = Instant::now();
+                    assert_eq!(r.cname(name).await, None, "{name}");
+                    quick(name, t);
+                }
+                let t = Instant::now();
+                let addrs = system_addresses("www.github.com").await;
+                quick("addresses of www.github.com", t);
+                assert!(!addrs.is_empty());
+                assert_eq!(
+                    r.cname("www.github.com").await.as_deref(),
+                    Some("github.com")
+                );
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn an_alias_on_the_way_is_followed_and_not_taken_for_the_answer() {
+            rt().block_on(async {
+                // Asked for the TXT records of an alias, the system hands
+                // back each alias it follows on the way, then what is at
+                // the end. Only that is the answer, whatever it holds: an
+                // alias's rdata is a name, which nothing gathered may read
+                // as. Only the chain's start is taken as known:
+                // autodiscover.microsoft.com is an alias
+                // (`a_cname_comes_from_the_system`). The chain is not walked
+                // with CNAME questions first: one about the name at its end
+                // makes the system wait out this question (`crate::dns_sd`).
+                let start = "autodiscover.microsoft.com";
+                let t = Instant::now();
+                let (found, ended) = dns_sd::asked(start, dns_sd::TXT).await;
+                let took = t.elapsed();
+                assert!(
+                    ended == dns_sd::Ended::Answered && took < QUICK,
+                    "TXT {start}: {ended:?} after {took:?}"
+                );
+                assert!(
+                    found
+                        .iter()
+                        .all(|rdata| records::txt(rdata).is_some()
+                            && records::cname(rdata).is_none()),
+                    "TXT {start}: {found:?}"
+                );
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn a_name_that_does_not_exist_answers_nothing_and_at_once() {
+            rt().block_on(async {
+                let r = system();
+                let pid = std::process::id();
+                for name in [format!("nx-{pid}.gmail.com"), format!("nx-{pid}.invalid")] {
+                    // Each question discovery asks is answered "no such
+                    // name", not waited out: fresh from the network the
+                    // first time, from the system's cache the second, which
+                    // is believed once nothing fresher comes
+                    // (`dns_sd::SETTLE`). The autodiscover name's alias is
+                    // an address question (`dns_sd::aliased`).
+                    for (what, rrtype, asked) in [
+                        ("MX", dns_sd::MX, name.clone()),
+                        ("SRV", dns_sd::SRV, format!("_imaps._tcp.{name}")),
+                        ("TXT", dns_sd::TXT, name.clone()),
+                        ("A", dns_sd::A, format!("autodiscover.{name}")),
+                    ] {
+                        for time in ["first", "second"] {
+                            let t = Instant::now();
+                            let (found, ended) = dns_sd::asked(&asked, rrtype).await;
+                            let took = t.elapsed();
+                            assert!(
+                                found.is_empty()
+                                    && ended == dns_sd::Ended::Answered
+                                    && took < QUICK,
+                                "{what} {asked}, {time} time: {} records, {ended:?} after {took:?}",
+                                found.len()
+                            );
+                        }
+                    }
+                    // As discovery asks, and then the addresses of the
+                    // domain and of its autodiscover name, each at once:
+                    // no CNAME question was asked about either (`dns_sd`,
+                    // on what one does to the questions after it).
+                    let auto = format!("autodiscover.{name}");
+                    assert!(r.mx(&name).await.is_empty(), "{name}");
+                    assert_eq!(r.srv_imaps(&name).await, None, "{name}");
+                    assert!(r.txt(&name).await.is_empty(), "{name}");
+                    let t = Instant::now();
+                    let (alias, ended) = dns_sd::aliased(&auto).await;
+                    let took = t.elapsed();
+                    assert!(
+                        alias.is_none() && ended == dns_sd::Ended::Answered && took < QUICK,
+                        "alias of {auto}: {ended:?} after {took:?}"
+                    );
+                    assert_eq!(r.cname(&auto).await, None, "{auto}");
+                    for host in [&name, &auto] {
+                        let t = Instant::now();
+                        assert_eq!(check_host(&r, host).await, HostVerdict::NotFound);
+                        let took = t.elapsed();
+                        assert!(took < QUICK, "addresses of {host}: {took:?}");
+                    }
+                }
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn discovery_runs_through_the_system_end_to_end() {
+            rt().block_on(async {
+                let r = system();
+                let first = |found: Discovery| match found {
+                    Discovery::Candidates { hosts, .. } => {
+                        hosts.into_iter().next().expect("a candidate")
+                    }
+                    other => panic!("{other:?}"),
+                };
+                // Gmail and Fastmail addresses: the table knows them.
+                for (addr, host) in [
+                    ("someone@gmail.com", "imap.gmail.com"),
+                    ("someone@fastmail.com", "imap.fastmail.com"),
+                ] {
+                    let c = first(discover(&r, addr, None).await);
+                    assert_eq!((c.host.as_str(), c.port), (host, IMAP_PORT), "{addr}");
+                }
+                // A domain the table does not know is found by what its DNS
+                // says, and in time: the same shape
+                // `a_real_business_domain_resolves_through_its_mx` asks of
+                // hickory (a provider's MX, with its help, and the
+                // conventional names behind it).
+                let t = Instant::now();
+                let found = discover(&r, "someone@anthropic.com", None).await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "anthropic.com: {took:?}");
+                match found {
+                    Discovery::Candidates { hosts, .. } => {
+                        assert_eq!(hosts[0].source, Source::Mx, "{hosts:?}");
+                        assert!(hosts[0].help.is_some(), "{hosts:?}");
+                        assert!(hosts.iter().any(|c| c.source == Source::Guess));
+                    }
+                    other => panic!("{other:?}"),
+                }
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn the_evidence_behind_a_filter_comes_from_the_system_in_time() {
+            // L1's evidence (`found_elsewhere`): a domain's TXT records and
+            // its autodiscover name's CNAME, asked side by side, then at most
+            // one SPF redirect. Both halves have to come back well inside
+            // `SYSTEM_WAIT`. Each domain here is its provider's own, and its
+            // TXT answer fits in one UDP reply: a bigger one, which the
+            // system asks again over TCP (microsoft.com's), is never
+            // answered through the macOS runners' DNS, dig included, so it
+            // cannot be asked here.
+            rt().block_on(async {
+                let r = system();
+                let sources = |found: &[Candidate]| -> Vec<(String, Source)> {
+                    found.iter().map(|c| (c.host.clone(), c.source)).collect()
+                };
+
+                // Microsoft's minecraft.net: the autodiscover alias, and an
+                // SPF record whose one mailbox provider is Microsoft 365 too,
+                // which is the same server, so it is listed once.
+                let t = Instant::now();
+                let found = found_elsewhere(&r, "minecraft.net").await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "minecraft.net: {took:?}");
+                assert_eq!(
+                    sources(&found),
+                    [(MS_IMAP.to_string(), Source::Autodiscover)],
+                    "minecraft.net"
+                );
+                let spf = spf_record(&r.txt("minecraft.net").await)
+                    .and_then(parse_spf)
+                    .expect("minecraft.net's SPF");
+                let named: Vec<&str> = spf
+                    .includes
+                    .iter()
+                    .filter_map(|i| spf_provider(i))
+                    .map(|h| h.host)
+                    .collect();
+                assert!(
+                    !named.is_empty() && named.iter().all(|h| *h == MS_IMAP),
+                    "minecraft.net's SPF: {:?}",
+                    spf.includes
+                );
+
+                // Google's android.com: no autodiscover name at all, and an
+                // SPF record naming Google alone.
+                let t = Instant::now();
+                let found = found_elsewhere(&r, "android.com").await;
+                let took = t.elapsed();
+                assert!(took < QUICK, "android.com: {took:?}");
+                assert_eq!(
+                    sources(&found),
+                    [("imap.gmail.com".to_string(), Source::Spf)],
+                    "android.com"
+                );
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS through dns_sd: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn a_local_domain_is_never_asked_about() {
+            // `.local` belongs to the local network (multicast DNS): asking
+            // there is what iOS asks the customer's leave for, and it never
+            // says a name does not exist. No public mail server is there,
+            // so none of discovery's questions is asked, each ends at once,
+            // and every server it suggests is refused by the guard without
+            // a lookup. The same for a domain with `_` in it, whose
+            // questions could otherwise slip past the guard's reading of
+            // host names, and for an SPF `redirect=` any domain's owner can
+            // write, `_spf.local` or `loca\l` (dns_sd reads `\l` as `l`).
+            rt().block_on(async {
+                let r = system();
+                let t = Instant::now();
+                for domain in ["printer.local", "a_b.local", "corp_x.internal"] {
+                    for (rrtype, name) in [
+                        (dns_sd::SRV, format!("_imaps._tcp.{domain}")),
+                        (dns_sd::MX, domain.to_string()),
+                        (dns_sd::TXT, domain.to_string()),
+                        (dns_sd::A, format!("autodiscover.{domain}")),
+                    ] {
+                        let (found, ended) = dns_sd::asked(&name, rrtype).await;
+                        assert!(
+                            found.is_empty() && ended == dns_sd::Ended::NotAsked,
+                            "{name}: {} records, {ended:?}",
+                            found.len()
+                        );
+                    }
+                    let auto = format!("autodiscover.{domain}");
+                    let (alias, ended) = dns_sd::aliased(&auto).await;
+                    assert!(
+                        alias.is_none() && ended == dns_sd::Ended::NotAsked,
+                        "{auto}"
+                    );
+                    match discover(&r, &format!("someone@{domain}"), None).await {
+                        Discovery::Candidates { hosts, .. } => {
+                            assert!(!hosts.is_empty());
+                            for c in &hosts {
+                                let verdict = check_host(&r, &c.host).await;
+                                assert!(!verdict.is_allowed(), "{}: {verdict:?}", c.host);
+                            }
+                        }
+                        other => panic!("{domain}: {other:?}"),
+                    }
+                }
+                for redirect in [
+                    "_spf.local",
+                    "_spf.acme.local",
+                    "acme.loca\\l",
+                    "_spf.acme.loca\\108",
+                ] {
+                    let (found, ended) = dns_sd::asked(redirect, dns_sd::TXT).await;
+                    assert!(
+                        found.is_empty() && ended == dns_sd::Ended::NotAsked,
+                        "{redirect}: {ended:?}"
+                    );
+                }
+                let took = t.elapsed();
+                assert!(took < Duration::from_secs(1), "{took:?}");
+            });
+        }
+
+        #[test]
+        #[ignore = "real DNS and IMAP: run on macOS and in an iOS Simulator by mail-apple.yml"]
+        fn a_mail_server_is_reached_at_the_addresses_the_system_gives() {
+            // The guarded dial from start to finish, with no password: the
+            // system's addresses, each judged by the guard, a socket to one
+            // of them, TLS checked against the name, and the server's
+            // greeting.
+            rt().block_on(async {
+                let r = system();
+                for host in ["imap.gmail.com", "imap.fastmail.com"] {
+                    let (name, addrs) = resolve_public(&r, host).await.expect(host);
+                    assert!(addrs.iter().all(|ip| is_public(*ip)), "{addrs:?}");
+                    let tcp = crate::imap::dial(&addrs, IMAP_PORT, host)
+                        .await
+                        .expect(host);
+                    let mut tls = crate::imap::wrap_tls(tcp, &name, host).await.expect(host);
+                    let mut greeting = [0u8; 64];
+                    let n = tokio::time::timeout(Duration::from_secs(20), tls.read(&mut greeting))
+                        .await
+                        .expect("a greeting in time")
+                        .expect("a greeting");
+                    assert!(
+                        greeting[..n].starts_with(b"* OK"),
+                        "{host}: {}",
+                        String::from_utf8_lossy(&greeting[..n])
+                    );
+                }
+            });
+        }
     }
 }

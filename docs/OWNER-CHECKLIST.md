@@ -75,7 +75,8 @@ OneDrive.
 
 Steps: `docs/CONNECTIONS-SETUP.md` → Slack. Register all three redirect
 addresses exactly (`http://localhost:28417`, `:28418`, `:28419`), turn on
-PKCE, add the seven user scopes. One **Variable**: `RATA_SLACK_CLIENT_ID`.
+PKCE, add the six user scopes (RATA no longer asks for `im:read`; an app
+that already has it can drop it). One **Variable**: `RATA_SLACK_CLIENT_ID`.
 Never copy the client secret anywhere.
 
 **Worked when:** Settings → Connected accounts lists Slack, and Connect opens
@@ -120,7 +121,54 @@ a file from Files → Create file in Word, Excel and PowerPoint (and Pages,
 Numbers, Keynote on a Mac) and say if any complains, and try Convert on a
 PDF on a Mac.
 
-## 9. Decisions only you can make
+## 9. RATA on the iPhone App Store (weeks, mostly Apple's waiting)
+
+**Unlocks:** selling RATA in the iOS App Store, with Base and Pro as Apple
+subscriptions (`org.mailrata.pro.monthly`, `org.mailrata.base.monthly`),
+the In-App Purchase model you chose on 2026-10-15. As you decided on
+2026-10-17, the first public launch is the desktop direct download, sold
+through Stripe on mailrata.org, and the App Store comes after it, so
+nothing here holds that launch up. The iPhone app and its purchase
+screen are still being built (`docs/APP-STORES.md`), so steps 1, 2 and the
+trader details can start now; the rest wait for the app.
+
+1. The Apple Developer Program (the same membership as macOS signing in
+   §7), then in App Store Connect the Paid Apps agreement, banking and
+   tax, and the Digital Services Act trader details (an address, phone and
+   email that Apple shows publicly; without them RATA is not sold in the
+   EU).
+2. The App Store Small Business Program, for the lower commission.
+3. The app record, with the bundle id `org.mailrata.mail` (decision D9,
+   2026-10-17: the iPhone and Mac App Store builds share it, so one
+   subscription covers both; the direct download keeps
+   `org.mailrata.desktop`). It is permanent once the first build is
+   uploaded. Note the record's numeric App ID.
+4. One subscription group, "RATA", with the two monthly subscriptions:
+   `org.mailrata.pro.monthly` at level 1 and `org.mailrata.base.monthly` at
+   level 2. Each needs its prices, a name and description in each
+   language, and the review screenshot Apple asks for. No free trial;
+   introductory offers and Family Sharing are your choice and need no
+   code.
+5. App Store Server Notifications, version 2, for Production and Sandbox,
+   both to `https://mailrata.org/api/apple/notifications`.
+6. A sandbox tester account.
+7. On the server: `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list it
+   once the in-app purchase server, #167, has merged). `APPLE_BUNDLE_ID`
+   is optional: it defaults to `org.mailrata.mail`.
+8. Run `database.sql` §7 (it arrives with the same change).
+9. Redeploy mailrata.org.
+10. The App Privacy answers ("nutrition label"), the age rating, the
+    encryption questions, the privacy policy and support addresses, and
+    Notes for Review with a reviewer's licence and a test mailbox
+    (`docs/APP-STORES.md` says what each depends on).
+11. From TestFlight: a purchase, a restore, an upgrade from Base to Pro,
+    and a cancellation.
+
+**Worked when:** a TestFlight build buys Pro in the sandbox, Settings →
+Current plan says it is licensed for Pro, and Restore purchases on a
+second device brings the same plan back.
+
+## 10. Decisions only you can make
 
 - **Sent copies.** Some providers do not file mail sent over SMTP into Sent
   (Gmail and Outlook do). Should RATA put a copy there itself?
@@ -129,3 +177,10 @@ PDF on a Mac.
 - **Renewals inside the 90-day window** (security review row 15): a copy
   that keeps renewing is not stopped. A business decision.
 - **More extensions in the disguised-program lists** (security review P3-4).
+- **The app stores** (`docs/APP-STORES.md`, where each is set out):
+  deleting an account while a subscription is live (D4), what Anthropic
+  keeps of AI text (D5), new mail in the background on phones (D7), phone
+  backups (D8), a store version without "beta" (D9; its identifiers you
+  decided on 2026-10-17), when the Mac App Store build ships (D10), and
+  the legal entity, address and contact for the privacy policy and terms
+  (D11).
