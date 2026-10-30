@@ -579,16 +579,34 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .digest-strip b{color:var(--ink);font-weight:600}
 .dg-text{flex:1 1 220px;min-width:0}
 .dg-cta{margin-left:auto;font-weight:600;color:var(--tint)}
-/* ---------- inbox sources ---------- */
+/* ---------- inbox sources ----------
+   The linked mailboxes: one quiet line (a dot, the one address or how
+   many, when the last one synced) that opens a card listing each. It was
+   a chip per mailbox, which wrapped to a line each and pushed the mail a
+   screen down. */
 #sources:empty{display:none}
-.src-row{display:flex;gap:7px;flex-wrap:wrap;padding:0 14px 8px}
-.src-chip{display:inline-flex;align-items:center;gap:7px;font-family:var(--sans);font-size:12px;font-weight:500;color:var(--slate);background:transparent;border-radius:var(--r-sm);padding:4px 10px;box-shadow:var(--edge);transition:var(--lift)}
-.src-chip:not([disabled]):hover{background:var(--fill-2);color:var(--ink)}
-.src-chip[disabled]{opacity:.55;cursor:default}
-.src-chip.live{color:var(--ink)}
-.src-dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+#sources{position:relative;padding:0 14px 8px}
+.src-btn{display:inline-flex;align-items:center;gap:7px;max-width:100%;font-family:var(--sans);font-size:12.5px;font-weight:500;color:var(--slate);background:transparent;border-radius:var(--r-sm);padding:4px 10px;box-shadow:var(--edge);transition:var(--lift);white-space:nowrap}
+.src-btn:hover,.src-btn[aria-expanded="true"]{background:var(--fill-2);color:var(--ink)}
+.src-what{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.src-btn .src-meta{flex-shrink:0}
+.src-sep{flex-shrink:0;margin:0 -2px;color:var(--faint);font-weight:400}
+.src-caret{flex-shrink:0;width:12px;height:12px;color:var(--faint)}
+.src-btn:hover :is(.src-sep,.src-meta,.src-caret),.src-btn[aria-expanded="true"] :is(.src-sep,.src-meta,.src-caret){color:var(--slate)}
+.src-dot{flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--faint)}
 .src-dot.on{background:var(--green)}
 .src-meta{font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
+.src-panel{position:absolute;z-index:40;top:calc(100% - 4px);left:14px;width:max-content;min-width:min(280px,calc(100% - 28px));max-width:calc(100% - 28px);max-height:min(420px,60vh);overflow-y:auto;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;animation:pop .16s ease-out}
+.src-panel[hidden]{display:none}
+.src-list{list-style:none}
+.src-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 10px;border-radius:var(--r-sm);font-size:13px;font-weight:500;color:var(--slate);transition:var(--lift)}
+.src-item.live{color:var(--ink)}
+.src-item:not([disabled]):hover{background:var(--fill-2)}
+.src-item:not([disabled]):hover .src-meta{color:var(--slate)}
+.src-item[disabled]{opacity:.55;cursor:default}
+.src-item[disabled]:active{transform:none}
+.src-addr{flex:1;min-width:0;overflow-wrap:anywhere}
+.src-item .src-meta{flex-shrink:0;white-space:nowrap}
 /* ---------- account menu ---------- */
 #acct-btn{width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:13px;display:grid;place-items:center;margin-left:12px;flex-shrink:0;box-shadow:var(--edge)}
 #acct-menu{position:absolute;top:56px;right:18px;width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
@@ -756,7 +774,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .saveto-menu{position:fixed;z-index:70;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;min-width:190px;animation:pop .16s ease-out}
 .saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
 .saveto-menu button:hover{background:var(--fill-2)}
-@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu{animation:none}}
+@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu,.src-panel{animation:none}}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -892,7 +910,7 @@ body.send-counting #toast{bottom:76px}
 }
 
 /* Phone: the list is the point, and it was starting a screen and a half down.
-   Everything above it — the mode switch, the briefing, the per-account chips,
+   Everything above it — the mode switch, the briefing, the mailboxes line,
    two rows of filters, the sync button — is furniture, and at 390px wide it
    was costing more than it earned. Same controls, less air. */
 @media (max-width:600px){
@@ -900,7 +918,10 @@ body.send-counting #toast{bottom:76px}
   .seg{margin:8px 12px}
   .digest-strip{padding:10px 13px;font-size:12.5px}
   #sources{padding:6px 12px 2px}
-  .src-chip{padding:4px 9px;font-size:11.5px}
+  .src-btn{padding:4px 9px;font-size:12px}
+  /* Inside a 16 px gutter (and the notch's), with rows a thumb can hit. */
+  .src-panel{top:calc(100% + 2px);left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));width:auto;min-width:0;max-width:none}
+  .src-item{min-height:44px}
   .pill{padding:4px 9px;font-size:12px}
   #sync-all{font-size:12px;padding:4px 10px}
   .mail-row{padding:11px 10px}
@@ -2582,19 +2603,95 @@ function renderDigest(){
   el.innerHTML=`<button class="digest-strip"><span class="dg-text"><b>${unread} unread</b>${pr.length?` · ${pr.length} need you`:''}${top?` · latest: “${esc((top.subj||top.prev).slice(0,46))}”`:''}</span><span class="dg-cta">Open briefing →</span></button>`;
   el.querySelector('.digest-strip').onclick=openAssist;
 }
+/* The linked mailboxes: one line (a dot, green only while every one is
+   live, the one address or how many, and when the last one synced) that
+   opens a card listing each, as the chips did, a mailbox's row syncing
+   when pressed. A disclosure, not a menu: Tab goes through the rows, and
+   Escape or a press elsewhere closes it, Escape giving the focus back to
+   the button. It is drawn in place on every sync, so an open card stays
+   open and a row that has the focus keeps it. */
+let SRC_OPEN=false;
+function srcPart(tag,cls){const e=document.createElement(tag);if(cls)e.className=cls;return e}
+function srcShow(open){
+  SRC_OPEN=!!open;
+  const b=$('#src-btn'),p=$('#src-panel');
+  if(b)b.setAttribute('aria-expanded',String(SRC_OPEN));
+  if(p)p.hidden=!SRC_OPEN;
+}
+function srcClose(back){
+  if(!SRC_OPEN)return;
+  srcShow(false);
+  const b=$('#src-btn');
+  if(back&&b)b.focus({preventScroll:true});
+}
 function renderSources(){renderDigest();
   const el=$('#sources');if(!el)return;
-  if(!S.linked.length){el.innerHTML='';return}
-  el.innerHTML='<div class="src-row">'+S.linked.map(l=>{
-    const live=l.status==='live';
-    const syncable=l.type==='mail';
-    return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="Tap to sync now">
-      <span class="src-dot ${live?'on':''}"></span>${esc(l.label)}
-      <span class="src-meta">${l.lastSync?rel(l.lastSync)+' ago':(syncable?'never synced':'pending')}</span>
-    </button>`;
-  }).join('')+'</div>';
-  el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>serverSync('mail'));
+  if(!S.linked.length){SRC_OPEN=false;el.replaceChildren();return}
+  let btn=$('#src-btn'),list=el.querySelector('.src-list');
+  if(!btn||!list){
+    btn=srcPart('button','src-btn');btn.type='button';btn.id='src-btn';
+    btn.setAttribute('aria-controls','src-panel');
+    const sep=srcPart('span','src-sep');sep.textContent='·';
+    btn.append(srcPart('span','src-dot'),srcPart('span','src-what'),' ',sep,' ',srcPart('span','src-meta'),srcPart('span','vh'));
+    btn.insertAdjacentHTML('beforeend','<svg class="src-caret" aria-hidden="true" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>');
+    btn.onclick=()=>srcShow(!SRC_OPEN);
+    const panel=srcPart('div','src-panel');panel.id='src-panel';
+    panel.setAttribute('role','group');panel.setAttribute('aria-label','Linked mailboxes');
+    list=srcPart('ul','src-list');panel.append(list);
+    el.replaceChildren(btn,panel);
+  }
+  const n=S.linked.length,mail=S.linked.filter(l=>l.type==='mail');
+  const live=mail.length>0&&mail.every(l=>l.status==='live');
+  const last=Math.max(0,...mail.map(l=>l.lastSync||0));
+  btn.querySelector('.src-dot').classList.toggle('on',live);
+  btn.querySelector('.src-what').textContent=n===1?S.linked[0].label:n+(mail.length===n?' mailboxes':' accounts');
+  btn.querySelector('.src-meta').textContent=!mail.length?'pending':last?'synced '+rel(last)+' ago':'never synced';
+  btn.querySelector('.vh').textContent=n===1?(live?', live':', not live'):(live?', all live':', not all live');
+  /* Rows by id, changed where they stand: one that left goes first, so
+     none still here is moved (moving it would drop its focus). */
+  const ids=new Set(S.linked.map(l=>l.id));
+  for(const li of [...list.children])if(!ids.has(li.dataset.id))li.remove();
+  const have=new Map([...list.children].map(li=>[li.dataset.id,li]));
+  S.linked.forEach((l,i)=>{
+    let li=have.get(l.id);
+    if(!li){
+      li=srcPart('li');li.dataset.id=l.id;
+      const b=srcPart('button','src-item');b.type='button';
+      b.append(srcPart('span','src-dot'),srcPart('span','src-addr'),' ',srcPart('span','src-meta'),srcPart('span','vh'));
+      li.append(b);
+    }
+    const b=li.firstChild,on=l.status==='live',mailbox=l.type==='mail';
+    b.classList.toggle('live',on);
+    b.disabled=!mailbox;
+    if(mailbox){b.dataset.src=l.id;b.title='Sync now';b.onclick=()=>serverSync('mail')}
+    else{delete b.dataset.src;b.removeAttribute('title');b.onclick=null}
+    b.querySelector('.src-dot').classList.toggle('on',on);
+    b.querySelector('.src-addr').textContent=l.label;
+    b.querySelector('.src-meta').textContent=l.lastSync?rel(l.lastSync)+' ago':(mailbox?'never synced':'pending');
+    b.querySelector('.vh').textContent=on?', live':', not live';
+    if(list.children[i]!==li)list.insertBefore(li,list.children[i]||null);
+  });
+  srcShow(SRC_OPEN);
 }
+/* In the capture phase, so Escape closes only the card (not the message
+   behind it); a question on screen keeps its own Escape. Up and Down move
+   between the rows. */
+addEventListener('keydown',e=>{
+  if(!SRC_OPEN||e.defaultPrevented)return;
+  const src=$('#sources'),inside=src.contains(document.activeElement);
+  if(e.key==='Escape'){
+    if(!inside&&topDialog())return;
+    e.preventDefault();e.stopPropagation();srcClose(true);return;
+  }
+  if(!inside||!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;
+  const rows=[...src.querySelectorAll('.src-item:not([disabled])')];if(!rows.length)return;
+  const i=rows.indexOf(document.activeElement);
+  e.preventDefault();
+  rows[e.key==='Home'?0:e.key==='End'?rows.length-1:i<0?(e.key==='ArrowDown'?0:rows.length-1):(i+(e.key==='ArrowDown'?1:rows.length-1))%rows.length].focus();
+},true);
+addEventListener('pointerdown',e=>{if(SRC_OPEN&&!$('#sources').contains(e.target))srcClose(false)},true);
+/* Tabbing past the last row, or back before the button, closes it. */
+$('#sources').addEventListener('focusout',e=>{if(SRC_OPEN&&e.relatedTarget&&!$('#sources').contains(e.relatedTarget))srcClose(false)});
 function renderSyncAll(){renderSources();
   const b=$('#sync-all');if(!b)return;
   b.style.display=S.linked.some(l=>l.type==='mail')?'':'none';
@@ -4118,6 +4215,8 @@ addEventListener('keydown',e=>{
     return;
   }
   if(keyDialog())return;
+  /* The linked mailboxes' card is open: its rows have the keys. */
+  if(SRC_OPEN)return;
   const composing=ov.classList.contains('open');
   if(e.key==='Escape'&&composing){e.preventDefault();closeCompose();return}
   if(!keysOn()||composing||keyTyping(e.target))return;
@@ -7112,7 +7211,8 @@ async function removeLinked(id){
   /* Its gaps can never be filled now (BUG-C). */
   if(l.type==='mail')S.gaps=(S.gaps||[]).filter(g=>g.email!==String(l.label).toLowerCase());
   save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
-  renderLinked();renderMailFilters();renderMail();
+  /* The linked mailboxes' line too, or it went on listing this one. */
+  renderLinked();renderSyncAll();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
 }
 
