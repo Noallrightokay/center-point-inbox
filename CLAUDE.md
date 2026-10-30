@@ -25,7 +25,7 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard, server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`). Standalone, knows nothing about the app. 318 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard (which judges a NAT64 address by the IPv4 address inside, since #164; first in the next release), server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`), and on iOS looking names up through the system's own resolver instead of hickory (`dns_sd.rs` asks, `records.rs` reads the answers; *Name lookups on iOS*, below). Standalone, knows nothing about the app. 343 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). CI job *Mail layer on macOS* (`.github/workflows/mail-apple.yml`, workflow *Mail on Apple systems*, on every change to the engine or that file; not part of the release gate) runs the 343 with hickory, as the macOS app has it; again with `--features system-dns`, as iOS looks names up (337: the six tests that need hickory do not exist in that build; and 12 that exist only in such a build, ignored there and run in a step of their own, one at a time, since ten of them ask real DNS); clippy with that feature and for `aarch64-apple-ios`; checks with `cargo tree` that neither iOS target builds hickory, System Configuration or resolv-conf; builds and links the tests for iOS and the iOS Simulator; and runs the library's tests in an iOS Simulator (337, then the 12) as a bare process (`xcrun simctl spawn`), outside any app's sandbox. Linux CI never compiles the iOS code: check it here with `cargo clippy --all-targets -- --cfg system_dns -D warnings` (*Name lookups on iOS*). |
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 326 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
@@ -251,7 +251,12 @@ lock on the list, the list and Windows keychain entries kept on this
 computer rather than a roaming profile, Slack's sign-in on both loopbacks
 with targets that say who they are and no link previews, OneDrive and
 Google Drive saves that resume and say when a file may already be there,
-and Apps' accounts kept per RATA account. An
+and Apps' accounts kept per RATA account. On main and in no release yet,
+so first in the next one: the outbound guard judges a NAT64 address by
+the IPv4 address inside instead of refusing all of `64:ff9b::/32`
+(#164), refuses the zones `local`, `internal` and all of `arpa`
+themselves (#163), and the engine can look names up through the system
+on iOS (#163; no released build is for iOS). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -2120,6 +2125,170 @@ inside a mailbox or a link is not kept by `rest`; an older build's save
 drops it. Not done: R5's optional check at save time that the file has not
 changed since it was read. Tested by `tests::at_start_*` (main.rs) and the
 `store::` and `vault::` tests, which CI also runs on Windows.
+**Name lookups on iOS (#163; on main, in no release yet).** An iOS app
+cannot read the network's DNS settings (no `/etc/resolv.conf`, no System
+Configuration store), so there the engine asks the system's own resolver
+instead of hickory. No released build is for iOS; what #163 changed on
+the desktop, the private names below, is first in the next release. `build.rs`
+sets `cfg(system_dns)` for every iOS target, and on another Apple target
+only with the test-only `system-dns` feature, which the macOS app must
+never turn on; every other build keeps hickory. `hickory-resolver` is a
+`cfg(not(target_os = "ios"))` dependency, so iOS builds neither it nor
+System Configuration (*Mail layer on macOS* checks both iOS targets).
+Under `system_dns` SRV, MX and TXT go through dns_sd's
+`DNSServiceQueryRecord` (`dns_sd::ask`, each question on its own
+connection in a blocking task), their rdata is read by `records.rs` (plain
+Rust over bytes, compiled into every test build; a record cut short, run
+past its end or naming a host with anything but letters, digits, `-` and
+`_` is refused), and addresses come from getaddrinfo
+(`resolve::system_addresses`), which on an IPv6-only network is what
+makes a NAT64 address for an IPv4-only host. Ordering is shared
+(`by_preference`, `srv_choice`), so both resolvers' answers read alike.
+Each question gets `SYSTEM_WAIT` (10 s); one unanswered by then is a
+failed lookup and discovery goes on. Every question carries
+`FLAGS_RETURN_INTERMEDIATES`, so a name or record that does not exist is
+answered at once, empty; a "no such record" counts only with `FLAGS_ADD`
+and the type asked, and a cached one (`FLAGS_ANSWERED_FROM_CACHE`) only
+after `SETTLE` (1 s) with nothing fresher, since mDNSResponder can answer a
+cached "No Such Record" and then the real record. **No CNAME question,
+ever:** one about a name with no CNAME held up later questions reaching
+that name (getaddrinfo waited 10 s and more on macOS 15; a TXT question
+was waited out on macOS 26 and in the iOS 26.5 Simulator), and the
+system's cache is every app's. So L1's `autodiscover.<domain>` alias
+comes from an A question (`dns_sd::aliased`): the first CNAME the system
+hands back whose owner is the name asked. **Names never asked**
+(`records::question`, `Ended::NotAsked`): one with any byte outside
+`[A-Za-z0-9._-]` (dns_sd reads `\` as an escape: `loca\l` is `local`);
+anything under `local`, `localhost`, `internal`, `home.arpa`,
+`254.169.in-addr.arpa` and `8`/`9`/`a`/`b.e.f.ip6.arpa` (`UNASKED`: on
+Apple systems `local` and the link-local reverse zones go out by
+multicast DNS to the local network, which iOS asks the customer's leave
+for and which never says a name does not exist); and whatever
+`guard::check_literal` refuses, with `_` labels read as plain ones, and
+again for the domain under the service labels (`_imaps._tcp.192.168.1.1`).
+Any domain's SPF `redirect=` reaches this rule. A non-ASCII name is asked
+as `xn--…`. Every address getaddrinfo gives still goes through
+`resolve_public` and the guard, as hickory's do. Tests: `records::tests`
+and the shared `resolve` tests run everywhere;
+`resolve::tests::through_the_system` (10: MX, SRV, TXT, aliases, a name
+that does not exist, discovery, L1's evidence in time, `.local`, an IMAP
+greeting at the system's addresses) and `dns_sd::tests` (2: the deadline,
+and that every question frees its socket) exist only under `system_dns`,
+are `#[ignore]`d, and run only in *Mail layer on macOS*, on the Mac and in
+the Simulator, one at a time in a step of their own. They depend on outside
+servers as well as real DNS: Gmail's and Fastmail's IMAP (the dial and TLS
+greeting, no sign-in, through the platform verifier: the first sight of
+TLS verification in an iOS Simulator), gmail.com's `_imaps` SRV and SPF
+redirect, fastmail.com's SRV, and autodiscover.microsoft.com's alias to
+autodiscover.outlook.com; a change at Gmail, Fastmail or Microsoft can turn
+the job red with no fault in the change under test. All 12 exist only in
+a `system_dns` build, so only on an Apple system; ten ask real DNS, the
+deadline test asks only a `.local` name, by multicast DNS, which nobody
+answers, and the `.local` test asks nothing at all (every question ends
+`NotAsked` and the guard refuses every host before a lookup). The six
+tests that need hickory (`scripted::answering`, below) do not exist in
+that build, so the system-dns run and the Simulator run 337 of the 343,
+plus the 12. The Simulator runs
+the library's test program as a bare process (`xcrun simctl spawn`),
+outside any app's sandbox, so it does not show dns_sd and getaddrinfo
+working from a sandboxed app (#166's Simulator smoke does, once it
+merges), and nobody has seen iOS's Local Network prompt: `.local` is no
+longer asked, but whether anything else in the app raises it shows only in
+the app on a device. Trap: the macOS runners' DNS never answers a TXT set
+too big for one UDP reply (microsoft.com's), dig included, so no network
+test may ask one. Trap: linking anything that holds the engine for an
+iOS device by hand (its tests, `cargo test --no-run --target
+aarch64-apple-ios`, or an app that contains it) needs
+`IPHONEOS_DEPLOYMENT_TARGET`, as `mail-apple.yml` sets it; without it
+rustc links for its own default, iOS 10, while aws-lc-sys's C is built for
+the SDK's version and calls `___chkstk_darwin`, which that link cannot
+find. Building the engine alone links nothing (it is a library) and does
+not need it. The workflow sets 14.0, and its comment calls that Tauri's
+default `bundle.iOS.minimumSystemVersion`; it is not: tauri-utils 2.10.0
+(RATA's lock, and what tauri-cli 2.12.0 reads config with) defaults to
+15.0, and #166's `tauri.ios.conf.json` sets 15.0 as well (RATA's minimum,
+`docs/APP-STORES.md`). Keep `mail-apple.yml`'s value equal to the app's
+`minimumSystemVersion`: raise it to 15.0, comment and all, when #166
+merges. rustc's own default for the Simulator target is already 14.0.
+Still open: an IPv4 literal typed as the server on an IPv6-only network
+is dialled as typed, never synthesised to NAT64 (`resolve_public`'s
+literal branch; names are fine), which no GitHub runner can show; and TXT
+over TCP through dns_sd, never seen, which L1's SPF evidence for a big
+TXT set needs (check it on a device). Not seen on a phone or on a real
+IPv6-only network. `mail-apple.yml`'s `RUST` is `desktop-ci.yml`'s
+toolchain (1.94.1): bump the two together, with the version `release.yml`
+names inline. **Checking the iOS code on Linux.**
+Linux CI (*Mail layer*) never compiles `cfg(system_dns)`; only *Mail layer
+on macOS* does, outside the release gate, and only after a push: no
+session here can run it locally. So before pushing any engine change, run
+in `desktop/rata-mail`
+`cargo clippy --all-targets -- --cfg system_dns -D warnings` as well as
+the plain clippy: it type-checks `dns_sd.rs`, `records.rs` and the
+`system_dns` tests on Linux and links nothing (clean on main,
+2026-10-17). The rule it guards: engine code or a test that uses hickory
+(`HickoryResolver`, `Resolver.inner`, `scripted::answering`) carries
+`#[cfg(not(system_dns))]`, since hickory is not built for iOS at all; a
+merge of #164's first commit (`422cf77`) with #163 compiled on Linux and
+failed this check with E0432 (`super::HickoryResolver`) and E0560
+(`inner`), as #164's description shows.
+**`unsafe` (#163).** `dns_sd.rs` holds the engine's only `unsafe` code
+(none in `desktop/rata-mail` before #163, as at v0.1.52's `0c60aad`):
+nine uses, the `unsafe extern "C"` block declaring dns_sd's four
+functions and `poll`, and eight `unsafe` blocks, each with a `SAFETY`
+comment (the reply callback's context cast, its rdata slice and its
+`fullname` C string; starting a question, freeing it, its socket, `poll`
+and `DNSServiceProcessResult`). The reply callback is an `extern "C" fn`
+that must never panic, which across that boundary would end the app.
+It compiles only under `system_dns`. A later security review part, or
+anyone touching that file, starts there.
+**The outbound guard on IPv6-only networks (NAT64, #164), and its private
+names (#163). On main, first in the next release:** 0.1.52 and earlier
+refuse all of `64:ff9b::/32`, on every system, and do not refuse the
+zones `local`, `internal` and `arpa` themselves, nor any name under
+`arpa` except those under `home.arpa`. On an IPv6-only network with DNS64 (Guideline
+2.5.5: "Apps must be fully functional on IPv6-only networks"; Apple's
+*Supporting IPv6 DNS64/NAT64 Networks* sets "the one used during App
+Review" beside providers' DNS64/NAT64 networks, without saying it is
+IPv6-only; T-Mobile US runs one; `docs/APP-STORES.md` quotes both pages)
+an IPv4-only mail host answers only with an
+address in NAT64's well-known prefix `64:ff9b::/96`, and the gateway
+connects to the IPv4 address in its last 32 bits. So `guard::v6_public`
+judges such an address by that IPv4 address, as it judges 6to4:
+`64:ff9b::808:808` (8.8.8.8) passes, and `64:ff9b::7f00:1`,
+`64:ff9b::a00:1`, `64:ff9b::a9fe:a9fe`, `64:ff9b::6440:1` and
+`64:ff9b::c0a8:101` (127.0.0.1, 10.0.0.1, 169.254.169.254, 100.64.0.1 and
+192.168.1.1) are refused like the IPv4 addresses inside them. Until #164
+all of `64:ff9b::/32` was refused, and linking such a host said "… is not
+a public mail server — it points inside a private network". The rest of `64:ff9b::/32` is still refused,
+the local-use `64:ff9b:1::/48` (RFC 8215) among it, and so is a /96 with
+anything but zeros before the IPv4 address: where an operator's IPv4
+address sits depends on its prefix length. IPv4-mapped and
+IPv4-compatible addresses are judged by the IPv4 address inside, as
+before. An operator-chosen NAT64 prefix (RFC 6052 §2.2) looks like
+ordinary global IPv6 and is judged as such; RFC 7050 discovery is not
+done, and adding it needs an exception: the name it asks,
+`ipv4only.arpa`, is refused by `is_private_name` (all of `arpa`, below),
+so `resolve_public` refuses it by name and `records::question` never asks
+it. `check_resolved` still condemns a name if any answer is private, a
+wrapped one included. `resolve::scripted::answering(ip)` is a test
+`Resolver` whose name server (UDP on 127.0.0.1) answers every AAAA
+question with `ip` and every other with nothing; the tests use it to show
+a hostile NAT64 answer refused on linking, a refresh, the watch and
+sending, and a public one dialled. It points hickory at a server, so it
+and the six tests using it are `#[cfg(not(system_dns))]`; the guard's own
+NAT64 tests (guard.rs) run in every build, and the loopback suite's
+`guard_admits_only_the_literal_loopback_address` pins that
+`64:ff9b::7f00:1` and `64:ff9b::127.0.0.1` stay refused with
+`loopback-tests` on, as literals and as a resolved answer, since that
+feature's one hole in the guard is the literal `127.0.0.1`.
+**Private names** (`is_private_name`,
+judged before any lookup): `localhost`, `local`, `internal` and `arpa`,
+each the zone itself and every name under it (#163; before, only
+`localhost` and names under `.localhost`, `.local`, `.internal` and
+`.home.arpa`). No mail server is named there, and on Apple systems the
+system's resolver answers `local` and the link-local reverse zones by
+asking the local network. No customer-facing sentence changed. Not yet
+seen on a real IPv6-only network.
 **Security review (2026-09).** `docs/SECURITY-REVIEW-2026-09.md` holds the
 findings, each with a severity; no High. SEC-1 fixed the `cid:`
 amplification, the Stripe checkout conflict, `past_due`, the AI fence and
@@ -2165,13 +2334,33 @@ certificates.
 opened yet; the engine runs against real Dovecot (IMAP) and GreenMail (SMTP,
 and IMAPS on 3993 for a server that declares no special-use folders) on
 every PR (`tests/loopback.rs`), but not against Gmail, Outlook or any hosted
-provider. Run them locally with `sudo
+provider with a sign-in (*Mail layer on macOS* only dials Gmail's and
+Fastmail's IMAP and reads the greeting). Run them locally with `sudo
 desktop/rata-mail/tests/loopback/servers.sh start /tmp/rata-lb`, then
 `SSL_CERT_FILE=/tmp/rata-lb/ca.crt cargo test --features loopback-tests
 --test loopback`. When a real connection fails, the three files to read are
 `resolve.rs` (discovery), `imap.rs` (handshake and auth classification) and
 `guard.rs` (host refusal). Errors are typed, so the message names the hosts
-tried and what each said.
+tried and what each said. On iOS, a lookup that comes back empty may also
+be `dns_sd.rs` (a question waited out at `SYSTEM_WAIT`, or a cached "no
+such record" taken after `SETTLE`) or `records.rs` (`question` declining
+the name, `Ended::NotAsked`, or a record naming a host with an odd label
+dropped); either way discovery just sees nothing. Testing trap: this
+container's resolvers (8.8.8.8 and 8.8.4.4, from `/etc/resolv.conf`)
+answer only A questions. MX, AAAA, TXT, SRV and CNAME questions all come
+back NOERROR with no records (measured 2026-10-17 with raw UDP queries:
+gmail.com's MX, AAAA and TXT, anthropic.com's, microsoft.com's and
+fastmail.com's MX, `_imaps._tcp.gmail.com` and `_imaps._tcp.fastmail.com`
+SRV, `autodiscover.microsoft.com` CNAME, example.com's and google.com's
+TXT; an A question about an alias still carries its CNAMEs on the way).
+So nothing here can check SRV, L1's SPF or autodiscover evidence, or IPv6
+answers against real DNS: an empty answer here is the container's, not
+the domain's. `cargo test` in `desktop/rata-mail` passes 341 of 343 here.
+The two that fail,
+`resolve::tests::a_domain_at_microsoft_365_is_found_by_its_mx` and
+`a_real_business_domain_resolves_through_its_mx`, need real MX records;
+they pass in CI (*Mail layer*, and *Mail layer on macOS*), so that is not
+a regression.
 
 ## Working style that earned its place here
 
