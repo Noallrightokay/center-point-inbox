@@ -55,13 +55,16 @@ export const APPLE_ROOT_FILES = ['AppleRootCA-G3.cer', 'AppleRootCA-G2.cer', 'Ap
 export const APPLE_DEFAULT_BUNDLE_ID = 'org.mailrata.mail';
 
 /* What /api/licence/apple takes: the app's current entitlements, at most
-   ten signed transactions of at most 16 KiB each. A real one is roughly 5
-   to 7 KiB: the three certificates in its header's x5c come to about
-   3.5 KB of base64, and the header is base64url-encoded again around
-   them. */
+   ten signed transactions of at most 16 KiB each, and beside them, when
+   the app sends it, each subscription's signed renewal info, at most ten
+   of the same size (readTransactions). A real transaction is roughly 5 to
+   7 KiB: the three certificates in its header's x5c come to about 3.5 KB
+   of base64, and the header is base64url-encoded again around them; a
+   renewal info has the same header around a smaller payload. */
 export const APPLE_MAX_TRANSACTIONS = 10;
+export const APPLE_MAX_RENEWALS = 10;
 export const APPLE_MAX_JWS = 16 * 1024;
-const APPLE_MAX_BODY = APPLE_MAX_TRANSACTIONS * (APPLE_MAX_JWS + 16) + 1024;
+const APPLE_MAX_BODY = (APPLE_MAX_TRANSACTIONS + APPLE_MAX_RENEWALS) * (APPLE_MAX_JWS + 16) + 1024;
 /* A notification carries a transaction and its renewal info inside it. */
 const APPLE_MAX_NOTIFICATION = 64 * 1024;
 
@@ -294,15 +297,29 @@ export function verifyAppleIn(environment, kind, jws, made) {
 
 /* ---- reading a request ---------------------------------------------------- */
 
-/* /api/licence/apple's body: { transactions: [<JWS>, ...] }. */
+/* /api/licence/apple's body:
+
+     { "transactions": [<JWS>, ...], "renewalInfos": [<JWS>, ...] }
+
+   `transactions`: StoreKit 2's Transaction.currentEntitlements, each
+   transaction's jwsRepresentation, at most APPLE_MAX_TRANSACTIONS.
+   `renewalInfos`, which may be left out or null: for each of those
+   subscriptions, the jwsRepresentation of its
+   Product.SubscriptionInfo.RenewalInfo (from
+   Product.SubscriptionInfo.Status.renewalInfo), which carries
+   gracePeriodExpiresDate while Apple gives a billing grace period, at most
+   APPLE_MAX_RENEWALS. Each is a JWS of at most APPLE_MAX_JWS. Anything
+   else is malformed. Answers { ok, list, renewals }. */
 export function readTransactions(raw) {
   if (typeof raw !== 'string' || raw.length > APPLE_MAX_BODY) return { ok: false };
   let body;
   try { body = JSON.parse(raw); } catch { return { ok: false }; }
-  const list = body && Array.isArray(body.transactions) ? body.transactions : null;
-  if (!list || list.length > APPLE_MAX_TRANSACTIONS) return { ok: false };
-  if (!list.every((t) => typeof t === 'string' && t.length > 0 && t.length <= APPLE_MAX_JWS)) return { ok: false };
-  return { ok: true, list };
+  const signed = (l, most) => Array.isArray(l) && l.length <= most
+    && l.every((t) => typeof t === 'string' && t.length > 0 && t.length <= APPLE_MAX_JWS);
+  if (!body || typeof body !== 'object' || !signed(body.transactions, APPLE_MAX_TRANSACTIONS)) return { ok: false };
+  const renewals = body.renewalInfos === undefined || body.renewalInfos === null ? [] : body.renewalInfos;
+  if (!signed(renewals, APPLE_MAX_RENEWALS)) return { ok: false };
+  return { ok: true, list: body.transactions, renewals };
 }
 
 /* A notification's body: { signedPayload: <JWS> }. */
@@ -329,9 +346,12 @@ export function readNotification(raw) {
    'expired' is the one a row can still overrule. In a billing grace
    period StoreKit's current entitlements still list the subscription, by
    its transaction for the period that has ended, and what says the grace
-   period has not is Apple's DID_FAIL_TO_RENEW notification, recorded in
-   the row as grace_until. So /api/licence/apple asks the row about an
-   expired transaction (appleLive) and writes nothing from it. */
+   period has not is Apple's: the subscription's renewal info, which the
+   phone sends beside the transaction, or Apple's DID_FAIL_TO_RENEW
+   notification, either recorded in the row as grace_until. So
+   /api/licence/apple writes an expired transaction only with its renewal
+   info (applePurchase), asks the row about it otherwise, and lets the row
+   decide (appleLive). */
 export function appleIgnored(t, settings, now = Date.now()) {
   if (!t || !appleIdOk(t.originalTransactionId)) return 'id';
   if (t.bundleId !== settings.bundleId) return 'bundle';
@@ -366,6 +386,13 @@ const periodFrom = (t) => iso(t && typeof t.purchaseDate === 'number' && Number.
    with. */
 const EPOCH = iso(0);
 const NO_GRACE = Object.freeze({ grace_until: null, grace_signed_at: EPOCH });
+/* The grace fields a renewal info states: the end of a billing grace
+   period (its gracePeriodExpiresDate, or null when it gives none), stamped
+   `at`. */
+function graceOf(r, at) {
+  const until = typeof r.gracePeriodExpiresDate === 'number' && Number.isFinite(r.gracePeriodExpiresDate) ? iso(r.gracePeriodExpiresDate) : null;
+  return { grace_until: until, grace_signed_at: at };
+}
 
 /* A row's subscription fields as a transaction describes them: the
    product, the plan, the period and its expiry, whether the transaction is
@@ -418,19 +445,26 @@ export function appleChange(n, t, r, environment) {
   if (REVOKED.includes(type) && own === null) revoked = typeof n.signedDate === 'number' && Number.isFinite(n.signedDate) ? n.signedDate : Date.now();
   if (type === 'REFUND_REVERSED') revoked = null;
   const core = { ...appleRowOf(t, environment), revoked_at: revoked === null ? null : iso(revoked), signed_at: at };
-  const grace = r && typeof r === 'object'
-    ? { grace_until: typeof r.gracePeriodExpiresDate === 'number' && Number.isFinite(r.gracePeriodExpiresDate) ? iso(r.gracePeriodExpiresDate) : null, grace_signed_at: at }
-    : null;
+  const grace = r && typeof r === 'object' ? graceOf(r, at) : null;
   return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
 
-/* What a live transaction the app sent says (/api/licence/apple): its
+/* What a transaction the app sent says (/api/licence/apple): its
    subscription fields, and nothing about a grace period, which StoreKit's
-   transaction does not carry. An upgraded transaction never gets here,
-   since appleIgnored refuses it. */
-export function applePurchase(t, environment) {
+   transaction does not carry; or, with `r`, the subscription's own signed
+   renewal info, which the route has matched to the transaction (the same
+   original transaction id, the same environment and so the same
+   verifier), also the grace period it states, stamped with when Apple
+   signed that renewal info. That is written as a notification's is
+   (appleWrite), under the same grace_signed_at guard, so a renewal info
+   older than what Apple has since said of the period changes nothing, and
+   the phone alone records a billing grace period when no notification
+   reaches mailrata.org. An upgraded transaction never gets here, since
+   appleIgnored refuses it. */
+export function applePurchase(t, environment, r = null) {
   const core = appleRowOf(t, environment);
-  return { core, grace: null, insert: { ...core, ...NO_GRACE } };
+  const grace = r && typeof r === 'object' ? graceOf(r, signedAt(r)) : null;
+  return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
 
 /* ---- the row -------------------------------------------------------------- */
@@ -451,16 +485,17 @@ export function applePurchase(t, environment) {
 
    - the subscription fields (`core`), stamped signed_at. Written over a
      row recording an earlier period, which this one replaces, its grace
-     fields reset with it (to this notification's grace, or to none); or
-     over a row recording the same period whose signed_at is no later. A
-     row recording a later period is never written.
-   - the grace fields, grace_until and grace_signed_at, written only by a
-     notification that carries renewal info: over a row recording this
-     same period whose grace_signed_at is no later. The core write has
-     already moved a row of an earlier period on to this one, and only a
-     notification knows the grace period: the phone's purchase never
-     touches it, so a transaction StoreKit signed later cannot hide a
-     grace period Apple reported earlier.
+     fields reset with it (to this write's grace, or to none); or over a
+     row recording the same period whose signed_at is no later. A row
+     recording a later period is never written.
+   - the grace fields, grace_until and grace_signed_at, written only from
+     a renewal info: a notification's, or one the phone sent beside its
+     transaction (applePurchase). Over a row recording this same period
+     whose grace_signed_at is no later. The core write has already moved a
+     row of an earlier period on to this one. Only a renewal info knows the
+     grace period, and a transaction alone never touches it, so a
+     transaction StoreKit signed later cannot hide a grace period Apple
+     reported earlier.
 
    So each group's (period_from, stamp) never goes down. Every guard is in
    the database, so two deliveries racing each other cannot both pass a
@@ -534,22 +569,32 @@ export function appleLive(row, now = Date.now()) {
 }
 
 /* How long a licence for an App Store subscription outlives what was paid
-   for. A Stripe licence lasts LICENCE_DAYS whatever happens to the
-   subscription after it is issued; an App Store one lasts at most that, and
-   never longer than the end of what the row pays for (appleUntil: the
-   period's expiry, or a billing grace period Apple reported) and this
-   margin. So a refund, which Apple grants by itself, leaves at most the rest
-   of the period paid for, and a purchase in Apple's test environment, which
-   costs nothing and whose periods last minutes, no 30-day licence.
+   for. A Stripe licence lasts LICENCE_DAYS from the day it is issued,
+   whatever happens to the subscription after, so one issued on the last
+   day of a period runs nearly a whole period past it. An App Store one
+   lasts at most LICENCE_DAYS too, and never longer than the end of what
+   the row pays for, as Apple last reported it when the licence is issued
+   (appleUntil: the current period's expiry, or a billing grace period),
+   and this margin. So a subscription that is cancelled, or stops renewing,
+   stops unlocking RATA within the margin of its end, and a purchase in
+   Apple's test environment, which costs nothing, gets no 30-day licence.
+
+   A refund does not shorten a licence already issued: Apple reports it as
+   a revocation, not as an earlier end of the period. Renewal stops then
+   (appleLive), and the AI relay stops answering at once (appleAiLive),
+   but mail keeps working until that licence's own end.
 
    The margin lets a customer who is offline when one period ends and the
    next begins keep working: the app renews in a licence's last week, at
    launch, every six hours and when the connection comes back (bridge.js,
    settleLicence), and on the iPhone on each transaction StoreKit hands over
    (claude/iap-native), so any of those within the margin moves the licence
-   on to the new period. Three days for the App Store itself; an hour in the
-   sandbox (TestFlight, App Review, Xcode), whose monthly period is five
-   minutes. The privacy policy and terms state both
+   on to the new period. Three days for the App Store itself; an hour in
+   Apple's test environment, where a subscription bought in TestFlight
+   renews once a day, up to six times a week, and only one bought with a
+   Sandbox Apple Account signed in on a device has periods minutes long (a
+   month is five minutes, unless the tester's renewal rate was changed in
+   App Store Connect). The privacy policy and terms state both
    (tests/legal.test.mjs). */
 export const APPLE_MARGIN_DAYS = 3;
 export const APPLE_SANDBOX_MARGIN_HOURS = 1;
@@ -561,6 +606,31 @@ export function appleLicenceUntil(row, now = Date.now()) {
   const paid = Date.parse(appleUntil(row) || '');
   const margin = row && row.environment === 'Production' ? APPLE_MARGIN_DAYS * 86400e3 : APPLE_SANDBOX_MARGIN_HOURS * 3600e3;
   return Math.min(now + LICENCE_DAYS * 86400e3, (Number.isFinite(paid) ? paid : now) + margin);
+}
+
+/* Whether the AI relay answers an `apple:` licence, by its row: there is
+   a row, for a plan RATA sells here; it is not revoked, since a refund or
+   a revocation stops AI at once; and it is still inside the bound a
+   licence issued from it would have (appleLicenceUntil: the end of what
+   it pays for and the margin), so AI never outlasts what the licence
+   itself may. A row that has only expired is not live (appleLive), and is
+   still answered within that margin: between a period's end and its
+   renewal reaching the row (a DID_RENEW delivered late, the phone not
+   opened yet), a paying customer is not refused. */
+export function appleAiLive(row, now = Date.now()) {
+  if (!row || row.revoked_at) return false;
+  if (!Object.values(APPLE_PRODUCTS).includes(row.plan) || !PLANS[row.plan]) return false;
+  if (!appleUntil(row)) return false;
+  return appleLicenceUntil(row, now) > now;
+}
+
+/* The plan the AI relay validates an `apple:` licence against: the lower
+   of the licence's own and its row's. When the row's ranks lower (Pro
+   changed to Base since the licence was issued) the relay answers as for
+   an expired licence, so the app renews to the row's plan and asks again. */
+export function appleAiPlan(licencePlan, row) {
+  const held = row && row.plan;
+  return ORDER.indexOf(held) < ORDER.indexOf(licencePlan) ? held : licencePlan;
 }
 
 /* When a row stops being live, if nothing else happens: the later of its

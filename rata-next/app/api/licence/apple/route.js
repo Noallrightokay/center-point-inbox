@@ -28,14 +28,32 @@ export const dynamic = 'force-dynamic';
    period that a later one has replaced, changes nothing and unlocks
    nothing of its own (only what the row says is live), and one for the
    period after a refunded one is recorded whenever Apple signed it. A
-   transaction never touches the grace period, which only Apple's
-   notifications report.
+   transaction alone never touches the grace period, which only a renewal
+   info reports.
 
-   One past its expiry writes nothing, and unlocks only what its row says
-   is live. That is a billing grace period: StoreKit still lists the
-   subscription by the transaction that has just expired, and Apple's
-   DID_FAIL_TO_RENEW notification has put when the grace period ends in
-   the row (grace_until). Without the row, it unlocks nothing.
+   Beside the transactions the app may send each subscription's renewal
+   info as Apple signed it (`renewalInfos`, lib/apple.js readTransactions),
+   which says when a billing grace period ends. Each is verified by the
+   verifier its own environment picks, and is used only with a transaction
+   of this request that has the same original transaction id and was
+   verified in the same environment (so by the same verifier, and for
+   RATA's bundle id, which the transaction carries and the renewal info
+   does not). One that matches no such transaction is refused: it records
+   nothing and unlocks nothing, and the log counts it. A matched one's
+   grace period is written with the transaction (applePurchase), under
+   the guard a notification's is written under, stamped with when Apple
+   signed the renewal info; so one older than what Apple has since said
+   of the period changes nothing.
+
+   A transaction past its expiry unlocks only what its row says is live.
+   That is a billing grace period: StoreKit still lists the subscription
+   by the transaction that has just expired, and the row holds when the
+   grace period ends (grace_until), from Apple's DID_FAIL_TO_RENEW
+   notification or from the renewal info the phone sends with the
+   transaction. With its renewal info the expired transaction is written
+   as a live one is, so the phone alone records the grace period when no
+   notification has reached mailrata.org; without it, it writes nothing,
+   and without the row it unlocks nothing.
 
    A refusal is { licensed: false, reason, message }, the shape
    /api/licence/renew answers with: the app keeps any licence that still
@@ -68,7 +86,8 @@ async function licenceFor(req) {
   const now = Date.now();
   const seen = await Promise.all(asked.list.map((jws) => verifyApple('transaction', jws, made)));
   /* Each verified transaction worth asking about, with whether it is past
-     its expiry (`lapsed`), so only its row can make it live. */
+     its expiry (`lapsed`), so only its row, or its renewal info, can make
+     it live. */
   const live = [];
   const refused = [];
   let otherApp = 0;
@@ -95,6 +114,34 @@ async function licenceFor(req) {
   if (otherApp) console.warn(`licence/apple: ${otherApp} transaction(s) were for another app (INVALID_APP_IDENTIFIER), so ignored; if every purchase says so, APPLE_BUNDLE_ID does not match the app (rata-next/LAUNCH.md section 11)`);
   if (refused.length) console.warn(`licence/apple: ${refused.length} transaction(s) did not verify: ${[...new Set(refused)].join(', ')}`);
 
+  /* The renewal infos, each matched to a transaction above by original
+     transaction id and environment; of several for one, the one Apple
+     signed last. A refused one is only counted in the log, by the
+     library's status name, never its contents. */
+  const renewalOf = new Map();
+  const renewalRefused = [];
+  let unmatched = 0;
+  const signedOf = (p) => (typeof p.signedDate === 'number' && Number.isFinite(p.signedDate) ? p.signedDate : 0);
+  const renewalsSeen = await Promise.all(asked.renewals.map((jws) => verifyApple('renewal', jws, made)));
+  for (const r of renewalsSeen) {
+    if (!r.ok) {
+      renewalRefused.push(r.status);
+      continue;
+    }
+    const id = r.payload && r.payload.originalTransactionId;
+    const twins = live.filter((l) => l.payload.originalTransactionId === id && l.environment === r.environment);
+    if (!twins.length) {
+      unmatched += 1;
+      continue;
+    }
+    for (const twin of twins) {
+      const held = renewalOf.get(twin.payload);
+      if (!held || signedOf(r.payload) > signedOf(held)) renewalOf.set(twin.payload, r.payload);
+    }
+  }
+  if (renewalRefused.length) console.warn(`licence/apple: ${renewalRefused.length} renewal info(s) did not verify: ${[...new Set(renewalRefused)].join(', ')}`);
+  if (unmatched) console.warn(`licence/apple: ${unmatched} renewal info(s) matched no transaction sent with them, so refused`);
+
   if (!live.length) {
     if (noAppId) {
       console.warn('licence/apple: a Production purchase arrived and APPLE_APP_ID is not set; see rata-next/LAUNCH.md section 11');
@@ -111,11 +158,12 @@ async function licenceFor(req) {
 
   for (const s of applePreferred(live.map((l) => l.payload))) {
     const { environment, lapsed } = live.find((l) => l.payload === s);
+    const renewal = renewalOf.get(s) || null;
     let written;
-    if (lapsed) {
+    if (lapsed && !renewal) {
       written = await appleRow(sb, s.originalTransactionId);
     } else {
-      written = await appleWrite(sb, s.originalTransactionId, applePurchase(s, environment));
+      written = await appleWrite(sb, s.originalTransactionId, applePurchase(s, environment, renewal));
     }
     if (written.error) {
       /* Fail closed: a licence that cannot be recorded, or checked against

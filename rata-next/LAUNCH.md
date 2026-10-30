@@ -450,21 +450,25 @@ mailrata.org account, and Apple tells mailrata.org nothing personal. Three
 routes do it:
 
 - `POST /api/licence/apple`: the app sends the purchases StoreKit holds,
-  each signed by Apple, and gets a licence back. The site checks Apple's
-  signature with Apple's own library (`@apple/app-store-server-library`)
-  against Apple's root certificates in `lib/apple-roots`, offline: no call
-  to Apple per request.
+  each signed by Apple, with each subscription's signed renewal info
+  (which says when a billing grace period ends), and gets a licence back.
+  The site checks Apple's signature with Apple's own library
+  (`@apple/app-store-server-library`) against Apple's root certificates in
+  `lib/apple-roots`, offline: no call to Apple per request.
 - `POST /api/apple/notifications`: Apple's App Store Server Notifications
   V2, which keep the record current when a subscription renews, fails to
   renew, expires or is refunded.
 - `/api/licence/renew` renews an `apple:` licence from that record.
 
-An App Store licence lasts at most 30 days, and never more than 3 days past
-the end of what Apple has been paid for (1 hour in the sandbox), so a
-refund leaves at most the rest of that period; the app renews it as the
-subscription renews. The AI relay also reads the subscription's record
-before each request, and refuses one that is not live
-(`LICENSING.md`, *Why 30 days*).
+An App Store licence lasts until the end of the subscription's current
+period as Apple last reported it (or of its billing grace period), plus 3
+days (1 hour in Apple's test environment), and never more than 30 days;
+the app renews it as the subscription renews. A refund does not shorten a
+licence already issued: mail keeps working until its end, about 30 days
+after a refund on a period's first day. What a refund stops at once is AI:
+the relay reads the subscription's record before each request and refuses
+one that is refunded or revoked (`LICENSING.md`, *Refunds, cancellations
+and revocation*).
 
 Desktop builds and the Stripe checkout do not change. The steps, in order:
 
@@ -499,18 +503,23 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    transactions of their own (up to five besides the buyer), so each gets
    a licence, and an AI allowance, of their own: one subscription can cost
    up to six times `AI_MONTHLY_CAP_USD` in AI. Turn on
-   **Billing Grace Period** (on the same Subscriptions page): with the
-   notifications of step 5, RATA keeps renewing the licence until it ends,
-   from the phone and from the record alike. Without them the site never
-   hears of a grace period, so a phone whose renewal has failed gets no new
-   licence until Apple's retry succeeds.
+   **Billing Grace Period** (on the same Subscriptions page): RATA then
+   keeps renewing the licence until it ends. The phone reports the grace
+   period itself, with its renewal info, so this works even without the
+   notifications of step 5; with them, the record knows of the grace period
+   too when the phone has not been opened.
 5. **Server notifications**: the app → App Information → App Store Server
    Notifications. Version 2, the URL
    `https://mailrata.org/api/apple/notifications`, for **both** Production
-   and Sandbox. Types RATA has no use for are answered 200 and change
-   nothing, among them `RESCIND_CONSENT` (a parent withdrew consent under
-   the age laws Apple applies in Texas; Apple then stops the app launching
-   on that child's device by itself).
+   and Sandbox. The phone alone renews a licence correctly, grace period
+   included, but this URL is still what records refunds and revocations
+   promptly: StoreKit stops listing a refunded purchase rather than sending
+   it, so without the notifications the record stays live to the end of the
+   refunded period, and the licence renews and the AI relay answers until
+   then. Types RATA has no use for are answered 200 and change nothing,
+   among them `RESCIND_CONSENT` (a parent withdrew consent under the age
+   laws Apple applies in Texas; Apple then stops the app launching on that
+   child's device by itself).
 6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
    address that is not an Apple Account already.
 7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
@@ -531,8 +540,10 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
     and cancel. After each, Supabase → Table Editor →
     `apple_subscriptions` shows the subscription's row with `environment`
     Sandbox and the plan you expect; a cancelled one stays live until its
-    `expires_at`. Sandbox subscriptions renew every few minutes, so a
-    month passes quickly.
+    `expires_at`. A subscription bought in TestFlight renews once a day, up
+    to six times a week (App Store Connect Help, *Subscription renewal rate
+    in TestFlight*); only a Sandbox Apple Account signed in on a device,
+    with a development build, renews every few minutes.
 
 **How to tell it worked:** `https://mailrata.org/api/apple/notifications`
 in a browser answers `"configured": true` once Apple's root certificates
@@ -563,11 +574,13 @@ Two choices are made for you, and are yours to revisit:
   `lib/apple.js` is the switch.
 - **Sandbox purchases are accepted**, because App Review and TestFlight buy
   there. A sandbox purchase costs nothing. Its licence lasts only an hour
-  past the end of its sandbox period, which is minutes long, so it lasts as
-  long as the sandbox subscription keeps renewing. Everyone you let into
-  TestFlight still uses RATA free while they test, with an AI allowance per
-  sandbox subscription. Keep TestFlight to people you would give a licence
-  to: a public TestFlight link gives one to anyone who opens it.
+  past the end of its period, so it lasts as long as the subscription keeps
+  renewing: in TestFlight once a day, up to six times a week, and with a
+  Sandbox Apple Account on a device every few minutes. Everyone you let
+  into TestFlight still uses RATA free while they test, with an AI
+  allowance per sandbox subscription. Keep TestFlight to people you would
+  give a licence to: a public TestFlight link gives one to anyone who
+  opens it.
 
 ---
 

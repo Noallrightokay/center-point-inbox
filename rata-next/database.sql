@@ -266,7 +266,8 @@ create trigger pending_subscriptions_touch
 --    groups, each ordered by period_from and then by its own stamp of
 --    when Apple signed what it says: the subscription's (signed_at)
 --    and the grace period's (grace_until, grace_signed_at, which only
---    Apple's notifications report). So a notification delivered late,
+--    a renewal info Apple signed reports: a notification's, or one the
+--    phone sends with its purchase). So a notification delivered late,
 --    or twice, never undoes a later one (lib/apple.js, appleWrite).
 --    Not by expires_at: a period paid for in advance can end after
 --    the one that replaced it.

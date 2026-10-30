@@ -283,14 +283,28 @@ export default async function run(state) {
     /* How long an App Store licence lasts (lib/apple.js, appleLicenceUntil):
        the margins are named constants, and both pages state them. */
     const hours = (n) => `${n} hour${n === 1 ? '' : 's'}`;
-    check(T.includes(`A licence for a subscription bought in the iPhone app lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for`)
+    /* Until the end of the current period as Apple last reported it, or of
+       its billing grace period (appleUntil), plus the margin, and never more
+       than LICENCE_DAYS: never "past the period Apple has been paid for",
+       which a refund would make untrue (a refund does not shorten a licence
+       already issued). */
+    const until = 'lasts until the end of the subscription\'s current period as Apple last reported it (or of its billing grace period)';
+    check(T.includes(`A licence for a subscription bought in the iPhone app ${until}, plus ${apple.APPLE_MARGIN_DAYS} days, and never more than ${LICENCE_DAYS} days`)
       && T.includes(`lasts no more than ${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)} past the end of its period`),
-      `terms: an App Store licence lasts at most LICENCE_DAYS, and APPLE_MARGIN_DAYS (${apple.APPLE_MARGIN_DAYS}) past what was paid for, APPLE_SANDBOX_MARGIN_HOURS (${apple.APPLE_SANDBOX_MARGIN_HOURS}) in the sandbox`);
-    check(P.includes(`The licence lasts at most ${LICENCE_DAYS} days, and never more than ${apple.APPLE_MARGIN_DAYS} days past the end of the period Apple has been paid for (${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)}, for a purchase in Apple's test environment)`),
+      `terms: an App Store licence lasts to its period's end or its grace period's, plus APPLE_MARGIN_DAYS (${apple.APPLE_MARGIN_DAYS}), APPLE_SANDBOX_MARGIN_HOURS (${apple.APPLE_SANDBOX_MARGIN_HOURS}) in the sandbox, at most LICENCE_DAYS`);
+    check(P.includes(`The licence ${until}, plus ${apple.APPLE_MARGIN_DAYS} days (${hours(apple.APPLE_SANDBOX_MARGIN_HOURS)}, for a purchase in Apple's test environment), and never more than ${LICENCE_DAYS} days`),
       'privacy: the same, under Subscribing in the iPhone app');
-    check(T.includes('AI features stop as soon as Apple refunds or ends the subscription, even while the licence still runs')
-      && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription is still live'),
-      'both pages: the AI relay checks an App Store subscription is still live (app/api/ai)');
+    check([T, P].every((page) => page.includes('(or of its billing grace period)')), 'both pages count a billing grace period in it');
+    check(!/past the end of the period Apple has been paid for/.test(T + P), 'and neither says a licence ends with what Apple has been paid for');
+    check(P.includes('Each purchase names the product') && P.indexOf('Each purchase names the product') < P.indexOf(`The licence ${until}`),
+      'privacy: what each purchase names comes straight after the purchases, before the licence\'s lifetime');
+    check(T.includes('AI features stop as soon as Apple refunds or revokes the subscription; mail keeps working until that licence\'s end')
+      && P.includes('A refund stops AI at once, and mail keeps working until that licence\'s end')
+      && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription has not been refunded or revoked'),
+      'both pages: a refund or a revocation stops AI at once (app/api/ai, appleAiLive), and mail runs to the licence\'s end');
+    check(P.includes('With them the app sends Apple\'s signed renewal information for each subscription')
+      && P.includes('nor anything in the renewal information but when a billing grace period ends'),
+      'privacy: the renewal information the app sends (renewalInfos), and that only the grace period\'s end is kept from it');
     check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
       'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }

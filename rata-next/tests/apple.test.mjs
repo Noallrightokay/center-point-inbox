@@ -399,6 +399,21 @@ export default async function run(state) {
       && apple.appleLive({ ...row, expires_at: new Date(now - DAY).toISOString(), grace_until: new Date(now + DAY).toISOString() }, now),
       'and until it expires, or its billing grace period ends');
     check(!apple.appleLive({ ...row, plan: 'enterprise' }, now) && !apple.appleLive(null, now), 'and only for a plan sold here');
+
+    /* What the AI relay answers: a row not revoked, until the end a licence
+       issued from it would have (the margin past what it pays for). */
+    const ai = (over) => apple.appleAiLive({ ...row, environment: 'Production', ...over }, now);
+    check(ai({}) && ai({ expires_at: new Date(now - 3600e3).toISOString() }) && ai({ expires_at: new Date(now - 2.9 * DAY).toISOString() }),
+      'the AI relay answers a live row, and one that expired less than 3 days ago (a renewal not yet recorded)');
+    check(!ai({ expires_at: new Date(now - 3.1 * DAY).toISOString() }), 'but not one past the margin');
+    check(ai({ environment: 'Sandbox', expires_at: new Date(now - 30 * 60e3).toISOString() }) && !ai({ environment: 'Sandbox', expires_at: new Date(now - 2 * 3600e3).toISOString() }),
+      'in the sandbox, an hour');
+    check(ai({ expires_at: new Date(now - 10 * DAY).toISOString(), grace_until: new Date(now - DAY).toISOString() }), 'counted from a billing grace period\'s end');
+    check(!ai({ revoked_at: new Date(now).toISOString() }) && !ai({ expires_at: new Date(now - 3600e3).toISOString(), revoked_at: new Date(now - 7200e3).toISOString() }),
+      'never a refunded or revoked one, at a period\'s end or not');
+    check(!apple.appleAiLive(null, now) && !ai({ plan: 'enterprise' }) && !ai({ expires_at: null }), 'nor no row, a plan not sold here, or a row with no end');
+    check(apple.appleAiPlan('pro', { plan: 'base' }) === 'base' && apple.appleAiPlan('base', { plan: 'pro' }) === 'base' && apple.appleAiPlan('pro', { plan: 'pro' }) === 'pro',
+      'the plan the relay validates against is the lower of the licence\'s and the row\'s');
   }
 
   console.log('\n— the products, as App Store Connect has them —');
@@ -505,6 +520,21 @@ export default async function run(state) {
       `a notice with renewal info: the subscription's fields so, then the grace period's, over the same period with its own stamp no later: ${three.join(' | ')}`);
     check(r.row.grace_until === new Date(at + 16 * DAY).toISOString() && r.row.grace_signed_at === stamp && r.row.signed_at === stamp && r.row.period_from === from,
       'and the row records both, each with its stamp');
+    /* The phone's purchase sent with its renewal info: the grace period
+       under the same guard, stamped when Apple signed the renewal info. */
+    const rAt = at + 1000;
+    const fromPhone = apple.applePurchase(t, 'Production', { originalTransactionId: id, gracePeriodExpiresDate: rAt + 9 * DAY, signedDate: rAt });
+    const k = sbx.fake.queries.length;
+    const pw = await apple.appleWrite(sb, id, fromPhone);
+    const phoneAsked = sbx.fake.queries.slice(k).map((x) => x.split('?')[1].replace(/&select=.*/, ''));
+    const rStamp = new Date(rAt).toISOString();
+    check(pw.wrote && phoneAsked.at(-1) === `original_transaction_id=eq.${id}&period_from=eq.${from}&grace_signed_at=lte.${rStamp}`
+      && pw.row.grace_until === new Date(rAt + 9 * DAY).toISOString() && pw.row.grace_signed_at === rStamp && pw.row.signed_at === stamp,
+      `the phone's purchase with its renewal info: the grace period over the same period with the renewal info's stamp no later, the older transaction changing nothing else: ${phoneAsked.at(-1)}`);
+    const staleAsked = apple.applePurchase(t, 'Production', { originalTransactionId: id, signedDate: rAt - 1 });
+    const sw = await apple.appleWrite(sb, id, staleAsked);
+    check(!sw.wrote && sw.row.grace_until === new Date(rAt + 9 * DAY).toISOString() && sw.row.grace_signed_at === rStamp,
+      'and an older renewal info changes nothing');
   }
 
   console.log('\n— every delivery order ends as signing order does —');
@@ -532,11 +562,12 @@ export default async function run(state) {
      row check is all these tests reach, never Anthropic. */
   const s = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_APP_ID: String(APP_ID), ANTHROPIC_API_KEY: 'sk-test-never-sent', AI_API_URL: 'http://127.0.0.1:9/never' } });
   const sent = [];
-  const post = async (transactions, { raw, origin } = {}) => {
+  const post = async (transactions, { raw, origin, renewals } = {}) => {
     if (Array.isArray(transactions)) sent.push(...transactions);
+    if (Array.isArray(renewals)) sent.push(...renewals);
     const r = await fetch(s.url + '/api/licence/apple', {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...(origin ? { Origin: origin } : {}) },
-      body: raw !== undefined ? raw : JSON.stringify({ transactions }),
+      body: raw !== undefined ? raw : JSON.stringify({ transactions, ...(renewals ? { renewalInfos: renewals } : {}) }),
     });
     return { status: r.status, cors: r.headers.get('access-control-allow-origin'), d: await r.json().catch(() => ({})) };
   };
@@ -673,7 +704,9 @@ export default async function run(state) {
       check(mixed.d.licensed === true && mixed.d.plan === 'base', 'one live purchase among a forgery and an expired one still unlocks');
     }
     {
-      const one = signJws(txn(), chain);
+      const oneT = txn();
+      const one = signJws(oneT, chain);
+      const oneRenewal = signJws(renewalInfo(oneT), chain);
       for (const [what, raw, want] of [
         ['a body that is not JSON', 'not json', 400],
         ['no list', JSON.stringify({ transaction: one }), 400],
@@ -682,10 +715,113 @@ export default async function run(state) {
         ['eleven', JSON.stringify({ transactions: Array(11).fill(one) }), 400],
         ['one over 16 KiB', JSON.stringify({ transactions: ['a'.repeat(16 * 1024 + 1)] }), 400],
         ['ten, the most', JSON.stringify({ transactions: Array(10).fill(one) }), 200],
+        ['renewalInfos that is not a list', JSON.stringify({ transactions: [one], renewalInfos: one }), 400],
+        ['renewalInfos holding something else', JSON.stringify({ transactions: [one], renewalInfos: [7] }), 400],
+        ['an empty renewal info', JSON.stringify({ transactions: [one], renewalInfos: [''] }), 400],
+        ['eleven renewal infos', JSON.stringify({ transactions: [one], renewalInfos: Array(11).fill(oneRenewal) }), 400],
+        ['a renewal info over 16 KiB', JSON.stringify({ transactions: [one], renewalInfos: ['a'.repeat(16 * 1024 + 1)] }), 400],
+        ['renewalInfos empty', JSON.stringify({ transactions: [one], renewalInfos: [] }), 200],
+        ['renewalInfos null', JSON.stringify({ transactions: [one], renewalInfos: null }), 200],
+        ['ten transactions and ten renewal infos, the most', JSON.stringify({ transactions: Array(10).fill(one), renewalInfos: Array(10).fill(oneRenewal) }), 200],
       ]) {
         const r = await post(null, { raw });
         check(r.status === want && (want === 200 ? r.d.licensed === true : refusal(r.d, 'malformed')), `${what}: ${r.status}`);
       }
+    }
+
+    console.log('\n— the phone\'s renewal info: a billing grace period with no notification —');
+    {
+      const iso = (ms) => new Date(ms).toISOString();
+      const near = (a, b) => Math.abs(a - b) <= 2000;
+      const exp = (d) => (d.licence ? subOf(d).licence.exp * 1000 : NaN);
+      /* In a billing grace period StoreKit lists the subscription by the
+         transaction that has just expired, and its renewal info says when
+         the grace period ends. Here no notification has ever arrived, and
+         there is no row. */
+      const lapsedOf = (over = {}) => txn({ purchaseDate: Date.now() - 31 * DAY, expiresDate: Date.now() - DAY, signedDate: Date.now() - 31 * DAY, ...over });
+      const grace = Date.now() + 10 * DAY;
+      const t = lapsedOf();
+      const r = renewalInfo(t, { gracePeriodExpiresDate: grace, isInBillingRetryPeriod: true, signedDate: Date.now() - 1000 });
+      const { status, d } = await post([signJws(t, chain)], { renewals: [signJws(r, chain)] });
+      check(status === 200 && d.licensed === true && d.plan === 'pro' && subOf(d).licence.sub === `apple:${t.originalTransactionId}` && d.expires === iso(grace),
+        `the expired transaction with its renewal info, and no notification at all: a Pro licence, the subscription running to the grace period's end (${d.reason || d.expires})`);
+      check(near(exp(d), grace + 3 * DAY), `and the licence to 3 days past it (${Number.isFinite(exp(d)) ? iso(exp(d)) : 'none'})`);
+      const row = rowOf(t);
+      check(!!row && row.period_from === iso(t.purchaseDate) && row.expires_at === iso(t.expiresDate) && row.grace_until === iso(grace)
+        && row.grace_signed_at === iso(r.signedDate) && row.signed_at === iso(t.signedDate) && row.revoked_at === null,
+        'the row records the period and its grace period, the grace period stamped when Apple signed the renewal info');
+      const lic = issue({ email: apple.appleSub(t.originalTransactionId), plan: 'pro' }, keys.privateKey);
+      const renewed = await renew(lic);
+      check(renewed.d.licensed === true && near(exp(renewed.d), grace + 3 * DAY), `and /api/licence/renew renews from that row (${renewed.d.reason || renewed.d.plan})`);
+
+      /* A row the phone recorded for the period before, and nothing since:
+         the period that has ended (and failed to renew) was never seen. */
+      const id = nextId();
+      const before = { purchaseDate: Date.now() - 62 * DAY, expiresDate: Date.now() - 31 * DAY };
+      sbx.fake.rows.set(id, {
+        original_transaction_id: id, product_id: PRO, plan: 'pro', environment: 'Production', period_from: iso(before.purchaseDate), expires_at: iso(before.expiresDate),
+        grace_until: null, grace_signed_at: iso(0), revoked_at: null, signed_at: iso(before.purchaseDate), app_account_token: null, email: null,
+      });
+      const m2 = lapsedOf({ originalTransactionId: id });
+      const without = await post([signJws(m2, chain)]);
+      check(refusal(without.d, 'no-subscription', NOTHING_LIVE) && rowOf(m2).period_from === iso(before.purchaseDate),
+        'without its renewal info, the expired transaction of a period the row has not heard of unlocks nothing and writes nothing, as before');
+      const withIt = await post([signJws(m2, chain)], { renewals: [signJws(renewalInfo(m2, { gracePeriodExpiresDate: grace }), chain)] });
+      check(withIt.d.licensed === true && rowOf(m2).period_from === iso(m2.purchaseDate) && rowOf(m2).grace_until === iso(grace),
+        `with it, the row moves on to that period and its grace period, and it unlocks (${withIt.d.reason || withIt.d.plan})`);
+
+      const none = lapsedOf();
+      const n = await post([signJws(none, chain)], { renewals: [signJws(renewalInfo(none, { isInBillingRetryPeriod: true }), chain)] });
+      check(refusal(n.d, 'no-subscription', NOTHING_LIVE) && rowOf(none) && rowOf(none).grace_until === null,
+        'an expired transaction whose renewal info gives no grace period: no-subscription');
+
+      const live = txn();
+      const lr = renewalInfo(live, { signedDate: Date.now() - 1000 });
+      const l = await post([signJws(live, chain)], { renewals: [signJws(lr, chain)] });
+      check(l.d.licensed === true && rowOf(live).grace_until === null && rowOf(live).grace_signed_at === iso(lr.signedDate),
+        'a live purchase with its renewal info: licensed, and the row records that no grace period runs, stamped');
+
+      /* Apple has since ended the grace period (EXPIRED, its renewal info
+         giving none), and the phone sends renewal info StoreKit signed
+         before that, still giving the grace period. */
+      const ended = lapsedOf({ signedDate: Date.now() - 3 * 3600e3 });
+      const endedAt = Date.now() - 3600e3;
+      await notify(notification(chain, 'EXPIRED', ended, {
+        subtype: 'BILLING_RETRY', renewal: renewalInfo(ended, { signedDate: endedAt }), signedDate: endedAt,
+      }));
+      check(!!rowOf(ended) && rowOf(ended).grace_until === null && rowOf(ended).grace_signed_at === iso(endedAt), 'EXPIRED, its renewal info giving no grace period, is recorded');
+      const held = JSON.stringify(rowOf(ended));
+      const staleInfo = renewalInfo(ended, { gracePeriodExpiresDate: grace, isInBillingRetryPeriod: true, signedDate: Date.now() - 2 * 3600e3 });
+      const stale = await post([signJws(ended, chain)], { renewals: [signJws(staleInfo, chain)] });
+      check(refusal(stale.d, 'no-subscription', NOTHING_LIVE) && JSON.stringify(rowOf(ended)) === held && rowOf(ended).grace_until === null,
+        `renewal info Apple signed before a notification that has since ended the grace period changes nothing: "${stale.d.message}"`);
+      const fresh = await post([signJws({ ...ended, signedDate: Date.now() }, chain)], { renewals: [signJws(staleInfo, chain)] });
+      check(refusal(fresh.d, 'no-subscription') && rowOf(ended).grace_until === null && rowOf(ended).grace_signed_at === iso(endedAt),
+        'nor with the transaction StoreKit has signed again since: a transaction never touches the grace period, and the renewal info is older than what Apple said');
+
+      /* Refused: a renewal info for another subscription, from another
+         environment, for a refunded transaction, or not signed by Apple. */
+      const a = lapsedOf();
+      const b = lapsedOf();
+      const at = s.log().length;
+      const cross = await post([signJws(a, chain)], { renewals: [signJws(renewalInfo(b, { gracePeriodExpiresDate: grace }), chain)] });
+      check(refusal(cross.d, 'no-subscription', NOTHING_LIVE) && !rowOf(a) && !rowOf(b),
+        `a renewal info for another subscription is refused: "${cross.d.message}", and nothing is recorded for either`);
+      const elsewhere = await post([signJws(a, chain)], { renewals: [signJws(renewalInfo(a, { environment: 'Sandbox', gracePeriodExpiresDate: grace }), chain)] });
+      check(refusal(elsewhere.d, 'no-subscription') && !rowOf(a), 'so is one from another environment than its transaction');
+      const refunded = txn({ revocationDate: Date.now() - 1000, revocationReason: 0, expiresDate: Date.now() - DAY });
+      const ref = await post([signJws(refunded, chain)], { renewals: [signJws(renewalInfo(refunded, { gracePeriodExpiresDate: grace }), chain)] });
+      check(refusal(ref.d, 'no-subscription') && !rowOf(refunded), 'and one whose transaction unlocks nothing (refunded)');
+      const forged = await post([signJws(a, chain)], { renewals: [signJws(renewalInfo(a, { gracePeriodExpiresDate: grace }), stranger)] });
+      check(refusal(forged.d, 'no-subscription') && !rowOf(a), 'and one signed by anybody but Apple');
+      await new Promise((res) => setTimeout(res, 200));
+      const said = s.log().slice(at);
+      check(/licence\/apple: 1 renewal info\(s\) matched no transaction sent with them, so refused/.test(said) && /licence\/apple: 1 renewal info\(s\) did not verify: /.test(said)
+        && ![a, b, refunded].some((x) => said.includes(x.originalTransactionId)),
+        'the log counts each refused one, naming no transaction');
+      const both = await post([signJws(a, chain), signJws(b, chain)], { renewals: [signJws(renewalInfo(b, { gracePeriodExpiresDate: grace }), chain)] });
+      check(both.d.licensed === true && subOf(both.d).licence.sub === `apple:${b.originalTransactionId}` && !rowOf(a) && rowOf(b).grace_until === iso(grace),
+        'sent with both transactions, it records the grace period of its own subscription only');
     }
 
     console.log('\n— nothing older than what is recorded overwrites it —');
@@ -1330,6 +1466,63 @@ export default async function run(state) {
       at = sbx.fake.calls.length;
       const none = await ask(issue({ email: 'apple:2999999999999998', plan: 'pro' }, keys.privateKey));
       check(none.status === 401 && none.d.reason === 'expired' && !reserved(at), 'no row at all: the same');
+
+      /* A period's end, with its renewal not yet recorded: Apple's
+         DID_RENEW is late, and the phone has not been opened. The row has
+         expired an hour ago; renewing the licence is refused until the
+         renewal arrives, and the licence still runs, so AI still answers,
+         to the margin a licence from that row would have. */
+      const iso = (ms) => new Date(ms).toISOString();
+      const seed = ({ licencePlan = 'pro', ...over }) => {
+        const id = nextId();
+        sbx.fake.rows.set(id, {
+          original_transaction_id: id, product_id: PRO, plan: 'pro', environment: 'Production', period_from: iso(Date.now() - 30 * DAY),
+          expires_at: iso(Date.now() + DAY), grace_until: null, grace_signed_at: iso(0), revoked_at: null, signed_at: iso(Date.now() - 30 * DAY),
+          app_account_token: null, email: null, ...over,
+        });
+        return issue({ email: apple.appleSub(id), plan: licencePlan }, keys.privateKey);
+      };
+      const boundary = seed({ expires_at: iso(Date.now() - 3600e3) });
+      at = sbx.fake.calls.length;
+      const b = await ask(boundary);
+      check(reserved(at) && b.status !== 401, `at a period's end, the renewal not yet recorded: the relay answers (${b.status}, here a stand-in with no ai_reserve)`);
+      check(refusal((await renew(boundary)).d, 'no-subscription'), 'though renewing the licence waits for the renewal');
+      at = sbx.fake.calls.length;
+      const sandboxEdge = await ask(seed({ environment: 'Sandbox', expires_at: iso(Date.now() - 30 * 60e3) }));
+      check(reserved(at) && sandboxEdge.status !== 401, 'in the sandbox, within its hour, too');
+      at = sbx.fake.calls.length;
+      const pastMargin = await ask(seed({ expires_at: iso(Date.now() - 4 * DAY) }));
+      const sandboxPast = await ask(seed({ environment: 'Sandbox', expires_at: iso(Date.now() - 2 * 3600e3) }));
+      check(pastMargin.status === 401 && pastMargin.d.reason === 'expired' && sandboxPast.status === 401 && !reserved(at),
+        'past the margin, 3 days (an hour in the sandbox): 401 expired, nothing reserved');
+      at = sbx.fake.calls.length;
+      const graceRow = await ask(seed({ expires_at: iso(Date.now() - 5 * DAY), grace_until: iso(Date.now() + 2 * DAY) }));
+      check(reserved(at) && graceRow.status !== 401, 'in a billing grace period: answered');
+      at = sbx.fake.calls.length;
+      const refundedEdge = await ask(seed({ expires_at: iso(Date.now() - 3600e3), revoked_at: iso(Date.now() - 60e3) }));
+      const refundedLive = await ask(seed({ revoked_at: iso(Date.now() - 60e3) }));
+      check(refundedEdge.status === 401 && refundedEdge.d.reason === 'expired' && refundedEdge.d.error === NOTHING_LIVE
+        && refundedLive.status === 401 && !reserved(at),
+        'a refund is refused at once, at a period\'s end or in the middle of one');
+
+      /* The plan: the lower of the licence's and the row's. A Pro licence
+         whose row is now Base is answered as expired, so the app renews to
+         Base; a Base licence whose row is now Pro is answered as Base. */
+      at = sbx.fake.calls.length;
+      const lowered = await ask(seed({ plan: 'base', product_id: BASE }));
+      check(lowered.status === 401 && lowered.d.reason === 'expired' && !reserved(at), `a Pro licence, its row now Base: 401 expired, so the app renews to Base ("${lowered.d.error}")`);
+      at = sbx.fake.calls.length;
+      const up = await ask(seed({ licencePlan: 'base' }));
+      check(reserved(at) && up.status !== 401, 'a Base licence, its row now Pro: answered, for what Base allows');
+      const upSummary = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'summarize', text: 'Hello there', licence: seed({ licencePlan: 'base' }) }) });
+      check(upSummary.status === 403, `and not for what only Pro allows (${upSummary.status})`);
+
+      /* Too many requests are refused before the row is read. */
+      const busy = issue({ email: 'apple:2999999999999997', plan: 'pro' }, keys.privateKey);
+      for (let i = 0; i < 20; i++) await ask(busy);
+      at = sbx.fake.calls.length;
+      const limited = await ask(busy);
+      check(limited.status === 429 && limited.d.reason === 'rate' && sbx.fake.calls.length === at, 'the twenty-first request in a minute: 429, and no row is read');
 
       sbx.fake.mode = 'broken';
       at = sbx.fake.calls.length;

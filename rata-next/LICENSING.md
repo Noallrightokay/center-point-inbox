@@ -111,7 +111,19 @@ purchases (`APPLE_SAID`), which sends the phone's purchases to
 `/api/licence/apple` for a new one. See `LAUNCH.md` §11 and `lib/apple.js`.
 
 Such a licence is also shorter (below, *Why 30 days*), and the AI relay
-asks its row whether the subscription is still live before each request.
+reads its row before each request (*Refunds, cancellations and
+revocation*).
+
+The phone sends `/api/licence/apple` the transactions StoreKit holds and,
+beside them, each subscription's signed renewal info (`renewalInfos`, the
+jwsRepresentation of StoreKit 2's `Product.SubscriptionInfo.RenewalInfo`),
+which says when a billing grace period ends. A renewal info is used only
+with a transaction of the same request that has the same original
+transaction id and was verified in the same environment; the grace period
+it states is recorded under the same guard as a notification's, stamped
+with when Apple signed it. So the phone alone keeps a customer in Apple's
+billing grace period licensed, even when no notification reaches
+mailrata.org.
 
 **Before the Mac App Store build ships:** the App Store app's bundle id,
 `org.mailrata.mail`, is shared by the iPhone and Mac apps (Universal
@@ -137,17 +149,31 @@ stops mattering within a billing cycle or two.
 
 `LICENCE_DAYS` in `lib/licence.js` is the one place to change it.
 
-**An App Store licence is shorter.** Apple refunds by itself, so a 30-day
-licence after a refund on the first day would be a month of free use that
-can be had again and again; and a purchase in Apple's test environment
-(TestFlight, App Review) costs nothing and renews every few minutes. So a
-licence for `apple:<id>` lasts the earlier of `LICENCE_DAYS` and the end of
-what its row pays for (the period's expiry, or the end of a billing grace
-period Apple reported) plus a margin: `APPLE_MARGIN_DAYS` (3) for the App
-Store, `APPLE_SANDBOX_MARGIN_HOURS` (1) in the sandbox (`lib/apple.js`,
-`appleLicenceUntil`). For a monthly subscription bought today that is still
-30 days; it is shorter when it is issued later in a period, and much
-shorter in the sandbox.
+**An App Store licence is shorter.** A licence for an address lasts 30
+days from the day it is issued, so one renewed on the last day of a period
+runs nearly a whole period past it; and a purchase in Apple's test
+environment costs nothing, so a 30-day licence from one would be a month
+of RATA for nothing, as often as anyone liked. So a licence for
+`apple:<id>` lasts until the end of the subscription's current period as
+Apple last reported it when the licence is issued (or of its billing grace
+period), plus a margin, and never more than `LICENCE_DAYS`: the margin is
+`APPLE_MARGIN_DAYS` (3) for the App Store and `APPLE_SANDBOX_MARGIN_HOURS`
+(1) in the test environment (`lib/apple.js`, `appleLicenceUntil`). For a
+monthly subscription bought today that is still 30 days; it is shorter
+when it is issued later in a period, and much shorter in the test
+environment. A subscription that is cancelled, or stops renewing, stops
+unlocking RATA within 3 days of its end.
+
+It is not shorter after a refund. Apple reports a refund as a revocation,
+not as an earlier end of the period, so a licence issued before it keeps
+unlocking mail until its own end: after a refund on the first day of a
+monthly period, about 30 days. What a refund stops at once is AI (below,
+*Refunds, cancellations and revocation*), and the next renewal.
+
+In the test environment, a subscription bought in TestFlight renews once a
+day, up to six times a week (App Store Connect Help, *Subscription renewal
+rate in TestFlight*); only one bought with a Sandbox Apple Account signed in
+on a device has periods minutes long. The one-hour margin is for both.
 
 At the end of a period, nothing shows. The licence then has less than a
 week left, so the app renews it at launch, every six hours and when the
@@ -159,7 +185,8 @@ licence for the new period. A customer offline for more than the margin
 across the boundary finds the licence expired. The app then renews it by
 itself as soon as it is online: at launch, when the connection comes back,
 or when a refresh finds it unlicensed. Until then the licence box says so.
-A customer whose subscription ended, or was refunded, keeps working until
+AI keeps answering across the boundary too, to the same margin (below). A
+customer whose subscription ended, or was refunded, keeps working until
 the licence's own end, and is then told "There is no active RATA
 subscription on this Apple account."
 
@@ -178,14 +205,24 @@ working because of something at our end.
 If that ever becomes too generous, shorten `LICENCE_DAYS` rather than adding a
 callback. Fifteen days halves the exposure and still covers a normal holiday.
 
-An App Store subscription refunded or revoked keeps its licence only to the
-end of what was paid for and the margin (above). The AI relay, whose answers
-cost money, does ask: for an `apple:` licence it reads the subscription's
-row before anything is reserved, and answers a row that is not live as an
-expired licence (`reason: 'expired'`). The app then renews once and asks
-again, so a row that has just caught up answers the second time; otherwise
-the renewal is refused and the customer reads the App Store's sentence. A
-row that cannot be read refuses (503), as the AI cap does.
+An App Store subscription refunded or revoked keeps the licence it has to
+that licence's end (above, *Why 30 days*): mail keeps working, and the
+licence is not renewed. The AI relay, whose answers cost money, does ask:
+for an `apple:` licence it reads the subscription's row before anything is
+reserved (`app/api/ai`, `appleAiLive`), and refuses at once a row that is
+refunded or revoked, and a licence with no row. A row that has only
+expired is still answered until the end a licence issued from it would
+have, its period's end (or its billing grace period's) and the margin, so
+a paying customer is not refused between a period's end and its renewal
+reaching the row (Apple's `DID_RENEW` delivered late, or the phone not
+opened yet), and AI never outlasts what the licence itself may. A refusal
+is answered as an expired licence is (`reason: 'expired'`): the app renews
+once and asks again, the renewal of a refunded row is refused too, and the
+customer reads the App Store's sentence beside the summary or translation
+made on the device. The relay also validates the request against the lower
+of the licence's plan and the row's: when the row's is lower (Pro changed
+to Base), it answers `expired`, so the app renews to Base and asks again.
+A row that cannot be read refuses (503), as the AI cap does.
 
 ## What this does *not* protect against
 
