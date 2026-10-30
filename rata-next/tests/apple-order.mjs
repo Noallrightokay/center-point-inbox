@@ -15,13 +15,17 @@
      period starting, a change of renewal preference during it, the refund
      reversed, the grace period ending and the subscription expiring; each
      order then delivers its first and last events again;
-   - every order of six small sets: two that cross from one period to the
+   - every order of nine small sets: two that cross from one period to the
      next (one of them an upgrade from a period paid for in advance, which
      ends after the one that replaced it); one where the phone's purchase,
-     signed after a grace notice, arrives before it; and three where the
+     signed after a grace notice, arrives before it; three where the
      phone sends its renewal info with its purchase, recording a grace
      period with no notification, then ended by one, then recovered by
-     the next period.
+     the next period; and three where the phone's transaction and renewal
+     info are of different moments (a lapsed transaction beside a renewal
+     info signed after billing recovered, with and without the recovery
+     arriving, and the next period's transaction beside the renewal info
+     of the grace period before it).
    The answer for each set is that set delivered in signing order, and a
    few of those answers are also checked against what they must say.
 
@@ -207,9 +211,36 @@ export async function deliveryOrders({ sb, check, label, width = 1 }) {
     note('M2 RECOVERY', 'DID_RENEW', 'BILLING_RECOVERY', T0 + 35 * DAY, M2, undefined),
     phone('M2 phone', T0 + 36 * DAY, M2),
   ];
-  const cross = await settle([upgrade, recovered, resigned, alone, aloneEnded, aloneRecovered]);
+  /* The phone's transaction and renewal info need not be of one moment:
+     StoreKit's transactions are its local copy, the renewal info is
+     fetched from Apple, and neither names a period (lib/apple.js,
+     appleGraceFor). M1 in grace by Apple's notice, and the phone still
+     sending M1 beside a renewal info Apple signed on day 36, after billing
+     recovered: no grace period, since M2 runs. Then the same with M2's
+     recovery arriving. And M2's transaction beside M1's renewal info of
+     day 31, whose grace period ends on day 46, before M2 does. Neither
+     renewal info is the period's beside it, so neither is used. */
+  const lagging = [
+    note('M1 GRACE', 'DID_FAIL_TO_RENEW', 'GRACE_PERIOD', T0 + 30 * DAY, M1, T0 + 46 * DAY),
+    phoneWith('M1 phone, renewal info after recovery', T0 + 5 * DAY, M1, T0 + 36 * DAY, null),
+  ];
+  const laggingRecovered = [...lagging, note('M2 RECOVERY', 'DID_RENEW', 'BILLING_RECOVERY', T0 + 35 * DAY, M2, undefined)];
+  const oldInfo = [
+    phoneWith('M1 phone in grace', T0 + 5 * DAY, M1, T0 + 31 * DAY, T0 + 46 * DAY),
+    phoneWith('M2 phone, M1\'s renewal info', T0 + 36 * DAY, M2, T0 + 31 * DAY, T0 + 46 * DAY),
+  ];
+  const cross = await settle([upgrade, recovered, resigned, alone, aloneEnded, aloneRecovered, lagging, laggingRecovered, oldInfo]);
   check(cross.wrong.length === 0,
-    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a re-signed purchase and the phone alone in a grace period, each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
+    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a re-signed purchase, the phone alone in a grace period and the phone's two halves of different moments, each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
+  const lg = cross.answers.get(lagging);
+  check(!!lg && lg.period_from === M1.purchaseDate && lg.grace_until === T0 + 46 * DAY && lg.grace_signed_at === T0 + 30 * DAY,
+    `${label}a renewal info signed after billing recovered, beside the lapsed transaction, leaves the grace period Apple reported (${shown(lg)})`);
+  const lr = cross.answers.get(laggingRecovered);
+  check(!!lr && lr.period_from === M2.purchaseDate && lr.grace_until === null,
+    `${label}and the recovery, when it arrives, records M2 (${shown(lr)})`);
+  const oi = cross.answers.get(oldInfo);
+  check(!!oi && oi.period_from === M2.purchaseDate && oi.grace_until === null && oi.grace_signed_at === 0,
+    `${label}the next period's transaction beside the renewal info of the grace period before it: no grace period (${shown(oi)})`);
   const g = cross.answers.get(alone);
   check(!!g && g.period_from === M1.purchaseDate && g.grace_until === T0 + 46 * DAY && g.grace_signed_at === T0 + 31 * DAY && g.signed_at === T0 + 5 * DAY,
     `${label}the phone alone records the grace period from its renewal info, stamped when Apple signed that (${shown(g)})`);

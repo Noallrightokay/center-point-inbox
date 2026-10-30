@@ -308,8 +308,10 @@ export function verifyAppleIn(environment, kind, jws, made) {
    Product.SubscriptionInfo.RenewalInfo (from
    Product.SubscriptionInfo.Status.renewalInfo), which carries
    gracePeriodExpiresDate while Apple gives a billing grace period, at most
-   APPLE_MAX_RENEWALS. Each is a JWS of at most APPLE_MAX_JWS. Anything
-   else is malformed. Answers { ok, list, renewals }. */
+   APPLE_MAX_RENEWALS; each is used only with a transaction whose period
+   it states a grace period for (appleGraceFor). Each is a JWS of at most
+   APPLE_MAX_JWS. Anything else is malformed. Answers { ok, list,
+   renewals }. */
 export function readTransactions(raw) {
   if (typeof raw !== 'string' || raw.length > APPLE_MAX_BODY) return { ok: false };
   let body;
@@ -349,8 +351,9 @@ export function readNotification(raw) {
    period has not is Apple's: the subscription's renewal info, which the
    phone sends beside the transaction, or Apple's DID_FAIL_TO_RENEW
    notification, either recorded in the row as grace_until. So
-   /api/licence/apple writes an expired transaction only with its renewal
-   info (applePurchase), asks the row about it otherwise, and lets the row
+   /api/licence/apple writes an expired transaction only with a renewal
+   info that states a grace period for its period (appleGraceFor,
+   applePurchase), asks the row about it otherwise, and lets the row
    decide (appleLive). */
 export function appleIgnored(t, settings, now = Date.now()) {
   if (!t || !appleIdOk(t.originalTransactionId)) return 'id';
@@ -449,12 +452,47 @@ export function appleChange(n, t, r, environment) {
   return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
 
+/* Whether a renewal info the phone sent states a billing grace period for
+   the period transaction `t` pays for: a gracePeriodExpiresDate later than
+   t's expiry. Only such a renewal info is used with t (applePurchase, and
+   /api/licence/apple's choice of one).
+
+   A notification carries its transaction and its renewal info as one
+   statement Apple signed at one moment. The phone's two come from
+   different places and need not be of one moment: StoreKit's transactions
+   from Transaction.currentEntitlements, its local copy, and the renewal
+   info from Product.SubscriptionInfo.Status, which asks Apple. Both name
+   only the subscription (originalTransactionId), never the period. So
+   after billing recovers in a grace period, the phone can still list the
+   lapsed transaction of the period that failed to renew beside a fresh
+   renewal info that gives no grace period, because the next period now
+   runs; written onto the lapsed period, that would end a grace period
+   Apple reported, and refuse a customer who has paid. And a renewal info
+   from an earlier grace period sent beside the next period's transaction
+   would give that period a grace period it never had.
+
+   A grace period begins when the period it follows ends, so one that ends
+   no later than t's expiry is not t's, and a renewal info that gives none
+   says nothing about t's. Either is left out, as though not sent: the
+   transaction is written alone, and a lapsed one only reads its row,
+   whose grace period is Apple's own (a notification's, or an earlier
+   renewal info's). The phone therefore never ends a grace period; Apple's
+   notifications do, and a grace period ends at the time Apple gave for it
+   in any case. */
+export function appleGraceFor(t, r) {
+  if (!t || !r || typeof r !== 'object') return false;
+  const grace = r.gracePeriodExpiresDate;
+  return typeof grace === 'number' && Number.isFinite(grace)
+    && typeof t.expiresDate === 'number' && Number.isFinite(t.expiresDate) && grace > t.expiresDate;
+}
+
 /* What a transaction the app sent says (/api/licence/apple): its
    subscription fields, and nothing about a grace period, which StoreKit's
    transaction does not carry; or, with `r`, the subscription's own signed
    renewal info, which the route has matched to the transaction (the same
    original transaction id, the same environment and so the same
-   verifier), also the grace period it states, stamped with when Apple
+   verifier), also the grace period it states for the transaction's period
+   (appleGraceFor; otherwise `r` is ignored), stamped with when Apple
    signed that renewal info. That is written as a notification's is
    (appleWrite), under the same grace_signed_at guard, so a renewal info
    older than what Apple has since said of the period changes nothing, and
@@ -463,7 +501,7 @@ export function appleChange(n, t, r, environment) {
    appleIgnored refuses it. */
 export function applePurchase(t, environment, r = null) {
   const core = appleRowOf(t, environment);
-  const grace = r && typeof r === 'object' ? graceOf(r, signedAt(r)) : null;
+  const grace = appleGraceFor(t, r) ? graceOf(r, signedAt(r)) : null;
   return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
 
@@ -490,7 +528,8 @@ export function applePurchase(t, environment, r = null) {
      recording a later period is never written.
    - the grace fields, grace_until and grace_signed_at, written only from
      a renewal info: a notification's, or one the phone sent beside its
-     transaction (applePurchase). Over a row recording this same period
+     transaction that states a grace period for that transaction's period
+     (applePurchase, appleGraceFor). Over a row recording this same period
      whose grace_signed_at is no later. The core write has already moved a
      row of an earlier period on to this one. Only a renewal info knows the
      grace period, and a transaction alone never touches it, so a

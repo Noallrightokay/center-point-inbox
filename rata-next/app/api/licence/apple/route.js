@@ -5,7 +5,7 @@ import { issue, LICENCE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
 import {
   APPLE_SAID, appleVerifiers, verifyApple, readTransactions, appleIgnored, applePreferred,
-  applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleLicenceUntil, appleSub, appleTableBehind,
+  appleGraceFor, applePurchase, appleWrite, appleRow, appleLive, appleUntil, appleLicenceUntil, appleSub, appleTableBehind,
 } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
@@ -39,21 +39,31 @@ export const dynamic = 'force-dynamic';
    verified in the same environment (so by the same verifier, and for
    RATA's bundle id, which the transaction carries and the renewal info
    does not). One that matches no such transaction is refused: it records
-   nothing and unlocks nothing, and the log counts it. A matched one's
-   grace period is written with the transaction (applePurchase), under
-   the guard a notification's is written under, stamped with when Apple
-   signed the renewal info; so one older than what Apple has since said
-   of the period changes nothing.
+   nothing and unlocks nothing, and the log counts it.
+
+   A matched one is used only when it states a grace period for the period
+   that transaction pays for: a gracePeriodExpiresDate later than the
+   transaction's expiry (lib/apple.js, appleGraceFor). StoreKit's
+   transactions are its local copy and the renewal info is fetched from
+   Apple, and neither names a period, so after billing recovers the phone
+   can send the lapsed transaction beside a fresh renewal info that gives
+   no grace period because the next period runs; one like that, or one
+   from an earlier grace period, is left out as though not sent, and never
+   ends a grace period the row holds. A used one's grace period is
+   written with the transaction (applePurchase), under the guard a
+   notification's is written under, stamped with when Apple signed the
+   renewal info; so one older than what Apple has since said of the
+   period changes nothing.
 
    A transaction past its expiry unlocks only what its row says is live.
    That is a billing grace period: StoreKit still lists the subscription
    by the transaction that has just expired, and the row holds when the
    grace period ends (grace_until), from Apple's DID_FAIL_TO_RENEW
    notification or from the renewal info the phone sends with the
-   transaction. With its renewal info the expired transaction is written
-   as a live one is, so the phone alone records the grace period when no
-   notification has reached mailrata.org; without it, it writes nothing,
-   and without the row it unlocks nothing.
+   transaction. With a renewal info stating its grace period the expired
+   transaction is written as a live one is, so the phone alone records the
+   grace period when no notification has reached mailrata.org; without
+   one, it only reads its row, and without the row it unlocks nothing.
 
    A refusal is { licensed: false, reason, message }, the shape
    /api/licence/renew answers with: the app keeps any licence that still
@@ -115,9 +125,13 @@ async function licenceFor(req) {
   if (refused.length) console.warn(`licence/apple: ${refused.length} transaction(s) did not verify: ${[...new Set(refused)].join(', ')}`);
 
   /* The renewal infos, each matched to a transaction above by original
-     transaction id and environment; of several for one, the one Apple
-     signed last. A refused one is only counted in the log, by the
-     library's status name, never its contents. */
+     transaction id and environment, and used with it only when it states
+     a grace period for that transaction's period (appleGraceFor); of
+     several so for one, the one Apple signed last. A refused one is only
+     counted in the log, by the library's status name, never its contents.
+     A matched one that states no grace period for its transaction is
+     neither used nor counted: the phone sends one for every subscription,
+     and outside a grace period none states one. */
   const renewalOf = new Map();
   const renewalRefused = [];
   let unmatched = 0;
@@ -135,6 +149,7 @@ async function licenceFor(req) {
       continue;
     }
     for (const twin of twins) {
+      if (!appleGraceFor(twin.payload, r.payload)) continue;
       const held = renewalOf.get(twin.payload);
       if (!held || signedOf(r.payload) > signedOf(held)) renewalOf.set(twin.payload, r.payload);
     }
@@ -159,12 +174,12 @@ async function licenceFor(req) {
   for (const s of applePreferred(live.map((l) => l.payload))) {
     const { environment, lapsed } = live.find((l) => l.payload === s);
     const renewal = renewalOf.get(s) || null;
-    let written;
-    if (lapsed && !renewal) {
-      written = await appleRow(sb, s.originalTransactionId);
-    } else {
-      written = await appleWrite(sb, s.originalTransactionId, applePurchase(s, environment, renewal));
-    }
+    /* A lapsed transaction with no renewal info stating its grace period
+       only reads its row; anything else is written. */
+    const read = lapsed && !renewal;
+    const written = read
+      ? await appleRow(sb, s.originalTransactionId)
+      : await appleWrite(sb, s.originalTransactionId, applePurchase(s, environment, renewal));
     if (written.error) {
       /* Fail closed: a licence that cannot be recorded, or checked against
          its row, is not issued. */
@@ -172,7 +187,7 @@ async function licenceFor(req) {
         console.warn('licence/apple: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
         return refuse('not-configured', APPLE_SAID.off, 503);
       }
-      console.warn(`licence/apple: could not ${lapsed ? 'read' : 'record'} an App Store purchase`, written.error.code || written.error.message);
+      console.warn(`licence/apple: could not ${read ? 'read' : 'record'} an App Store purchase`, written.error.code || written.error.message);
       return refuse('unavailable', APPLE_SAID.busy, 503);
     }
     if (!appleLive(written.row, now)) continue;

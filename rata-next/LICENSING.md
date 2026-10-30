@@ -119,11 +119,20 @@ beside them, each subscription's signed renewal info (`renewalInfos`, the
 jwsRepresentation of StoreKit 2's `Product.SubscriptionInfo.RenewalInfo`),
 which says when a billing grace period ends. A renewal info is used only
 with a transaction of the same request that has the same original
-transaction id and was verified in the same environment; the grace period
-it states is recorded under the same guard as a notification's, stamped
-with when Apple signed it. So a phone that sends it keeps a customer in
-Apple's billing grace period licensed by itself, even when no notification
-reaches mailrata.org. The StoreKit code (`claude/iap-native`) sends only
+transaction id and was verified in the same environment, and only when it
+states a grace period for that transaction's period: one ending after the
+transaction's expiry (`appleGraceFor`). Neither half names a period, and
+they come from different places (the transactions from StoreKit's own
+copy, the renewal info from Apple), so after billing recovers the phone
+can send the lapsed transaction beside a fresh renewal info that gives no
+grace period because the next period already runs. Such a renewal info,
+or one from an earlier grace period, is left out as though not sent: the
+phone never ends a grace period, which Apple's notifications do and which
+ends at the time Apple gave for it in any case. The grace period a used
+one states is recorded under the same guard as a notification's, stamped
+with when Apple signed it; of several, the one Apple signed last. So a
+phone that sends it keeps a customer in Apple's billing grace period
+licensed by itself, even when no notification reaches mailrata.org. The StoreKit code (`claude/iap-native`) sends only
 `transactions` so far: until a build sends `renewalInfos` too, a grace
 period reaches the row only through Apple's notifications (`LAUNCH.md`
 §11, steps 4 and 5).
