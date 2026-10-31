@@ -214,7 +214,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 848 checks, no network, no database required
+npm test 2>&1 | cat # 849 checks, no network, no database required
 npm run dev
 ```
 

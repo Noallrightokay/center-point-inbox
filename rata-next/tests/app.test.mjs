@@ -601,6 +601,19 @@ export default async function run(state) {
       check(wkAgain.docs.includes('wk-fb') && wkAgain.docs.includes('wk-doc') && wkAgain.entryDocs === 0,
         `and when it opens again, both halves are one list, out of the entry: ${JSON.stringify(wkAgain)}`);
 
+      /* Some webviews leave open() pending for ever. Each store gives up
+         after 5 s; asked one after the other, the first screen waited 10. */
+      const p6 = await ctx.newPage();
+      p6.on('pageerror', e => errs.push('hung stores page: ' + e.message));
+      await p6.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (/^rata-(mail|work)-/.test(String(name))) return {}; return o.call(this, name, ...a); }; });
+      const hungFrom = Date.now();
+      await p6.goto(s.url + '/app.html'); await boot(p6);
+      const hungFor = Date.now() - hungFrom;
+      const hung = await p6.evaluate(() => ({ mail: !!MS, work: !!WK }));
+      await p6.close();
+      check(!hung.mail && !hung.work && hungFor >= 4500 && hungFor < 8000,
+        `where IndexedDB's open never answers, start waits out one timeout for both stores together, not one each, and keeps them the old way (${hungFor} ms, ${JSON.stringify(hung)})`);
+
       await p2.evaluate(async () => {
         S.documents = S.documents.filter(d => !/^wk-/.test(d.id));
         S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^(wk|old)@example\.com$/.test(k)));

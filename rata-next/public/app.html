@@ -1865,8 +1865,11 @@ async function load(){
   let st=null;
   try{const raw=localStorage.getItem(LS_KEY);st=raw?JSON.parse(raw):null}catch(e){st=null}
   let held=[],parts=new Map();
-  try{MS=await msOpen();held=await msAll(MS)}catch(e){console.warn('message store unavailable, keeping mail in localStorage',e);MS=null;held=[]}
-  try{WK=await wkOpen();parts=await wkAll(WK)}catch(e){console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',e);WK=null;WK_HELD.clear();parts=new Map()}
+  /* The two databases open together, so a webview whose open() never
+     settles keeps the first screen waiting one timeout, not one for each. */
+  const [mail,work]=await Promise.allSettled([msOpen().then(db=>{MS=db;return msAll(db)}),wkOpen().then(db=>{WK=db;return wkAll(db)})]);
+  if(mail.status==='fulfilled')held=mail.value;else{console.warn('message store unavailable, keeping mail in localStorage',mail.reason);MS=null;held=[]}
+  if(work.status==='fulfilled')parts=work.value;else{console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',work.reason);WK=null;WK_HELD.clear();parts=new Map()}
   const inBlob=!!(st&&Array.isArray(st.messages)&&st.messages.length);
   try{S=migrate(st)}catch(e){S=seed()}
   /* The audit trail, the Files list and the folder names, from beside the
