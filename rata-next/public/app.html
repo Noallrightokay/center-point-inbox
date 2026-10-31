@@ -7690,14 +7690,15 @@ async function brLib(k,globalName){
 /* A file RATA made — a conversion, an export — handed to the customer. In a
    browser that is a download. In the app the webview drops a page's
    downloads without a word, so the app writes the file into Downloads itself
-   (save_file) and says where; it cleans the name and never overwrites. */
+   (save_file; on an iPhone the app's own folder in the Files app) and says
+   where, in Rust's words (place); it cleans the name and never overwrites. */
 async function brDownload(blob,fname){
   if(window.__RATA_NATIVE__){
     let r;
     try{r=await apiFetch('/api/file/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fname,data:await fileBase64(blob)})})}
     catch(e){r={error:String(e&&e.message||e)}}
     if(!r||!r.ok){toast('Could not save '+fname+' \u2014 '+((r&&r.error)||'no answer'));return false}
-    toast('Saved to your Downloads folder as '+r.name);
+    toast('Saved to '+(r.place||'your Downloads folder')+' as '+r.name);
     return true;
   }
   const u=URL.createObjectURL(blob);

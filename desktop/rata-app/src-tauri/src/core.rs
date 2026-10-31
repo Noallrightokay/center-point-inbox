@@ -434,12 +434,15 @@ pub struct Forgotten {
     pub mailboxes: usize,
 }
 
-/// Where an attachment was saved.
+/// Where an attachment, or a file the interface made, was saved.
 #[derive(Debug, Serialize)]
 pub struct Saved {
     pub path: String,
     pub name: String,
     pub size: u64,
+    /// The folder, in the customer's words (`save_place`), for the page to
+    /// say where the file went.
+    pub place: &'static str,
 }
 
 /// What doing something to messages on the server came to, in the shape the
@@ -2863,6 +2866,7 @@ fn save_fetched(
             .unwrap_or(name),
         path: path.display().to_string(),
         size: bytes.len() as u64,
+        place: save_place(cfg!(target_os = "ios")),
     })
 }
 
@@ -2920,6 +2924,18 @@ pub fn save_folder(
     downloads.or_else(|| home.map(|h| h.join("Downloads")))
 }
 
+/// The folder `save_folder` picks, as the page names it to the customer
+/// ("Saved to … as invoice.pdf"). On iOS the Files app shows the app's
+/// Documents folder as On My iPhone › RATA; there is no Downloads folder
+/// for a save to be in.
+pub fn save_place(ios: bool) -> &'static str {
+    if ios {
+        "RATA's folder in the Files app"
+    } else {
+        "your Downloads folder"
+    }
+}
+
 /// A file the interface made — a converted document, a workspace export —
 /// saved into `dir` (the Downloads folder). The webview does not save a
 /// page's downloads on its own, so without this "Convert & download" did
@@ -2941,6 +2957,7 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8], avoid: &[PathBuf]) -> Res
             .unwrap_or(name),
         path: path.display().to_string(),
         size: bytes.len() as u64,
+        place: save_place(cfg!(target_os = "ios")),
     })
 }
 
@@ -3827,6 +3844,9 @@ mod tests {
         assert_eq!(a.name, "report.docx");
         assert_eq!(b.name, "report (2).docx");
         assert_eq!(std::fs::read(&a.path).unwrap(), b"one");
+        // What the page says of where it went, as this system's build has it.
+        assert_eq!(a.place, save_place(cfg!(target_os = "ios")));
+        assert_eq!(serde_json::to_value(&a).unwrap()["place"], a.place);
         let sly = save_file(&dir, "../../.bashrc", b"x", &[]).unwrap();
         assert!(
             std::path::Path::new(&sly.path).starts_with(&dir),
@@ -3863,6 +3883,11 @@ mod tests {
             p("/home/ann/Downloads")
         );
         assert_eq!(save_folder(false, None, None, None), None);
+        // And the page names the folder each time it says where a file
+        // went: never Downloads on a phone.
+        assert_eq!(save_place(false), "your Downloads folder");
+        assert_eq!(save_place(true), "RATA's folder in the Files app");
+        assert!(!save_place(true).contains("Downloads"));
     }
 
     /// SEC-9 (F2): a name a file Create file made is recorded under is

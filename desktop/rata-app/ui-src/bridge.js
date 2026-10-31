@@ -428,7 +428,9 @@
       const b = body(opts);
       try {
         const saved = await invoke('save_file', { name: String(b.name || 'file'), data: String(b.data || '') });
-        return { ok: true, path: saved.path, name: saved.name };
+        /* place: the folder in the customer's words (core::save_place), so
+           a phone never says Downloads. */
+        return { ok: true, path: saved.path, name: saved.name, place: saved.place };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e) };
       }

@@ -128,11 +128,21 @@ compiled cleanly and then died at bundling.
   for release.
 - **Desktop shell** installs the system webview and runs `sync-ui.sh` first,
   which makes that script's anchor checks against `rata-next/public` part of
-  CI rather than something that fails on a release machine.
+  CI rather than something that fails on a release machine. After the usual
+  three it runs clippy and the tests again without self-update
+  (`--no-default-features`, the build a store or a phone gets), then clippy
+  with the smoke self-test (`--no-default-features --features smoke`) and
+  that self-test's own tests (`cargo test --lib --no-default-features
+  --features smoke -- smoke::`).
 - **Desktop shell on Windows** runs `sync-ui.sh`, then only the keychain,
-  list and start tests (`cargo test --bin rata-app -- vault:: store::
+  list and start tests (`cargo test --lib -- vault:: store::
   tests::at_start`), two of them Windows-only and run against the real
-  Credential Manager, which Linux cannot reach. `release.yml`'s
+  Credential Manager, which Linux cannot reach. They are in the library
+  since RATA became one (`src/lib.rs`, for iOS): `--bin rata-app` would
+  now find no tests at all, and pass. Then `cargo build --lib --bins`
+  builds and links what an installer is made from, `rata-app.exe` and the
+  library in each of its kinds (a `.dll` and a static library too), which
+  nothing else before a release links on Windows. `release.yml`'s
   `gate_windows` runs the same steps; change the two together.
 - **Desktop interface, driven** runs `harness/ui-harness.mjs` against the
   assembled `ui/` under the app's own CSP, with a fake backend, then the
@@ -142,9 +152,42 @@ compiled cleanly and then died at bundling.
 *Mail layer* and *Desktop shell* run `cargo fmt --check`, `cargo clippy
 --all-targets -- -D warnings` and `cargo test --all-targets`; the
 loopback job runs clippy with its feature and then only `--test
-loopback`.
+loopback`. `release.yml`'s `gate` runs *Desktop shell*'s three test steps
+(with self-update, without it, and the smoke self-test's), not its clippy.
 `release.yml` also installs and launches each installer on its own runner
 before keeping it (`harness/smoke-installed.sh`, `.ps1` on Windows).
+
+`.github/workflows/ios.yml` (workflow *iOS*) runs on every change to
+`desktop/`, `rata-next/public/` (the shell compiles the interface in),
+`infrastructure/licence/mint.sh` or itself, in four jobs. It is not part
+of the release gate, and nothing of it is a release.
+
+- **Without self-update, no updater** (Linux) builds the shell for
+  release without self-update and with it, and a debug build with the
+  smoke self-test; `harness/verify-release.sh --no-updater` finds none
+  of the updater in the first, and `--no-smoke` none of the self-test's
+  words in either release build. A release build with the self-test must
+  be refused.
+- **Shell for iOS** runs clippy for `aarch64-apple-ios` without
+  self-update and for the Simulator with the self-test, checks the
+  self-test is refused for a phone, checks the desktop shell for macOS
+  with its tests, and builds and links the macOS program and the library
+  in each of its kinds (`cargo build --lib --bins`), as both Windows jobs
+  do, so the `.dmg` is not the first to link them.
+- **iOS app in the Simulator** makes the Xcode project afresh (`tauri ios
+  init`, then `ios/prepare.sh`), builds RATA for the Simulator with the
+  smoke self-test, checks the app with `ios/check-app.sh`, and runs it
+  five times with a screenshot each (`ios/run-smoke.sh`): the first
+  screen, the workspace licensed by a throwaway key made in the job, the
+  workspace in dark, Settings, and a web address opened in Safari. Its
+  artifact `ios-simulator` holds the screenshots, `smoke.json`, the
+  device's log and the app.
+- **iOS app for a device, unsigned** builds RATA for a phone, release and
+  unsigned, as a store's build is made, and checks the app, its privacy
+  manifest against the program's required-reason APIs, and that the
+  program holds neither the updater nor the self-test, nor the Microsoft
+  and Slack client ids or the Google Drive secret it was given (made-up
+  values, `MADE_UP_*`), which a phone leaves out.
 
 `.github/workflows/mail-apple.yml` (workflow *Mail on Apple systems*, job
 *Mail layer on macOS*) runs on every change to `desktop/rata-mail/` or to
@@ -158,8 +201,9 @@ shell. Linux CI never compiles the iOS code, so check it locally with
 `cargo clippy --all-targets -- --cfg system_dns -D warnings` in
 `desktop/rata-mail` (the top-level `README.md` says more).
 
-The toolchain is pinned rather than `stable`, to the same version in both
-workflows (`RUST`, 1.94.1; `release.yml` names it inline): bump them
+The toolchain is pinned rather than `stable`, to the same version in
+every workflow that builds Rust (`RUST`, 1.94.1, in `desktop-ci.yml`,
+`mail-apple.yml` and `ios.yml`; `release.yml` names it inline): bump them
 together. With `-D warnings`, an unpinned toolchain means a new clippy lint
 reddens an unrelated pull request on the day it ships, which teaches
 everyone to ignore the colour.

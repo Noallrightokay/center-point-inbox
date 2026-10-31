@@ -28,10 +28,18 @@
 //! audit trail starts again.
 //!
 //! Left in backups, on purpose: WebKit's LocalStorage, and the app's
-//! Documents folder, where saved attachments go for the Files app to show,
-//! the customer's own files as a computer's Downloads folder is. Whether
-//! LocalStorage should be left there is the owner's call (D8); what it
-//! holds, none of it fetched from anywhere else:
+//! Documents folder (`core::save_folder`), the customer's own files as a
+//! computer's Downloads folder is, which the Files app shows (On My iPhone
+//! › RATA, `UIFileSharingEnabled`). Everything RATA saves goes there, each
+//! by the customer's own tap: an attachment saved from a message, a file
+//! saved from the Files view, what the Format Bridge made (a document
+//! converted from an attachment among it), and Settings' Export workspace
+//! (its **Export JSON** button), which is the whole workspace in one file:
+//! every message RATA holds, text and all, People, the Files list, the
+//! audit trail and the settings. So one tap puts a full copy of the mail
+//! into a folder iCloud Backup copies. Whether either should be left there
+//! is the owner's call (D8); what LocalStorage holds, none of it fetched
+//! from anywhere else:
 //!
 //! - the workspace (app.html's `LS_KEY` entry): settings with the
 //!   signatures, People, the rules, the linked mailboxes' entries (each

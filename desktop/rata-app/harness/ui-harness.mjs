@@ -221,7 +221,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'save_file':
         M.files = (M.files || []).concat([args]);
         if (M.saveFails) throw 'It could not be saved in /home/me/Downloads (disk full).';
-        return { path: '/home/me/Downloads/' + args.name, name: args.name, size: atob(args.data).length };
+        /* place is core::save_place's: Downloads on a computer, the app's
+           own folder in the Files app on an iPhone (M.savePlace). */
+        return { path: '/home/me/Downloads/' + args.name, name: args.name, size: atob(args.data).length, place: M.savePlace || 'your Downloads folder' };
       case 'list_folders':
         if (M.foldersFail) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached: its folders could not be listed' };
         return M.folders || [];
@@ -4846,6 +4848,21 @@ console.log('\n— SEC-10: only what this build connects is named, no disguised 
   await pg.click('#doc-grid [data-dl]');
   await pg.waitForFunction(() => (__mock.files || []).length === 1, null, { timeout: 3000 }).catch(() => {});
   check(await pg.evaluate(() => !document.querySelector('#warn-ov').classList.contains('open') && __mock.files.length === 1 && __mock.files[0].name === 'Rota.txt'), 'a document saves without a question');
+  /* Where it went is said in Rust's words (core::save_place), so an
+     iPhone, whose saves go to the app's folder in the Files app, never
+     hears of a Downloads folder. */
+  const saidWhere = async (place) => {
+    await pg.evaluate((p) => { __mock.files = []; __mock.savePlace = p; window.__toasts = []; }, place);
+    await pg.click('#doc-grid [data-dl]');
+    await pg.waitForFunction(() => window.__toasts.some((t) => /^Saved to /.test(t)), null, { timeout: 3000 }).catch(() => {});
+    return toasts(pg);
+  };
+  const onComputer = await saidWhere(undefined);
+  check(onComputer.includes('Saved to your Downloads folder as Rota.txt'), `and says it went to Downloads: ${JSON.stringify(onComputer)}`);
+  const onPhone = await saidWhere("RATA's folder in the Files app");
+  check(onPhone.includes("Saved to RATA's folder in the Files app as Rota.txt") && !onPhone.some((t) => /Downloads/.test(t)),
+    `on an iPhone it names the folder Rust names, never Downloads: ${JSON.stringify(onPhone)}`);
+  await pg.evaluate(() => { delete __mock.savePlace; __mock.files = []; });
 
   /* 3. Share to Slack: once Send is pressed, Cancel, ✕, Escape and the
      backdrop do nothing until Slack answers, and the answer is said. */
