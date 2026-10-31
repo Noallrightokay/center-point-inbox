@@ -600,7 +600,9 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .src-dot{flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--faint)}
 .src-dot.on{background:var(--green)}
 .src-meta{font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
-.src-panel{position:absolute;z-index:40;top:calc(100% - 4px);left:14px;width:max-content;min-width:min(280px,calc(100% - 28px));max-width:calc(100% - 28px);max-height:min(420px,60vh);overflow-y:auto;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;animation:pop .16s ease-out}
+/* It lies over the list and may reach past it: the list is 340 px wide
+   beside the rail's icons, too narrow for an address to keep to one line. */
+.src-panel{position:absolute;z-index:40;top:calc(100% - 4px);left:14px;width:max-content;min-width:min(280px,calc(100% - 28px));max-width:max(calc(100% - 28px),440px);max-height:min(420px,60vh);overflow-y:auto;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;animation:pop .16s ease-out}
 .src-panel[hidden]{display:none}
 .src-list{list-style:none}
 .src-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 10px;border-radius:var(--r-sm);font-size:13px;font-weight:500;color:var(--slate);transition:var(--lift)}
@@ -2867,12 +2869,18 @@ async function fetchBoxes(l){
 /* The mailboxes Folders lists: the one chosen, else every one. Only those
    are asked for their folders, a sign-in each. */
 function boxShown(){const scope=shownScope();return boxAccts().filter(l=>!scope||l.id===scope)}
-async function toggleBoxPanel(open){
+/* The mailboxes asked since Folders last opened. Drawing the panel asks
+   any it lists that has not been (all of them when it opens; then another
+   mailbox chosen while it is open, or every one when the chosen one is
+   removed), so none is said to have no folders for never being asked. */
+const BOX_ASKED=new Set();
+function toggleBoxPanel(open){
   boxPanel=open===undefined?!boxPanel:open;
+  BOX_ASKED.clear();
   renderMailFilters();
-  if(!boxPanel)return;
-  await Promise.all(boxShown().map(async l=>{
-    BOX_LOADING.add(l.id);renderBoxPanel();
+}
+async function askBoxes(list){
+  await Promise.all(list.map(async l=>{
     const e=await fetchBoxes(l);
     BOX_LOADING.delete(l.id);
     if(e)BOX_ERR[l.id]=e;else delete BOX_ERR[l.id];
@@ -2891,18 +2899,16 @@ function renderBoxPanel(){
   const el=$('#box-panel');if(!el)return;
   el.hidden=!boxPanel;if(!boxPanel)return;
   /* With a mailbox chosen, its folders only. */
-  const accts=boxShown();
+  const accts=boxShown(),ask=accts.filter(l=>!BOX_ASKED.has(l.id));
+  for(const l of ask){BOX_ASKED.add(l.id);BOX_LOADING.add(l.id)}
   el.innerHTML=accts.map(l=>(accts.length>1?`<div class="box-acct">${esc(l.label)}</div>`:'')+`<div class="box-list">${boxButtons(l,null,'data-box')}</div>`).join('')
     ||'<span class="box-note">Link a mailbox to see its folders.</span>';
   el.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>openBox(b.dataset.email,b.dataset.box));
+  if(ask.length)askBoxes(ask);
 }
 async function openBox(email,name){
-  /* A folder of a mailbox other than the one chosen makes that one chosen,
-     so the line names whose folder this is. */
-  const l=boxMailbox(email);
-  if(shownScope()&&l&&l.id!==SCOPE)SCOPE=l.id;
   BOX={email,name};mailFilter='box';boxPanel=false;
-  renderSources();renderMailFilters();renderMail();
+  renderMailFilters();renderMail();
   await loadBox(email,name,false);
 }
 /* The oldest message RATA holds from one folder, to page back from. */
