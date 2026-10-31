@@ -153,9 +153,15 @@ for the trader details and step 10's answers.
    level 2. Each needs its prices, a name and description in each
    language, and the review screenshot Apple asks for. No free trial;
    introductory offers and Family Sharing are your choice and need no
-   code. Turn on **Billing Grace Period** on the same page: the terms
-   promise RATA keeps working while Apple gives a billing grace period,
-   and without the switch Apple gives none.
+   code. **Turn multiseat purchasing off** in each subscription's
+   purchase options: Apple has switched it on by default for every
+   subscription since 16 September 2026 (organisations buying seats in
+   bulk from 22 October, groups "this winter"), and the purchase server
+   (#167) gives one licence per purchase, not one per seat
+   (`docs/APPLE-REVIEW-2026-10.md`, section (j)). Turn on **Billing
+   Grace Period** on the same Subscriptions page: the terms promise RATA
+   keeps working while Apple gives a billing grace period, and without
+   the switch Apple gives none.
 5. App Store Server Notifications, version 2, for Production and Sandbox,
    both to `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester account.
@@ -164,10 +170,15 @@ for the trader details and step 10's answers.
    is optional: it defaults to `org.mailrata.mail`.
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
-10. The App Privacy answers ("nutrition label"), the age rating, the
+10. The App Privacy answers ("nutrition label"), the age rating (since
+    September 2026 it also asks about social media: RATA has none), the
     encryption questions, the privacy policy and support addresses, and
-    Notes for Review with a reviewer's licence and a test mailbox
-    (`docs/APP-STORES.md` says what each depends on).
+    Notes for Review: a test mailbox with an app password (not Outlook or
+    Microsoft 365, which a phone cannot link yet), and the reviewer
+    subscribing in the sandbox rather than pasting a licence key, since
+    Apple names licence keys as a banned unlock (`docs/APP-STORES.md` says
+    what each depends on; `docs/APPLE-REVIEW-2026-10.md` checks the build
+    against every rule and lists what would most likely be rejected).
 11. From TestFlight: a purchase, a restore, an upgrade from Base to Pro,
     and a cancellation.
 
