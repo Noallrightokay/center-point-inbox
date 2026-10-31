@@ -614,6 +614,68 @@ export default async function run(state) {
       check(!hung.mail && !hung.work && hungFor >= 4500 && hungFor < 8000,
         `where IndexedDB's open never answers, start waits out one timeout for both stores together, not one each, and keeps them the old way (${hungFor} ms, ${JSON.stringify(hung)})`);
 
+      /* A session neither store opened for leaves the mail and the parts in
+         the entry. At the next start that opens them, the mail's own
+         rewrite of the entry comes first: written without the parts before
+         the work store has them, a start ended between the two loses the
+         audit trail, the Files list and the folder names. */
+      const p7 = await ctx.newPage();
+      p7.on('pageerror', e => errs.push('both refused page: ' + e.message));
+      await p7.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (/^rata-(mail|work)-/.test(String(name))) throw new Error('no IndexedDB here'); return o.call(this, name, ...a); }; });
+      await p7.goto(s.url + '/app.html'); await boot(p7);
+      const refused = await p7.evaluate(async () => {
+        S.messages.push({ id: 'wk-both-msg', ch: 'email', prov: 'imap', subj: 'Kept the old way', prev: '', body: 'x', ts: 8, atts: [] });
+        S.documents.unshift({ id: 'wk-both', name: 'Both refused.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 3, content: 'wk-secret-7', hasFile: false });
+        await audit('msg.read', 'wk-secret-8');
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { mail: !!MS, work: !!WK, msg: (meta.messages || []).some(m => m.id === 'wk-both-msg'),
+          doc: (meta.documents || []).some(d => d.id === 'wk-both'), audit: (meta.audit || []).some(e => e.detail === 'wk-secret-8') };
+      });
+      await p7.close();
+      const p8 = await ctx.newPage();
+      p8.on('pageerror', e => errs.push('both open again page: ' + e.message));
+      /* Each write of the entry before the work store has committed the
+         parts must still hold them. */
+      await p8.addInitScript(() => {
+        const w = window.__wkOrder = { committed: false, early: [], puts: 0 };
+        const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (...a) {
+          if (this.name === 'parts') { w.puts++; this.transaction.addEventListener('complete', () => { w.committed = true; }); }
+          return put.apply(this, a);
+        };
+        const set = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          let ours = false; try { ours = this === localStorage && k === LS_KEY; } catch (e) {}
+          if (ours && !w.committed) {
+            const lost = ['wk-secret-7', 'wk-secret-8'].filter(x => !String(v).includes(x));
+            if (lost.length) w.early.push(lost);
+          }
+          return set.call(this, k, v);
+        };
+      });
+      await p8.goto(s.url + '/app.html'); await boot(p8);
+      const reopened = await p8.evaluate(async () => {
+        await wkFlush();
+        await new Promise(r => { const until = Date.now() + 8000; const t = setInterval(() => {
+          const meta = JSON.parse(localStorage.getItem(LS_KEY));
+          if ((window.__wkOrder.committed && !meta.documents.length && !('messages' in meta)) || Date.now() > until) { clearInterval(t); r(); }
+        }, 50); });
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        const db = new Map((await new Promise((res) => { const tx = WK.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(k.result.map((x, i) => [x, v.result[i]])); })));
+        const out = { mail: !!MS, work: !!WK, early: window.__wkOrder.early, puts: window.__wkOrder.puts, committed: window.__wkOrder.committed,
+          entry: { messages: 'messages' in meta, documents: meta.documents.length, audit: meta.audit.length },
+          stored: ['wk-secret-7', 'wk-secret-8'].filter(x => [...db.values()].some(j => j.includes(x))),
+          msg: S.messages.some(m => m.id === 'wk-both-msg') && MS_HELD.has('wk-both-msg') };
+        S.messages = S.messages.filter(m => m.id !== 'wk-both-msg'); S.documents = S.documents.filter(d => d.id !== 'wk-both');
+        save(); await msFlush(); await wkFlush();
+        return out;
+      });
+      await p8.close();
+      check(!refused.mail && !refused.work && refused.msg && refused.doc && refused.audit && reopened.mail && reopened.work
+        && !reopened.early.length && reopened.puts > 0 && reopened.committed && !reopened.entry.messages && !reopened.entry.documents && !reopened.entry.audit
+        && reopened.stored.length === 2 && reopened.msg,
+      `after a session neither store opened for, the next start writes the entry without the parts only once the work store has them, and the mail moves too: ${JSON.stringify({ refused, reopened })}`);
+
       await p2.evaluate(async () => {
         S.documents = S.documents.filter(d => !/^wk-/.test(d.id));
         S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^(wk|old)@example\.com$/.test(k)));

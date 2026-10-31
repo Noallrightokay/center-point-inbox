@@ -177,9 +177,13 @@ of the release gate, and nothing of it is a release.
 - **iOS app in the Simulator** makes the Xcode project afresh (`tauri ios
   init`, then `ios/prepare.sh`), builds RATA for the Simulator with the
   smoke self-test, checks the app with `ios/check-app.sh`, and runs it
-  five times with a screenshot each (`ios/run-smoke.sh`): the first
+  six times with a screenshot each (`ios/run-smoke.sh`): the first
   screen, the workspace licensed by a throwaway key made in the job, the
-  workspace in dark, Settings, and a web address opened in Safari. Each
+  workspace in dark, Settings, a web address opened in Safari, and the
+  inbox's linked mailboxes card, open, for two RFC 2606 mailboxes put in
+  RATA's list before the launch with no password (so nothing is dialled),
+  held to the phone's rule: rows 44 px tall, a 16 px gutter, nothing to
+  scroll sideways, the focus on its button. Each
   screenshot must show something drawn below the status bar
   (`ios/painted.py`, which has its own tests in the job): the self-test's
   page check reads the DOM, which passes on a window that never drew, so

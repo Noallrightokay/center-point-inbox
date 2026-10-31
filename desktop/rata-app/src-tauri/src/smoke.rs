@@ -9,13 +9,15 @@
 //! real address, a TLS connection to a real mail server through the guard;
 //! what a phone answers where a computer has more (connected services,
 //! Create file, updates, Microsoft sign-in, the system's opener); the
-//! folder saves go to; the page itself; once the page has opened its mail
-//! store, that the list's folder and the mail are kept out of the phone's
-//! backups (each file of the page's databases, found by its name, inside a
-//! folder kept out); and, when asked at launch, that a web address the
-//! page asks RATA to open, through the very command bridge.js calls for
-//! every link (`open_link`), is handed to the system, and off the window's
-//! thread (`links::open_aside`).
+//! folder saves go to; the page itself; once the page has opened its
+//! stores (both, at this start, as it says), that the list's folder and
+//! the mail are kept out of the phone's backups (each file of the page's
+//! databases, found by its name, inside a folder kept out); with the
+//! mailboxes view asked for, the inbox's linked mailboxes card, open and
+//! measured on the phone's screen; and, when asked at launch, that a web
+//! address the page asks RATA to open, through the very command bridge.js
+//! calls for every link (`open_link`), is handed to the system, and off
+//! the window's thread (`links::open_aside`).
 //! Each answer goes into `smoke.json` in the app's cache
 //! folder (never its data folder, which the list must be the first to
 //! make), written once and whole when the last check is done, for the job
@@ -32,7 +34,8 @@
 //! (`Rata::set_licence`); a view in `RATA_SMOKE_VIEW`, which the page
 //! script opens as a person would: it fills the real sign-up form for an
 //! RFC 2606 address on the first screen, closes the welcome, and presses the
-//! view's own button; and `RATA_SMOKE_OPEN=1`, which has the page ask for
+//! view's own button (for [`MAILBOXES_VIEW`], the inbox's, then the
+//! mailboxes line's); and `RATA_SMOKE_OPEN=1`, which has the page ask for
 //! [`OPEN_URL`] last of all, so the job can see the system's browser come
 //! up (ios/run-smoke.sh).
 
@@ -61,6 +64,18 @@ pub const VIEW_VAR: &str = "RATA_SMOKE_VIEW";
 /// `1` has the page ask RATA to open [`OPEN_URL`] once every other check
 /// is done.
 pub const OPEN_VAR: &str = "RATA_SMOKE_OPEN";
+/// The view that is the inbox with its linked mailboxes card open: the page
+/// script opens the inbox, waits for the mailboxes line (it comes with the
+/// first refresh of the mailboxes the list holds; ios/run-smoke.sh writes
+/// them into it, `RATA_SMOKE_MAILBOXES`), presses its button and measures
+/// the card.
+pub const MAILBOXES_VIEW: &str = "mailboxes";
+/// The least a row of the card may be tall on a phone, in CSS pixels, as
+/// app.html's phone rule makes it (`min-height:44px`).
+const CARD_ROW: f64 = 44.0;
+/// The gutter the card keeps from the window's edges on a phone
+/// (`max(16px,env(safe-area-inset-*))`).
+const CARD_GUTTER: f64 = 16.0;
 /// The address it opens: IANA's reserved example (RFC 2606), which no mail
 /// names and which answers. Fixed here: the launch only says whether.
 pub const OPEN_URL: &str = "https://example.com/";
@@ -166,8 +181,50 @@ pub struct Page {
     /// (`prefers-color-scheme: dark`), which ios/run-smoke.sh holds to
     /// what the Simulator was set to.
     pub dark: bool,
+    /// Whether each of the page's own IndexedDB stores opened at this
+    /// start, as the page holds them once its start is past opening them
+    /// (app.html's `MS` and `WK`); none on a page without them (auth.html).
+    /// A store that did not open is kept in LocalStorage, which an iPhone
+    /// backs up: what [`backups`] fails.
+    pub stores: Option<Stores>,
+    /// The inbox's linked mailboxes card, opened and measured, when the
+    /// [`MAILBOXES_VIEW`] was asked for.
+    pub card: Option<Card>,
     pub agent: String,
     pub after_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Stores {
+    /// `rata-mail-…`: every message and its text.
+    pub mail: bool,
+    /// `rata-work-…`: the audit trail, the Files list and folder names.
+    pub work: bool,
+}
+
+/// The linked mailboxes card (`#src-panel`, app.html's `renderSources`) as
+/// the page found it once its button was pressed.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Card {
+    /// Its button says it is open (`aria-expanded`), and it is not hidden.
+    pub open: bool,
+    /// The focus is on its button, which the card's keys and its closing
+    /// go by: the page puts it there by hand, since WebKit does not focus a
+    /// button it clicks.
+    pub focused: bool,
+    /// Each mailbox's row, by its address, in order (not All mailboxes).
+    pub mailboxes: Vec<String>,
+    /// Whether the All mailboxes row is there.
+    pub all: bool,
+    /// The shortest of its rows, Sync now among them, in CSS pixels.
+    pub lowest: f64,
+    /// How far it is from the window's left and right edges.
+    pub left: f64,
+    pub right: f64,
+    /// How far the page can be scrolled sideways.
+    pub sideways: f64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -313,6 +370,12 @@ fn clipped(mut page: Page) -> Page {
         cut(e, 300);
     }
     page.view = page.view.and_then(|v| view_named(Some(v)));
+    if let Some(card) = &mut page.card {
+        card.mailboxes.truncate(10);
+        for m in &mut card.mailboxes {
+            cut(m, 100);
+        }
+    }
     page
 }
 
@@ -415,7 +478,9 @@ pub fn licence(rata: &Rata, token: &str) -> Check {
 /// `smoke_page`. With a view asked for, it gets there first.
 pub fn script(view: Option<&str>) -> String {
     let view = serde_json::to_string(&view).unwrap_or_else(|_| "null".into());
-    PAGE_SCRIPT.replace("__RATA_SMOKE_VIEW__", &view)
+    PAGE_SCRIPT
+        .replace("__RATA_SMOKE_VIEW__", &view)
+        .replace("__RATA_MAILBOXES_VIEW__", MAILBOXES_VIEW)
 }
 
 const PAGE_SCRIPT: &str = r#"(() => {
@@ -445,9 +510,29 @@ const PAGE_SCRIPT: &str = r#"(() => {
     d.remove();
     return v;
   };
-  const report = (shown) => {
+  // Resolves once `test` holds, or after `ms` whatever it says.
+  const until = (test, ms) => new Promise((done) => {
+    const end = Date.now() + ms;
+    const look = () => {
+      let held = false;
+      try { held = !!test(); } catch (e) {}
+      if (held || Date.now() >= end) done();
+      else setTimeout(look, 200);
+    };
+    look();
+  });
+  // app.html's own stores, as its start left them: `MS` and `WK` are its
+  // top-level bindings, and none on a page without them (auth.html).
+  const stores = () => {
+    try { return { mail: !!MS, work: !!WK }; } catch (e) { return null; }
+  };
+  // Past opening its stores, which `S` is set right after (load()). A page
+  // without `S` has nothing to wait for.
+  const opened = () => { try { return S !== null; } catch (e) { return true; } };
+  const report = async (shown, card) => {
     const ipc = window.__TAURI_INTERNALS__;
     if (!ipc || typeof ipc.invoke !== 'function') return;
+    await until(opened, 15000);
     ipc.invoke('smoke_page', { page: {
       path: here(),
       title: document.title,
@@ -461,6 +546,8 @@ const PAGE_SCRIPT: &str = r#"(() => {
       view: VIEW,
       shown,
       dark: matchMedia('(prefers-color-scheme: dark)').matches,
+      stores: stores(),
+      card: card || null,
       agent: navigator.userAgent,
       afterMs: Date.now() - started,
     } }).catch(() => {});
@@ -502,17 +589,54 @@ const PAGE_SCRIPT: &str = r#"(() => {
       report(false);
     }, 20000);
   };
-  // The view's own button, after the welcome a new account is shown.
+  // The linked mailboxes card (app.html's renderSources), measured as
+  // ui-harness.mjs measures it on a phone.
+  const measure = () => {
+    const button = document.getElementById('src-btn');
+    const panel = document.getElementById('src-panel');
+    if (!button || !panel) return null;
+    const box = panel.getBoundingClientRect();
+    const d = document.documentElement;
+    const rows = Array.from(panel.querySelectorAll('.src-item, .src-sync'), (b) => b.getBoundingClientRect().height);
+    return {
+      open: button.getAttribute('aria-expanded') === 'true' && !panel.hidden,
+      focused: document.activeElement === button,
+      mailboxes: Array.from(panel.querySelectorAll('li:not(.src-all) .src-addr'), (a) => a.textContent),
+      all: !!panel.querySelector('li.src-all'),
+      lowest: rows.length ? Math.min(...rows) : 0,
+      left: box.left,
+      right: innerWidth - box.right,
+      sideways: Math.max(d.scrollWidth, document.body.scrollWidth) - d.clientWidth,
+    };
+  };
+  // The view's own button, after the welcome a new account is shown. The
+  // mailboxes view is the inbox, with its mailboxes line's button pressed
+  // once the first refresh has drawn it: click(), as for every button
+  // here, which is no finger on the screen.
   const open = () => {
     const welcome = document.getElementById('welcome-ov');
     const enter = document.getElementById('w-enter');
     if (welcome && welcome.classList.contains('open') && enter) enter.click();
-    const button = document.querySelector('#mnav button[data-view="' + VIEW + '"]') || document.querySelector('[data-view="' + VIEW + '"]');
+    const name = VIEW === '__RATA_MAILBOXES_VIEW__' ? 'inbox' : VIEW;
+    const button = document.querySelector('#mnav button[data-view="' + name + '"]') || document.querySelector('[data-view="' + name + '"]');
     if (button) button.click();
-    setTimeout(() => {
-      const view = document.getElementById('view-' + VIEW);
-      report(!!(view && view.classList.contains('active')));
-    }, 1500);
+    const showing = () => {
+      const view = document.getElementById('view-' + name);
+      return !!(view && view.classList.contains('active'));
+    };
+    if (name === VIEW) {
+      setTimeout(() => report(showing()), 1500);
+      return;
+    }
+    until(() => document.getElementById('src-btn'), 30000).then(() => {
+      const line = document.getElementById('src-btn');
+      if (line) line.click();
+      else note('the mailboxes line never came');
+      setTimeout(() => {
+        const card = measure();
+        report(showing() && !!card && card.open, card);
+      }, 1500);
+    });
   };
   const settle = () => {
     const page = here();
@@ -896,8 +1020,10 @@ fn judge_saves(folder: Option<&Path>, home: Option<&Path>, wrote: Result<(), Str
 /// of these names is a file of that store, wherever WebKit keeps it. A test
 /// reads app.html, so the two cannot part.
 const STORES: [&str; 3] = ["rata-mail-", "rata-work-", "rata-files"];
-/// The one a page that has opened its mail store must have on disk.
+/// The two app.html opens at every start, which must both be open and on
+/// disk once it has.
 const MAIL_STORE: &str = STORES[0];
+const WORK_STORE: &str = STORES[1];
 /// How deep under `Library/WebKit` the stores' files are looked for. Deeper
 /// than `backup` looks for IndexedDB folders (a store's file is eight levels
 /// down in the per-site layout iOS 26 keeps the page's databases in,
@@ -917,19 +1043,27 @@ const STORE_FILES: usize = 4000;
 /// the stores' own files in both layouts.
 const LISTING_DEPTH: usize = 9;
 
-/// Once the page has opened its mail store: RATA's folder and each folder
+/// Once the page has opened its stores: RATA's folder and each folder
 /// WebKit keeps IndexedDB in, as `backup` finds them, each read back from
-/// the system as kept out of backups, and every file of the page's stores
-/// inside one of them. Read only: what this checks is what RATA's start
-/// and the page's licence question already did.
+/// the system as kept out of backups, every file of the page's stores
+/// inside one of them, and on app.html both its stores opened at this
+/// start, as the page says. Read only: what this checks is what RATA's
+/// start and the page's licence question already did.
 fn backups(handle: &tauri::AppHandle, page: Option<&Page>) -> Check {
     use tauri::Manager;
     let paths = handle.path();
     let (Ok(app), Ok(home)) = (paths.app_local_data_dir(), paths.home_dir()) else {
         return Check::new("backups", false, json!({ "error": "no folders" }));
     };
-    let mail_open = page.is_some_and(|p| p.path == "app.html");
-    backups_in(&app, &home, mail_open, crate::backup::excluded)
+    backups_in(&app, &home, stores_said(page), crate::backup::excluded)
+}
+
+/// What the page said of its stores: nothing to hold it to on a page that
+/// has none (auth.html), else what it reported, with none reported read as
+/// neither open.
+fn stores_said(page: Option<&Page>) -> Option<Stores> {
+    page.filter(|p| p.path == "app.html")
+        .map(|p| p.stores.unwrap_or_default())
 }
 
 /// [`backups`] in the container at `home`, with RATA's folder at `app` and
@@ -937,7 +1071,7 @@ fn backups(handle: &tauri::AppHandle, page: Option<&Page>) -> Check {
 fn backups_in(
     app: &Path,
     home: &Path,
-    mail_open: bool,
+    opened: Option<Stores>,
     excluded: impl Fn(&Path) -> Result<bool, String>,
 ) -> Check {
     let webkit = crate::backup::webkit_in(home);
@@ -950,7 +1084,7 @@ fn backups_in(
         .into_iter()
         .map(|(f, names)| (shown(&f), names))
         .collect();
-    let mut check = judge_backups(&found, &stores, mail_open);
+    let mut check = judge_backups(&found, &stores, opened);
     if !check.ok {
         check.detail["webkit holds"] = json!(listing(&webkit, home, LISTING_DEPTH));
     }
@@ -958,13 +1092,17 @@ fn backups_in(
 }
 
 /// RATA's folder (first) is kept out, and so is each IndexedDB folder; each
-/// file of the page's stores lies inside one of those kept out; and where
-/// the page has opened its mail store, a file of it is there. So the mail
-/// kept in a folder `backup` never found fails, whatever else it found.
+/// file of the page's stores lies inside one of those kept out; and on a
+/// page with stores (`opened`), both the mail's and the work's opened at
+/// this start, as the page says, and a file of each is there. So the mail
+/// kept in a folder `backup` never found fails, whatever else it found,
+/// and so does a start that kept either in LocalStorage (which an iPhone
+/// backs up) because its store did not open, though a file an earlier
+/// start made is still there.
 fn judge_backups(
     found: &[(PathBuf, Result<bool, String>)],
     stores: &[(PathBuf, Vec<&'static str>)],
-    mail_open: bool,
+    opened: Option<Stores>,
 ) -> Check {
     let mut wrong: Vec<String> = Vec::new();
     if found.is_empty() {
@@ -991,10 +1129,22 @@ fn judge_backups(
             ));
         }
     }
-    if mail_open && !stores.iter().any(|(_, names)| names.contains(&MAIL_STORE)) {
-        wrong.push(format!(
-            "no file of WebKit's holds the mail store ({MAIL_STORE}…)"
-        ));
+    if let Some(open) = opened {
+        for (name, what, was_open) in [
+            (MAIL_STORE, "mail", open.mail),
+            (WORK_STORE, "work", open.work),
+        ] {
+            if !was_open {
+                wrong.push(format!(
+                    "the page's {what} store ({name}…) did not open at this start, so it is kept in LocalStorage, which is backed up"
+                ));
+            }
+            if !stores.iter().any(|(_, names)| names.contains(&name)) {
+                wrong.push(format!(
+                    "no file of WebKit's holds the {what} store ({name}…)"
+                ));
+            }
+        }
     }
     Check::new(
         "backups",
@@ -1012,7 +1162,7 @@ fn judge_backups(
                 .iter()
                 .map(|(f, names)| format!("{}: {}", f.display(), names.join(", ")))
                 .collect::<Vec<_>>(),
-            "mail store open": mail_open,
+            "the page says opened": opened,
             "problems": wrong,
         }),
     )
@@ -1278,6 +1428,8 @@ fn judge_page(page: Option<&Page>, view: Option<&str>) -> Check {
     if let Some(v) = view {
         if p.path != "app.html" {
             wrong.push(format!("it stopped at {} before the {v} view", p.path));
+        } else if v == MAILBOXES_VIEW {
+            wrong.extend(judge_card(p));
         } else if p.shown != Some(true) {
             wrong.push(format!("the {v} view did not open"));
         }
@@ -1289,10 +1441,55 @@ fn judge_page(page: Option<&Page>, view: Option<&str>) -> Check {
     )
 }
 
+/// The inbox with its linked mailboxes card open, on a phone: at least one
+/// mailbox listed (and All mailboxes with two or more), the focus on its
+/// button, every row and Sync now a thumb's height, inside the window's
+/// gutter, and nothing to scroll sideways. What is wrong, if anything.
+fn judge_card(p: &Page) -> Vec<String> {
+    let Some(c) = &p.card else {
+        return vec!["the mailboxes card was never there".into()];
+    };
+    let mut wrong = Vec::new();
+    if p.shown != Some(true) || !c.open {
+        wrong.push("the inbox with its mailboxes card did not open".into());
+    }
+    if c.mailboxes.is_empty() {
+        wrong.push("the card lists no mailbox".into());
+    } else if c.mailboxes.len() > 1 && !c.all {
+        wrong.push("the card has no All mailboxes row".into());
+    }
+    if !c.focused {
+        wrong.push("the focus is not on the card's button".into());
+    }
+    // Half a pixel either way: WebKit lays out in fractions.
+    if c.lowest < CARD_ROW - 0.5 {
+        wrong.push(format!(
+            "a row of the card is {:.1} px tall, under {CARD_ROW} px",
+            c.lowest
+        ));
+    }
+    if c.left < CARD_GUTTER - 0.5 || c.right < CARD_GUTTER - 0.5 {
+        wrong.push(format!(
+            "the card is {:.1} and {:.1} px from the window's edges, inside its {CARD_GUTTER} px gutter",
+            c.left, c.right
+        ));
+    }
+    if c.sideways > 0.5 {
+        wrong.push(format!("the page scrolls {:.1} px sideways", c.sideways));
+    }
+    wrong
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    /// A page whose stores both opened.
+    const BOTH: Stores = Stores {
+        mail: true,
+        work: true,
+    };
     use crate::vault::Memory;
 
     fn tmpdir(name: &str) -> PathBuf {
@@ -1673,7 +1870,7 @@ mod tests {
             (root.clone(), Ok(true)),
             (site.clone(), Ok(true)),
         ];
-        let c = judge_backups(&all, &[mail.clone(), work.clone()], true);
+        let c = judge_backups(&all, &[mail.clone(), work.clone()], Some(BOTH));
         assert!(c.ok, "{c:?}");
         assert_eq!(
             c.detail["the page's stores"][0],
@@ -1682,10 +1879,10 @@ mod tests {
         // The first screen opens no mail store, and WebKit has made only
         // the old layout's IndexedDB folder, which holds none of the page's.
         let first = [ours.clone(), (root.clone(), Ok(true))];
-        assert!(judge_backups(&first, &[], false).ok);
+        assert!(judge_backups(&first, &[], None).ok);
         // With the mail store open, those same two folders, both kept out,
         // are not enough (they passed before): the mail must be in one.
-        let c = judge_backups(&first, &[], true);
+        let c = judge_backups(&first, &[], Some(BOTH));
         assert!(
             !c.ok
                 && c.detail["problems"]
@@ -1693,7 +1890,7 @@ mod tests {
                     .contains("holds the mail store"),
             "{c:?}"
         );
-        let c = judge_backups(&first, std::slice::from_ref(&mail), true);
+        let c = judge_backups(&first, std::slice::from_ref(&mail), Some(BOTH));
         assert!(
             !c.ok
                 && c.detail["problems"]
@@ -1707,7 +1904,7 @@ mod tests {
             (root.clone(), Ok(true)),
             (site.join("d1"), Ok(true)),
         ];
-        let c = judge_backups(&some, &[mail.clone(), work.clone()], true);
+        let c = judge_backups(&some, &[mail.clone(), work.clone()], Some(BOTH));
         assert!(
             !c.ok && c.detail["problems"].to_string().contains("rata-work-"),
             "{c:?}"
@@ -1718,7 +1915,7 @@ mod tests {
             (root.clone(), Ok(true)),
             (site.clone(), Ok(false)),
         ];
-        let c = judge_backups(&backed, std::slice::from_ref(&mail), true);
+        let c = judge_backups(&backed, std::slice::from_ref(&mail), Some(BOTH));
         let problems = c.detail["problems"].to_string();
         assert!(
             !c.ok
@@ -1729,8 +1926,74 @@ mod tests {
             (ours.0.clone(), Err("the system would not say".into())),
             (site.clone(), Ok(true)),
         ];
-        assert!(!judge_backups(&unread, std::slice::from_ref(&mail), true).ok);
-        assert!(!judge_backups(&[], &[], false).ok);
+        assert!(!judge_backups(&unread, std::slice::from_ref(&mail), Some(BOTH)).ok);
+        assert!(!judge_backups(&[], &[], None).ok);
+
+        // Files an earlier start made are not this start's stores: one the
+        // page says did not open fails, though its file is there and kept
+        // out, and so does one the page did not report on.
+        for (open, name) in [
+            (
+                Stores {
+                    mail: false,
+                    work: true,
+                },
+                "mail store (rata-mail-…) did not open",
+            ),
+            (
+                Stores {
+                    mail: true,
+                    work: false,
+                },
+                "work store (rata-work-…) did not open",
+            ),
+            (Stores::default(), "mail store (rata-mail-…) did not open"),
+        ] {
+            let c = judge_backups(&all, &[mail.clone(), work.clone()], Some(open));
+            assert!(
+                !c.ok && c.detail["problems"].to_string().contains(name),
+                "{c:?}"
+            );
+        }
+        // Both open, and the work store on disk nowhere.
+        let c = judge_backups(&all, std::slice::from_ref(&mail), Some(BOTH));
+        assert!(
+            !c.ok
+                && c.detail["problems"]
+                    .to_string()
+                    .contains("holds the work store (rata-work-…)"),
+            "{c:?}"
+        );
+    }
+
+    /// The first screen has no stores to hold to; app.html is held to what
+    /// it says, and to both open when it says nothing.
+    #[test]
+    fn the_stores_held_to_are_what_app_html_says() {
+        assert_eq!(stores_said(None), None);
+        assert_eq!(
+            stores_said(Some(&page("auth.html", "Sign in to RATA"))),
+            None
+        );
+        let mut app = page("app.html", "RATA");
+        assert_eq!(stores_said(Some(&app)), Some(Stores::default()));
+        app.stores = Some(BOTH);
+        assert_eq!(stores_said(Some(&app)), Some(BOTH));
+        let said: Page = serde_json::from_value(json!({
+            "path": "app.html",
+            "stores": { "mail": true, "work": false },
+        }))
+        .unwrap();
+        assert_eq!(
+            said.stores,
+            Some(Stores {
+                mail: true,
+                work: false
+            })
+        );
+        let none: Page =
+            serde_json::from_value(json!({ "path": "auth.html", "stores": null })).unwrap();
+        assert_eq!(none.stores, None);
     }
 
     /// The whole check, on a container laid out as iOS 26 lays it out and
@@ -1757,9 +2020,9 @@ mod tests {
         let marked = |_: &Path| Ok(true);
 
         // The first screen: no store yet, none needed.
-        assert!(backups_in(&app, &home, false, marked).ok);
+        assert!(backups_in(&app, &home, None, marked).ok);
         // The mail store open, and on disk nowhere.
-        let c = backups_in(&app, &home, true, marked);
+        let c = backups_in(&app, &home, Some(BOTH), marked);
         assert!(!c.ok, "{c:?}");
         let held = c.detail["webkit holds"].to_string();
         assert!(
@@ -1791,7 +2054,7 @@ mod tests {
             )
             .unwrap();
         }
-        let c = backups_in(&app, &home, true, marked);
+        let c = backups_in(&app, &home, Some(BOTH), marked);
         assert!(c.ok, "{c:?}");
         let stores = c.detail["the page's stores"].as_array().unwrap().clone();
         assert_eq!(stores.len(), 2, "{c:?}");
@@ -1808,7 +2071,7 @@ mod tests {
                 .ends_with("IndexedDB.sqlite3-wal: rata-work-")
         );
         // Only what reads back as kept out counts.
-        let c = backups_in(&app, &home, true, |f: &Path| {
+        let c = backups_in(&app, &home, Some(BOTH), |f: &Path| {
             Ok(!f.ends_with("s/s/IndexedDB"))
         });
         assert!(!c.ok, "{c:?}");
@@ -1816,7 +2079,7 @@ mod tests {
         // A folder of another name.
         let other = data.join("Default/s/s/IDB");
         std::fs::rename(&site, &other).unwrap();
-        let c = backups_in(&app, &home, true, marked);
+        let c = backups_in(&app, &home, Some(BOTH), marked);
         let problems = c.detail["problems"].to_string();
         assert!(
             !c.ok && problems.contains("IDB/5f3a/IndexedDB.sqlite3 holds rata-mail-"),
@@ -1827,7 +2090,7 @@ mod tests {
         let deep = data.join("Default/s/s/t/u/IndexedDB");
         put(&deep);
         assert!(!crate::backup::folders(&app, &webkit).contains(&deep));
-        let c = backups_in(&app, &home, true, marked);
+        let c = backups_in(&app, &home, Some(BOTH), marked);
         assert!(
             !c.ok && c.detail["problems"].to_string().contains("t/u/IndexedDB"),
             "{c:?}"
@@ -2034,12 +2297,188 @@ mod tests {
         assert!(judge_page(Some(&set), Some("set")).ok);
     }
 
+    /// Asked for the mailboxes view: the inbox, its card open and listing
+    /// the mailboxes (All mailboxes too, with two), the focus on its
+    /// button, every row a thumb's height, inside the window's gutter, and
+    /// nothing to scroll sideways.
+    #[test]
+    fn the_mailboxes_card_is_judged_as_a_phone_draws_it() {
+        let card = Card {
+            open: true,
+            focused: true,
+            mailboxes: vec!["ann@example.com".into(), "ben@example.org".into()],
+            all: true,
+            lowest: 44.0,
+            left: 16.0,
+            right: 16.0,
+            sideways: 0.0,
+        };
+        let mut p = page("app.html", "RATA");
+        p.shown = Some(true);
+        p.card = Some(card.clone());
+        let c = judge_page(Some(&p), Some(MAILBOXES_VIEW));
+        assert!(c.ok, "{c:?}");
+        // WebKit lays out in fractions.
+        p.card = Some(Card {
+            lowest: 43.6,
+            left: 15.7,
+            ..card.clone()
+        });
+        assert!(judge_page(Some(&p), Some(MAILBOXES_VIEW)).ok);
+        for (wrong, says) in [
+            (
+                Card {
+                    open: false,
+                    ..card.clone()
+                },
+                "did not open",
+            ),
+            (
+                Card {
+                    focused: false,
+                    ..card.clone()
+                },
+                "the focus is not on",
+            ),
+            (
+                Card {
+                    mailboxes: Vec::new(),
+                    ..card.clone()
+                },
+                "lists no mailbox",
+            ),
+            (
+                Card {
+                    all: false,
+                    ..card.clone()
+                },
+                "no All mailboxes row",
+            ),
+            (
+                Card {
+                    lowest: 36.0,
+                    ..card.clone()
+                },
+                "36.0 px tall",
+            ),
+            (
+                Card {
+                    left: 8.0,
+                    ..card.clone()
+                },
+                "16 px gutter",
+            ),
+            (
+                Card {
+                    right: -20.0,
+                    ..card.clone()
+                },
+                "16 px gutter",
+            ),
+            (
+                Card {
+                    sideways: 30.0,
+                    ..card.clone()
+                },
+                "30.0 px sideways",
+            ),
+        ] {
+            p.card = Some(wrong);
+            let c = judge_page(Some(&p), Some(MAILBOXES_VIEW));
+            assert!(
+                !c.ok && c.detail["problems"].to_string().contains(says),
+                "{says}: {c:?}"
+            );
+        }
+        // One mailbox has no All mailboxes row to show.
+        p.card = Some(Card {
+            mailboxes: vec!["ann@example.com".into()],
+            all: false,
+            ..card.clone()
+        });
+        assert!(judge_page(Some(&p), Some(MAILBOXES_VIEW)).ok);
+        // No card, the inbox not showing, or the first screen.
+        p.card = None;
+        assert!(!judge_page(Some(&p), Some(MAILBOXES_VIEW)).ok);
+        p.card = Some(card);
+        p.shown = Some(false);
+        assert!(!judge_page(Some(&p), Some(MAILBOXES_VIEW)).ok);
+        assert!(
+            !judge_page(
+                Some(&page("auth.html", "Sign in to RATA")),
+                Some(MAILBOXES_VIEW)
+            )
+            .ok
+        );
+        // The report, as the page script sends it.
+        let said: Page = serde_json::from_value(json!({
+            "path": "app.html",
+            "card": { "open": true, "mailboxes": ["ann@example.com"], "lowest": 44.5, "left": 16 },
+        }))
+        .unwrap();
+        let read = said.card.unwrap();
+        assert!(read.open && !read.focused && read.lowest == 44.5 && read.left == 16.0);
+        assert_eq!(read.mailboxes, ["ann@example.com"]);
+    }
+
+    /// The page script asks app.html for what app.html names: its stores'
+    /// bindings, the line's button, the card and its rows; and holds the
+    /// card to app.html's own phone rule. app.html is read here, so the two
+    /// cannot part.
+    #[test]
+    fn the_card_and_the_stores_are_read_by_app_htmls_own_names() {
+        assert_eq!(
+            view_named(Some(MAILBOXES_VIEW.into())).as_deref(),
+            Some(MAILBOXES_VIEW)
+        );
+        let asked = script(Some(MAILBOXES_VIEW));
+        assert!(!asked.contains("__RATA_MAILBOXES_VIEW__"));
+        for part in [
+            "const name = VIEW === 'mailboxes' ? 'inbox' : VIEW;",
+            "document.getElementById('src-btn')",
+            "document.getElementById('src-panel')",
+            "panel.querySelectorAll('.src-item, .src-sync')",
+            "panel.querySelectorAll('li:not(.src-all) .src-addr')",
+            "panel.querySelector('li.src-all')",
+            "button.getAttribute('aria-expanded') === 'true' && !panel.hidden",
+            "try { return { mail: !!MS, work: !!WK }; } catch (e) { return null; }",
+            "try { return S !== null; } catch (e) { return true; }",
+            "stores: stores(),",
+        ] {
+            assert!(asked.contains(part), "{part}");
+        }
+        let page = include_str!("../../../../rata-next/public/app.html");
+        for part in [
+            "let S=null;",
+            "let MS=null;",
+            "let WK=null;",
+            "try{S=migrate(st)}catch(e){S=seed()}",
+            "btn.id='src-btn';",
+            "panel.id='src-panel';",
+            "b.setAttribute('aria-expanded',String(SRC_OPEN));",
+            "if(p)p.hidden=!SRC_OPEN;",
+            "srcPart('button','src-item')",
+            "srcPart('button','src-sync')",
+            "srcPart('li',l.all?'src-all':'')",
+            "srcPart('span','src-addr')",
+            ".src-item,.src-sync{min-height:44px}",
+            "left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right))",
+        ] {
+            assert!(page.contains(part), "{part}");
+        }
+        assert_eq!((CARD_ROW, CARD_GUTTER), (44.0, 16.0));
+    }
+
     #[test]
     fn a_report_is_kept_short_and_only_the_first_is_kept() {
         let smoke = Smoke::begin(tmpdir("heard"), None);
         let mut long = page("app.html", &"RATA ".repeat(100));
         long.errors = vec!["e".repeat(1000); 50];
         long.view = Some("set\" onload".into());
+        long.card = Some(Card {
+            mailboxes: vec!["a".repeat(500); 30],
+            ..Card::default()
+        });
         smoke.heard(long);
         smoke.heard(page("auth.html", "second"));
         let kept = smoke.page.lock().unwrap().clone().unwrap();
@@ -2048,6 +2487,9 @@ mod tests {
         assert_eq!(kept.errors.len(), 20);
         assert!(kept.errors.iter().all(|e| e.chars().count() == 300));
         assert_eq!(kept.view, None);
+        let card = kept.card.unwrap();
+        assert_eq!(card.mailboxes.len(), 10);
+        assert!(card.mailboxes.iter().all(|m| m.chars().count() == 100));
     }
 
     #[test]

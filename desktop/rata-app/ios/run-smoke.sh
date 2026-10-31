@@ -25,6 +25,19 @@
 #                                    within 30 s (the screenshot waits for
 #                                    it), and RATA still running behind it.
 #
+# And for this script itself:
+#   RATA_SMOKE_MAILBOXES="a@example.com b@example.org"
+#                                    RFC 2606 addresses to put in RATA's
+#                                    mailbox list before the launch (RATA
+#                                    must have started once, to make its
+#                                    folder), with no password in the
+#                                    keychain: each refresh says the
+#                                    keychain has none, and nothing is
+#                                    dialled. With the view `mailboxes`
+#                                    (SIMCTL_CHILD_RATA_SMOKE_VIEW), the
+#                                    run then wants the inbox's mailboxes
+#                                    card to list exactly those.
+#
 # Used by .github/workflows/ios.yml, and on any Mac with Xcode:
 #   xcrun simctl boot "iPhone 16"; xcrun simctl install booted RATA.app
 #   desktop/rata-app/ios/run-smoke.sh booted /tmp/rata-smoke first-screen
@@ -62,6 +75,39 @@ if [ "$opens" = 1 ]; then
 fi
 container="$(xcrun simctl get_app_container "$sim" "$bundle" data)" \
   || { echo "$name: RATA is not installed on $sim"; exit 1; }
+mailboxes="${RATA_SMOKE_MAILBOXES:-}"
+if [ -n "$mailboxes" ]; then
+  # Written whole, as RATA writes it (a file beside it, 0600, renamed
+  # over it), keeping everything else the list holds (the licence).
+  # shellcheck disable=SC2086
+  python3 - "$container/Library/Application Support/$bundle/mailboxes.json" $mailboxes <<'PY' \
+    || { echo "$name: the mailboxes could not be put in RATA's list"; exit 1; }
+import json, os, sys, time
+path, addresses = sys.argv[1], sys.argv[2:]
+reserved = ('example.com', 'example.net', 'example.org')
+for a in addresses:
+    local, _, domain = a.rpartition('@')
+    if not local or not (domain in reserved or domain.endswith(('.example', '.test', '.invalid'))):
+        sys.exit(f'{a} is not an RFC 2606 address')
+if not os.path.isdir(os.path.dirname(path)):
+    sys.exit('RATA has not made its folder yet: run it once first')
+try:
+    with open(path) as f:
+        doc = json.load(f)
+except FileNotFoundError:
+    doc = {'version': 1}
+doc['mailboxes'] = [{
+    'email': a, 'host': 'imap.' + a.rpartition('@')[2], 'port': 993,
+    'label': 'Example', 'source': 'override', 'added_at': int(time.time()),
+} for a in addresses]
+part = path + '.smoke'
+fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(doc, f, indent=2)
+os.replace(part, path)
+print('listed in RATA:', ', '.join(addresses))
+PY
+fi
 # In the app's cache folder: its data folder is the mailbox list's, which
 # the list must be the first to make (src-tauri/src/smoke.rs).
 smoke="$container/Library/Caches/$bundle/smoke.json"
@@ -136,10 +182,12 @@ cat "$out/$name.smoke.json"
 # light or dark; anything else (an older simctl) is not held to.
 appearance="$(xcrun simctl ui "$sim" appearance 2>/dev/null | tr -d '[:space:]')"
 
-python3 - "$out/$name.smoke.json" "$name" "$appearance" "$opens" <<'PY'
+# shellcheck disable=SC2086
+python3 - "$out/$name.smoke.json" "$name" "$appearance" "$opens" $mailboxes <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 name, appearance, opens = sys.argv[2], sys.argv[3], sys.argv[4] == '1'
+listed = sys.argv[5:]
 for c in doc.get('checks', []):
     print(f"{name}: {'pass' if c.get('ok') else 'FAIL'}: {c.get('name')}")
 ok = doc.get('ok') is True
@@ -151,6 +199,14 @@ if appearance in ('light', 'dark') and isinstance(page, dict):
     shown = 'dark' if page.get('dark') is True else 'light'
     print(f"{name}: {'pass' if shown == appearance else 'FAIL'}: shown {shown}, the simulator {appearance}")
     ok = ok and shown == appearance
+# The card lists what was put in the list: the list, the refresh, the
+# bridge and the page all carried them.
+if listed and isinstance(page, dict) and page.get('view') == 'mailboxes':
+    card = page.get('card') or {}
+    shown = sorted(card.get('mailboxes') or [])
+    same = shown == sorted(listed)
+    print(f"{name}: {'pass' if same else 'FAIL'}: the card lists {shown}, the list held {sorted(listed)}")
+    ok = ok and same
 sys.exit(0 if ok else 1)
 PY
 verdict=$?

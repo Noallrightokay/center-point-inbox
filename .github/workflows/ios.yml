@@ -230,15 +230,17 @@ jobs:
   # system's resolver, discovery, a TLS greeting through the guard, what a
   # phone answers where a computer has more, where saves go, the page, and
   # that the list and the mail are kept out of the phone's backups. It runs
-  # five times, each with a screenshot: the first screen;
+  # six times, each with a screenshot: the first screen;
   # the workspace, signed up on the first screen's own form and licensed
   # with a Pro licence from a throwaway key made here (never the real one:
   # the build trusts only that key's public half); the workspace again in
-  # dark appearance; Settings; and RATA opening a web address, which must
-  # bring Safari up. The job fails when a check fails, the page is not
-  # shown in the appearance the simulator is set to, a screenshot shows
-  # nothing drawn below the status bar (ios/painted.py; it is taken again,
-  # 2 s apart, for a slow first frame), RATA stops, or the build was not
+  # dark appearance; Settings; RATA opening a web address, which must
+  # bring Safari up; and the inbox's linked mailboxes card, open, for two
+  # RFC 2606 mailboxes put in RATA's list with no password. The job fails
+  # when a check fails, the page is not shown in the appearance the
+  # simulator is set to, a screenshot shows nothing drawn below the status
+  # bar (ios/painted.py; it is taken again, 2 s apart, for a slow first
+  # frame), RATA stops, or the build was not
   # given the made-up client ids its phone answers refuse.
   simulator:
     name: iOS app in the Simulator
@@ -426,6 +428,15 @@ jobs:
           # run-smoke.sh ends Safari first, and then wants it running, and
           # RATA too.
           SIMCTL_CHILD_RATA_SMOKE_OPEN=1 bash "$smoke_run" "$SIM" "$out" 5-opens-a-link || failed=1
+          # 6. The inbox's linked mailboxes card, open: two RFC 2606
+          # mailboxes put in RATA's list before the launch, with no
+          # password in the keychain (each refresh says so, and nothing is
+          # dialled), and the mailboxes line the first refresh draws pressed.
+          # The self-test holds the card to the phone's rule (rows 44 px
+          # tall, a 16 px gutter, nothing to scroll sideways, the focus on
+          # its button); run-smoke.sh wants it to list exactly those two.
+          RATA_SMOKE_MAILBOXES="ann@example.com ben@example.org" SIMCTL_CHILD_RATA_SMOKE_VIEW=mailboxes \
+            bash "$smoke_run" "$SIM" "$out" 6-mailboxes || failed=1
           exit $failed
 
       # Each run's "phone answers" passed with the made-up client ids given

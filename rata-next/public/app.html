@@ -1750,11 +1750,13 @@ function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb'
    is newer than the database: the entry of a build from before this, or
    of a session the database would not open. It is merged in at start
    (wkMerge), and the entry is written empty again only once the database
-   has it. Where the database will not open, the parts stay in the entry
-   the old way. */
+   has it: until then every write of the entry keeps them (WK_MOVING),
+   the mail's own rewrite of it at start among them. Where the database
+   will not open, the parts stay in the entry the old way. */
 const WK_DB='rata-work-'+(SESSION?SESSION.uid:'anon'),WK_STORE='parts';
 const WK_PARTS=['audit','documents','boxes'];
 let WK=null;              /* the open database, or null: the old way */
+let WK_MOVING=false;      /* at start: parts the entry held, not yet written there */
 const WK_HELD=new Map();  /* part → its JSON as last written */
 let wkQueued=false,wkWarned=false,wkLast=Promise.resolve();
 function wkOpen(name=WK_DB){
@@ -1854,7 +1856,7 @@ function wkFlush(){
    and with the parts above empty where the work database holds them. */
 function entryOf(st){
   const o=MS?metaOf(st):Object.assign({},st);
-  if(WK)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
+  if(WK&&!WK_MOVING)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
   return o;
 }
 /* Before anything is shown: the small entry from localStorage, the messages
@@ -1877,8 +1879,15 @@ async function load(){
      without it once the database has it, after the mail is settled. */
   let moved=false;
   if(WK){try{moved=await wkMerge(parts)}catch(e){moved=false}}
-  await loadMail(held,inBlob);
-  if(moved&&WK){try{await wkFlush();saveLocal()}catch(e){}}
+  /* An entry that also holds mail (one the mail store would not open for)
+     is rewritten by loadMail once the mail is in IndexedDB, before the
+     parts are: written empty then, a start ended between the two would
+     lose them. */
+  WK_MOVING=moved;
+  try{
+    await loadMail(held,inBlob);
+    if(moved&&WK){try{await wkFlush();WK_MOVING=false;saveLocal()}catch(e){}}
+  }finally{WK_MOVING=false}
 }
 async function loadMail(held,inBlob){
   const byId=new Map();
