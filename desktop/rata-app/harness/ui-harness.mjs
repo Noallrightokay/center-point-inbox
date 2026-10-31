@@ -4965,6 +4965,586 @@ console.log('\n— SEC-10: only what this build connects is named, no disguised 
   await ctx.close();
 }
 
+console.log('\n— the linked mailboxes: one line that opens a card where one is chosen, not two rows of chips —');
+{
+  const { default: AxeBuilder } = await import('../../../rata-next/node_modules/@axe-core/playwright/dist/index.mjs');
+  /* `open`: the card was open when the scan began, which is what it is for;
+     `chosen`: so was a mailbox, when the scan is about that. */
+  const axe = async (pg, where, ready) => {
+    const held = await pg.evaluate(() => { const t = document.querySelector('#toast'); if (!t || !t.classList.contains('show')) return false; clearTimeout(t._to); return true; });
+    await pg.evaluate(() => Promise.race([
+      Promise.all(document.getAnimations().filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity).map((a) => a.finished.catch(() => {}))),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]));
+    const r = await new AxeBuilder({ page: pg }).analyze();
+    if (held) await pg.evaluate(() => { const t = document.querySelector('#toast'); if (t) { clearTimeout(t._to); t._to = setTimeout(() => t.classList.remove('show'), 2600); } });
+    const bad = r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+    for (const v of r.violations) console.log(`        axe ${v.impact}: ${v.id} at ${v.nodes.slice(0, 4).map((n) => n.target.join(' ')).join(' | ')}${v.nodes.length > 4 ? ` (+${v.nodes.length - 4})` : ''}`);
+    check(ready && bad.length === 0, `axe, ${where}: ready ${ready}, no serious or critical violation (${r.passes.length} rules pass): ${JSON.stringify(bad.map((v) => v.id))}`);
+  };
+  const ctx = await browser.newContext();
+  const pg = await open(true, { context: ctx });
+  /* A press that a page without the line reports as a failed check, not a crash. */
+  const press = (sel) => pg.click(sel, { timeout: 3000 }).catch(() => {});
+  /* A row of the card by the words on it, pressed with the mouse. */
+  const row = async (words) => {
+    const h = await pg.evaluateHandle((w) => [...document.querySelectorAll('#src-panel .src-item')].find((b) => b.querySelector('.src-addr').textContent === w) || null, words);
+    const el = h.asElement();
+    if (el) await el.click({ timeout: 3000 }).catch(() => {});
+    await h.dispose();
+  };
+  const LONG = 'a.very.long.address.for.the.front.desk.team@saltmarsh-regional-medical-centre.example.org';
+  /* Everything about the line, its card and the list, as drawn. */
+  const state = (page = pg) => page.evaluate(() => {
+    const src = document.querySelector('#sources'), btn = document.querySelector('#src-btn'), panel = document.querySelector('#src-panel');
+    const pill = document.querySelector('#cat-tabs .pill'), side = document.querySelector('#view-inbox .side-list').getBoundingClientRect();
+    const r = btn && btn.getBoundingClientRect(), what = btn && btn.querySelector('.src-what');
+    const a = document.activeElement;
+    return {
+      chips: document.querySelectorAll('.src-chip, .src-row').length,
+      shown: getComputedStyle(src).display !== 'none' && src.getClientRects().length > 0 && src.childElementCount > 0,
+      btns: document.querySelectorAll('#src-btn').length, panels: document.querySelectorAll('#src-panel').length,
+      what: what && what.textContent, meta: btn && btn.querySelector('.src-meta').textContent, dot: !!(btn && btn.querySelector('.src-dot.on')),
+      said: btn && btn.textContent.replace(/\s+/g, ' ').trim(), scoped: !!(btn && btn.classList.contains('scoped')),
+      cut: !!what && what.scrollWidth > what.clientWidth && getComputedStyle(what).textOverflow === 'ellipsis',
+      h: r ? Math.round(r.height) : 0, pillH: pill ? Math.round(pill.getBoundingClientRect().height) : 0,
+      inList: !!r && r.left >= side.left && r.right <= side.right - 8,
+      expanded: btn && btn.getAttribute('aria-expanded'), controls: btn && btn.getAttribute('aria-controls'),
+      open: !!panel && !panel.hidden && panel.getClientRects().length > 0,
+      role: panel && panel.getAttribute('role'), label: panel && panel.getAttribute('aria-label'),
+      rows: panel ? [...panel.querySelectorAll('.src-item')].map((b) => ({ addr: b.querySelector('.src-addr').textContent, meta: b.querySelector('.src-meta').textContent,
+        dot: !!b.querySelector('.src-dot'), on: !!b.querySelector('.src-dot.on'), scope: b.dataset.scope ?? null, current: b.getAttribute('aria-current'),
+        tint: getComputedStyle(b).backgroundColor, tick: !!b.querySelector('.src-tick') && getComputedStyle(b.querySelector('.src-tick')).visibility === 'visible', disabled: b.disabled })) : [],
+      sync: (() => { const s = document.querySelector('#src-panel #src-sync'); return s && { text: s.textContent.trim(), shown: s.getClientRects().length > 0 }; })(),
+      current: panel ? [...panel.querySelectorAll('.src-item[aria-current="true"]')].map((b) => b.querySelector('.src-addr').textContent) : [],
+      focus: a === btn ? 'button' : a && a.classList.contains('src-item') ? 'row:' + a.querySelector('.src-addr').textContent : a && (a.id || a.tagName),
+      dialog: !!topDialog() || keyDialog(),
+      list: [...document.querySelectorAll('#mail-scroll .mail-row')].map((e) => e.dataset.id),
+      filters: [...document.querySelectorAll('#mail-filters .pill')].map((p) => p.dataset.f),
+      acctChips: document.querySelectorAll('[data-f^="acct"]').length,
+      cats: [...document.querySelectorAll('#cat-tabs .pill')].map((p) => p.textContent),
+      eyebrow: document.querySelector('#tb-eyebrow').textContent,
+      digest: (document.querySelector('#digest .dg-text') || {}).textContent || '',
+      rest: [...document.querySelectorAll('#mail-detail .rest-box[aria-current="true"] .rest-box-name')].map((e) => e.textContent),
+      older: !!document.querySelector('#load-older'),
+    };
+  });
+  let s = await state();
+  check(s.chips === 0 && s.shown && s.btns === 1 && s.what === 'me@example.com' && s.dot && /^synced \d+m ago$/.test(s.meta) && s.expanded === 'false' && s.controls === 'src-panel' && !s.open,
+    `one mailbox: one closed line naming its address, green and when it synced, and no chip: ${JSON.stringify(s)}`);
+  await press('#src-btn');
+  await pg.waitForTimeout(50);
+  s = await state();
+  check(s.open && s.rows.length === 1 && s.rows[0].current === null && !s.rows[0].tick && JSON.stringify(s.current) === '[]' && JSON.stringify(s.rest) === '[]'
+    && (await pg.evaluate(() => document.querySelectorAll('#mail-detail .rest-box').length)) === 1,
+  `one mailbox: there is nothing to choose, so neither the card's row nor the resting pane's box is marked: ${JSON.stringify({ rows: s.rows, rest: s.rest })}`);
+  await pg.keyboard.press('Escape');
+  /* Three mailboxes, each with mail in it. */
+  const mk = (email, uid, mins, from, subject, preview, unread) => ({ id: email + '_' + uid, folder: 'inbox', acct: email, acct_label: 'Example', from_name: from.split('@')[0], from_addr: from,
+    to_name: '', to_addr: email, subject, preview, body: preview, ts: Date.now() - mins * 60000, unread, starred: false, uid, uidvalidity: 7, message_id: uid + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+  const ME = ['me@example.com_501', 'me@example.com_502'], WORK = ['work@example.net_601', 'work@example.net_602', 'work@example.net_603'], DESK = [LONG + '_701'];
+  const MAIL = [
+    mk('me@example.com', 501, 1, 'ann@example.org', 'Lunch on Friday?', 'Are you free', true),
+    mk('me@example.com', 502, 2, 'billing@shop.example', 'Invoice 4417', 'Thanks for your order', false),
+    mk('work@example.net', 601, 3, 'bo@example.org', 'Rota for the spring', 'Attached', true),
+    mk('work@example.net', 602, 4, 'accounts@supplier.example', 'Invoice 9921', 'Your statement', false),
+    mk('work@example.net', 603, 5, 'noreply@hospital.example', 'Your shift summary', 'Weekly digest', true),
+    mk(LONG, 701, 6, 'cy@example.org', 'Front desk notes', 'From the desk', false),
+  ];
+  await pg.evaluate(async ([long, msgs]) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' }, { email: long, host: 'imap.example.org', port: 993, label: 'Desk' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    go('inbox'); mailFilter = 'all'; catFilter = 'all'; renderMailFilters(); renderMail();
+  }, [LONG, MAIL]);
+  const ids = Object.fromEntries(await pg.evaluate(() => S.linked.map((l) => [l.label, l.id])));
+  const ALL = [...ME, ...WORK, ...DESK];
+  s = await state();
+  check(s.chips === 0 && s.btns === 1 && s.what === '3 mailboxes' && s.dot && /^synced \d+m ago$/.test(s.meta) && s.h > 0 && s.h <= s.pillH + 2 && s.inList && !s.open && !s.scoped
+    && JSON.stringify(s.list) === JSON.stringify(ALL),
+  `three mailboxes: no chip row, one line as tall as a chip (${s.h} px, a chip ${s.pillH} px) inside the list, "3 mailboxes", and every mailbox's mail: ${JSON.stringify(s)}`);
+  check(s.acctChips === 0 && JSON.stringify(s.filters) === JSON.stringify(['all', 'unread', 'starred', 'sent', 'folders']),
+    `no mailbox among the filter chips, or anywhere else, though all three hold mail: ${JSON.stringify({ filters: s.filters, acct: s.acctChips })}`);
+
+  await press('#src-btn');
+  s = await state();
+  const four = ['All mailboxes', 'me@example.com', 'work@example.net', LONG];
+  check(s.open && s.expanded === 'true' && s.panels === 1 && s.role === 'group' && s.label === 'Linked mailboxes' && JSON.stringify(s.rows.map((r) => r.addr)) === JSON.stringify(four)
+    && s.rows.every((r) => r.dot && r.on && /^\d+m ago$/.test(r.meta) && r.scope !== null && !r.disabled) && JSON.stringify(s.current) === '["All mailboxes"]',
+  `pressed, it opens a labelled card: All mailboxes (the one shown), then each address whole, with its dot and when it synced: ${JSON.stringify(s)}`);
+  check(s.sync && s.sync.text === 'Sync now' && s.sync.shown, `the card has one Sync now: ${JSON.stringify(s.sync)}`);
+  check(s.open && !s.dialog, `open, the card is not counted as a dialog (topDialog, keyDialog): ${JSON.stringify({ open: s.open, dialog: s.dialog })}`);
+  await pg.keyboard.press('Tab');
+  const f1 = (await state()).focus;
+  await pg.keyboard.press('Tab');
+  const f2 = (await state()).focus;
+  check(f1 === 'row:All mailboxes' && f2 === 'row:me@example.com', `Tab goes from the button through its rows: ${JSON.stringify([f1, f2])}`);
+  await pg.keyboard.press('c');
+  await pg.keyboard.press('?');
+  const keysQuiet = await pg.evaluate(() => ({ compose: document.querySelector('#compose-ov').classList.contains('open'), keys: document.querySelector('#keys-ov').classList.contains('open') }));
+  check(!keysQuiet.compose && !keysQuiet.keys && (await state()).focus === 'row:me@example.com', `no message shortcut runs from inside it (c, ?): ${JSON.stringify(keysQuiet)}`);
+
+  /* A refresh while it is open (renderSources runs on every one). */
+  await pg.evaluate(async () => { __mock.refreshDelay = 150; await serverSync('mail'); __mock.refreshDelay = 0; });
+  s = await state();
+  check(s.open && s.btns === 1 && s.panels === 1 && s.rows.length === 4 && s.focus === 'row:me@example.com',
+    `a refresh while it is open redraws it in place: one card, still open, four rows, the focus where it was: ${JSON.stringify({ open: s.open, btns: s.btns, panels: s.panels, rows: s.rows.length, focus: s.focus })}`);
+
+  await pg.keyboard.press('Escape');
+  s = await state();
+  check(!s.open && s.expanded === 'false' && s.focus === 'button' && !s.scoped, `Escape closes it, choosing nothing, and gives the focus back to the button: ${JSON.stringify({ open: s.open, expanded: s.expanded, focus: s.focus, scoped: s.scoped })}`);
+  /* By keyboard alone: Enter opens it, Down and End move in it, Tab goes
+     on to Sync now, and tabbing on past that closes it. */
+  await pg.keyboard.press('Enter');
+  const kOpen = (await state()).open;
+  await pg.keyboard.press('ArrowDown');
+  const kDown = (await state()).focus;
+  await pg.keyboard.press('End');
+  const kEnd = (await state()).focus;
+  await pg.keyboard.press('Tab');
+  const kSync = await state();
+  await pg.keyboard.press('Tab');
+  s = await state();
+  check(kOpen && kDown === 'row:All mailboxes' && kEnd === 'row:' + LONG && kSync.focus === 'src-sync' && kSync.open && !s.open && s.expanded === 'false' && s.focus !== 'button' && !String(s.focus).startsWith('row:'),
+    `Enter opens it, Down and End move through the rows, Tab reaches Sync now, and Tab past it closes the card: ${JSON.stringify({ kOpen, kDown, kEnd, sync: kSync.focus, open: s.open, focus: s.focus })}`);
+
+  /* Sync now refreshes every mailbox, and the card stays open. */
+  await press('#src-btn');
+  await pg.evaluate(() => { __mock.calls = []; });
+  await press('#src-sync');
+  await pg.waitForFunction(() => __mock.calls.some(([c]) => c === 'refresh_mail'), null, { timeout: 3000 }).catch(() => {});
+  await pg.waitForFunction(() => !SYNCING, null, { timeout: 3000 }).catch(() => {});
+  const synced = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'refresh_mail').map(([, a]) => a.only || null));
+  s = await state();
+  check(synced.length === 1 && synced[0] === null && s.open && s.panels === 1 && s.sync && s.sync.text === 'Sync now' && !s.scoped,
+    `Sync now refreshes every mailbox (refresh_mail ${JSON.stringify(synced)}), choosing nothing, and the card stays open: ${JSON.stringify({ open: s.open, panels: s.panels, sync: s.sync })}`);
+
+  /* Open, it lies over the list: a press anywhere else closes it. */
+  if (!s.open) await press('#src-btn');
+  await pg.mouse.click(300, 30);
+  s = await state();
+  check(!s.open && s.expanded === 'false', `a press outside closes it: ${JSON.stringify({ open: s.open, expanded: s.expanded })}`);
+  /* WebKit on macOS, which RATA ships on, does not focus a button it
+     clicks (here: a click that moves no focus). The card takes it. */
+  await pg.evaluate(() => { if (document.activeElement) document.activeElement.blur(); document.querySelector('#src-btn').click(); });
+  s = await state();
+  check(s.open && s.focus === 'button', `opened by a click that focuses nothing, as in WebKit on macOS, the card puts the focus on its button: ${JSON.stringify({ open: s.open, focus: s.focus })}`);
+  /* The focus going anywhere else closes it, and the page's keys are the
+     page's again: Enter on Compose opens the composer, Escape closes it. */
+  await pg.evaluate(() => document.activeElement.blur());
+  const unfocused = await state();
+  await pg.focus('#compose-btn');
+  const away = await state();
+  await pg.keyboard.press('Enter');
+  const composing = await pg.evaluate(() => document.querySelector('#compose-ov').classList.contains('open'));
+  await pg.keyboard.press('Escape');
+  const composeShut = await pg.evaluate(() => !document.querySelector('#compose-ov').classList.contains('open'));
+  check(unfocused.open && !away.open && away.expanded === 'false' && composing && composeShut,
+    `the focus moving out of the card (to Compose) closes it, and the page's keys work: Enter opens the composer and Escape closes it: ${JSON.stringify({ openBlurred: unfocused.open, openAway: away.open, composing, composeShut })}`);
+  /* However that went, nothing is left open for the checks that follow. */
+  await pg.evaluate(() => { if (document.querySelector('#compose-ov').classList.contains('open')) closeCompose(); srcShow(false); });
+  /* Open, with the focus gone to the page itself (a blur moves it to no
+     element, so nothing closes the card), the page's keys are the page's:
+     only the focus inside the card holds them back. */
+  await press('#src-btn');
+  await pg.evaluate(() => document.activeElement.blur());
+  const onPage = await state();
+  await pg.keyboard.press('?');
+  const sheetUp = await pg.evaluate(() => document.querySelector('#keys-ov').classList.contains('open'));
+  await pg.evaluate(() => { if (document.querySelector('#keys-ov').classList.contains('open')) closeKeys(); srcShow(false); });
+  check(onPage.open && onPage.focus === 'BODY' && sheetUp,
+    `open, with the focus on the page rather than in the card, ? opens the shortcut sheet: ${JSON.stringify({ open: onPage.open, focus: onPage.focus, sheetUp })}`);
+
+  await press('#src-btn');
+  await axe(pg, 'the linked mailboxes open', (await state()).open);
+  await pg.emulateMedia({ colorScheme: 'dark' });
+  await pg.waitForTimeout(300);
+  await axe(pg, 'the linked mailboxes open, dark', (await state()).open);
+  await pg.emulateMedia({ colorScheme: 'light' });
+
+  /* Choosing a mailbox: the list is that mailbox's alone, the row is marked,
+     the card closes and the button names it. */
+  await row('work@example.net');
+  s = await state();
+  const work = s.rows.find((r) => r.addr === 'work@example.net'), allRow = s.rows.find((r) => r.addr === 'All mailboxes');
+  check(JSON.stringify(s.list) === JSON.stringify(WORK) && !s.open && s.expanded === 'false' && s.focus === 'button',
+    `choosing work@example.net lists its mail alone, closes the card and gives the focus back to the button: ${JSON.stringify({ list: s.list, open: s.open, focus: s.focus })}`);
+  check(JSON.stringify(s.current) === '["work@example.net"]' && work && work.current === 'true' && work.tick && work.tint !== 'rgba(0, 0, 0, 0)' && allRow && !allRow.current && allRow.tint === 'rgba(0, 0, 0, 0)',
+    `the choice is marked: aria-current, the selection tint and a tick on its row alone: ${JSON.stringify({ current: s.current, work, allRow })}`);
+  check(s.what === 'work@example.net' && s.scoped && /^synced \d+m ago$/.test(s.meta) && s.dot && /^Showing work@example\.net · synced \d+m ago, live$/.test(s.said),
+    `the button names the mailbox chosen, with its own dot and sync: ${JSON.stringify({ what: s.what, meta: s.meta, said: s.said })}`);
+  const headWork = { eyebrow: s.eyebrow, digest: s.digest };
+  /* Mail filed under the mailbox's address rather than its entry's id (as
+     it is until tidyAccts refiles it at the next sync) is that mailbox's
+     too: ofMailbox matches through linkedOf. */
+  const byAddr = await pg.evaluate(() => {
+    const m = { ...S.messages.find((x) => x.id === 'work@example.net_601'), id: 'work-by-address', acct: 'work@example.net', mailbox: 'work@example.net', messageId: 'by-address@example.org', uid: 0 };
+    S.messages.push(m); renderMail();
+    const shown = [...document.querySelectorAll('#mail-scroll .mail-row')].map((e) => e.dataset.id);
+    S.messages = S.messages.filter((x) => x !== m); renderMail();
+    return { shown, idIsAddress: S.linked.some((l) => l.id === 'work@example.net') };
+  });
+  check(!byAddr.idIsAddress && byAddr.shown.includes('work-by-address') && byAddr.shown.every((id) => id === 'work-by-address' || WORK.includes(id)),
+    `mail of work@example.net filed under its address, not its entry's id, is listed with work@example.net chosen: ${JSON.stringify(byAddr)}`);
+  /* With the card open on a chosen mailbox: axe, light and dark. */
+  await press('#src-btn');
+  const chosenOpen = async () => { const t = await state(); return t.open && JSON.stringify(t.current) === '["work@example.net"]'; };
+  await axe(pg, 'the linked mailboxes open, a mailbox chosen', await chosenOpen());
+  await pg.emulateMedia({ colorScheme: 'dark' });
+  await pg.waitForTimeout(300);
+  await axe(pg, 'the linked mailboxes open, a mailbox chosen, dark', await chosenOpen());
+  await pg.emulateMedia({ colorScheme: 'light' });
+  await pg.keyboard.press('Escape');
+
+  /* The chips and the categories apply inside it. */
+  await press('#mail-filters .pill[data-f="unread"]');
+  s = await state();
+  check(JSON.stringify(s.list) === JSON.stringify(['work@example.net_601', 'work@example.net_603']) && s.what === 'work@example.net',
+    `Unread, with work@example.net chosen, is that mailbox's unread mail alone: ${JSON.stringify({ list: s.list, what: s.what })}`);
+  /* Nothing of the chosen mailbox in a view (nothing is starred): the list
+     says whose, and Show all mailboxes gives the rest back in that view,
+     with the focus on the line that now says so. */
+  await press('#mail-filters .pill[data-f="starred"]');
+  const none = await pg.evaluate(() => {
+    const e = document.querySelector('#mail-scroll .empty'), b = document.querySelector('#scope-all');
+    return e && { head: (e.querySelector('b') || {}).textContent, who: (e.querySelector('.empty-who') || {}).textContent, all: b && b.textContent, tag: b && b.tagName };
+  });
+  await press('#scope-all');
+  s = await state();
+  const keptView = await pg.evaluate(() => mailFilter);
+  check(!!none && none.head === 'Nothing here' && none.who === 'work@example.net has nothing in this view.' && none.all === 'Show all mailboxes' && none.tag === 'BUTTON'
+    && !s.scoped && s.what === '3 mailboxes' && JSON.stringify(s.current) === '["All mailboxes"]' && keptView === 'starred' && s.focus === 'button',
+  `nothing starred in work@example.net: "Nothing here", whose, and Show all mailboxes, which chooses all of them, keeps Starred and puts the focus on the line: ${JSON.stringify({ none, what: s.what, current: s.current, view: keptView, focus: s.focus })}`);
+  await press('#src-btn');
+  await row('work@example.net');
+  await press('#mail-filters .pill[data-f="all"]');
+  s = await state();
+  const scopedCats = s.cats;
+  await press('#cat-tabs .pill[data-cat="finance"]');
+  s = await state();
+  check(JSON.stringify(s.list) === '["work@example.net_602"]' && scopedCats.includes('Finance · 1') && scopedCats.includes('Updates · 1') && !scopedCats.some((c) => /^Priority/.test(c)),
+    `a category, with work@example.net chosen, is counted and listed in that mailbox alone: ${JSON.stringify({ list: s.list, cats: scopedCats })}`);
+  await press('#cat-tabs .pill[data-cat="all"]');
+  /* Drafts, Archive and Spam are offered for the mailbox chosen only when
+     it has some: work@example.net has archived mail, me@example.com none. */
+  const ARCH = Object.assign(mk('work@example.net', 901, 9, 'old@example.org', 'Filed away', 'Old news', false), { id: 'work@example.net_archive_901', folder: 'archive' });
+  await pg.evaluate(async (m) => { __mock.refresh = { ...__mock.refresh, messages: __mock.refresh.messages.concat([m]) }; await serverSync('mail'); }, ARCH);
+  await press('#mail-filters .pill[data-f="archive"]');
+  const archWork = await state();
+  await press('#src-btn');
+  await row('me@example.com');
+  const archMe = await state();
+  const archFilter = await pg.evaluate(() => mailFilter);
+  await press('#src-btn');
+  await row('All mailboxes');
+  const archAll = await state();
+  check(archWork.filters.includes('archive') && JSON.stringify(archWork.list) === '["work@example.net_archive_901"]'
+    && !archMe.filters.includes('archive') && archFilter === 'all' && JSON.stringify(archMe.list) === JSON.stringify(ME) && archAll.filters.includes('archive'),
+  `Archive is offered for work@example.net, which has archived mail, not for me@example.com, which has none (its inbox shows instead), and again for all mailboxes: ${JSON.stringify({ work: archWork.filters, me: archMe.filters, filter: archFilter, meList: archMe.list, all: archAll.filters })}`);
+  await pg.evaluate((id) => { __mock.refresh = { ...__mock.refresh, messages: __mock.refresh.messages.filter((m) => m.id !== id) }; S.messages = S.messages.filter((m) => m.id !== id); save(); mailFilter = 'all'; renderMailFilters(); renderMail(); }, ARCH.id);
+  await press('#src-btn');
+  await row('work@example.net');
+
+  /* All mailboxes gives everything back. */
+  await press('#src-btn');
+  await row('All mailboxes');
+  s = await state();
+  check(JSON.stringify(s.list) === JSON.stringify(ALL) && s.what === '3 mailboxes' && !s.scoped && JSON.stringify(s.current) === '["All mailboxes"]' && !s.open && s.focus === 'button'
+    && s.cats.includes('Finance · 2') && s.cats.some((c) => /^Priority/.test(c)),
+  `All mailboxes lists every mailbox's mail again, counts every category, and the button says how many: ${JSON.stringify({ list: s.list, what: s.what, current: s.current, cats: s.cats })}`);
+  check(headWork.eyebrow === 'work@example.net' && /^2 unread/.test(headWork.digest) && s.eyebrow === 'Every mailbox' && /^3 unread/.test(s.digest),
+    `the top bar and the digest above the list follow the choice: "work@example.net" and its 2 unread, then "Every mailbox" and all 3: ${JSON.stringify({ work: headWork, all: { eyebrow: s.eyebrow, digest: s.digest } })}`);
+
+  /* A mailbox in the resting pane (no message open) chooses it too, and is
+     marked there as in the card. */
+  await pg.waitForTimeout(50);
+  await press('#mail-detail .rest-box:has(.rest-box-name:text-is("work@example.net"))');
+  await pg.waitForTimeout(50);
+  s = await state();
+  const rest = await pg.evaluate(() => [...document.querySelectorAll('#mail-detail .rest-box[aria-current="true"] .rest-box-name')].map((e) => e.textContent));
+  check(JSON.stringify(s.list) === JSON.stringify(WORK) && s.what === 'work@example.net' && JSON.stringify(s.current) === '["work@example.net"]' && JSON.stringify(rest) === '["work@example.net"]',
+    `a mailbox pressed in the resting pane is chosen, and marked there and in the card: ${JSON.stringify({ list: s.list, what: s.what, card: s.current, rest })}`);
+  await press('#src-btn');
+  await row('All mailboxes');
+  /* By keyboard, the box pressed has the focus again after the pane is
+     drawn afresh, marked as the one chosen. */
+  await pg.evaluate((id) => { const b = [...document.querySelectorAll('#mail-detail .rest-box')].find((x) => x.dataset.scope === id); if (b) b.focus(); }, ids['work@example.net']);
+  await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(80);
+  const restFocus = await pg.evaluate(() => { const a = document.activeElement; return { tag: a.tagName, rest: a.classList.contains('rest-box'), scope: (a.dataset && a.dataset.scope) || null, current: a.getAttribute('aria-current') }; });
+  s = await state();
+  check(restFocus.rest && restFocus.scope === ids['work@example.net'] && restFocus.current === 'true' && s.what === 'work@example.net' && JSON.stringify(s.list) === JSON.stringify(WORK),
+    `Enter on a mailbox in the resting pane chooses it, and the focus stays on that box, now marked: ${JSON.stringify({ focus: restFocus, what: s.what })}`);
+  await press('#src-btn');
+  await row('All mailboxes');
+
+  /* By keyboard: Enter, Down to a mailbox, Enter. */
+  await pg.focus('#src-btn');
+  await pg.keyboard.press('Enter');
+  for (let i = 0; i < 3; i++) await pg.keyboard.press('ArrowDown');
+  const kOn = (await state()).focus;
+  await pg.keyboard.press('Enter');
+  s = await state();
+  check(kOn === 'row:work@example.net' && JSON.stringify(s.list) === JSON.stringify(WORK) && s.what === 'work@example.net' && !s.open && s.focus === 'button',
+    `by keyboard alone, Enter on a row chooses it, closes the card and puts the focus on the button: ${JSON.stringify({ on: kOn, list: s.list, what: s.what, open: s.open, focus: s.focus })}`);
+
+  /* A mailbox's own folders: with one chosen, Folders lists its folders
+     alone; a folder of another mailbox gives way to that one's inbox when
+     it is chosen. */
+  await pg.evaluate(() => { __mock.folders = [{ name: 'Receipts', label: 'Receipts' }]; __mock.calls = []; });
+  await press('#mail-filters .pill[data-f="folders"]');
+  await pg.waitForFunction(() => !document.querySelector('#box-panel').hidden && !document.querySelector('#box-panel .box-note'), null, { timeout: 3000 }).catch(() => {});
+  const folderAsks = await pg.evaluate(() => __mock.calls.filter(([c]) => c === 'list_folders').map(([, a]) => a.email));
+  check(JSON.stringify(folderAsks) === '["work@example.net"]', `Folders, with work@example.net chosen, asks that server alone for its folders (a sign-in each): ${JSON.stringify(folderAsks)}`);
+  const panelScoped = await pg.evaluate(() => ({ heads: [...document.querySelectorAll('#box-panel .box-acct')].map((e) => e.textContent), boxes: [...document.querySelectorAll('#box-panel [data-box]')].map((b) => b.dataset.email) }));
+  /* Folders still open, another choice: the mailboxes it lists now and did
+     not a moment ago are asked for theirs (and only those), so none is
+     said to have no folders for never having been asked. */
+  const panelNow = () => pg.evaluate(() => ({ asks: __mock.calls.filter(([c]) => c === 'list_folders').map(([, a]) => a.email).sort(), open: !document.querySelector('#box-panel').hidden,
+    heads: [...document.querySelectorAll('#box-panel .box-acct')].map((e) => e.textContent), boxes: [...document.querySelectorAll('#box-panel [data-box]')].map((b) => b.dataset.email),
+    notes: [...document.querySelectorAll('#box-panel .box-note')].map((e) => e.textContent) }));
+  await pg.evaluate(() => { __mock.calls = []; });
+  await press('#src-btn');
+  await row('All mailboxes');
+  await pg.waitForFunction(() => !BOX_LOADING.size && document.querySelectorAll('#box-panel [data-box]').length >= 3, null, { timeout: 3000 }).catch(() => {});
+  const panelAll = await panelNow();
+  await pg.evaluate(() => { __mock.calls = []; });
+  await press('#src-btn');
+  await row('me@example.com');
+  await pg.waitForFunction(() => !BOX_LOADING.size, null, { timeout: 3000 }).catch(() => {});
+  const panelMe = await panelNow();
+  check(panelAll.open && JSON.stringify(panelAll.asks) === JSON.stringify([LONG, 'me@example.com']) && JSON.stringify(panelAll.heads) === JSON.stringify(['me@example.com', 'work@example.net', LONG])
+    && JSON.stringify(panelAll.boxes) === JSON.stringify(['me@example.com', 'work@example.net', LONG]) && panelAll.notes.length === 0
+    && panelMe.open && panelMe.asks.length === 0 && JSON.stringify(panelMe.boxes) === '["me@example.com"]' && panelMe.notes.length === 0,
+  `with Folders open, choosing All mailboxes asks the two it had not listed (not work@example.net again) and lists every mailbox's folders; then choosing me@example.com asks nothing more: ${JSON.stringify({ panelAll, panelMe })}`);
+  await pg.evaluate(() => toggleBoxPanel(false));
+  await press('#src-btn');
+  await row('All mailboxes');
+  const fm = mk('me@example.com', 801, 7, 'shop@example.org', 'Receipt 801', 'Paid', false);
+  fm.id = 'me@example.com_fabc_801'; fm.folder = { named: 'Receipts' };
+  await pg.evaluate((m) => { __mock.inFolder = { Receipts: [m] }; return openBox('me@example.com', 'Receipts'); }, fm);
+  const inFolder = await state();
+  await press('#src-btn');
+  await row('work@example.net');
+  s = await state();
+  const after = await pg.evaluate(() => ({ filter: mailFilter, box: BOX }));
+  check(JSON.stringify(panelScoped.heads) === '[]' && JSON.stringify(panelScoped.boxes) === '["work@example.net"]'
+    && JSON.stringify(inFolder.list) === '["me@example.com_fabc_801"]' && inFolder.filters.includes('box')
+    && JSON.stringify(s.list) === JSON.stringify(WORK) && after.filter === 'all' && after.box === null && !s.filters.includes('box') && s.what === 'work@example.net',
+  `Folders lists the chosen mailbox's folders alone, and choosing another mailbox while me@example.com's folder is open goes to that one's inbox: ${JSON.stringify({ panelScoped, folder: inFolder.list, list: s.list, after, filters: s.filters })}`);
+
+  /* Side by side ignores it, and hides the line; back to one inbox, the
+     choice holds. */
+  const split = await pg.evaluate(() => {
+    setSplit(true);
+    const r = { shown: getComputedStyle(document.querySelector('#sources')).display !== 'none', col: [...document.querySelectorAll('#mail-scroll .mail-row')].map((e) => e.dataset.id), eyebrow: document.querySelector('#tb-eyebrow').textContent };
+    setSplit(false);
+    return r;
+  });
+  s = await state();
+  check(!split.shown && JSON.stringify(split.col) === JSON.stringify(ME) && split.eyebrow === 'Every mailbox' && JSON.stringify(s.list) === JSON.stringify(WORK) && s.what === 'work@example.net' && s.eyebrow === 'work@example.net',
+    `Side by side ignores the choice (its first column is me@example.com's, the top bar says every mailbox) and hides the line; back to one inbox, work@example.net is still chosen: ${JSON.stringify({ split, list: s.list, eyebrow: s.eyebrow })}`);
+  /* A refresh redraws the line whichever view is open (every five minutes,
+     or on new mail): in Settings the top bar still says Settings' own
+     words, and back in the inbox the chosen address. */
+  const elsewhere = await pg.evaluate(async () => {
+    go('set');
+    const before = document.querySelector('#tb-eyebrow').textContent;
+    await serverSync('mail');
+    const r = { before, after: document.querySelector('#tb-eyebrow').textContent, title: document.querySelector('#tb-title').textContent };
+    go('inbox');
+    return r;
+  });
+  s = await state();
+  check(elsewhere.before === 'Workspace' && elsewhere.after === 'Workspace' && elsewhere.title === 'Settings' && s.eyebrow === 'work@example.net' && s.what === 'work@example.net' && JSON.stringify(s.list) === JSON.stringify(WORK),
+    `a refresh while Settings is open leaves its top bar "Workspace / Settings", not the chosen address; back in the inbox it says work@example.net again: ${JSON.stringify({ elsewhere, eyebrow: s.eyebrow, what: s.what })}`);
+
+  /* Load older mail, with a mailbox chosen, is that mailbox's: offered only
+     while it has history or a gap of its own, and it asks its server alone.
+     work@example.net's history is all here; me@example.com has more. */
+  const DONE = ['historyDone', 'sentDone', 'archiveDone', 'junkDone', 'draftsDone'];
+  await pg.evaluate((done) => {
+    __mock.inbox = [101, 102];
+    __mock.mk = (u) => ({ id: 'me@example.com_' + u, folder: 'inbox', acct: 'me@example.com', acct_label: 'Example', from_name: 'Old', from_addr: 'old@example.org', to_name: '', to_addr: 'me@example.com',
+      subject: 'Older ' + u, preview: 'p', body: 'b', ts: Date.now() - 30 * 86400e3 - u, unread: false, starred: false, uid: u, uidvalidity: 7, message_id: 'h' + u + '@example.org', reply_to: '', truncated: false, attachments: [], html: false });
+    for (const l of S.linked) for (const k of done) l[k] = l.label === 'work@example.net';
+    S.gaps = []; __mock.olderAsked = []; renderMail();
+  }, DONE);
+  const noTail = (await state()).older;
+  await pg.evaluate(() => { S.gaps = [{ email: 'me@example.com', folder: 'inbox', uidvalidity: 7, top: 500, floor: 100 }]; renderMail(); });
+  const otherGap = (await state()).older;
+  await pg.evaluate(() => { S.gaps.push({ email: 'work@example.net', folder: 'inbox', uidvalidity: 7, top: 700, floor: 650 }); renderMail(); });
+  const ownGap = (await state()).older;
+  check(!noTail && !otherGap && ownGap, `with work@example.net chosen and its history all here, Load older mail is not offered, though me@example.com has more and a gap; a gap of its own offers it: ${JSON.stringify({ noTail, otherGap, ownGap })}`);
+  await press('#load-older');
+  await pg.waitForFunction(() => (__mock.olderAsked || []).length > 0 && !SYNCING && (!document.querySelector('#load-older') || !document.querySelector('#load-older').disabled), null, { timeout: 3000 }).catch(() => {});
+  const workAsked = await pg.evaluate(() => ({ asked: __mock.olderAsked, gaps: S.gaps.map((g) => g.email) }));
+  s = await state();
+  check(JSON.stringify(workAsked.asked) === '["work@example.net"]' && JSON.stringify(workAsked.gaps) === '["me@example.com"]' && JSON.stringify(s.list) === JSON.stringify(WORK),
+    `pressed, it fills work@example.net's gap alone and leaves me@example.com's: ${JSON.stringify({ ...workAsked, list: s.list })}`);
+  await press('#src-btn');
+  await row('me@example.com');
+  await pg.evaluate(() => { __mock.olderAsked = []; S.gaps = []; renderMail(); });
+  const meTail = (await state()).older;
+  await press('#load-older');
+  await pg.waitForFunction(() => (__mock.olderAsked || []).length > 0 && !SYNCING && (!document.querySelector('#load-older') || !document.querySelector('#load-older').disabled), null, { timeout: 3000 }).catch(() => {});
+  const meAsked = await pg.evaluate(() => __mock.olderAsked);
+  s = await state();
+  check(meTail && meAsked.length > 0 && meAsked.every((e) => e === 'me@example.com') && s.list.length === 4 && s.list.includes('me@example.com_101') && s.list.includes('me@example.com_102') && s.list.every((id) => id.startsWith('me@example.com_')),
+    `me@example.com chosen: Load older mail asks its server alone, and its older mail joins its list: ${JSON.stringify({ meTail, asked: meAsked, list: s.list })}`);
+  await pg.evaluate(() => { S.messages = S.messages.filter((m) => !['me@example.com_101', 'me@example.com_102'].includes(m.id)); save(); renderMail(); });
+  await press('#src-btn');
+  await row('work@example.net');
+
+  /* A press inside a formatted message's frame reaches no handler of this
+     page; the window losing the focus to the frame closes the card. */
+  await pg.evaluate(() => { OPENED.set('work@example.net_602', { text: 'Your statement', html: '<h1>Your statement</h1><p>It is ready.</p>', atts: [] }); VIEWMODE.set('work@example.net_602', 'html'); openMail('work@example.net_602'); });
+  await pg.waitForSelector('#md-html', { timeout: 3000 }).catch(() => {});
+  await press('#src-btn');
+  const frameOpen = (await state()).open;
+  const fb = await pg.$('#md-html').then((h) => h && h.boundingBox());
+  if (fb) await pg.mouse.click(fb.x + Math.min(60, fb.width / 2), fb.y + Math.min(30, fb.height / 2));
+  await pg.waitForTimeout(150);
+  s = await state();
+  check(frameOpen && !!fb && !s.open && s.expanded === 'false', `a press inside a formatted message's frame closes the card (the focus is on ${s.focus}): ${JSON.stringify({ frameOpen, frame: !!fb, open: s.open })}`);
+  await pg.evaluate(() => { srcShow(false); OPENED.delete('work@example.net_602'); VIEWMODE.delete('work@example.net_602'); selMail = null; document.querySelector('#mail-detail').classList.remove('open'); renderResting(); renderMail(); });
+
+  /* A phone: no sideways scroll, the card inside a 16 px gutter, rows a
+     thumb can hit. */
+  await pg.setViewportSize({ width: 375, height: 812 });
+  await pg.waitForTimeout(200);
+  await press('#src-btn');
+  const phone = await pg.evaluate(() => {
+    const el = document.querySelector('#src-panel'), d = document.documentElement;
+    if (!el) return { scroll: d.scrollWidth - d.clientWidth, rows: [] };
+    const p = el.getBoundingClientRect(), sync = document.querySelector('#src-sync');
+    return { scroll: Math.max(d.scrollWidth, document.body.scrollWidth) - d.clientWidth, left: Math.round(p.left), right: Math.round(innerWidth - p.right),
+      rows: [...document.querySelectorAll('#src-panel .src-item')].map((b) => Math.round(b.getBoundingClientRect().height)), sync: sync ? Math.round(sync.getBoundingClientRect().height) : 0 };
+  });
+  check(phone.scroll <= 0 && phone.left >= 16 && phone.right >= 16 && phone.rows.length === 4 && phone.rows.every((h) => h >= 44) && phone.sync >= 44,
+    `375 px wide: no sideways scroll, the card ${phone.left} and ${phone.right} px from the edges, rows ${JSON.stringify(phone.rows)} and Sync now ${phone.sync} px tall: ${JSON.stringify(phone)}`);
+  /* The long address chosen, on a phone: named, cut on one line. */
+  await row(LONG);
+  await pg.waitForTimeout(100);
+  s = await state();
+  const wide = await pg.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - document.documentElement.clientWidth);
+  check(s.what === LONG && s.cut && s.h <= s.pillH + 2 && wide <= 0 && JSON.stringify(s.list) === JSON.stringify(DESK),
+    `375 px, the long address chosen: the button names it, cut with an ellipsis on one line, its mail alone, nothing scrolls sideways: ${JSON.stringify({ what: s.what, cut: s.cut, h: s.h, wide, list: s.list })}`);
+  /* The top bar names it too, cut, and keeps Search and the account button
+     inside the window (#main hides what overflows, so a page that does not
+     scroll sideways can still have pushed them off it). */
+  const bar = await pg.evaluate(() => {
+    const at = (sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; };
+    const eb = document.querySelector('#tb-eyebrow');
+    return { width: innerWidth, eyebrow: eb.textContent, cut: eb.scrollWidth > eb.clientWidth, search: at('#top-search-btn'), acct: at('#acct-btn') };
+  });
+  check(bar.eyebrow === LONG && bar.cut && [bar.search, bar.acct].every((b) => b.w > 0 && b.left >= 0 && b.right <= bar.width) && bar.search.right <= bar.acct.left,
+    `375 px, the long address chosen: the top bar names it, cut, and Search and the account button stay inside the window: ${JSON.stringify(bar)}`);
+  /* Beside the rail's icons (901 to 1200 px) the list is 340 px wide: the
+     card lies over it and may reach past it, up to 440 px, inside the
+     window, so an address keeps to one line. */
+  await pg.setViewportSize({ width: 1000, height: 720 });
+  await pg.waitForTimeout(200);
+  await press('#src-btn');
+  const band = await pg.evaluate(() => {
+    const el = document.querySelector('#src-panel'), side = document.querySelector('#view-inbox .side-list').getBoundingClientRect();
+    if (!el) return null;
+    const p = el.getBoundingClientRect(), one = document.querySelector('#src-panel .src-item').getBoundingClientRect().height;
+    return { open: !el.hidden, list: Math.round(side.width), width: Math.round(p.width), right: Math.round(innerWidth - p.right),
+      oneLine: [...document.querySelectorAll('#src-panel .src-item')].filter((b) => b.querySelector('.src-addr').textContent.length < 30).every((b) => b.getBoundingClientRect().height === one),
+      scroll: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - document.documentElement.clientWidth };
+  });
+  await pg.keyboard.press('Escape');
+  await pg.setViewportSize({ width: 1280, height: 720 });
+  check(!!band && band.open && band.list === 340 && band.width > band.list - 28 && band.width <= 440 && band.right >= 16 && band.oneLine && band.scroll <= 0,
+    `1000 px wide, the list ${band && band.list} px: the card is ${band && band.width} px (wider than the list leaves it, at most 440), ${band && band.right} px inside the window, short addresses on one line: ${JSON.stringify(band)}`);
+
+  /* The mailbox chosen is removed: the list shows them all again. */
+  await press('#src-btn');
+  await row('work@example.net');
+  const before = (await state()).list;
+  /* Folders open on it as it goes: the panel then lists the others, which
+     it had not asked since it opened, and asks them. */
+  await pg.evaluate(() => toggleBoxPanel(true));
+  await pg.waitForFunction(() => !BOX_LOADING.size, null, { timeout: 3000 }).catch(() => {});
+  const openedOnWork = await panelNow();
+  await pg.evaluate(() => { __mock.calls = []; });
+  await pg.evaluate((id) => removeLinked(id), ids['work@example.net']);
+  await pg.waitForFunction(() => !BOX_LOADING.size, null, { timeout: 3000 }).catch(() => {});
+  const panelGone = await panelNow();
+  await pg.evaluate(() => toggleBoxPanel(false));
+  check(openedOnWork.open && JSON.stringify(openedOnWork.boxes) === '["work@example.net"]' && panelGone.open && JSON.stringify(panelGone.asks) === JSON.stringify([LONG, 'me@example.com'])
+    && JSON.stringify(panelGone.boxes) === JSON.stringify(['me@example.com', LONG]) && panelGone.notes.length === 0,
+  `with Folders open on work@example.net as it is removed, the panel lists the other two and asks them for their folders: ${JSON.stringify({ openedOnWork, panelGone })}`);
+  s = await state();
+  const scopeNow = await pg.evaluate(() => (typeof mailScope === 'function' ? mailScope() : null));
+  check(JSON.stringify(before) === JSON.stringify(WORK) && scopeNow === '' && s.what === '2 mailboxes' && !s.scoped && JSON.stringify(s.list) === JSON.stringify(ALL),
+    `removing the mailbox chosen shows every mailbox's mail again (its own kept, I6), and the button says how many: ${JSON.stringify({ before, scope: scopeNow, what: s.what, list: s.list })}`);
+  /* The other one removed instead, leaving the one chosen alone: the card
+     then has no All mailboxes row to undo the choice, so it goes, and the
+     mail Remove kept of the others shows (I6). */
+  await press('#src-btn');
+  await row(LONG);
+  const longChosen = await state();
+  await pg.evaluate((id) => removeLinked(id), ids['me@example.com']);
+  s = await state();
+  const scopeOne = await pg.evaluate(() => ({ scope: mailScope(), raw: SCOPE }));
+  check(JSON.stringify(longChosen.list) === JSON.stringify(DESK) && longChosen.scoped && scopeOne.scope === '' && scopeOne.raw === '' && !s.scoped && s.what === LONG
+    && JSON.stringify(s.list) === JSON.stringify(ALL) && s.rows.every((r) => r.current === null),
+  `with the one chosen the only mailbox left, the choice goes and every message RATA kept shows: ${JSON.stringify({ before: longChosen.list, scope: scopeOne, scoped: s.scoped, what: s.what, list: s.list })}`);
+
+  /* Down to one mailbox, with a long address: it is cut, on one line. */
+  await pg.evaluate(async (long) => { for (const l of S.linked.filter((x) => x.label !== long)) await removeLinked(l.id); }, LONG);
+  s = await state();
+  check(s.what === LONG && s.cut && s.h <= s.pillH + 2 && s.inList && s.btns === 1,
+    `one mailbox with a long address: the address, cut with an ellipsis on one line inside the list: ${JSON.stringify({ what: s.what, cut: s.cut, h: s.h, pillH: s.pillH, inList: s.inList })}`);
+
+  /* Something linked that is not a mailbox is listed, and not pressable. */
+  await pg.evaluate(() => { S.linked.push({ id: 'lkchat', type: 'chat', label: 'Team chat', status: 'pending', addedAt: Date.now() }); renderSources(); });
+  await press('#src-btn');
+  s = await state();
+  const chat = s.rows.find((r) => r.addr === 'Team chat');
+  check(s.what === '2 accounts' && chat && chat.disabled && chat.scope === null && !chat.current && chat.meta === 'pending', `an entry that is not a mailbox is listed but cannot be pressed: ${JSON.stringify(s.rows)}`);
+  await pg.keyboard.press('Escape');
+  await pg.evaluate(() => { S.linked = S.linked.filter((l) => l.type === 'mail'); renderSources(); });
+
+  /* None linked: nothing at all. */
+  await pg.evaluate(async () => { for (const l of [...S.linked]) await removeLinked(l.id); });
+  s = await state();
+  check(!s.shown && s.btns === 0 && s.panels === 0, `with no mailbox linked, nothing is shown: ${JSON.stringify({ shown: s.shown, btns: s.btns, panels: s.panels })}`);
+  await pg.close();
+  await ctx.close();
+
+  /* A mailbox new to RATA, linked while another is chosen: the list shows
+     every mailbox again, so the new one's mail is in it. */
+  const lp = await open(true);
+  const TWO = MAIL.filter((m) => m.acct !== LONG);
+  await lp.evaluate(async (msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    go('inbox'); mailFilter = 'all'; catFilter = 'all'; renderMailFilters(); renderMail();
+    chooseScope(S.linked.find((l) => l.label === 'work@example.net').id);
+  }, TWO);
+  const workOnly = await state(lp);
+  await lp.evaluate((msgs) => {
+    __mock.mailboxes.push({ email: 'new@example.org', host: 'imap.example.org', port: 993, label: 'New' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    go('set'); openMailForm();
+  }, [...TWO, mk('new@example.org', 801, 0, 'di@example.org', 'Welcome aboard', 'Hello', true)]);
+  await lp.fill('#lf-input', 'new@example.org');
+  await lp.fill('#lf-pass', 'abcd efgh ijkl mnop');
+  await lp.click('#lf-save');
+  await lp.waitForFunction(() => $('#lf-save').textContent === 'Link' && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  await lp.evaluate(() => go('inbox'));
+  s = await state(lp);
+  const linkedScope = await lp.evaluate(() => mailScope());
+  check(workOnly.scoped && JSON.stringify(workOnly.list) === JSON.stringify(WORK) && linkedScope === '' && !s.scoped && s.what === '3 mailboxes' && s.eyebrow === 'Every mailbox'
+    && JSON.stringify(s.list) === JSON.stringify(['new@example.org_801', ...ME, ...WORK]),
+  `a mailbox linked while work@example.net is chosen: every mailbox shows again, the new one's mail with them: ${JSON.stringify({ before: workOnly.list, scope: linkedScope, what: s.what, eyebrow: s.eyebrow, list: s.list })}`);
+  await lp.close();
+}
+
 await browser.close();
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);

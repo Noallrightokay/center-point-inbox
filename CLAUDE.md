@@ -29,7 +29,7 @@ convenient.
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`lib.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 334 tests on Linux (331 without the `self-update` feature, and 20 of the iOS self-test with `smoke`). The program, `main.rs`, only calls the library's `run` (`lib.rs`), where the tests are. On Windows CI runs only the keychain, list and start tests (`cargo test --lib -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*; `--bin rata-app` finds no tests and passes), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 848 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (583 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (637 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -258,8 +258,10 @@ and Apps' accounts kept per RATA account. On main and in no release yet,
 so first in the next one: the outbound guard judges a NAT64 address by
 the IPv4 address inside instead of refusing all of `64:ff9b::/32`
 (#164), refuses the zones `local`, `internal` and all of `arpa`
-themselves (#163), and the engine can look names up through the system
-on iOS (#163; no released build is for iOS). An
+themselves (#163), the engine can look names up through the system
+on iOS (#163; no released build is for iOS), and the inbox's row of
+linked-mailbox chips and its per-mailbox filter chips are one line whose
+card chooses the mailbox the list shows (#174). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -1362,6 +1364,52 @@ licence dialogs, plus the inbox and a message in dark and the icons-only
 rail, and fails on any serious or critical rule; no rule or selector is
 excluded. Not seen in a packaged build (markup, CSS and page JS only, no
 new inline `style=`).
+**The mailboxes line, and choosing one (#174; on main, in no release yet).** Above the category and
+filter chips the inbox has one line (`#sources`, `renderSources`), as tall
+as a chip: a dot, what the list shows ("N mailboxes", the one address
+when one is linked, or the address chosen, cut with an ellipsis) and "·
+synced …". It opens a card (`#src-panel`, a disclosure, not a menu:
+`aria-expanded`, `role=group` "Linked mailboxes", `SRC_OPEN`), redrawn in
+place on every sync so an open card and a focused row stay. Its rows are
+**All mailboxes** (with two or more), then every linked entry with its
+dot, whole address and sync; a row chooses (`chooseScope`), is marked
+(`aria-current`, `--tint-soft`, a tick; with one mailbox nothing is), and
+closes the card with the focus on the button. **Sync now** at its foot
+refreshes every mailbox. The card lies over the list and may be wider than
+it, up to 440 px, since beside the rail's icons (901 to 1200 px) the list
+is 340 px and an address would break in two. It replaced a wrapping chip
+per mailbox (`.src-chip`, a press synced) and the filters' `acct:<id>`
+chip per mailbox; neither is left. The choice (`SCOPE`) lasts the session
+and is never stored; `mailScope()` drops it when that mailbox is no longer
+linked or fewer than two are (no All row could undo it, and it would hide
+what Remove keeps, I6), `linkedOk` drops it when a mailbox new to RATA is
+linked (its mail would be kept out of the list with nothing to say why; a
+mailbox linked again keeps the choice), and `shownScope()` is empty Side by side, whose columns
+are a mailbox each and where the line is hidden. Inside it: the list
+(`mailPool`, which matches a mailbox by `ofMailbox`, its id or its address
+through `linkedOf`, Side by side columns too), Unread, Starred, Sent, the
+categories and their counts, the Drafts, Archive and Spam chips (offered
+only when that mailbox has some), the digest strip, the top bar's eyebrow
+(its address, set by `renderEyebrow` only while the inbox is the view,
+since every refresh redraws the line whichever view is open), Folders (`boxShown`: only its folders are asked for, a
+sign-in each; drawing the panel asks any mailbox it lists and has not
+asked since it opened, `BOX_ASKED`, such as another one chosen while it is
+open or the rest when the chosen one is removed; a folder of another
+mailbox gives way to the chosen one's inbox; opening a folder chooses
+nothing), and Load older mail (`olderCandidates(only)`, `gapsOf(only)`,
+`loadOlder(only)`, `fillGaps(only)`: offered, paged and gap-filled for
+that mailbox alone).
+The resting pane's mailbox boxes choose too, keep the focus through the
+redraw, and mark the chosen one. The nav's unread count, the briefing and
+the resting pane's overview stay every mailbox's. A choice with nothing in
+the current view says so and offers **Show all mailboxes**. Keys: Tab
+through the rows and Sync now, Up, Down, Home and End between rows, Escape
+closes it with the focus on the button. Message shortcuts hold back only
+while the focus is inside the card, which closes when the focus goes
+elsewhere, when the window loses it (a press inside a formatted message's
+frame reaches no handler here) or at a press outside; a click puts the
+focus on the button, since WebKit on macOS focuses no button it clicks.
+Harness: *the linked mailboxes* section. Not seen in a packaged build.
 **New mail as it arrives (v0.1.34).** `watch.rs` keeps one connection per
 linked mailbox waiting on its inbox with IMAP IDLE (`rata_mail::watch` →
 `Watch::wait(IDLE_FOR)`, nine minutes a round, then a fresh IDLE). It is an

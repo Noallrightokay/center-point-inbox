@@ -123,7 +123,10 @@ input,textarea,select{font-family:inherit;font-size:inherit;color:inherit}
 #main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .topbar{height:56px;flex-shrink:0;display:flex;align-items:center;gap:14px;padding:0 24px;background:var(--glass);backdrop-filter:saturate(180%) blur(24px);-webkit-backdrop-filter:saturate(180%) blur(24px);border-bottom:1px solid var(--hair-2);z-index:10}
 .topbar h1{font-size:20px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
-.topbar .eyebrow{font-size:11px;color:var(--faint);display:block;font-weight:500}
+.topbar .eyebrow{font-size:11px;color:var(--faint);display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The eyebrow can be a long address (the mailbox chosen): cut, never
+   pushing the search off the bar. */
+.tb-head{min-width:0}
 .top-search{margin-left:auto;display:flex;align-items:center;gap:8px;background:var(--card);box-shadow:var(--edge);border-radius:var(--r-sm);padding:7px 12px;width:min(320px,30vw);color:var(--faint);transition:background .15s}
 .top-search:hover{background:var(--fill-2);color:var(--slate)}
 .top-search kbd{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--slate);background:var(--fill-2);padding:1px 6px;border-radius:5px}
@@ -579,16 +582,52 @@ button.att-card:disabled{opacity:.6;cursor:progress}
 .digest-strip b{color:var(--ink);font-weight:600}
 .dg-text{flex:1 1 220px;min-width:0}
 .dg-cta{margin-left:auto;font-weight:600;color:var(--tint)}
-/* ---------- inbox sources ---------- */
+/* ---------- inbox sources ----------
+   The linked mailboxes: one quiet line (a dot, what the list shows, when
+   that last synced) that opens a card listing each, where one is chosen.
+   It was a chip per mailbox, which wrapped to a line each and pushed the
+   mail a screen down, and then a second chip per mailbox among the
+   filters. */
 #sources:empty{display:none}
-.src-row{display:flex;gap:7px;flex-wrap:wrap;padding:0 14px 8px}
-.src-chip{display:inline-flex;align-items:center;gap:7px;font-family:var(--sans);font-size:12px;font-weight:500;color:var(--slate);background:transparent;border-radius:var(--r-sm);padding:4px 10px;box-shadow:var(--edge);transition:var(--lift)}
-.src-chip:not([disabled]):hover{background:var(--fill-2);color:var(--ink)}
-.src-chip[disabled]{opacity:.55;cursor:default}
-.src-chip.live{color:var(--ink)}
-.src-dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+#sources{position:relative;padding:0 14px 8px}
+.src-btn{display:inline-flex;align-items:center;gap:7px;max-width:100%;font-family:var(--sans);font-size:12.5px;font-weight:500;color:var(--slate);background:transparent;border-radius:var(--r-sm);padding:4px 10px;box-shadow:var(--edge);transition:var(--lift);white-space:nowrap}
+.src-btn:hover,.src-btn[aria-expanded="true"]{background:var(--fill-2);color:var(--ink)}
+.src-what{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.src-btn .src-meta{flex-shrink:0}
+.src-sep{flex-shrink:0;margin:0 -2px;color:var(--faint);font-weight:400}
+.src-caret{flex-shrink:0;width:12px;height:12px;color:var(--faint)}
+.src-btn:hover :is(.src-sep,.src-meta,.src-caret),.src-btn[aria-expanded="true"] :is(.src-sep,.src-meta,.src-caret){color:var(--slate)}
+.src-dot{flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--faint)}
 .src-dot.on{background:var(--green)}
 .src-meta{font-weight:400;color:var(--faint);font-size:11px;font-family:var(--mono)}
+/* It lies over the list and may reach past it: the list is 340 px wide
+   beside the rail's icons, too narrow for an address to keep to one line. */
+.src-panel{position:absolute;z-index:40;top:calc(100% - 4px);left:14px;width:max-content;min-width:min(280px,calc(100% - 28px));max-width:max(calc(100% - 28px),440px);max-height:min(420px,60vh);overflow-y:auto;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;animation:pop .16s ease-out}
+.src-panel[hidden]{display:none}
+.src-list{list-style:none}
+.src-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 10px;border-radius:var(--r-sm);font-size:13px;font-weight:500;color:var(--slate);transition:var(--lift)}
+.src-item.live{color:var(--ink)}
+.src-item:not([disabled]):hover{background:var(--fill-2)}
+.src-item:not([disabled]):hover .src-meta{color:var(--slate)}
+.src-item[disabled]{opacity:.55;cursor:default}
+.src-item[disabled]:active{transform:none}
+.src-addr{flex:1;min-width:0;overflow-wrap:anywhere}
+.src-item .src-meta{flex-shrink:0;white-space:nowrap}
+/* The mailbox the list shows: the selection tint, as a list row, and a
+   tick, so colour is not the only sign. On the tint --faint falls short,
+   so its meta is --slate. */
+.src-item[aria-current="true"],.src-item[aria-current="true"]:not([disabled]):hover{background:var(--tint-soft)}
+.src-item[aria-current="true"] .src-meta{color:var(--slate)}
+.src-tick{flex-shrink:0;width:12px;height:12px;color:var(--tint);visibility:hidden}
+.src-item[aria-current="true"] .src-tick{visibility:visible}
+.src-all{border-bottom:1px solid var(--hair-2);margin-bottom:4px;padding-bottom:4px}
+.src-foot{border-top:1px solid var(--hair-2);margin-top:4px;padding-top:4px}
+.src-sync{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:7px 10px;border-radius:var(--r-sm);font-size:13px;font-weight:500;color:var(--slate);transition:var(--lift)}
+.src-sync:hover{background:var(--fill-2);color:var(--ink)}
+.src-sync svg{flex-shrink:0;width:13px;height:13px}
+.src-btn.scoped{color:var(--ink)}
+.empty-who{overflow-wrap:anywhere}
+.empty-act{margin-top:14px}
 /* ---------- account menu ---------- */
 #acct-btn{width:32px;height:32px;border-radius:30%;background:var(--fill);color:var(--ink);font-weight:600;font-size:13px;display:grid;place-items:center;margin-left:12px;flex-shrink:0;box-shadow:var(--edge)}
 #acct-menu{position:absolute;top:56px;right:18px;width:270px;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:8px;display:none;z-index:44}
@@ -756,7 +795,7 @@ button.cv-row:hover{background:var(--fill-2)}
 .saveto-menu{position:fixed;z-index:70;background:var(--card);border-radius:var(--r);box-shadow:var(--shadow-lg);padding:6px;min-width:190px;animation:pop .16s ease-out}
 .saveto-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink)}
 .saveto-menu button:hover{background:var(--fill-2)}
-@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu{animation:none}}
+@media (prefers-reduced-motion:reduce){#acct-menu.open,#link-card,#warn-card,#keys-card,#welcome-card,#slack-card,#create-card,.saveto-menu,.src-panel{animation:none}}
 #welcome-card h2{font-weight:600;font-size:20px;letter-spacing:-.015em;text-align:center}
 #welcome-card>p{font-size:13px;color:var(--slate);text-align:center;margin:6px 0 14px}
 .w-row{display:flex;align-items:center;gap:11px;background:var(--card);border-radius:var(--r-sm);box-shadow:var(--edge);padding:11px 13px;margin-top:9px}
@@ -837,6 +876,8 @@ body.send-counting #toast{bottom:76px}
 .rest-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:10px}
 .rest-box{display:flex;flex-direction:column;gap:5px;align-items:flex-start;text-align:left;padding:14px 15px;border-radius:var(--r);background:var(--card);border:1px solid var(--hair);transition:var(--lift);width:100%}
 .rest-box:hover{border-color:var(--faint)}
+.rest-box[aria-current="true"]{background:var(--tint-soft);border-color:var(--tint)}
+.rest-box[aria-current="true"] .rest-box-sub{color:var(--slate)}
 .rest-box-top{display:flex;align-items:center;gap:9px;width:100%;min-width:0}
 .rest-box-name{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .rest-pip{flex:none;background:var(--tint-btn);color:var(--on-tint);font-family:var(--mono);font-size:11px;font-weight:500;min-width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;padding:0 6px}
@@ -892,7 +933,7 @@ body.send-counting #toast{bottom:76px}
 }
 
 /* Phone: the list is the point, and it was starting a screen and a half down.
-   Everything above it — the mode switch, the briefing, the per-account chips,
+   Everything above it — the mode switch, the briefing, the mailboxes line,
    two rows of filters, the sync button — is furniture, and at 390px wide it
    was costing more than it earned. Same controls, less air. */
 @media (max-width:600px){
@@ -900,7 +941,10 @@ body.send-counting #toast{bottom:76px}
   .seg{margin:8px 12px}
   .digest-strip{padding:10px 13px;font-size:12.5px}
   #sources{padding:6px 12px 2px}
-  .src-chip{padding:4px 9px;font-size:11.5px}
+  .src-btn{padding:4px 9px;font-size:12px}
+  /* Inside a 16 px gutter (and the notch's), with rows a thumb can hit. */
+  .src-panel{top:calc(100% + 2px);left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));width:auto;min-width:0;max-width:none}
+  .src-item,.src-sync{min-height:44px}
   .pill{padding:4px 9px;font-size:12px}
   #sync-all{font-size:12px;padding:4px 10px}
   .mail-row{padding:11px 10px}
@@ -992,7 +1036,7 @@ body.send-counting #toast{bottom:76px}
 
   <main id="main">
     <div class="topbar">
-      <div><span class="eyebrow" id="tb-eyebrow">Every mailbox</span><h1 id="tb-title">Messages</h1></div>
+      <div class="tb-head"><span class="eyebrow" id="tb-eyebrow">Every mailbox</span><h1 id="tb-title">Messages</h1></div>
       <button class="top-search" id="top-search-btn" style="margin-left:auto" aria-keyshortcuts="Control+K Meta+K"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>Search everything…</span><kbd>⌘K</kbd></button>
       <button id="acct-btn" aria-label="Account" aria-expanded="false" aria-controls="acct-menu"></button>
       <div id="acct-menu" role="region" aria-label="Account">
@@ -1984,9 +2028,11 @@ async function loadOlder(only,quiet){
   /* Gaps that brought nothing (closed, their mailbox gone or parked, or
      offline) do not stop the rest: older mail below what RATA holds still
      loads in the same press (BUG-C). */
+  /* With `only` (the mailbox chosen, or one just linked), that mailbox's
+     gaps alone. */
   let gapError='',gapTried=false;
-  if(!only&&(S.gaps||[]).length){
-    const got=await fillGaps();
+  if(gapsOf(only).length){
+    const got=await fillGaps(only);
     if(got.added){if(!quiet)toast(got.added+' older message'+(got.added===1?'':'s')+' loaded');return}
     gapTried=true;gapError=got.error;
   }
@@ -2035,13 +2081,18 @@ function addGaps(list){
     S.gaps.push({email,folder:g.folder,uidvalidity:g.uidvalidity,top:g.top,floor:g.floor});
   }
 }
-async function fillGaps(){
+/* The gaps still open, of one mailbox (by address) or of every one. */
+function gapsOf(only){
+  const e=only?String(only).toLowerCase():'';
+  return (S.gaps||[]).filter(g=>!e||g.email===e);
+}
+async function fillGaps(only){
   let added=0,error='';
   /* A gap of a mailbox no longer linked can never be filled; kept, it
      stood in front of Load older mail for every mailbox (BUG-C). */
   const linked=new Set(mailAddrs());
   S.gaps=(S.gaps||[]).filter(g=>linked.has(g.email));
-  for(const g of S.gaps.slice()){
+  for(const g of gapsOf(only)){
     let r;
     try{r=await apiFetch('/api/mail/older',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:g.email,folder:g.folder,beforeUid:g.top,uidvalidity:g.uidvalidity,limit:OLDER_PAGE})})}
     catch(e){r={error:String(e&&e.message||e)}}
@@ -2623,6 +2674,31 @@ function openAddMailbox(){go('set');openMailForm();setTimeout(()=>$('#linkform')
 
 /* ---------------- MESSAGES ---------------- */
 let mailFilter='all',selMail=null;
+/* Which mailbox the list shows: its entry's id, or '' for all of them.
+   Chosen in the linked mailboxes' card, it is kept for the session as the
+   filter chips are (never stored) and combines with them and with the
+   categories. Side by side ignores it: each column is a mailbox already. */
+let SCOPE='';
+/* The chosen mailbox while it is still linked and there is another to
+   choose instead, else all of them. With one mailbox the card has no All
+   mailboxes row, so a choice kept then could never be undone, and it would
+   hide the mail Remove keeps of the others (I6). */
+function mailScope(){
+  if(SCOPE){const mail=S.linked.filter(l=>l.type==='mail');if(mail.length<2||!mail.some(l=>l.id===SCOPE))SCOPE=''}
+  return SCOPE;
+}
+/* What the one inbox shows: the mailbox chosen, if one is. Side by side,
+   whose columns are a mailbox each, shows them all. */
+function shownScope(){return splitOn?'':mailScope()}
+/* The chosen mailbox's linked entry, or null for every mailbox. */
+function shownMailbox(){const s=shownScope();return s?S.linked.find(l=>l.id===s)||null:null}
+/* A mailbox's mail: filed under its entry's id, or named by its address
+   (linkedOf), as everything else that asks which mailbox does. */
+function ofMailbox(m,id){return m.acct===id||(linkedOf(m)||{}).id===id}
+function chooseScope(id){
+  SCOPE=id||'';mailScope();
+  renderSources();renderMailFilters();renderMail();
+}
 $('#mail-sort').onchange=e=>{mailSort=e.target.value;renderMail()};
 $('#sel-mode').onclick=()=>{selecting=!selecting;if(!selecting)SEL.clear();$('#sel-mode').textContent=selecting?'✕ Cancel':'☑ Select';renderMail()};
 /* Several messages at once, on the server too (0.1.30): Archive takes the
@@ -2717,7 +2793,9 @@ $$('#bulk-bar [data-bulk]').forEach(b=>b.onclick=async e=>{
 });
 function renderDigest(){
   const el=$('#digest');if(!el)return;
-  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
+  /* Counted in the mailbox chosen, as the list under it is. */
+  const scope=shownScope();
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m)&&(!scope||ofMailbox(m,scope)));
   const unread=pool.filter(m=>m.unread).length;
   if(!unread){el.innerHTML='';return}
   const pr=pool.filter(m=>m.unread&&categorize(m)==='priority');
@@ -2725,19 +2803,150 @@ function renderDigest(){
   el.innerHTML=`<button class="digest-strip"><span class="dg-text"><b>${unread} unread</b>${pr.length?` · ${pr.length} need you`:''}${top?` · latest: “${esc((top.subj||top.prev).slice(0,46))}”`:''}</span><span class="dg-cta">Open briefing →</span></button>`;
   el.querySelector('.digest-strip').onclick=openAssist;
 }
+/* The linked mailboxes, and which of them the list shows: one line (a
+   dot, the address shown or how many, and when that last synced) that
+   opens a card. Its first row is All mailboxes, when there are two to
+   choose between, then a row per mailbox with its dot, whole address and
+   when it synced. Choosing a row shows only that mailbox's mail (SCOPE),
+   marks the row (aria-current), closes the card and gives the focus back
+   to the button, which then names it. Sync now, at the foot, refreshes
+   every mailbox, as a press on a row did before rows chose. A disclosure,
+   not a menu: Tab goes through the rows, and Escape or a press elsewhere
+   closes it, Escape giving the focus back to the button. It is drawn in
+   place on every sync, so an open card stays open and a row that has the
+   focus keeps it. */
+let SRC_OPEN=false;
+function srcPart(tag,cls){const e=document.createElement(tag);if(cls)e.className=cls;return e}
+function srcShow(open){
+  SRC_OPEN=!!open;
+  const b=$('#src-btn'),p=$('#src-panel');
+  if(b)b.setAttribute('aria-expanded',String(SRC_OPEN));
+  if(p)p.hidden=!SRC_OPEN;
+}
+function srcClose(back){
+  if(!SRC_OPEN)return;
+  srcShow(false);
+  const b=$('#src-btn');
+  if(back&&b)b.focus({preventScroll:true});
+}
+const SRC_TICK='<svg class="src-tick" aria-hidden="true" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.3l2.4 2.4 4.6-5"/></svg>';
+const SRC_SYNC='<svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>';
 function renderSources(){renderDigest();
   const el=$('#sources');if(!el)return;
-  if(!S.linked.length){el.innerHTML='';return}
-  el.innerHTML='<div class="src-row">'+S.linked.map(l=>{
-    const live=l.status==='live';
-    const syncable=l.type==='mail';
-    return `<button class="src-chip ${live?'live':''}" data-src="${l.id}" ${syncable?'':'disabled'} title="Tap to sync now">
-      <span class="src-dot ${live?'on':''}"></span>${esc(l.label)}
-      <span class="src-meta">${l.lastSync?rel(l.lastSync)+' ago':(syncable?'never synced':'pending')}</span>
-    </button>`;
-  }).join('')+'</div>';
-  el.querySelectorAll('[data-src]').forEach(b=>b.onclick=()=>serverSync('mail'));
+  if(!S.linked.length){SRC_OPEN=false;el.replaceChildren();renderEyebrow();return}
+  let btn=$('#src-btn'),list=el.querySelector('.src-list'),foot=el.querySelector('.src-foot');
+  if(!btn||!list||!foot){
+    btn=srcPart('button','src-btn');btn.type='button';btn.id='src-btn';
+    btn.setAttribute('aria-controls','src-panel');
+    const lead=srcPart('span','vh');lead.textContent='Showing ';
+    const sep=srcPart('span','src-sep');sep.textContent='·';
+    btn.append(lead,srcPart('span','src-dot'),srcPart('span','src-what'),' ',sep,' ',srcPart('span','src-meta'),srcPart('span','vh src-state'));
+    btn.insertAdjacentHTML('beforeend','<svg class="src-caret" aria-hidden="true" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5l3 3 3-3"/></svg>');
+    /* WebKit on macOS, which RATA ships on, does not focus a button it
+       clicks; the card's keys and its closing go by where the focus is,
+       so an open card takes it. */
+    btn.onclick=()=>{srcShow(!SRC_OPEN);if(SRC_OPEN&&document.activeElement!==btn)btn.focus({preventScroll:true})};
+    const panel=srcPart('div','src-panel');panel.id='src-panel';
+    panel.setAttribute('role','group');panel.setAttribute('aria-label','Linked mailboxes');
+    list=srcPart('ul','src-list');
+    foot=srcPart('div','src-foot');
+    const sync=srcPart('button','src-sync'),word=srcPart('span');sync.type='button';sync.id='src-sync';
+    sync.insertAdjacentHTML('beforeend',SRC_SYNC);word.textContent='Sync now';sync.append(word);
+    /* Never disabled while it runs: a focused button that is disabled
+       drops the focus. A second press joins the refresh under way. */
+    sync.onclick=async()=>{
+      if(sync.dataset.busy)return;
+      sync.dataset.busy='1';word.textContent='Syncing…';
+      try{await serverSync('mail')}finally{delete sync.dataset.busy;word.textContent='Sync now'}
+    };
+    foot.append(sync);
+    panel.append(list,foot);
+    el.replaceChildren(btn,panel);
+  }
+  const n=S.linked.length,mail=S.linked.filter(l=>l.type==='mail'),scope=mailScope();
+  const chosen=scope?mail.find(l=>l.id===scope):null;
+  const live=mail.length>0&&mail.every(l=>l.status==='live');
+  const last=Math.max(0,...mail.map(l=>l.lastSync||0));
+  /* The button says what the list shows: the mailbox chosen, else the one
+     linked or how many, with that one's dot and sync, or every one's. */
+  const on=chosen?chosen.status==='live':live,when=chosen?chosen.lastSync||0:last;
+  btn.classList.toggle('scoped',!!chosen);
+  btn.querySelector('.src-dot').classList.toggle('on',on);
+  btn.querySelector('.src-what').textContent=chosen?chosen.label:n===1?S.linked[0].label:n+(mail.length===n?' mailboxes':' accounts');
+  btn.querySelector('.src-meta').textContent=!mail.length?'pending':when?'synced '+rel(when)+' ago':'never synced';
+  btn.querySelector('.src-state').textContent=chosen||n===1?(on?', live':', not live'):(on?', all live':', not all live');
+  foot.hidden=!mail.length;
+  /* Rows by key ('' is All mailboxes), changed where they stand: one that
+     left goes first, so none still here is moved (moving it would drop its
+     focus). */
+  const rows=(mail.length>1?[{id:'',all:true}]:[]).concat(S.linked);
+  const ids=new Set(rows.map(l=>l.id));
+  for(const li of [...list.children])if(!ids.has(li.dataset.id))li.remove();
+  const have=new Map([...list.children].map(li=>[li.dataset.id,li]));
+  rows.forEach((l,i)=>{
+    let li=have.get(l.id);
+    if(!li){
+      li=srcPart('li',l.all?'src-all':'');li.dataset.id=l.id;
+      const b=srcPart('button','src-item');b.type='button';
+      b.append(srcPart('span','src-dot'),srcPart('span','src-addr'),' ',srcPart('span','src-meta'),srcPart('span','vh'));
+      b.insertAdjacentHTML('beforeend',SRC_TICK);
+      li.append(b);
+    }
+    const b=li.firstChild,mailbox=!!l.all||l.type==='mail',up=l.all?live:l.status==='live';
+    /* The mailbox chosen, or All mailboxes while none is. With one mailbox
+       there is nothing to choose, so nothing is marked, as in the resting
+       pane. */
+    const current=mailbox&&(l.all?!chosen:!!chosen&&chosen.id===l.id);
+    b.classList.toggle('live',up);
+    b.disabled=!mailbox;
+    if(current)b.setAttribute('aria-current','true');else b.removeAttribute('aria-current');
+    if(mailbox){b.dataset.scope=l.id;b.onclick=()=>{chooseScope(l.id);srcClose(true)}}
+    else{delete b.dataset.scope;b.onclick=null}
+    b.querySelector('.src-dot').classList.toggle('on',up);
+    /* An address too long for its row breaks after the @, not a letter
+       from its end (overflow-wrap is only for a part still too long). */
+    const at=l.all?-1:String(l.label).indexOf('@');
+    if(at>0)b.querySelector('.src-addr').replaceChildren(l.label.slice(0,at+1),document.createElement('wbr'),l.label.slice(at+1));
+    else b.querySelector('.src-addr').textContent=l.all?'All mailboxes':l.label;
+    b.querySelector('.src-meta').textContent=l.all?(last?rel(last)+' ago':'never synced'):l.lastSync?rel(l.lastSync)+' ago':(mailbox?'never synced':'pending');
+    b.querySelector('.vh').textContent=l.all?(up?', all live':', not all live'):(up?', live':', not live');
+    if(list.children[i]!==li)list.insertBefore(li,list.children[i]||null);
+  });
+  srcShow(SRC_OPEN);
+  renderEyebrow();
 }
+/* The top bar says whose mail the inbox shows: every mailbox's, or the
+   chosen one's address (cut with an ellipsis when long). */
+function renderEyebrow(){
+  if(currentView!=='inbox')return;
+  const l=shownMailbox();
+  $('#tb-eyebrow').textContent=l?l.label:TITLES.inbox[0];
+}
+/* In the capture phase, so Escape closes only the card (not the message
+   behind it); a question on screen keeps its own Escape. Up and Down move
+   between the rows. */
+addEventListener('keydown',e=>{
+  if(!SRC_OPEN||e.defaultPrevented)return;
+  const src=$('#sources'),inside=src.contains(document.activeElement);
+  if(e.key==='Escape'){
+    if(!inside&&topDialog())return;
+    e.preventDefault();e.stopPropagation();srcClose(true);return;
+  }
+  if(!inside||!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;
+  const rows=[...src.querySelectorAll('.src-item:not([disabled])')];if(!rows.length)return;
+  const i=rows.indexOf(document.activeElement);
+  e.preventDefault();
+  rows[e.key==='Home'?0:e.key==='End'?rows.length-1:i<0?(e.key==='ArrowDown'?0:rows.length-1):(i+(e.key==='ArrowDown'?1:rows.length-1))%rows.length].focus();
+},true);
+addEventListener('pointerdown',e=>{if(SRC_OPEN&&!$('#sources').contains(e.target))srcClose(false)},true);
+/* Tabbing past the last row, or back before the button, closes it; so does
+   the focus going anywhere else, and the window losing it, which is also
+   what a press inside a formatted message's frame does (no pointerdown
+   reaches this page from there). Open, it has the keys only while the
+   focus is in it. */
+$('#sources').addEventListener('focusout',e=>{if(SRC_OPEN&&e.relatedTarget&&!$('#sources').contains(e.relatedTarget))srcClose(false)});
+addEventListener('focusin',e=>{if(SRC_OPEN&&!$('#sources').contains(e.target))srcClose(false)});
+addEventListener('blur',e=>{if(SRC_OPEN&&e.target===window)srcClose(false)});
 function renderSyncAll(){renderSources();
   const b=$('#sync-all');if(!b)return;
   b.style.display=S.linked.some(l=>l.type==='mail')?'':'none';
@@ -2748,7 +2957,9 @@ function renderSyncAll(){renderSources();
 }
 function renderCats(){
   const el=$('#cat-tabs');if(!el)return;
-  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m));
+  /* Counted in the mailbox chosen, as the list shows them. */
+  const scope=shownScope();
+  const pool=S.messages.filter(m=>channelEnabled(m.ch)&&inInbox(m)&&(!scope||ofMailbox(m,scope)));
   const cnt=c=>pool.filter(m=>categorize(m)===c).length;
   const tabs=[['all','All',pool.length],...Object.entries(CATS).map(([c,l])=>[c,l,cnt(c)])].filter(t=>t[0]==='all'||t[2]>0);
   if(!tabs.some(t=>t[0]===catFilter))catFilter='all';
@@ -2756,11 +2967,19 @@ function renderCats(){
   el.querySelectorAll('[data-cat]').forEach(p=>p.onclick=()=>{catFilter=p.dataset.cat;renderCats();renderMail()});
 }
 function renderMailFilters(){renderCats();
-  let chips=[['all','All'],['unread','Unread'],['starred','Starred']];
-  S.linked.filter(l=>S.messages.some(m=>m.acct===l.id)).forEach(l=>chips.push(['acct:'+l.id,l.label.includes('@')?l.label.split('@')[0]:l.label]));
-  chips.push(['sent','Sent']);
-  for(const f of ['drafts','archive','junk'])if(S.messages.some(m=>folderOf(m)===f))chips.push([f,FOLDER_LABEL[f]]);
+  /* Which mailbox is the linked mailboxes' card's to say (SCOPE), not a
+     chip's. */
+  let chips=[['all','All'],['unread','Unread'],['starred','Starred'],['sent','Sent']];
+  /* Drafts, Archive and Spam show when the mailbox chosen (or any, with
+     none chosen) has some: a chip that could only say "nothing here" is
+     not offered, and choosing a mailbox without the folder open goes to
+     its inbox, as for a folder of its own below. */
+  const scope=shownScope();
+  for(const f of ['drafts','archive','junk'])if(S.messages.some(m=>folderOf(m)===f&&(!scope||ofMailbox(m,scope))))chips.push([f,FOLDER_LABEL[f]]);
   if(BOX&&!boxMailbox(BOX.email))BOX=null;
+  /* A folder is its mailbox's: with another mailbox chosen, the list goes
+     back to that one's inbox. */
+  if(BOX&&scope&&boxMailbox(BOX.email).id!==scope)BOX=null;
   if(BOX)chips.push(['box',boxLabel(BOX.email,BOX.name)]);
   if(window.__RATA_NATIVE__&&boxAccts().length)chips.push(['folders',boxPanel?'Folders \u25b4':'Folders \u25be']);
   if(!chips.some(c=>c[0]===mailFilter))mailFilter='all';
@@ -2790,12 +3009,21 @@ async function fetchBoxes(l){
   S.boxes[boxEmail(l)]={at:Date.now(),list:r.folders.map(f=>({name:String(f.name),label:String(f.label||f.name)}))};
   save();return '';
 }
-async function toggleBoxPanel(open){
+/* The mailboxes Folders lists: the one chosen, else every one. Only those
+   are asked for their folders, a sign-in each. */
+function boxShown(){const scope=shownScope();return boxAccts().filter(l=>!scope||l.id===scope)}
+/* The mailboxes asked since Folders last opened. Drawing the panel asks
+   any it lists that has not been (all of them when it opens; then another
+   mailbox chosen while it is open, or every one when the chosen one is
+   removed), so none is said to have no folders for never being asked. */
+const BOX_ASKED=new Set();
+function toggleBoxPanel(open){
   boxPanel=open===undefined?!boxPanel:open;
+  BOX_ASKED.clear();
   renderMailFilters();
-  if(!boxPanel)return;
-  await Promise.all(boxAccts().map(async l=>{
-    BOX_LOADING.add(l.id);renderBoxPanel();
+}
+async function askBoxes(list){
+  await Promise.all(list.map(async l=>{
     const e=await fetchBoxes(l);
     BOX_LOADING.delete(l.id);
     if(e)BOX_ERR[l.id]=e;else delete BOX_ERR[l.id];
@@ -2813,10 +3041,13 @@ function boxButtons(l,current,attr){
 function renderBoxPanel(){
   const el=$('#box-panel');if(!el)return;
   el.hidden=!boxPanel;if(!boxPanel)return;
-  const accts=boxAccts();
+  /* With a mailbox chosen, its folders only. */
+  const accts=boxShown(),ask=accts.filter(l=>!BOX_ASKED.has(l.id));
+  for(const l of ask){BOX_ASKED.add(l.id);BOX_LOADING.add(l.id)}
   el.innerHTML=accts.map(l=>(accts.length>1?`<div class="box-acct">${esc(l.label)}</div>`:'')+`<div class="box-list">${boxButtons(l,null,'data-box')}</div>`).join('')
     ||'<span class="box-note">Link a mailbox to see its folders.</span>';
   el.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>openBox(b.dataset.email,b.dataset.box));
+  if(ask.length)askBoxes(ask);
 }
 async function openBox(email,name){
   BOX={email,name};mailFilter='box';boxPanel=false;
@@ -2877,13 +3108,12 @@ function categorize(m){
 }
 function mailPool(acctId){
   let pool=S.messages.filter(m=>channelEnabled(m.ch));
-  if(acctId)pool=pool.filter(m=>m.acct===acctId);
+  if(acctId)pool=pool.filter(m=>ofMailbox(m,acctId));
   if(mailFilter==='unread')pool=pool.filter(m=>m.unread&&!m.sent);
   else if(mailFilter==='starred')pool=pool.filter(m=>m.starred);
   else if(mailFilter==='sent')pool=pool.filter(m=>m.sent);
   else if(['archive','junk','drafts'].includes(mailFilter))pool=pool.filter(m=>folderOf(m)===mailFilter);
   else if(mailFilter==='box')pool=BOX?pool.filter(m=>folderOf(m)==='named'&&m.box===BOX.name&&mailEmailOf(m)===BOX.email):[];
-  else if(mailFilter.startsWith('acct:'))pool=pool.filter(m=>m.acct===mailFilter.slice(5));
   /* Sent, Archive and Spam are each their own view; everywhere else they are
      left out. The old chain dropped sent mail last and unconditionally, so
      the Sent chip always showed an empty list. Starred also shows starred
@@ -3042,6 +3272,9 @@ function setSplit(on){
   const head=$('#main-head');if(head)head.hidden=!on;
   $$('#inbox-mode button').forEach(b=>b.classList.toggle('on',(b.dataset.mode==='split')===on));
   if(on&&panes.length<2)panes=seedPanes(2);
+  /* Side by side shows every mailbox; back in one inbox, the line, the
+     digest, the chips and the top bar follow the mailbox chosen again. */
+  renderSources();renderMailFilters();
   renderMail();
   renderSplit();
 }
@@ -3077,12 +3310,24 @@ function renderMail(){
   /* Whatever changed the list may have changed what the resting pane says. */
   setTimeout(renderResting,0);
   /* Side by side, the left pane belongs to its own account; on its own it
-     follows the filter chips as before. */
-  const pool=mailPool(splitOn?(paneAcct(0)||undefined):undefined),sc=$('#mail-scroll');
+     follows the filter chips, in the mailbox chosen (SCOPE) if one is. */
+  const scope=shownScope();
+  const pool=mailPool(splitOn?(paneAcct(0)||undefined):scope||undefined),sc=$('#mail-scroll');
   $('#nc-inbox').textContent=S.messages.filter(m=>m.unread&&inInbox(m)&&channelEnabled(m.ch)).length;
   const inBox=mailFilter==='box'&&BOX&&!splitOn,bkey=inBox?boxKey(BOX.email,BOX.name):'';
   if(!pool.length&&inBox){
     sc.innerHTML=`<div class="empty"><b>${BOX_LOADING.has(bkey)?'Loading '+esc(boxLabel(BOX.email,BOX.name))+'\u2026':'Nothing in '+esc(boxLabel(BOX.email,BOX.name))}</b>${BOX_LOADING.has(bkey)?'':'Mail you file in this folder appears here.'}</div>`;
+    return}
+  /* Nothing of the chosen mailbox in this view: say whose, and offer the
+     rest back. */
+  if(!pool.length&&scope){
+    const l=S.linked.find(x=>x.id===scope),e=document.createElement('div'),b=document.createElement('b'),who=document.createElement('span'),act=document.createElement('div'),all=document.createElement('button');
+    e.className='empty';b.textContent='Nothing here';
+    who.className='empty-who';who.textContent=(l?l.label:'This mailbox')+' has nothing in this view.';
+    act.className='empty-act';all.type='button';all.className='btn';all.id='scope-all';all.textContent='Show all mailboxes';
+    /* It goes with the press: the focus goes to the line that now says so. */
+    all.onclick=()=>{chooseScope('');const s=$('#src-btn');if(s)s.focus({preventScroll:true})};
+    act.append(all);e.append(b,who,act);sc.replaceChildren(e);
     return}
   if(!pool.length){
     const linked=S.linked.length;
@@ -3099,10 +3344,13 @@ function renderMail(){
     if(b)b.onclick=openAddMailbox;
     return}
   bulkRefresh();
-  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&(olderCandidates().length||(S.gaps||[]).length);
+  /* With a mailbox chosen, Load older mail is that mailbox's: offered while
+     it has history or a gap of its own, and it asks that server alone. */
+  const only=scope?(S.linked.find(l=>l.id===scope)||{}).label||'':'';
+  const more=inBox?!BOX_DONE.has(bkey):window.__RATA_NATIVE__&&(olderCandidates(only).length||gapsOf(only).length);
   vlist(sc,pool,more?'<div class="vl-tail" style="text-align:center;padding:14px 0 22px"><button class="btn" id="load-older">Load older mail</button></div>':'');
   const lo=document.getElementById('load-older');
-  if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await (inBox?loadBox(BOX.email,BOX.name,true):loadOlder())}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
+  if(lo)lo.onclick=async()=>{lo.disabled=true;lo.textContent='Loading older mail\u2026';try{await (inBox?loadBox(BOX.email,BOX.name,true):loadOlder(only||undefined))}finally{if(lo.isConnected){lo.disabled=false;lo.textContent='Load older mail'}}};
   wireRows(sc,true);
   if(splitOn){
     /* Every pane accepts what another drops on it, and forwards from its own
@@ -3294,6 +3542,12 @@ function renderResting(){
   const d=$('#mail-detail');
   if(!d||selMail)return;
   d.classList.remove('open');
+  /* The pane is drawn afresh, and a mailbox pressed in it redraws it (it
+     chooses that mailbox): whatever in it had the focus has it again,
+     found by what it stands for, rather than the focus falling to the
+     page. */
+  const had=d.contains(document.activeElement)?document.activeElement:null;
+  const keep=had&&(had.dataset.scope!==undefined?['scope',had.dataset.scope]:had.dataset.mid!==undefined?['mid',had.dataset.mid]:null);
 
   const boxes=S.linked.filter(l=>l.type==='mail');
   if(!boxes.length){
@@ -3310,6 +3564,8 @@ function renderResting(){
   const unread=pool.filter(m=>m.unread);
   const need=unread.filter(m=>categorize(m)==='priority');
   const latest=[...pool].sort((a,b)=>b.ts-a.ts).slice(0,5);
+  /* The mailbox chosen, marked as in the linked mailboxes' card. */
+  const scope=shownScope();
 
   /* A message names its mailbox by address when it came from a live sync and
      by linked-entry id otherwise — a seeded demo, or anything saved before the
@@ -3333,7 +3589,7 @@ function renderResting(){
     </div>
 
     <div class="rest-grid">
-      ${perBox.map(b=>`<button class="rest-box" data-box="${esc(b.l.label)}">
+      ${perBox.map(b=>`<button class="rest-box" data-scope="${esc(b.l.id)}"${b.l.id===scope?' aria-current="true"':''}>
         <span class="rest-box-top">
           <span class="rest-box-name">${esc(b.l.label)}</span>
           ${b.unread?`<span class="rest-pip">${b.unread}</span>`:''}
@@ -3357,11 +3613,13 @@ function renderResting(){
   </div>`;
 
   d.querySelectorAll('[data-mid]').forEach(b=>b.onclick=()=>openMail(b.dataset.mid));
-  /* Clicking a mailbox filters the list to it rather than opening anything —
-     the pane is a way into the inbox, not a second inbox. */
-  d.querySelectorAll('[data-box]').forEach(b=>b.onclick=()=>{
-    mailFilter=b.dataset.box;renderMailFilters();renderMail();
-  });
+  /* Clicking a mailbox shows the list of it alone rather than opening
+     anything — the pane is a way into the inbox, not a second inbox. It
+     chooses that mailbox as the linked mailboxes' card does; until now it
+     set the filter to the address, which no chip was, so the list stayed
+     as it was. */
+  d.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>chooseScope(b.dataset.scope));
+  if(keep){const again=[...d.querySelectorAll('[data-'+keep[0]+']')].find(b=>b.dataset[keep[0]]===keep[1]);if(again)again.focus({preventScroll:true})}
 }
 
 /* ---------------- LINKS ----------------
@@ -4261,6 +4519,9 @@ addEventListener('keydown',e=>{
     return;
   }
   if(keyDialog())return;
+  /* The linked mailboxes' card is open with the focus in it: its rows have
+     the keys. */
+  if(SRC_OPEN&&$('#sources').contains(document.activeElement))return;
   const composing=ov.classList.contains('open');
   if(e.key==='Escape'&&composing){e.preventDefault();closeCompose();return}
   if(!keysOn()||composing||keyTyping(e.target))return;
@@ -5939,12 +6200,16 @@ async function mailLink(email,pass,host){
    the list, the form closed, and its mail fetched. */
 async function linkedOk(res){
   $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
-  let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
+  const known=linkedFind('mail',res.email);
+  let l=known||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
   if(l){
     l.status='live';l.host=res.host;l.provLabel=res.label;
     if(res.auth==='oauth')l.auth='oauth';else delete l.auth;
     delete l.needsRelink;delete l.signIn;delete l.lastError;save();
   }
+  /* A mailbox new to RATA shows with the others: a mailbox chosen before
+     (SCOPE) would keep its mail out of the list, with nothing to say why. */
+  if(!known&&SCOPE)chooseScope('');
   LF_FOUND=null;
   $('#linkform').style.display='none';
   renderLinked();refreshQuota();
@@ -7260,7 +7525,9 @@ async function removeLinked(id){
   /* Its gaps can never be filled now (BUG-C). */
   if(l.type==='mail')S.gaps=(S.gaps||[]).filter(g=>g.email!==String(l.label).toLowerCase());
   save();await audit('account.unlink',`${(LINK_META[l.type]||[l.type])[0]} — ${l.label}`);
-  renderLinked();renderMailFilters();renderMail();
+  /* The linked mailboxes' line too, or it went on listing this one; were
+     it the mailbox chosen, the list shows them all again (mailScope). */
+  renderLinked();renderSyncAll();renderMailFilters();renderMail();
   toast('Unlinked '+l.label);
 }
 
