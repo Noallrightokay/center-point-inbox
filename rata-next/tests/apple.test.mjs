@@ -119,7 +119,7 @@ function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(
    read; anything this does not know (an operator, `not.`, a quote) throws,
    and the stand-in answers 400, so a test can never pass on a filter it
    ignored. */
-const PG_OPS = ['eq', 'lt', 'lte', 'gt', 'gte', 'is'];
+const PG_OPS = ['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'is'];
 function pgLeaf(col, rest) {
   const i = rest.indexOf('.');
   const op = i > 0 ? rest.slice(0, i) : '';
@@ -169,7 +169,7 @@ function pgHolds(row, f) {
   const a = pgTime(String(have));
   const b = pgTime(f.val);
   const [x, y] = Number.isNaN(a) || Number.isNaN(b) ? [String(have), f.val] : [a, b];
-  return { eq: x === y, lt: x < y, lte: x <= y, gt: x > y, gte: x >= y }[f.op];
+  return { eq: x === y, neq: x !== y, lt: x < y, lte: x <= y, gt: x > y, gte: x >= y }[f.op];
 }
 
 /* Supabase, for apple_subscriptions (and subscriptions, which only a
@@ -477,6 +477,9 @@ export default async function run(state) {
     check(wrong.length === 0, `or=(lt, and(eq, lte)) holds where Postgres would, and only there: ${wrong.join('; ') || `${cases.length} cases`}`);
     const isNull = pgFilters(new URLSearchParams('period_from=is.null'))[0];
     check(pgHolds(row(null, S), isNull) && !pgHolds(row(P, S), isNull), 'is.null asks for NULL');
+    const neq = pgFilters(new URLSearchParams(`period_from=neq.${P}`))[0];
+    check(pgHolds(row(S, S), neq) && !pgHolds(row(P, S), neq) && !pgHolds(row('2026-01-10T00:00:00+00:00', S), neq) && !pgHolds(row(null, S), neq),
+      'neq holds where the value differs, a time as a time, and never against NULL');
     const nested = pgFilters(new URLSearchParams('or=(and(a.eq.1,or(b.eq.2,c.eq.3)),d.eq.4)'));
     const nests = [[{ a: '1', b: '2' }, true], [{ a: '1', c: '3' }, true], [{ a: '1' }, false], [{ d: '4' }, true], [{ b: '2', c: '3' }, false]];
     check(nests.every(([r, want]) => nested.every((f) => pgHolds(r, f)) === want), 'and() and or() nest to any depth');
@@ -502,21 +505,67 @@ export default async function run(state) {
     const n = sbx.fake.queries.length;
     const again = await apple.appleWrite(sb, id, apple.applePurchase(t, 'Production'));
     const asked = sbx.fake.queries.slice(n).map((x) => x.split('?')[1].replace(/&select=.*/, ''));
-    check(first.wrote && again.wrote && asked.length === 2 && asked[0] === `original_transaction_id=eq.${id}&period_from=lt.${from}`
-      && asked[1] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${signed}`,
-      `a purchase: over a row of an earlier period, else over the same period signed no later; nothing about a grace period: ${asked.join(' | ')}`);
+    check(first.wrote && again.wrote && asked.length === 1 && asked[0] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${signed}`,
+      `a purchase the row already places the same: over it, signed no later, asked first; nothing about a grace period: ${asked.join(' | ')}`);
     const wrote = sbx.fake.bodies.slice(n).map((b) => Object.keys(JSON.parse(b || '{}')));
-    check(wrote.length === 2 && wrote[0].includes('grace_signed_at') && !wrote[1].some((k) => /grace/.test(k)),
-      `over the same period it never writes the grace fields, and over an earlier one it starts them afresh: ${wrote.map((k) => k.filter((x) => /grace/.test(x)).join('+') || 'none').join(' | ')}`);
+    check(wrote.length === 1 && !wrote[0].some((k) => /grace/.test(k)),
+      `and it never writes the grace fields: ${wrote.map((k) => k.filter((x) => /grace/.test(x)).join('+') || 'none').join(' | ')}`);
+    /* A row placed earlier: of the same period (its product and expiry),
+       a period charged ahead that a statement signed before it began
+       placed, whose grace fields are kept; or of another period, by its
+       product or its expiry, which this one replaces, starting them
+       afresh. Each guard whole in its own update. */
+    {
+      const H = 3600e3;
+      const iso = (ms) => new Date(ms).toISOString();
+      const askedBy = async (sid, write) => {
+        const k = sbx.fake.queries.length;
+        const w = await apple.appleWrite(sb, sid, write);
+        return {
+          w,
+          q: sbx.fake.queries.slice(k).map((x) => x.split('?')[1].replace(/&select=.*/, '')),
+          b: sbx.fake.bodies.slice(k).map((x) => Object.keys(JSON.parse(x || '{}'))),
+        };
+      };
+      const ahead = txn({ purchaseDate: Date.now() + 6 * H, expiresDate: Date.now() + 30 * DAY, signedDate: Date.now() - 2 * H, transactionReason: 'RENEWAL' });
+      const aid = ahead.originalTransactionId;
+      const graceStamp = Date.now() - H;
+      sbx.fake.rows.set(aid, {
+        original_transaction_id: aid, product_id: PRO, plan: 'pro', environment: 'Production', period_from: iso(ahead.signedDate), expires_at: iso(ahead.expiresDate),
+        grace_until: iso(ahead.expiresDate + 16 * DAY), grace_signed_at: iso(graceStamp), revoked_at: null, signed_at: iso(ahead.signedDate), app_account_token: null, email: null,
+      });
+      const begun = { ...ahead, signedDate: ahead.purchaseDate + H };
+      const bf = iso(ahead.purchaseDate);
+      const same = await askedBy(aid, apple.applePurchase(begun, 'Production'));
+      check(same.w.wrote && same.q.length === 2
+        && same.q[0] === `original_transaction_id=eq.${aid}&period_from=eq.${bf}&signed_at=lte.${iso(begun.signedDate)}`
+        && same.q[1] === `original_transaction_id=eq.${aid}&period_from=lt.${bf}&product_id=eq.${PRO}&expires_at=eq.${iso(ahead.expiresDate)}`
+        && !same.b[1].some((k) => /grace/.test(k)),
+        `the same period placed earlier (its product and expiry): over it, keeping its grace fields: ${same.q.join(' | ')}`);
+      check(same.w.row.period_from === bf && same.w.row.grace_until === iso(ahead.expiresDate + 16 * DAY) && same.w.row.grace_signed_at === iso(graceStamp),
+        'and the row moves on to where the later statement places it, its grace period kept');
+      const next = { ...begun, transactionId: nextId(), purchaseDate: ahead.expiresDate, expiresDate: ahead.expiresDate + 30 * DAY, signedDate: ahead.expiresDate + H };
+      const nf = iso(next.purchaseDate);
+      const renewed = await askedBy(aid, apple.applePurchase(next, 'Production'));
+      check(renewed.w.wrote && renewed.q.length === 4
+        && renewed.q[2] === `original_transaction_id=eq.${aid}&period_from=lt.${nf}&product_id=neq.${PRO}`
+        && renewed.q[3] === `original_transaction_id=eq.${aid}&period_from=lt.${nf}&expires_at=neq.${iso(next.expiresDate)}`
+        && renewed.b[3].includes('grace_signed_at') && renewed.w.row.grace_until === null && renewed.w.row.grace_signed_at === iso(0),
+        `the next period (another expiry) placed later: over the row, its grace fields afresh: ${renewed.q.slice(2).join(' | ')}`);
+      const up = { ...next, transactionId: nextId(), productId: BASE, purchaseDate: next.purchaseDate + DAY, expiresDate: next.expiresDate, signedDate: next.purchaseDate + DAY };
+      const changed = await askedBy(aid, apple.applePurchase(up, 'Production'));
+      check(changed.w.wrote && changed.q.length === 3 && changed.q[2] === `original_transaction_id=eq.${aid}&period_from=lt.${iso(up.purchaseDate)}&product_id=neq.${BASE}`
+        && changed.b[2].includes('grace_signed_at') && changed.w.row.product_id === BASE,
+        `another product placed later, though it expires the same: over the row, its grace fields afresh: ${changed.q[2]}`);
+    }
     const at = Date.now() + 1000;
     const notice = apple.appleChange({ notificationType: 'DID_FAIL_TO_RENEW', subtype: 'GRACE_PERIOD', signedDate: at }, t, { gracePeriodExpiresDate: at + 16 * DAY }, 'Production');
     const m = sbx.fake.queries.length;
     const r = await apple.appleWrite(sb, id, notice);
     const three = sbx.fake.queries.slice(m).map((x) => x.split('?')[1].replace(/&select=.*/, ''));
     const stamp = new Date(at).toISOString();
-    check(r.wrote && three.length === 3 && three[0] === `original_transaction_id=eq.${id}&period_from=lt.${from}`
-      && three[1] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${stamp}`
-      && three[2] === `original_transaction_id=eq.${id}&period_from=eq.${from}&grace_signed_at=lte.${stamp}`,
+    check(r.wrote && three.length === 2 && three[0] === `original_transaction_id=eq.${id}&period_from=eq.${from}&signed_at=lte.${stamp}`
+      && three[1] === `original_transaction_id=eq.${id}&period_from=eq.${from}&grace_signed_at=lte.${stamp}`,
       `a notice with renewal info: the subscription's fields so, then the grace period's, over the same period with its own stamp no later: ${three.join(' | ')}`);
     check(r.row.grace_until === new Date(at + 16 * DAY).toISOString() && r.row.grace_signed_at === stamp && r.row.signed_at === stamp && r.row.period_from === from,
       'and the row records both, each with its stamp');
@@ -587,6 +636,13 @@ export default async function run(state) {
     check(noSigned.core.period_from === iso(ahead.purchaseDate) && noSigned.core.signed_at === iso(0) && notFinite.core.period_from === iso(ahead.purchaseDate)
       && noPurchase.core.period_from === iso(0),
       'no signedDate, or one that is not a time: by purchaseDate alone; no purchaseDate: the earliest there is, as before');
+    /* A notification that gives no signedDate of its own is placed and
+       stamped as one: by purchaseDate, at the oldest time there is, never
+       by the transaction inside it, whose signedDate here is earlier. */
+    const unsigned = [{ notificationType: 'DID_RENEW' }, { notificationType: 'DID_RENEW', signedDate: null }, { notificationType: 'DID_RENEW', signedDate: Number.NaN }]
+      .map((n) => apple.appleChange(n, ahead, null, 'Production'));
+    check(unsigned.every((c) => c.core.period_from === iso(ahead.purchaseDate) && c.core.signed_at === iso(0) && c.insert.period_from === iso(ahead.purchaseDate) && c.insert.signed_at === iso(0)),
+      `a notification with no signedDate, or one that is not a time: by purchaseDate, stamped the oldest time there is, not by its transaction (${unsigned.map((c) => `${c.core.period_from} ${c.core.signed_at}`).join(', ')})`);
   }
 
   console.log('\n— every delivery order ends as signing order does —');
@@ -939,6 +995,48 @@ export default async function run(state) {
         const mixed = await post([signJws(t3, chain)], { renewals: put(graced, plain).map((x) => signJws(x, chain)) });
         check(mixed.d.licensed === true && rowOf(t3).grace_until === iso(graced.gracePeriodExpiresDate) && rowOf(t3).grace_signed_at === iso(graced.signedDate),
           `beside a later-signed one giving no grace period, ${order}: the one stating it is used (${rowOf(t3) && rowOf(t3).grace_until})`);
+      }
+
+      /* A renewal Apple charged ahead of time, B2, and the iPhone's copy
+         of it signed seven hours before B2 began, so placed then
+         (lib/apple.js, periodFrom). Something signed later then placed
+         the row later: the Mac's copy, signed a day into B2 (Universal
+         Purchase), or Apple's DID_RENEW, signed after the iPhone's copy
+         but still before B2 began. Each was recorded while B2 ran, the
+         copies by the route's own appleWrite, since a period that has
+         ended is no longer written without its renewal info. Two hours
+         after B2's end the iPhone sends its copy with the renewal info
+         Apple has just signed, giving a grace period to 16 days after
+         B2's end; no grace notice has arrived. The grace period is B2's,
+         wherever the row placed B2, so it counts. */
+      const H = 3600e3;
+      const sbw = createClient(sbx.url, fakeSupabaseKey('service_role'), { auth: { persistSession: false } });
+      for (const later of ['the Mac\'s copy, signed once B2 began', 'Apple\'s DID_RENEW, signed after the iPhone\'s copy']) {
+        const mac = later.startsWith('the Mac');
+        const end = Date.now() - 2 * H;
+        const begun = end - 30 * DAY;
+        const b2 = txn({ productId: BASE, purchaseDate: begun, expiresDate: end, signedDate: begun - 7 * H, transactionReason: 'RENEWAL' });
+        const iPhone = await apple.appleWrite(sbw, b2.originalTransactionId, apple.applePurchase(b2, 'Production'));
+        const macCopy = { ...b2, signedDate: begun + DAY };
+        const told = mac
+          ? (await apple.appleWrite(sbw, b2.originalTransactionId, apple.applePurchase(macCopy, 'Production'))).wrote
+          : (await notify(notification(chain, 'DID_RENEW', { ...b2, signedDate: begun - 6 * H }, { signedDate: begun - 6 * H, renewal: renewalInfo(b2, { signedDate: begun - 6 * H }) }))).d.acted;
+        const placed = { ...rowOf(b2) };
+        check(iPhone.wrote && told === true && placed.period_from === iso(mac ? begun : begun - 6 * H) && placed.grace_until === null,
+          `(${later}) B2 is recorded, placed later than the iPhone's copy places it (${placed.period_from})`);
+        const graceEnd = end + 16 * DAY;
+        const info = renewalInfo(b2, { gracePeriodExpiresDate: graceEnd, isInBillingRetryPeriod: true, signedDate: Date.now() - 1000 });
+        const r = await post([signJws(b2, chain)], { renewals: [signJws(info, chain)] });
+        check(r.d.licensed === true && r.d.plan === 'base' && r.d.expires === iso(graceEnd) && near(exp(r.d), graceEnd + 3 * DAY)
+          && rowOf(b2).grace_until === iso(graceEnd) && rowOf(b2).grace_signed_at === iso(info.signedDate)
+          && rowOf(b2).period_from === placed.period_from && rowOf(b2).signed_at === placed.signed_at,
+          `(${later}) the iPhone's copy with its renewal info, two hours after B2's end: licensed to 3 days past Apple's grace period, recorded on B2 as the row placed it (${r.d.reason || r.d.expires})`);
+        const renewed = await renew(issue({ email: apple.appleSub(b2.originalTransactionId), plan: 'base', now: Date.now() - 27 * DAY }, keys.privateKey));
+        check(renewed.d.licensed === true && near(exp(renewed.d), graceEnd + 3 * DAY), `(${later}) and /api/licence/renew renews to the same end (${renewed.d.reason || renewed.d.plan})`);
+        if (mac) {
+          const fromMac = await post([signJws(macCopy, chain)], { renewals: [signJws(info, chain)] });
+          check(fromMac.d.licensed === true && fromMac.d.expires === iso(graceEnd), `(${later}) as is the Mac's copy with the same renewal info (${fromMac.d.reason || fromMac.d.expires})`);
+        }
       }
     }
 

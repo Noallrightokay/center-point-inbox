@@ -130,9 +130,14 @@ or one from an earlier grace period, is left out as though not sent: the
 phone never ends a grace period, which Apple's notifications do and which
 ends at the time Apple gave for it in any case. The grace period a used
 one states is recorded under the same guard as a notification's, stamped
-with when Apple signed it; of several, the one Apple signed last. So a
-phone that sends it keeps a customer in Apple's billing grace period
-licensed by itself, even when no notification reaches mailrata.org. The StoreKit code (`claude/iap-native`) sends only
+with when Apple signed it, onto the period its transaction pays for
+however the row placed that period (*A renewal charged ahead of time*,
+below); of several, the one Apple signed last. So a phone that sends it
+keeps a customer in Apple's billing grace period licensed by itself,
+even when no notification reaches mailrata.org, and whichever of the
+customer's devices, or Apple's notifications, recorded the period
+first. Refunds still need the notifications (*Refunds, cancellations
+and revocation*). The StoreKit code (`claude/iap-native`) sends only
 `transactions` so far: until a build sends `renewalInfos` too, a grace
 period reaches the row only through Apple's notifications (`LAUNCH.md`
 §11, steps 4 and 5).
@@ -207,15 +212,18 @@ marks the Base renewal upgraded, is recorded on the upgrade, from both
 Apple's notification and the phone's Pro transaction. Placed by
 `purchaseDate` alone, the Base renewal would have outranked the upgrade,
 and a customer who paid for Pro would have had Base until the next Pro
-renewal, a month on. The cost is small: two statements about a period
-charged ahead, one signed before it began, are placed as though of two
-periods, and the later replaces the other with its grace fields afresh.
-No grace period can be known of a period that has not begun, so nothing
-Apple's notifications say is lost; the phone's renewal info, beside a
-transaction StoreKit signed before its period began, counts only over a
-row placed no later than that transaction, so over one a later
-notification of that period wrote, the grace period waits for Apple's
-`DID_FAIL_TO_RENEW`.
+renewal, a month on. Two statements about a period charged ahead, one
+signed before it began and one after, are placed apart, and the
+subscription fields of the one placed later win. They are still one
+period, with one product and one expiry, and the grace period belongs
+to the period rather than to where a statement placed it: a move to a
+later placement of the same period keeps its grace fields, and a grace
+period, from Apple's notification or the phone's renewal info, is
+written onto the period wherever the row placed it (`appleWrite`). So
+the phone's renewal info beside the iPhone's copy of a renewal, signed
+before its period began, still records the grace period after the Mac's
+copy (Universal Purchase), or Apple's `DID_RENEW`, signed later, has
+placed the row later.
 
 Two things the early charge still does, each for at most the hours
 before the period ends, and each left for the owner to decide: a Pro

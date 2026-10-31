@@ -302,13 +302,16 @@ export default async function run(state) {
       && P.includes('A refund stops AI at once, and mail keeps working until that licence\'s end')
       && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription has not been refunded or revoked'),
       'both pages: a refund or a revocation stops AI at once (app/api/ai, appleAiLive), and mail runs to the licence\'s end');
-    check(P.includes('With them the app sends Apple\'s signed renewal information for each subscription')
+    /* claude/iap-native sends only `transactions` so far, so the page says
+       the renewal information comes from a version that sends it
+       (LAUNCH.md section 11, step 4). */
+    check(P.includes('With them, a version of the app that reports billing grace periods itself also sends Apple\'s signed renewal information for each subscription')
       && P.includes('nor anything in the renewal information but when a billing grace period ends, and when Apple signed that'),
-      'privacy: the renewal information the app sends (renewalInfos), and that only the grace period\'s end, and when Apple signed it (grace_signed_at), are kept from it');
+      'privacy: the renewal information a version of the app that reports grace periods sends (renewalInfos), and that only the grace period\'s end, and when Apple signed it (grace_signed_at), are kept from it');
     /* What a renewal info carries (the library's JWSRenewalInfoDecodedPayload)
        beyond the grace period, said where the page lists what the app sends. */
     check(['whether it will renew and when', 'whether Apple is still retrying a failed payment', 'when the subscription most recently began',
-      'Apple\'s numbers for it, and when Apple signed it'].every((w) => P.includes(w)),
+      'Apple\'s numbers for it, a value StoreKit uses to check that it belongs to your device, and when Apple signed it'].every((w) => P.includes(w)),
       'privacy: the renewal information is described whole: when it renews, a payment Apple is retrying, when it began, Apple\'s numbers and its signing date');
     /* Every field Apple's library reads from a signed transaction and from
        a renewal info (JWSTransactionDecodedPayload and
@@ -351,12 +354,70 @@ export default async function run(state) {
     const riUnnamed = unnamed('JWSRenewalInfoDecodedPayload', RENEWAL_SAID, renewalInfo);
     check(fieldsOf('JWSTransactionDecodedPayload').length >= 30 && fieldsOf('JWSRenewalInfoDecodedPayload').length >= 20 && txUnnamed.length === 0 && riUnnamed.length === 0,
       `privacy: every field of a signed purchase and of its renewal information (the library's models) is named where the page lists what the app sends${txUnnamed.length || riUnnamed.length ? `; not: ${[...txUnnamed, ...riUnnamed].join(', ')}` : ''}`);
-    /* And what StoreKit adds on the phone, outside the library's models: a
-       transaction's deviceVerification and deviceVerificationNonce, a value
-       tied to the device (Apple's identifierForVendor) and its nonce. */
+    /* And what StoreKit adds on the phone, outside the library's models:
+       deviceVerification and deviceVerificationNonce, a value tied to the
+       device (Apple's identifierForVendor) and its nonce, which StoreKit
+       documents on a Transaction and on a
+       Product.SubscriptionInfo.RenewalInfo alike. */
     check(purchase.includes('a value StoreKit uses to check that the purchase belongs to your device')
+      && renewalInfo.includes('a value StoreKit uses to check that it belongs to your device')
       && P.includes('the device value or anything else a purchase names that the record does not list'),
-      'privacy: and StoreKit\'s device value, which is sent and not kept');
+      'privacy: and StoreKit\'s device value, on the purchase and on the renewal information, which is sent and not kept');
+    /* What Apple's notifications say (App Store Server Notifications V2):
+       every notification type in the library's NotificationTypeV2, and
+       every field of a notification and of its data, is named in the
+       sentences after the renewal information, so a type or field a new
+       version adds fails here until the page says it. Apple posts every
+       type to the URL, whatever RATA does with it; the route acts on some
+       and answers the rest 200. Left out, each for its reason: TEST,
+       which Apple sends only when the owner asks for one, about no
+       subscription; EXTERNAL_PURCHASE_TOKEN (and the payload's
+       externalPurchaseToken), only for apps using Apple's External
+       Purchase APIs; ONE_TIME_CHARGE, only for consumables,
+       non-consumables and non-renewing subscriptions, which RATA does not
+       sell; METADATA_UPDATE, MIGRATION and PRICE_CHANGE, only for apps
+       using the Advanced Commerce API; and of the payload, `data` (what it
+       holds is named field by field), `version` (the format's, "2.0") and
+       `summary`, which comes only with RENEWAL_EXTENSION's SUMMARY after
+       the owner asks Apple to extend every subscription at once, and holds
+       counts, a product and countries, naming no subscription. */
+    const told = (sends.match(/(Apple also tells mailrata\.org of each change to the subscription, in the same terms: .*?)\. Each of these names/) || ['', ''])[1];
+    const consent = (sends.match(/When a parent or guardian withdraws consent (.*?)\. None of it carries/) || ['', ''])[1];
+    const model = (f) => readFileSync(join(SITE, 'node_modules', '@apple', 'app-store-server-library', 'dist', 'models', `${f}.d.ts`), 'utf8');
+    const types = [...model('NotificationTypeV2').matchAll(/^ {4}([A-Z_]+) = "/gm)].map((m) => m[1]);
+    const NOT_TOLD = ['TEST', 'EXTERNAL_PURCHASE_TOKEN', 'ONE_TIME_CHARGE', 'METADATA_UPDATE', 'MIGRATION', 'PRICE_CHANGE', 'data', 'version', 'summary', 'externalPurchaseToken'];
+    const TOLD_SAID = {
+      SUBSCRIBED: 'when it is bought', DID_RENEW: 'renews', DID_FAIL_TO_RENEW: 'fails to renew', EXPIRED: 'or expires', GRACE_PERIOD_EXPIRED: 'when a billing grace period ends',
+      DID_CHANGE_RENEWAL_PREF: 'when it is moved to another product', OFFER_REDEEMED: 'or offer', DID_CHANGE_RENEWAL_STATUS: 'or set to renew or not',
+      PRICE_INCREASE: 'when its price is to rise', RENEWAL_EXTENDED: 'when its renewal date is extended', RENEWAL_EXTENSION: 'when its renewal date is extended',
+      CONSUMPTION_REQUEST: 'when a refund is asked for', REFUND: 'when one is given', REFUND_DECLINED: 'declined', REFUND_REVERSED: 'or reversed',
+      REVOKE: 'when it is revoked, as when access to it through Family Sharing ends',
+      notificationType: 'of each change to the subscription', subtype: 'of each change to the subscription', notificationUUID: 'Apple\'s number for the message',
+      signedDate: 'and when Apple signed it', environment: 'whether it is in Apple\'s test environment', appAppleId: 'Apple\'s number for the app',
+      bundleId: 'names the app', bundleVersion: 'and its version', signedTransactionInfo: 'in the same terms', signedRenewalInfo: 'in the same terms',
+      status: 'the subscription\'s status', consumptionRequestReason: 'and why',
+    };
+    /* RESCIND_CONSENT carries appData instead of data: the app, its
+       environment and Apple's signed record of the app on the device (an
+       AppTransaction). */
+    const CONSENT_SAID = {
+      RESCIND_CONSENT: 'for a child\'s use of the app', appData: 'its signed record of the app on that device',
+      appAppleId: 'Apple\'s numbers for it', bundleId: 'the app and its version', environment: 'whether it is in Apple\'s test environment',
+      signedAppTransactionInfo: 'its signed record of the app on that device', receiptType: 'whether it is in Apple\'s test environment',
+      applicationVersion: 'the app and its version', versionExternalIdentifier: 'the app and its version', receiptCreationDate: 'when Apple made and signed it',
+      originalPurchaseDate: 'when and in which version it was first downloaded', originalApplicationVersion: 'when and in which version it was first downloaded',
+      deviceVerification: 'a value StoreKit uses to check that it belongs to the device', deviceVerificationNonce: 'a value StoreKit uses to check that it belongs to the device',
+      preorderDate: 'whether it was pre-ordered', appTransactionId: 'Apple\'s numbers for it', originalPlatform: 'on which kind of device',
+    };
+    const each = (sends.match(/Each of these names (.*?)\. When a parent/) || ['', ''])[1];
+    const toldBy = (names, said, words) => names.filter((f) => !NOT_TOLD.includes(f) && !(said[f] && words.includes(said[f])));
+    const notTold = [
+      ...toldBy(types.filter((t) => t !== 'RESCIND_CONSENT'), TOLD_SAID, told),
+      ...toldBy([...fieldsOf('ResponseBodyV2DecodedPayload').filter((f) => f !== 'appData'), ...fieldsOf('Data')], TOLD_SAID, `${told} Each of these names ${each}`),
+      ...toldBy(['RESCIND_CONSENT', 'appData', ...fieldsOf('AppData'), ...fieldsOf('AppTransaction')], CONSENT_SAID, consent),
+    ];
+    check(types.length >= 20 && types.includes('RESCIND_CONSENT') && fieldsOf('Data').length >= 8 && fieldsOf('AppTransaction').length >= 12 && !!told && !!each && !!consent && notTold.length === 0,
+      `privacy: every notification type Apple posts for a subscription, and every field of a notification, its data and the consent notice's record of the app (the library's models), is named where the page says what Apple tells mailrata.org${notTold.length ? `; not: ${notTold.join(', ')}` : ''}`);
     /* When the app sends them: not only at a purchase or a restore, but by
        itself while its licence is due (claude/iap-native, appstore.rs: at
        launch and every six hours) and on each transaction StoreKit hands

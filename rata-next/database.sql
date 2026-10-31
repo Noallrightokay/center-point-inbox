@@ -266,14 +266,17 @@ create trigger pending_subscriptions_touch
 --    charged and reported before its period began, when Apple signed
 --    that, so an upgrade made in between is the later (lib/apple.js,
 --    periodFrom). Its fields are written in two
---    groups, each ordered by period_from and then by its own stamp of
---    when Apple signed what it says: the subscription's (signed_at)
---    and the grace period's (grace_until, grace_signed_at, which only
---    a renewal info Apple signed reports: a notification's, or one the
---    phone sends with its purchase). So a notification delivered late,
---    or twice, never undoes a later one (lib/apple.js, appleWrite).
---    Not by expires_at: a period paid for in advance can end after
---    the one that replaced it.
+--    groups, each with its own stamp of when Apple signed what it
+--    says: the subscription's (signed_at), ordered by period_from and
+--    then signed_at; and the grace period's (grace_until,
+--    grace_signed_at, which only a renewal info Apple signed reports:
+--    a notification's, or one the phone sends with its purchase),
+--    ordered by grace_signed_at within the period, which is its
+--    product and expiry wherever the row placed it. So a notification
+--    delivered late, or twice, never undoes a later one (lib/apple.js,
+--    appleWrite). Periods are ordered by period_from, never by
+--    expires_at: a period paid for in advance can end after the one
+--    that replaced it.
 --
 --    Live means revoked_at is null and expires_at, or grace_until
 --    (Apple's billing grace period, when a renewal has failed), is

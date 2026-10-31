@@ -15,7 +15,7 @@
      period starting, a change of renewal preference during it, the refund
      reversed, the grace period ending and the subscription expiring; each
      order then delivers its first and last events again;
-   - every order of thirteen small sets: two that cross from one period
+   - every order of fifteen small sets: two that cross from one period
      to the next (one of them an upgrade from a period paid for in
      advance, which ends after the one that replaced it); one where the
      phone's purchase, signed after a grace notice, arrives before it;
@@ -26,10 +26,11 @@
      transaction beside a renewal info signed after billing recovered,
      with and without the recovery arriving, and the next period's
      transaction beside the renewal info of the grace period before it);
-     and four with a renewal Apple charged ahead of time, before its
+     and six with a renewal Apple charged ahead of time, before its
      period began (an upgrade made after the charge, that period's grace
-     period from Apple and from the phone alone, and a refund of the
-     period before it).
+     period from Apple and from the phone alone, the phone's grace period
+     after another device's copy, or Apple's notice, signed later placed
+     the period later, and a refund of the period before it).
    The answer for each set is that set delivered in signing order, and a
    few of those answers are also checked against what they must say.
 
@@ -242,6 +243,10 @@ export async function deliveryOrders({ sb, check, label, width = 1 }) {
      Base until U's renewal; B2 is placed when Apple reported it instead
      (lib/apple.js, periodFrom), so U is the later. Then B2 renewed as it
      was and in grace at its end, from Apple and from the phone alone;
+     the phone's grace period after a copy of B2 signed later than the
+     phone's placed the row later: the Mac's (Universal Purchase), signed
+     once B2 had begun, or Apple's DID_RENEW, signed after the phone's but
+     before B2 began, with Apple's own grace notice not yet delivered;
      and a refund of B1, signed after B2 was charged, which is about the
      period before and changes nothing. */
   const H = 3600e3;
@@ -261,24 +266,32 @@ export async function deliveryOrders({ sb, check, label, width = 1 }) {
   const chargedInGrace = phoneWith('B2 phone in grace', T0 + 30 * DAY - 7 * H, B2, T0 + 61 * DAY, BG);
   const aheadGrace = [charged, chargedPhone, note('B2 GRACE', 'DID_FAIL_TO_RENEW', 'GRACE_PERIOD', T0 + 60 * DAY, B2, BG), chargedInGrace];
   const aheadAlone = [chargedPhone, chargedInGrace];
+  const aheadTwoDevices = [chargedPhone, phone('B2 Mac, once B2 began', T0 + 31 * DAY, B2), chargedInGrace];
+  const aheadRenewedLater = [chargedPhone, note('B2 DID_RENEW, after the phone', 'DID_RENEW', null, T0 + 30 * DAY - 6 * H, B2, null), chargedInGrace];
   const aheadRefund = [
     note('B1 SUBSCRIBED', 'SUBSCRIBED', 'INITIAL_BUY', T0, B1, null),
     charged,
     note('B1 REFUND', 'REFUND', null, T0 + 30 * DAY - 2 * H, { ...B1, revocationDate: T0 + 30 * DAY - 2 * H, revocationReason: 0 }, null),
   ];
-  const cross = await settle([upgrade, recovered, resigned, alone, aloneEnded, aloneRecovered, lagging, laggingRecovered, oldInfo, aheadUpgrade, aheadGrace, aheadAlone, aheadRefund]);
+  const cross = await settle([upgrade, recovered, resigned, alone, aloneEnded, aloneRecovered, lagging, laggingRecovered, oldInfo, aheadUpgrade, aheadGrace, aheadAlone, aheadTwoDevices, aheadRenewedLater, aheadRefund]);
   check(cross.wrong.length === 0,
-    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a re-signed purchase, the phone alone in a grace period, the phone's two halves of different moments and a renewal charged ahead of time, each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
+    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a re-signed purchase, the phone alone in a grace period, the phone's two halves of different moments and a renewal charged ahead of time (with two devices, and with a notice signed after the phone's copy), each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
   const au = cross.answers.get(aheadUpgrade);
   check(!!au && au.plan === 'pro' && au.product_id === PRO && au.period_from === U.purchaseDate && au.expires_at === U.expiresDate && au.revoked_at === null
     && au.signed_at === T0 + 30 * DAY - 5 * H,
     `${label}an upgrade made after Apple charged the Base renewal ahead of time: Pro, from the upgrade (${shown(au)})`);
   const ag = cross.answers.get(aheadGrace);
-  check(!!ag && ag.plan === 'base' && ag.period_from === B2.purchaseDate && ag.expires_at === B2.expiresDate && ag.grace_until === BG && ag.grace_signed_at === T0 + 60 * DAY,
-    `${label}a renewal charged ahead, then in grace at its end: Apple's grace period stands, from its notice, and the phone's renewal info beside a transaction signed before the period began does not restamp it (${shown(ag)})`);
+  check(!!ag && ag.plan === 'base' && ag.period_from === B2.purchaseDate && ag.expires_at === B2.expiresDate && ag.grace_until === BG && ag.grace_signed_at === T0 + 61 * DAY,
+    `${label}a renewal charged ahead, then in grace at its end: the grace period stands, from Apple's notice and then from the phone's later renewal info of the same period, though its transaction was signed before the period began (${shown(ag)})`);
   const aa = cross.answers.get(aheadAlone);
   check(!!aa && aa.period_from === T0 + 30 * DAY - 7 * H && aa.expires_at === B2.expiresDate && aa.grace_until === BG && aa.grace_signed_at === T0 + 61 * DAY,
     `${label}and from the phone alone, its transaction signed before its period began: the grace period is recorded (${shown(aa)})`);
+  const td = cross.answers.get(aheadTwoDevices);
+  check(!!td && td.period_from === B2.purchaseDate && td.signed_at === T0 + 31 * DAY && td.expires_at === B2.expiresDate && td.grace_until === BG && td.grace_signed_at === T0 + 61 * DAY,
+    `${label}and from the phone alone after the Mac's copy, signed once B2 began, placed the row later: the grace period is recorded on B2 (${shown(td)})`);
+  const rl = cross.answers.get(aheadRenewedLater);
+  check(!!rl && rl.period_from === T0 + 30 * DAY - 6 * H && rl.signed_at === T0 + 30 * DAY - 6 * H && rl.grace_until === BG && rl.grace_signed_at === T0 + 61 * DAY,
+    `${label}and after Apple's DID_RENEW, signed after the phone's copy, with no grace notice yet: the grace period is recorded from the phone (${shown(rl)})`);
   const ar = cross.answers.get(aheadRefund);
   check(!!ar && ar.period_from === T0 + 30 * DAY - 8 * H && ar.expires_at === B2.expiresDate && ar.revoked_at === null,
     `${label}a refund of the period before, signed after the renewal was charged ahead: B2, not revoked (${shown(ar)})`);

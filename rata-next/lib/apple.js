@@ -35,9 +35,11 @@ import { LICENCE_DAYS } from './licence.js';
    genuine purchases would become a flood of requests to Apple. A revoked
    App Store signing certificate would be news Apple announces, not one a
    per-request check is needed for; and a refunded or revoked purchase is a
-   different thing, which reaches RATA as a transaction carrying
-   `revocationDate` or as a REFUND or REVOKE notification. So RATA checks
-   offline, which costs no request to anybody.
+   different thing, which an online check would not find either: it
+   reaches RATA only as Apple's REFUND or REVOKE notification (StoreKit
+   stops listing a refunded purchase, and one the phone sends with a
+   `revocationDate` unlocks nothing and records nothing, appleIgnored). So
+   RATA checks offline, which costs no request to anybody.
    --------------------------------------------------------------------------- */
 
 /* Apple's root certificates, as the library's documentation asks: every one
@@ -402,16 +404,14 @@ const signedAt = (o) => iso(o && known(o.signedDate) ? o.signedDate : 0);
    after that, is the later.
 
    So two statements about a period charged ahead, when one of them was
-   signed before it began, are placed apart, as though of two periods: the
-   one placed later replaces the other, its grace fields starting afresh.
-   No grace period can be known of a period that has not begun (it starts
-   when the period ends), so nothing Apple's notifications say is lost.
-   What does change is the phone's renewal info, which is written with its
-   transaction (applePurchase) and so only where that transaction is
-   placed: beside a transaction StoreKit signed before its period began,
-   over a row that a later statement of that period wrote (a notification
-   signed once the period had begun), it changes nothing, and the grace
-   period reaches the row by Apple's DID_FAIL_TO_RENEW instead.
+   signed before it began, are placed apart: the subscription fields of the
+   one placed later replace the other's. They are still one period, with
+   one product and one expiry, and appleWrite keeps that period's grace
+   fields across the move and writes a grace period onto it wherever it is
+   placed. So the phone's renewal info, beside a transaction StoreKit
+   signed before its period began, still counts over a row placed later by
+   another device's copy of that period, or by a notification signed once
+   the period had begun.
 
    Treated as the earliest there is when purchaseDate is missing, as
    signedAt is; with no signed time, by purchaseDate alone. */
@@ -435,8 +435,9 @@ function graceOf(r, at) {
 /* A row's subscription fields as a transaction describes them: the
    product, the plan, the period (periodFrom) and its expiry, whether the
    transaction is revoked, and when Apple signed what says it (`signed`:
-   the transaction's own signedDate, or a notification's). Everything but
-   the grace period. */
+   the transaction's own signedDate when left out, or a notification's;
+   null for a notification that gives none, which is not replaced by the
+   transaction's). Everything but the grace period. */
 export function appleRowOf(t, environment, signed = t && t.signedDate) {
   return {
     product_id: t.productId,
@@ -484,7 +485,11 @@ export function appleChange(n, t, r, environment) {
   let revoked = own;
   if (REVOKED.includes(type) && own === null) revoked = typeof n.signedDate === 'number' && Number.isFinite(n.signedDate) ? n.signedDate : Date.now();
   if (type === 'REFUND_REVERSED') revoked = null;
-  const core = { ...appleRowOf(t, environment, n.signedDate), revoked_at: revoked === null ? null : iso(revoked) };
+  /* Placed and stamped by the notification's own signedDate, never by the
+     transaction inside it: one without a signedDate is passed as null,
+     which appleRowOf does not replace, so it is placed by purchaseDate and
+     stamped the oldest time there is, as signedAt says. */
+  const core = { ...appleRowOf(t, environment, known(n.signedDate) ? n.signedDate : null), revoked_at: revoked === null ? null : iso(revoked) };
   const grace = r && typeof r === 'object' ? graceOf(r, at) : null;
   return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
@@ -557,31 +562,42 @@ export function applePurchase(t, environment, r = null) {
    before, however long each lasts, and an upgrade made after a renewal
    was charged ahead is later than that renewal; the expiry would not do,
    since a period paid for in advance (an introductory offer of several
-   months, an offer code) can end after the one that replaced it. Within
-   one period, what Apple signed later wins, in two groups of fields, each
-   with its own stamp:
+   months, an offer code) can end after the one that replaced it. Two
+   statements about one period charged ahead can be placed apart, one
+   signed before the period began and one after; they are still one
+   period, with one product and one expiry. What Apple signed later wins,
+   in two groups of fields, each with its own stamp:
 
-   - the subscription fields (`core`), stamped signed_at. Written over a
-     row recording an earlier period, which this one replaces, its grace
-     fields reset with it (to this write's grace, or to none); or over a
-     row recording the same period whose signed_at is no later. A row
-     recording a later period is never written.
+   - the subscription fields (`core`), stamped signed_at and ordered by
+     (period_from, signed_at): written over a row placed the same whose
+     signed_at is no later, or over a row placed earlier. Over a row
+     placed earlier that records another period (another product, or
+     another expiry), which this one replaces, the grace fields are reset
+     with it (to this write's grace, or to none). Over one placed earlier
+     that records this same period they are kept: a grace period belongs
+     to the period, not to where a statement about it was placed. A row
+     placed later is never written.
    - the grace fields, grace_until and grace_signed_at, written only from
      a renewal info: a notification's, or one the phone sent beside its
      transaction that states a grace period for that transaction's period
-     (applePurchase, appleGraceFor). Over a row recording this same period
-     whose grace_signed_at is no later. The core write has already moved a
-     row of an earlier period on to this one. Only a renewal info knows the
-     grace period, and a transaction alone never touches it, so a
+     (applePurchase, appleGraceFor). Over a row recording this same period,
+     placed the same or with the same product and expiry, whose
+     grace_signed_at is no later; the core write has already moved a row
+     of an earlier period on to this one. So the phone's renewal info
+     counts beside a transaction StoreKit signed before its period began
+     even after another device's copy, or a notification, signed once the
+     period had begun, has placed the row later. Only a renewal info knows
+     the grace period, and a transaction alone never touches it, so a
      transaction StoreKit signed later cannot hide a grace period Apple
      reported earlier.
 
-   So each group's (period_from, stamp) never goes down. Every guard is in
-   the database, so two deliveries racing each other cannot both pass a
-   check and then both write. A row not there yet is inserted whole; if
-   another request inserted it in between, the guarded updates are tried
-   once more. Answers { row, wrote } with the row as it stands after, or
-   { error }. */
+   So the subscription fields' (period_from, signed_at) never goes down,
+   and nor, within a period, does the grace fields' stamp. Every guard is
+   in the database, each update's whole on its own, so two deliveries
+   racing each other cannot both pass a check and then both write. A row
+   not there yet is inserted whole; if another request inserted it in
+   between, the guarded updates are tried once more. Answers { row, wrote }
+   with the row as it stands after, or { error }. */
 export async function appleWrite(sb, id, { core, grace = null, insert }) {
   const table = () => sb.from('apple_subscriptions');
   const update = async (values, guard) => {
@@ -590,8 +606,18 @@ export async function appleWrite(sb, id, { core, grace = null, insert }) {
     return data && data.length ? data[0] : null;
   };
   const from = core.period_from;
-  const coreWrite = async () => (await update({ ...core, ...(grace || NO_GRACE) }, (q) => q.lt('period_from', from)))
-    || update(core, (q) => q.eq('period_from', from).lte('signed_at', core.signed_at));
+  /* The same period as this write's: its product and its expiry. */
+  const samePeriod = (q) => q.eq('product_id', core.product_id).eq('expires_at', core.expires_at);
+  const afresh = { ...core, ...(grace || NO_GRACE) };
+  /* Each of these holds alone, in the database, so whichever lands, and
+     whatever another request wrote in between, is right: over the same
+     placement signed no later; over this period placed earlier, keeping
+     its grace fields; over another period placed earlier (another
+     product, or another expiry), starting them afresh. */
+  const coreWrite = async () => (await update(core, (q) => q.eq('period_from', from).lte('signed_at', core.signed_at)))
+    || (await update(core, (q) => samePeriod(q.lt('period_from', from))))
+    || (await update(afresh, (q) => q.lt('period_from', from).neq('product_id', core.product_id)))
+    || update(afresh, (q) => q.lt('period_from', from).neq('expires_at', core.expires_at));
   try {
     let row = await coreWrite();
     if (!row) {
@@ -604,7 +630,11 @@ export async function appleWrite(sb, id, { core, grace = null, insert }) {
     }
     let wrote = !!row;
     if (grace) {
-      const kept = await update(grace, (q) => q.eq('period_from', from).lte('grace_signed_at', grace.grace_signed_at));
+      /* Over the period this write is about, however the row placed it:
+         the same placement, or the same product and expiry. */
+      const stamp = grace.grace_signed_at;
+      const kept = (await update(grace, (q) => q.eq('period_from', from).lte('grace_signed_at', stamp)))
+        || (await update(grace, (q) => samePeriod(q).lte('grace_signed_at', stamp)));
       if (kept) { row = kept; wrote = true; }
     }
     if (row) return { row, wrote };

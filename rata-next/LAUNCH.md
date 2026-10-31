@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1200 checks).
+the website's test suites pass with `npm test` after it (1216 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -262,7 +262,8 @@ they are written to be true, not as legal advice. Three statements rest on
 things only you can confirm. The privacy policy says backups are deleted
 90 days after they are made (the lifecycle rule in
 `infrastructure/backup/README.md`, step 1), and names Hostinger as the host
-and Anthropic and Stripe as the other companies that handle data. It says
+and Anthropic, Stripe and Apple (for a subscription bought in the iPhone
+app, §11) as the other companies that handle data. It says
 what RATA keeps of an AI request (nothing but the count) and points to
 Anthropic's own terms for what Anthropic keeps; if you have a
 zero-retention agreement with Anthropic, say so there. Refunds, price
@@ -511,10 +512,12 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    tell the record of the grace period, even when the phone has not been
    opened. An app build that sends each subscription's signed renewal info
    beside its purchases (`renewalInfos`) also reports it from the phone, so
-   with such a build it works without step 5 too. The StoreKit code
-   (`claude/iap-native`) does not send renewal info yet: until a build
-   that does is in the App Store, a customer in a grace period is licensed
-   past 3 days after their period's end only through step 5.
+   with such a build a grace period is recorded without step 5 too, from
+   whichever of the customer's devices sends it (refunds still need step
+   5). The StoreKit code (`claude/iap-native`) does not send renewal info
+   yet: until a build that does is in the App Store, a customer in a grace
+   period is licensed past 3 days after their period's end only through
+   step 5.
 5. **Server notifications**: the app → App Information → App Store Server
    Notifications. Version 2, the URL
    `https://mailrata.org/api/apple/notifications`, for **both** Production
@@ -539,12 +542,22 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    `apple_subscriptions`.
 9. **Redeploy** (§5).
 10. **The App Privacy answers** (the "nutrition label"): App Store Connect
-    → the app → App Privacy. For what this server does: *Purchases →
-    Purchase History* is collected, for *App Functionality*, not used for
-    tracking. It is keyed by Apple's transaction id, which only Apple can
-    tie to a person; answer *linked to the user* unless you are sure it is
-    not. The privacy policy (§5) already says what is kept, under
-    *Subscribing in the iPhone app*.
+    → the app → App Privacy. For the purchases this server records:
+    *Purchases → Purchase History* is collected, for *App Functionality*,
+    not used for tracking. It is keyed by Apple's transaction id, which
+    only Apple can tie to a person; answer *linked to the user* unless you
+    are sure it is not. The privacy policy (§5) already says what is kept,
+    under *Subscribing in the iPhone app*. That is not the whole form, so
+    do not fill it in from this step alone: the same server also passes
+    the text of a message to Anthropic when the customer asks the iPhone
+    app for a summary, a translation or a briefing (the AI relay, §4), and
+    keeps each month's AI request count and cost under the purchase's
+    number (the AI usage record in the privacy policy). The count is kept,
+    so it is collected too. Whether the message text counts as collected
+    (*User Content → Emails or Text Messages*) depends on what Anthropic
+    keeps of it, which is decision D5: `docs/APP-STORES.md`, *Store
+    privacy forms* and D5, has the drafts of the answers and what each
+    waits on.
 11. **Test from TestFlight** with your own Apple Account (TestFlight
     purchases cost nothing), or with the step-6 sandbox tester on a
     development build: buy Base, upgrade to Pro, restore purchases on a
@@ -578,10 +591,11 @@ Two choices are made for you, and are yours to revisit:
   against today. It keeps a good answer for 15 minutes and a failure not at
   all, so while that service is slow every licence request would wait up
   to 30 seconds and call out again, and a flood of requests would become a
-  flood of calls to Apple. A refunded or revoked *purchase* still reaches
-  RATA, as the purchase saying so or as a REFUND or REVOKE notification;
-  only a revoked Apple *signing certificate*, which Apple would announce,
-  goes unchecked. The `false` passed as `enableOnlineChecks` in
+  flood of calls to Apple. A refunded or revoked *purchase* is not what
+  that check is for: it reaches RATA through step 5's REFUND or REVOKE
+  notification, and only that way, online checks or not. Only a revoked
+  Apple *signing certificate*, which Apple would announce, goes
+  unchecked. The `false` passed as `enableOnlineChecks` in
   `lib/apple.js` is the switch.
 - **Sandbox purchases are accepted**, because App Review and TestFlight buy
   there. A sandbox purchase costs nothing. Its licence lasts only an hour
