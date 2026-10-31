@@ -51,8 +51,8 @@
 //!    Word saves by writing a new file and renaming it over the old one.
 //!
 //! Then the recorded path alone goes to the system's opener (`system_open`,
-//! the opener plugin's Rust side, the same one `links` uses for the
-//! browser): as an argument, never in a shell string. Opening is asked for, never needed:
+//! the `open` crate, the same one `links` uses for the browser): as an
+//! argument, never in a shell string. Opening is asked for, never needed:
 //! a file that could not be opened is still made, and the answer says so.
 //!
 //! The files are the customer's own documents from their first byte, so
@@ -315,23 +315,31 @@ pub struct Contents {
 /// the tests launch nothing.
 pub type Opener<'a> = dyn Fn(&Path) -> std::io::Result<()> + Sync + 'a;
 
-/// The system's own opener, through the opener plugin's Rust side (the
-/// page is granted none of it): Launch Services through `open` on a Mac,
-/// the shell's own `ShellExecuteExW` on Windows (no shell string, no
-/// command line), `xdg-open` and its kin on Linux, each given the path as
-/// one argument. Only ever called with a recorded path that has just passed
-/// `checked`, and only on a computer: a phone has no Create file (`offered`).
+/// The system's own opener: Launch Services through `open` on a Mac,
+/// `Invoke-Item -LiteralPath` with the path in an environment variable on
+/// Windows (no shell string), `xdg-open` and its kin on Linux, each given
+/// the path as one argument. Only ever called with a recorded path that has
+/// just passed `checked`.
+#[cfg(desktop)]
 pub fn system_open(path: &Path) -> std::io::Result<()> {
-    tauri_plugin_opener::open_path(for_opener(path), None::<&str>).map_err(|e| match e {
-        tauri_plugin_opener::Error::Io(e) => e,
-        other => std::io::Error::other(other),
-    })
+    open::that_detached(for_opener(path))
+}
+
+/// A phone has no Create file (`offered`), so nothing it made is ever
+/// asked to open there.
+#[cfg(mobile)]
+pub fn system_open(_: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        NO_CREATE,
+    ))
 }
 
 /// The path as a program expects it. On Windows a canonical path is a
 /// verbatim one (`\\?\C:\…`), which not every launcher takes; the plain
 /// form names the same file, since RATA's names never need the verbatim
 /// form (`safe_file_name`).
+#[cfg(any(desktop, test))]
 fn for_opener(path: &Path) -> PathBuf {
     #[cfg(windows)]
     if let Some(plain) = path.to_str().and_then(unverbatim) {

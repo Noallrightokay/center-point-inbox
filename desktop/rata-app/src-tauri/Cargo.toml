@@ -34,18 +34,27 @@ getrandom = "0.3"
 sha2 = "0.11"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-# Handing a web address to the browser, and a file RATA made to its app
-# (links.rs, created.rs), after RATA's own checks. Its Rust side only: the
-# page is granted none of it. On a computer it starts the system's opener
-# through the `open` crate, as RATA did itself before; on a phone it asks
-# the system, since an app there cannot start a program.
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = { version = "2", optional = true }
 tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
+
+# Handing a web address to the browser, and a file RATA made to its app
+# (links.rs, created.rs), after RATA's own checks, on a computer: the
+# system's own opener, given it as one argument, as in every release. Not
+# on a phone, where an app cannot start a program.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+open = "5"
+
+# On a phone the system opens a web address for RATA: the opener plugin's
+# mobile half (links.rs), called from Rust only; the page is granted none
+# of it. A phone only, so that a computer's build stays as it was: the
+# plugin also turns on the `open` crate's ShellExecuteExW for Windows,
+# which would change how every Windows installer opens a link or a file.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-opener = "2"
 
 # A second launch handing over to the first (lib.rs, review R5), on
 # Windows and Linux; on macOS the list's lock is the only guard, and a

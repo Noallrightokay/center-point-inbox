@@ -2151,8 +2151,15 @@ window.addEventListener('keydown',e=>{
   if(!WARN_DONE)return;
   if(e.key==='Escape'||(e.key==='Enter'&&document.activeElement!==$('#warn-go'))){e.preventDefault();e.stopPropagation();closeWarn(false)}
 },true);
-/* An attachment goes to the Downloads folder and is never opened by RATA:
-   it is a stranger's file, and running it is the customer's decision. */
+/* Where the app saves, in Rust's words (core::save_place): the Downloads
+   folder on a computer, the app's own folder in the Files app on an
+   iPhone. Rust sets it as the page starts, for what is said before a save
+   (an attachment's button); each save's answer names it again (place). */
+const savePlace=()=>typeof window.__RATA_SAVE_PLACE__==='string'&&window.__RATA_SAVE_PLACE__||'your Downloads folder';
+/* An attachment goes there and is never opened by RATA: it is a
+   stranger's file, and running it is the customer's decision. Where it
+   went is said as the folder and the name it was saved under, never the
+   path, which on an iPhone is the inside of the app's container. */
 async function saveAttachment(m,a,btn,confirmed){
   if(!a)return;
   if(a.disguised&&!confirmed){if(!await askDisguised(a,true))return;confirmed=true}
@@ -2163,7 +2170,7 @@ async function saveAttachment(m,a,btn,confirmed){
   if(btn&&btn.isConnected)btn.disabled=false;
   /* Listed by a build that did not mark disguises: Rust knows, so ask now. */
   if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){a.disguised=true;return saveAttachment(m,a,btn)}
-  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path+(confirmed?' (a program named as a document, saved after asking)':''));toast('Saved to '+r.path)}
+  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path+(confirmed?' (a program named as a document, saved after asking)':''));toast('Saved to '+(r.place?r.place+' as '+r.name:r.path))}
   else toast('Could not save '+a.n+' \u2014 '+((r&&r.error)||'try again'));
 }
 /* An attachment straight into the Format Bridge: the app fetches it from the
@@ -3757,7 +3764,7 @@ function openMail(id){
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     <section class="md-convo" id="md-convo" hidden></section>
     ${atts.length?`<div class="md-atts">${picsHTML}${atts.map((a,k)=>savable&&a.i!==undefined
-      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}${clouds?`<button class="att-conv" data-cloud="${k}" aria-haspopup="true" aria-expanded="false" title="Save ${esc(a.n)} to a connected cloud">Save to \u25be</button>`:''}</span>`
+      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to ${esc(savePlace())}"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}${clouds?`<button class="att-conv" data-cloud="${k}" aria-haspopup="true" aria-expanded="false" title="Save ${esc(a.n)} to a connected cloud">Save to \u25be</button>`:''}</span>`
       :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
@@ -7698,7 +7705,7 @@ async function brDownload(blob,fname){
     try{r=await apiFetch('/api/file/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fname,data:await fileBase64(blob)})})}
     catch(e){r={error:String(e&&e.message||e)}}
     if(!r||!r.ok){toast('Could not save '+fname+' \u2014 '+((r&&r.error)||'no answer'));return false}
-    toast('Saved to '+(r.place||'your Downloads folder')+' as '+r.name);
+    toast('Saved to '+(r.place||savePlace())+' as '+r.name);
     return true;
   }
   const u=URL.createObjectURL(blob);

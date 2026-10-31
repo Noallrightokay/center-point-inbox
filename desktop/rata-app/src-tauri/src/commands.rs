@@ -491,10 +491,15 @@ pub fn save_file(
 /// A web address from the interface — a link in the text of a message, or
 /// one the customer confirmed — for the browser. Anything that is not http
 /// or https is refused here, whatever the page asked.
+///
+/// Async, and the opening itself off the window's thread (`open_aside`): a
+/// command that is not async runs on the thread the page's call arrives
+/// on, which on a phone is the main thread, and there the wait for the
+/// system's answer could hold up the thread the opening needs.
 #[tauri::command]
-pub fn open_link(handle: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_link(handle: AppHandle, url: String) -> Result<(), String> {
     match crate::links::classify(&url) {
-        Some(crate::links::Link::Web(u)) => crate::links::open_web(&handle, &u),
+        Some(crate::links::Link::Web(u)) => crate::links::open_aside(handle, u).await,
         _ => Err("RATA only opens web addresses (http and https).".into()),
     }
 }

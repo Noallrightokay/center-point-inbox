@@ -411,9 +411,12 @@ jobs:
           xcrun simctl ui "$SIM" appearance light
           # 4. Settings, with the account and the licence the second run kept.
           SIMCTL_CHILD_RATA_SMOKE_VIEW="set" bash "$smoke_run" "$SIM" "$out" 4-settings || failed=1
-          # 5. RATA opens a web address as a phone opens one for it
-          # (links::open_web, the opener plugin's mobile half): run-smoke.sh
-          # ends Safari first, and then wants it running, and RATA too.
+          # 5. RATA opens a web address the page asks for, as the page asks
+          # for every link (open_link, over the page's own IPC, so on the
+          # thread a real tap's call arrives on), off the window's thread
+          # (links::open_aside) through the opener plugin's mobile half:
+          # run-smoke.sh ends Safari first, and then wants it running, and
+          # RATA too.
           SIMCTL_CHILD_RATA_SMOKE_OPEN=1 bash "$smoke_run" "$SIM" "$out" 5-opens-a-link || failed=1
           exit $failed
 

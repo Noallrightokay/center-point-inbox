@@ -360,12 +360,15 @@ pub fn run() {
                 .first()
                 .cloned()
                 .ok_or_else(|| std::io::Error::other("no window configured"))?;
+            // A link of RATA's own goes to the browser off the window's
+            // thread, which this handler runs on (`links::open_aside`), and
+            // the window stays where it is at once.
             let opener = app.handle().clone();
             let window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
                 .on_navigation(move |url| match links::navigation(url) {
                     Navigation::Stay => true,
                     Navigation::Browser(u) => {
-                        let _ = links::open_web(&opener, &u);
+                        tauri::async_runtime::spawn(links::open_aside(opener.clone(), u));
                         false
                     }
                     Navigation::Refuse => false,
@@ -384,6 +387,10 @@ pub fn run() {
                     NewWindowResponse::Deny
                 })
             };
+            // Where saves go, in the words each save's answer uses
+            // (`core::save_place`), for the page to say before a save too.
+            let window = window
+                .initialization_script(crate::core::save_place_script(cfg!(target_os = "ios")));
             #[cfg(feature = "smoke")]
             let window =
                 window.initialization_script(smoke::script(smoke::asked_view().as_deref()));

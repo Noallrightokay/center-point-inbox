@@ -25,11 +25,11 @@ convenient.
 
 | Path | What |
 |---|---|
-| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard (which judges a NAT64 address by the IPv4 address inside, since #164; first in the next release), server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`), and on iOS looking names up through the system's own resolver instead of hickory (`dns_sd.rs` asks, `records.rs` reads the answers; *Name lookups on iOS*, below). Standalone, knows nothing about the app. 343 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). CI job *Mail layer on macOS* (`.github/workflows/mail-apple.yml`, workflow *Mail on Apple systems*, on every change to the engine or that file; not part of the release gate) runs the 343 with hickory, as the macOS app has it; again with `--features system-dns`, as iOS looks names up (337: the six tests that need hickory do not exist in that build; and 12 that exist only in such a build, ignored there and run in a step of their own, one at a time, since ten of them ask real DNS); clippy with that feature and for `aarch64-apple-ios`; checks with `cargo tree` that neither iOS target builds hickory, System Configuration or resolv-conf; builds and links the tests for iOS and the iOS Simulator; and runs the library's tests in an iOS Simulator (337, then the 12) as a bare process (`xcrun simctl spawn`), outside any app's sandbox. Linux CI never compiles the iOS code: check it here with `cargo clippy --all-targets -- --cfg system_dns -D warnings` (*Name lookups on iOS*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 326 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
+| `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard (which judges a NAT64 address by the IPv4 address inside, since #164; first in the next release), server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`), and on iOS looking names up through the system's own resolver instead of hickory (`dns_sd.rs` asks, `records.rs` reads the answers; *Name lookups on iOS*, below). Standalone, knows nothing about the app. 344 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). CI job *Mail layer on macOS* (`.github/workflows/mail-apple.yml`, workflow *Mail on Apple systems*, on every change to the engine or that file; not part of the release gate) runs the 344 with hickory, as the macOS app has it; again with `--features system-dns`, as iOS looks names up (338: the six tests that need hickory do not exist in that build; and 12 that exist only in such a build, ignored there and run in a step of their own, one at a time, since ten of them ask real DNS); clippy with that feature and for `aarch64-apple-ios`; checks with `cargo tree` that neither iOS target builds hickory, System Configuration or resolv-conf; builds and links the tests for iOS and the iOS Simulator; and runs the library's tests in an iOS Simulator (338, then the 12) as a bare process (`xcrun simctl spawn`), outside any app's sandbox. Linux CI never compiles the iOS code: check it here with `cargo clippy --all-targets -- --cfg system_dns -D warnings` (*Name lookups on iOS*). |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`lib.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 334 tests on Linux (331 without the `self-update` feature, and 17 of the iOS self-test with `smoke`). The program, `main.rs`, only calls the library's `run` (`lib.rs`), where the tests are. On Windows CI runs only the keychain, list and start tests (`cargo test --lib -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*; `--bin rata-app` finds no tests and passes), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (579 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (584 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -73,7 +73,7 @@ Nothing is built until `gate` (*Tests before a release*: `sync-ui.sh`, the
 engine and shell tests, the driven harness, the update feed's rules in
 `harness/feed.test.cjs`, and the demo's rules in `demo/check.mjs`) and its
 Windows half `gate_windows` (*Tests before a release (Windows)*, on
-`windows-latest`: `sync-ui.sh`, then `cargo test --bin rata-app -- vault::
+`windows-latest`: `sync-ui.sh`, then `cargo test --lib -- vault::
 store:: tests::at_start`, since RATA writes its own Windows keychain
 entries and Credential Manager cannot be reached from Linux; SEC-11) pass
 on the commit being released (BUG-R, v0.1.43); `create-release` and
@@ -171,7 +171,7 @@ removes every control that led nowhere; v0.1.7 decodes message bodies;
 v0.1.8 opens whole messages and saves attachments; v0.1.9 sends
 attachments; v0.1.10 shrinks the window to fit small screens (it opened
 1280×860, taller than a 1366×768 laptop, with Send below the edge — see
-`fit_to_screen` in `main.rs`, which has to use the configured size because
+`fit_to_screen` in `lib.rs`, which has to use the configured size because
 the window reports 0×0 during setup); v0.1.11 adds Forward, which carries
 the original's attachments; v0.1.12 shows HTML mail formatted; v0.1.13
 keeps mail in IndexedDB, one record per message, with no storage cap;
@@ -845,7 +845,7 @@ real CSP from `tauri.conf.json`. Opening a message fetches it whole when it may 
 outside page may ever load in it; links go to the customer's browser, and
 only http and https do (`links.rs`: `classify` refuses `file:`,
 `javascript:`, `data:`, custom schemes, and `user@host` addresses that
-disguise the real host). The main window is built in `main.rs` rather than
+disguise the real host). The main window is built in `lib.rs` rather than
 from the config (`"create": false`) so it can carry two handlers.
 `on_new_window` receives every click on a link in a formatted message (the
 frame's only permission), always answers `Deny`, and tells the page via
@@ -2075,7 +2075,7 @@ SHA-256 in `mailboxes.json.moved` and removed at a later start only while
 it is still exactly the list moved (`tidy_roaming`). Under FSLogix or User
 Profile Disks, Local AppData travels inside the profile container with the
 rest of that profile. **What start forgets (R5, R6).** `open_store`
-(main.rs) runs once, before `Rata` exists and with the lock held: any
+(lib.rs) runs once, before `Rata` exists and with the lock held: any
 Slack, OneDrive or Google Drive sign-in the keychain holds (its entry or a
 piece a cut-short removal left) without a link in the list is forgotten
 (`vault::forget_unlinked`; nothing is sent to the provider), since nothing
@@ -2123,7 +2123,7 @@ older build (add a field beside the old one), since a build that cannot
 parse the file starts empty and saves its own list over it. A new field
 inside a mailbox or a link is not kept by `rest`; an older build's save
 drops it. Not done: R5's optional check at save time that the file has not
-changed since it was read. Tested by `tests::at_start_*` (main.rs) and the
+changed since it was read. Tested by `tests::at_start_*` (lib.rs) and the
 `store::` and `vault::` tests, which CI also runs on Windows.
 **Name lookups on iOS (#163; on main, in no release yet).** An iOS app
 cannot read the network's DNS settings (no `/etc/resolv.conf`, no System
@@ -2187,7 +2187,7 @@ deadline test asks only a `.local` name, by multicast DNS, which nobody
 answers, and the `.local` test asks nothing at all (every question ends
 `NotAsked` and the guard refuses every host before a lookup). The six
 tests that need hickory (`scripted::answering`, below) do not exist in
-that build, so the system-dns run and the Simulator run 337 of the 343,
+that build, so the system-dns run and the Simulator run 338 of the 344,
 plus the 12. The Simulator runs
 the library's test program as a bare process (`xcrun simctl spawn`),
 outside any app's sandbox, so it does not show dns_sd and getaddrinfo
@@ -2203,13 +2203,13 @@ aarch64-apple-ios`, or an app that contains it) needs
 rustc links for its own default, iOS 10, while aws-lc-sys's C is built for
 the SDK's version and calls `___chkstk_darwin`, which that link cannot
 find. Building the engine alone links nothing (it is a library) and does
-not need it. The workflow sets 14.0, and its comment calls that Tauri's
-default `bundle.iOS.minimumSystemVersion`; it is not: tauri-utils 2.10.0
-(RATA's lock, and what tauri-cli 2.12.0 reads config with) defaults to
-15.0, and #166's `tauri.ios.conf.json` sets 15.0 as well (RATA's minimum,
-`docs/APP-STORES.md`). Keep `mail-apple.yml`'s value equal to the app's
-`minimumSystemVersion`: raise it to 15.0, comment and all, when #166
-merges. rustc's own default for the Simulator target is already 14.0.
+not need it. The workflow sets 16.4, the app's own
+`bundle.iOS.minimumSystemVersion` (`desktop/rata-app/src-tauri/
+tauri.ios.conf.json`): the oldest WebKit that runs the page's script, whose
+regular expressions look behind (`docs/APP-STORES.md`). A test of the shell
+(`an_ios_build_merges_its_own_config_and_a_computers_does_not`, lib.rs)
+fails unless the two are equal, so change them together. rustc's own
+default for the Simulator target is 14.0.
 Still open: an IPv4 literal typed as the server on an IPv6-only network
 is dialled as typed, never synthesised to NAT64 (`resolve_public`'s
 literal branch; names are fine), which no GitHub runner can show; and TXT
@@ -2355,7 +2355,7 @@ SRV, `autodiscover.microsoft.com` CNAME, example.com's and google.com's
 TXT; an A question about an alias still carries its CNAMEs on the way).
 So nothing here can check SRV, L1's SPF or autodiscover evidence, or IPv6
 answers against real DNS: an empty answer here is the container's, not
-the domain's. `cargo test` in `desktop/rata-mail` passes 341 of 343 here.
+the domain's. `cargo test` in `desktop/rata-mail` passes 342 of 344 here.
 The two that fail,
 `resolve::tests::a_domain_at_microsoft_365_is_found_by_its_mx` and
 `a_real_business_domain_resolves_through_its_mx`, need real MX records;

@@ -77,6 +77,16 @@
      clear() emptied every other local HTML file's storage too. Every key
      the demo, bridge.js and app.html write starts with centra_ or rata_;
      they are collected first, since removing one renumbers the rest. */
+  /* The page's own databases: the mail, the Files view's files, and what
+     mail leaves in the workspace (app.html's WK_DB: the audit trail, the
+     Files list and the folder names). Leaving the last would bring the old
+     Files list and audit trail back over the sample, with no files behind
+     the documents. */
+  const dropStores = () => {
+    indexedDB.deleteDatabase('rata-mail-' + UID);
+    indexedDB.deleteDatabase('rata-work-' + UID);
+    indexedDB.deleteDatabase('rata-files');
+  };
   const wipeOwn = () => {
     const ks = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -90,7 +100,7 @@
     if (localStorage.getItem('rata_demo_v') !== DEMO_VERSION) {
       wipeOwn();
       if (PLAN === 'base') localStorage.setItem('rata_demo_plan', 'base');
-      try { indexedDB.deleteDatabase('rata-mail-local_demo'); indexedDB.deleteDatabase('rata-mail-' + UID); indexedDB.deleteDatabase('rata-files'); } catch (e) {}
+      try { dropStores(); indexedDB.deleteDatabase('rata-mail-local_demo'); indexedDB.deleteDatabase('rata-work-local_demo'); } catch (e) {}
       localStorage.setItem('rata_demo_v', DEMO_VERSION);
     }
     if (!localStorage.getItem('centra_session')) {
@@ -946,8 +956,7 @@ Marcus` }));
     try {
       wipeOwn();
       if (plan === 'base') localStorage.setItem('rata_demo_plan', 'base');
-      indexedDB.deleteDatabase('rata-mail-' + UID);
-      indexedDB.deleteDatabase('rata-files');
+      dropStores();
     } catch (e) {}
     try { history.replaceState(history.state, '', '#plan=' + plan); } catch (e) {}
     setTimeout(() => location.reload(), 300);

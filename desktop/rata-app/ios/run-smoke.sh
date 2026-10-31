@@ -11,8 +11,11 @@
 # simctl hands to it without the prefix:
 #   SIMCTL_CHILD_RATA_SMOKE_LICENCE  a licence to store (src-tauri/src/smoke.rs)
 #   SIMCTL_CHILD_RATA_SMOKE_VIEW     a view to open: inbox, set (Settings)…
-#   SIMCTL_CHILD_RATA_SMOKE_OPEN=1   open a web address last of all, as RATA
-#                                    opens one on a phone (links::open_web).
+#   SIMCTL_CHILD_RATA_SMOKE_OPEN=1   have the page ask RATA to open a web
+#                                    address last of all, through the
+#                                    command bridge.js calls for every link
+#                                    (open_link), which must hand it to the
+#                                    system off the window's thread.
 #                                    Safari is ended before the launch, and
 #                                    the run then also wants smoke.json's
 #                                    "opens a link" passed, Safari running

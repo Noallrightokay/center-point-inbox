@@ -384,7 +384,10 @@
              disguised program without it (kind needs-confirmation). */
           confirmed: b.confirmed === true,
         });
-        return { ok: true, path: saved.path, name: saved.name };
+        /* place: the folder in the customer's words (core::save_place), as
+           for /api/file/save, so a phone never names Downloads or the path
+           inside the app's container. */
+        return { ok: true, path: saved.path, name: saved.name, place: saved.place };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }

@@ -245,14 +245,15 @@ the iOS Simulator job makes and never a release (`harness/verify-release.sh
 --no-smoke`), adds a forty-fifth, `smoke_page`, for its self-test's report. No
 filesystem plugin, no shell plugin, no arbitrary HTTP. The notification
 plugin, the updater plugin (only in a build with the `self-update` feature, the
-desktop installers'), and on a phone the opener plugin (the system opens a web
-address there; its script that would send the page's link clicks to it is left
-out) are called from Rust only; the page holds no plugin permission. A script
+desktop installers'), and on a phone only the opener plugin (the system opens
+a web address there; its script that would send the page's link clicks to it
+is left out; a computer opens through the `open` crate, as before) are called
+from Rust only; the page holds no plugin permission. A script
 that somehow reached a rendered message can ask to refresh the mail; it cannot
 ask to read `~/.ssh`. The commands that write a file (`save_attachment`,
 `save_file`) choose the Downloads folder (on iOS the app's own Documents
 folder) and clean the name in Rust, and `open_link` hands only http and https
-addresses to the browser.
+addresses to the browser, off the window's thread (`links::open_aside`).
 
 ```
 licence_status     set_licence        link_mailbox       link_microsoft

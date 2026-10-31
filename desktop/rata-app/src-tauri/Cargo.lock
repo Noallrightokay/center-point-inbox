@@ -3599,6 +3599,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "keyring",
+ "open",
  "rata-mail",
  "reqwest",
  "security-framework-sys",

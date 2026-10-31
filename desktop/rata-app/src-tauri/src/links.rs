@@ -103,19 +103,29 @@ fn decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Hands a web address to the customer's browser: the opener plugin's
-/// Rust side, which starts the system's own opener with the address as one
-/// argument (the `open` crate, underneath). Only ever called with what
-/// [`classify`] made a [`Link::Web`]; the page is granted none of the
-/// plugin.
+/// Hands a web address to the customer's browser: the system's own opener,
+/// given the address as one argument (the `open` crate), on a computer.
+/// Only ever called with what [`classify`] made a [`Link::Web`].
+#[cfg(desktop)]
 pub fn open_in_browser(url: &Url) -> Result<(), String> {
-    tauri_plugin_opener::open_url(url.as_str(), None::<&str>).map_err(not_opened)
+    open::that_detached(url.as_str()).map_err(not_opened)
+}
+
+/// On a phone only the app's own window and its page open addresses
+/// ([`open_aside`]). What else would come here, the sign-in pages of
+/// Microsoft, Slack and Google Drive, is never offered there
+/// (`desktop_only`, lib.rs), so this is never asked.
+#[cfg(mobile)]
+pub fn open_in_browser(_: &Url) -> Result<(), String> {
+    Err("Your browser could not be opened from this copy of RATA.".into())
 }
 
 /// The same, for the app's own window and the interface's links, which
 /// have the app at hand. On a phone, where an app cannot start a program,
 /// the system opens the address (the opener plugin's mobile half, set up
-/// in `run`); on a computer this is [`open_in_browser`].
+/// in `run`), and this waits for the system's answer: never call it on the
+/// window's thread, use [`open_aside`]. On a computer this is
+/// [`open_in_browser`].
 pub fn open_web<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &Url) -> Result<(), String> {
     #[cfg(mobile)]
     {
@@ -131,7 +141,31 @@ pub fn open_web<R: tauri::Runtime>(app: &tauri::AppHandle<R>, url: &Url) -> Resu
     }
 }
 
-fn not_opened(e: tauri_plugin_opener::Error) -> String {
+/// [`open_web`] on a thread of the async runtime's blocking pool, never on
+/// the thread that asked. That one is the window's (the main thread) for
+/// both callers on a phone: a page's command arrives there (`open_link`,
+/// whose work this is), and so does the window's navigation handler
+/// (`run`). The opener plugin's mobile half hands the address to Tauri's
+/// ipc queue, which calls `UIApplication.open`, UIKit's and so the main
+/// thread's, and the caller waits for the queue's answer: on the main
+/// thread that wait could hold up the very thread the opening needs.
+/// smoke.rs's last check runs this path in the Simulator, through the
+/// page's own command.
+pub async fn open_aside<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    url: Url,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let opened = open_web(&app, &url);
+        #[cfg(feature = "smoke")]
+        crate::smoke::opened(&app, &url, &opened);
+        opened
+    })
+    .await
+    .unwrap_or_else(|e| Err(not_opened(e)))
+}
+
+fn not_opened(e: impl std::fmt::Display) -> String {
     format!("Your browser could not be opened: {e}")
 }
 

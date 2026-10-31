@@ -2936,6 +2936,15 @@ pub fn save_place(ios: bool) -> &'static str {
     }
 }
 
+/// The same words for the page before any save answers (an attachment's
+/// button, "Save to …"): a script the window runs as each page starts
+/// (lib.rs), setting `window.__RATA_SAVE_PLACE__` to a JSON string, which
+/// a JavaScript string literal is, so nothing in it can become code.
+pub fn save_place_script(ios: bool) -> String {
+    let place = serde_json::to_string(save_place(ios)).unwrap_or_else(|_| "null".into());
+    format!("window.__RATA_SAVE_PLACE__={place};")
+}
+
 /// A file the interface made — a converted document, a workspace export —
 /// saved into `dir` (the Downloads folder). The webview does not save a
 /// page's downloads on its own, so without this "Convert & download" did
@@ -3888,6 +3897,21 @@ mod tests {
         assert_eq!(save_place(false), "your Downloads folder");
         assert_eq!(save_place(true), "RATA's folder in the Files app");
         assert!(!save_place(true).contains("Downloads"));
+        // And before any save, as each page starts (app.html's savePlace):
+        // the same words, as one string literal.
+        assert_eq!(
+            save_place_script(false),
+            r#"window.__RATA_SAVE_PLACE__="your Downloads folder";"#
+        );
+        assert_eq!(
+            save_place_script(true),
+            r#"window.__RATA_SAVE_PLACE__="RATA's folder in the Files app";"#
+        );
+        let page = include_str!("../../../../rata-next/public/app.html");
+        assert!(page.contains(
+            "const savePlace=()=>typeof window.__RATA_SAVE_PLACE__==='string'&&window.__RATA_SAVE_PLACE__||'your Downloads folder';"
+        ));
+        assert!(page.contains(r#"title="Save to ${esc(savePlace())}""#));
     }
 
     /// SEC-9 (F2): a name a file Create file made is recorded under is

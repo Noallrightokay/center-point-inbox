@@ -11,8 +11,10 @@
 //! Create file, updates, Microsoft sign-in, the system's opener); the
 //! folder saves go to; the page itself; once the page has opened its mail
 //! store, that the list's folder and the mail are kept out of the phone's
-//! backups; and, when asked at launch, that a web address handed to the
-//! system the way RATA hands one on a phone (`links::open_web`) is taken.
+//! backups; and, when asked at launch, that a web address the page asks
+//! RATA to open, through the very command bridge.js calls for every link
+//! (`open_link`), is handed to the system, and off the window's thread
+//! (`links::open_aside`).
 //! Each answer goes into `smoke.json` in the app's cache
 //! folder (never its data folder, which the list must be the first to
 //! make), written once and whole when the last check is done, for the job
@@ -29,7 +31,7 @@
 //! (`Rata::set_licence`); a view in `RATA_SMOKE_VIEW`, which the page
 //! script opens as a person would: it fills the real sign-up form for an
 //! RFC 2606 address on the first screen, closes the welcome, and presses the
-//! view's own button; and `RATA_SMOKE_OPEN=1`, which has the self-test open
+//! view's own button; and `RATA_SMOKE_OPEN=1`, which has the page ask for
 //! [`OPEN_URL`] last of all, so the job can see the system's browser come
 //! up (ios/run-smoke.sh).
 
@@ -55,7 +57,8 @@ pub const FILE: &str = "smoke.json";
 pub const LICENCE_VAR: &str = "RATA_SMOKE_LICENCE";
 /// A view for the page script to open (`set` is Settings).
 pub const VIEW_VAR: &str = "RATA_SMOKE_VIEW";
-/// `1` has the self-test open [`OPEN_URL`] once every other check is done.
+/// `1` has the page ask RATA to open [`OPEN_URL`] once every other check
+/// is done.
 pub const OPEN_VAR: &str = "RATA_SMOKE_OPEN";
 /// The address it opens: IANA's reserved example (RFC 2606), which no mail
 /// names and which answers. Fixed here: the launch only says whether.
@@ -89,6 +92,9 @@ const SIGN_IN_GIVEN: [(&str, bool); 4] = [
 /// How long the page is given to load, sign up and report. Well inside the
 /// job's three minutes, and far longer than a page that works needs.
 const PAGE_WAIT: Duration = Duration::from_secs(120);
+/// How long the page's `open_link` is given to reach the system's opener
+/// once the page is asked.
+const OPEN_WAIT: Duration = Duration::from_secs(30);
 /// The keychain entry's name, under [`SMOKE_SERVICE`].
 const ENTRY: &str = "self-test";
 /// Discovered with no password: a domain the table does not know, whose
@@ -172,6 +178,19 @@ pub struct Insets {
     pub left: f64,
 }
 
+/// A web address RATA handed to the system (`links::open_aside`), as the
+/// opening itself saw it.
+#[derive(Debug, Clone)]
+pub struct Opened {
+    url: String,
+    result: Result<(), String>,
+    /// Whether it was opened inside the async runtime, on its blocking
+    /// pool: never the window's thread, which the runtime does not run on.
+    off_window: bool,
+    /// That thread's name, if it has one.
+    thread: Option<String>,
+}
+
 /// What a run has found so far, and where it goes.
 pub struct Smoke {
     dir: PathBuf,
@@ -180,6 +199,8 @@ pub struct Smoke {
     checks: Mutex<Vec<Check>>,
     page: Mutex<Option<Page>>,
     heard: Notify,
+    opened: Mutex<Option<Opened>>,
+    heard_open: Notify,
 }
 
 impl Smoke {
@@ -196,6 +217,8 @@ impl Smoke {
             checks: Mutex::new(Vec::new()),
             page: Mutex::new(None),
             heard: Notify::new(),
+            opened: Mutex::new(None),
+            heard_open: Notify::new(),
         })
     }
 
@@ -221,6 +244,25 @@ impl Smoke {
             return Some(page);
         }
         let _ = tokio::time::timeout(wait, self.heard.notified()).await;
+        held()
+    }
+
+    /// The first address opened is kept.
+    fn heard_open(&self, opened: Opened) {
+        if let Ok(mut held) = self.opened.lock()
+            && held.is_none()
+        {
+            *held = Some(opened);
+        }
+        self.heard_open.notify_one();
+    }
+
+    async fn wait_for_open(&self, wait: Duration) -> Option<Opened> {
+        let held = || self.opened.lock().ok().and_then(|o| o.clone());
+        if let Some(opened) = held() {
+            return Some(opened);
+        }
+        let _ = tokio::time::timeout(wait, self.heard_open.notified()).await;
         held()
     }
 
@@ -422,6 +464,19 @@ const PAGE_SCRIPT: &str = r#"(() => {
       afterMs: Date.now() - started,
     } }).catch(() => {});
   };
+  // Asked by the self-test last of all (`open_from_page`): a web address
+  // opened the way the page opens one, so the command runs on the thread a
+  // page's call arrives on. app.html's own route where the bridge is there
+  // (Help, Report a bug, Unsubscribe, a link confirmed), else the call
+  // bridge.js makes for a link clicked on the page; both are open_link.
+  window.__rataSmokeOpen = (url) => {
+    const native = window.__RATA_NATIVE__;
+    const core = window.__TAURI__ && window.__TAURI__.core;
+    const asked = typeof native === 'function'
+      ? native('/api/link/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
+      : core && core.invoke('open_link', { url });
+    if (asked && asked.catch) asked.catch(() => {});
+  };
   // The first screen's own sign-up form, filled and sent as a person would:
   // a device account for an RFC 2606 address, with a password nobody keeps.
   const signUp = () => {
@@ -478,9 +533,9 @@ pub fn smoke_page(smoke: State<'_, Arc<Smoke>>, page: Page) {
 
 /// The rest, once the window is up: the keychain, the network, what a
 /// phone answers and where it saves, then the page's report (waited for),
-/// the backups once the page has opened its mail store, a web address
-/// opened when the launch asked (last, since the browser then comes in
-/// front of RATA and its page), and `smoke.json`.
+/// the backups once the page has opened its mail store, a web address the
+/// page asks RATA to open when the launch asked (last, since the browser
+/// then comes in front of RATA and its page), and `smoke.json`.
 pub fn start(smoke: Arc<Smoke>, handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let secret = fresh_secret();
@@ -495,11 +550,7 @@ pub fn start(smoke: Arc<Smoke>, handle: tauri::AppHandle) {
         smoke.record(judge_page(page.as_ref(), smoke.view.as_deref()));
         smoke.record(backups(&handle, page.as_ref()));
         if asked_open() {
-            let opener = handle.clone();
-            let opened = tauri::async_runtime::spawn_blocking(move || opens_a_link(&opener))
-                .await
-                .unwrap_or_else(|e| judge_open(OPEN_URL, Err(e.to_string())));
-            smoke.record(opened);
+            smoke.record(open_from_page(&smoke, &handle).await);
         }
         if let Err(e) = smoke.finish(page) {
             eprintln!("{MARK}: {FILE} could not be written: {e}");
@@ -648,15 +699,28 @@ async fn phone_answers(handle: &tauri::AppHandle) -> PhoneAnswers {
         microsoft: rata.microsoft_ready(),
         update_key: crate::update::has_key(handle.config()),
         update_check: crate::update::check(handle).await.enabled,
-        opener: handle
-            .try_state::<tauri_plugin_opener::Opener<tauri::Wry>>()
-            .is_some(),
+        opener: opener_set_up(handle),
         given: SIGN_IN_GIVEN
             .iter()
             .filter(|(_, given)| *given)
             .map(|(name, _)| *name)
             .collect(),
     }
+}
+
+#[cfg(mobile)]
+fn opener_set_up(handle: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    handle
+        .try_state::<tauri_plugin_opener::Opener<tauri::Wry>>()
+        .is_some()
+}
+
+/// A computer sets nothing up for this: the `open` crate starts the
+/// system's opener (`links::open_in_browser`).
+#[cfg(desktop)]
+fn opener_set_up(_: &tauri::AppHandle) -> bool {
+    true
 }
 
 /// Nothing a phone cannot do is offered, and the opener is there. Which
@@ -706,26 +770,78 @@ fn judge_phone(a: &PhoneAnswers) -> Check {
     )
 }
 
-/// [`OPEN_URL`] handed to the system exactly as RATA hands a link on a
-/// phone: through `links::classify`, then `links::open_web`, which there is
-/// the opener plugin's mobile half. Whether the system's browser then came
-/// up is for the job to see (ios/run-smoke.sh).
-fn opens_a_link(handle: &tauri::AppHandle) -> Check {
-    let opened = match crate::links::classify(OPEN_URL) {
-        Some(crate::links::Link::Web(url)) => crate::links::open_web(handle, &url),
-        _ => Err("links::classify did not take it for a web address".into()),
-    };
-    judge_open(OPEN_URL, opened)
+/// Every address `links::open_aside` hands to the system, as it saw it:
+/// what the last check waits for. Called on the thread that opened it.
+pub fn opened<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    url: &tauri::Url,
+    result: &Result<(), String>,
+) {
+    use tauri::Manager;
+    if let Some(smoke) = app.try_state::<Arc<Smoke>>() {
+        smoke.heard_open(Opened {
+            url: url.to_string(),
+            result: result.clone(),
+            off_window: tokio::runtime::Handle::try_current().is_ok(),
+            thread: std::thread::current().name().map(str::to_string),
+        });
+    }
 }
 
-fn judge_open(url: &str, opened: Result<(), String>) -> Check {
+/// [`OPEN_URL`] asked for by the page, as the page asks for every link it
+/// opens: `open_link` over the page's IPC, which on a phone arrives on the
+/// main thread (the page script's `__rataSmokeOpen`). Then waited for at
+/// the opener (`opened`): handed to the system, and off the window's
+/// thread. Whether the system's browser then came up is for the job to see
+/// (ios/run-smoke.sh).
+async fn open_from_page(smoke: &Smoke, handle: &tauri::AppHandle) -> Check {
+    use tauri::Manager;
+    let url = serde_json::to_string(OPEN_URL).unwrap_or_default();
+    let asked = match handle.get_webview_window("main") {
+        Some(window) => window
+            .eval(format!(
+                "window.__rataSmokeOpen&&window.__rataSmokeOpen({url})"
+            ))
+            .map_err(|e| e.to_string()),
+        None => Err("there is no window".into()),
+    };
+    let heard = match asked {
+        Ok(()) => smoke.wait_for_open(OPEN_WAIT).await,
+        Err(_) => None,
+    };
+    judge_open(OPEN_URL, asked, heard)
+}
+
+fn judge_open(url: &str, asked: Result<(), String>, heard: Option<Opened>) -> Check {
+    let mut problems: Vec<String> = Vec::new();
+    match (&asked, &heard) {
+        (Err(e), _) => problems.push(format!("the page could not be asked: {e}")),
+        (Ok(()), None) => problems.push(format!(
+            "nothing reached the opener within {} s of asking the page",
+            OPEN_WAIT.as_secs()
+        )),
+        (Ok(()), Some(o)) => {
+            if o.url != url {
+                problems.push(format!("{} was opened instead", o.url));
+            }
+            if let Err(e) = &o.result {
+                problems.push(format!("the system did not take it: {e}"));
+            }
+            if !o.off_window {
+                problems.push("it was opened on the thread that asked".into());
+            }
+        }
+    }
     Check::new(
         "opens a link",
-        opened.is_ok(),
+        problems.is_empty(),
         json!({
             "address": url,
-            "handed to the system": opened.is_ok(),
-            "error": opened.err(),
+            "asked by": "the page, through open_link as bridge.js calls it",
+            "handed to the system": heard.as_ref().is_some_and(|o| o.result.is_ok()),
+            "off the window's thread": heard.as_ref().map(|o| o.off_window),
+            "thread": heard.as_ref().and_then(|o| o.thread.clone()),
+            "problems": problems,
         }),
     )
 }
@@ -1302,8 +1418,26 @@ mod tests {
         ));
     }
 
-    /// Opening is asked for by `1` alone, and judged on whether the system
-    /// took the address.
+    /// The page asks for the address as the page asks for any link: by the
+    /// route app.html calls, or else the call bridge.js makes for a link
+    /// clicked on the page, both `open_link`, never anything of the
+    /// self-test's own. bridge.js is read here, so the two cannot part.
+    #[test]
+    fn the_page_asks_for_the_link_as_bridge_js_does() {
+        let page = script(None);
+        assert!(page.contains("window.__rataSmokeOpen = (url) =>"), "{page}");
+        assert!(page.contains("native('/api/link/open', { method: 'POST'"));
+        assert!(page.contains("core.invoke('open_link', { url })"));
+        let bridge = include_str!("../../ui-src/bridge.js");
+        assert!(bridge.contains("async '/api/link/open'(opts) {"));
+        assert!(bridge.contains("await invoke('open_link', { url: String(b.url || '') });"));
+        assert!(bridge.contains("invoke('open_link', { url: href })"));
+        assert!(bridge.contains("const invoke = window.__TAURI__?.core?.invoke;"));
+    }
+
+    /// Opening is asked for by `1` alone, and judged on what reached the
+    /// opener once the page was asked: that address, taken by the system,
+    /// and off the window's thread.
     #[test]
     fn a_link_is_opened_only_when_asked_and_judged_on_the_answer() {
         assert!(open_asked(Some("1".into())));
@@ -1316,13 +1450,52 @@ mod tests {
         ] {
             assert!(!open_asked(no.clone()), "{no:?}");
         }
-        let c = judge_open(OPEN_URL, Ok(()));
+        let at_opener = |url: &str, result: Result<(), String>, off_window: bool| Opened {
+            url: url.into(),
+            result,
+            off_window,
+            thread: Some("tokio-runtime-worker".into()),
+        };
+        let c = judge_open(OPEN_URL, Ok(()), Some(at_opener(OPEN_URL, Ok(()), true)));
         assert!(c.ok, "{c:?}");
         assert_eq!(c.name, "opens a link");
         assert_eq!(c.detail["address"], OPEN_URL);
-        let c = judge_open(OPEN_URL, Err("no browser".into()));
-        assert!(!c.ok);
-        assert_eq!(c.detail["error"], "no browser");
+        assert_eq!(c.detail["handed to the system"], true);
+        assert_eq!(c.detail["off the window's thread"], true);
+        let failed = [
+            (
+                judge_open(
+                    OPEN_URL,
+                    Ok(()),
+                    Some(at_opener(OPEN_URL, Err("no browser".into()), true)),
+                ),
+                "the system did not take it: no browser",
+            ),
+            (
+                judge_open(OPEN_URL, Ok(()), Some(at_opener(OPEN_URL, Ok(()), false))),
+                "it was opened on the thread that asked",
+            ),
+            (
+                judge_open(
+                    OPEN_URL,
+                    Ok(()),
+                    Some(at_opener("https://example.org/", Ok(()), true)),
+                ),
+                "https://example.org/ was opened instead",
+            ),
+            (
+                judge_open(OPEN_URL, Ok(()), None),
+                "nothing reached the opener within 30 s of asking the page",
+            ),
+            (
+                judge_open(OPEN_URL, Err("no window".into()), None),
+                "the page could not be asked: no window",
+            ),
+        ];
+        for (c, why) in failed {
+            assert!(!c.ok, "{c:?}");
+            assert_eq!(c.detail["problems"], json!([why]), "{c:?}");
+        }
     }
 
     /// A save goes to the container's own Documents folder, which takes a
