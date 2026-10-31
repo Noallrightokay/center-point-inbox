@@ -184,11 +184,17 @@ for the trader details and step 10's answers.
 
 **Worked when:** a TestFlight build buys Pro in the sandbox, Settings →
 Current plan says it is licensed for Pro, and Restore purchases on a
-second device brings the same plan back. Then, after your own first
-purchase from the released app, the server log has no line beginning
-`apple/notifications: refused (INVALID_APP_IDENTIFIER)`: a sandbox
-purchase never checks `APPLE_APP_ID`, so only that shows it is the app's
-(`rata-next/LAUNCH.md` §11, *How to tell it worked*).
+second device brings the same plan back. A sandbox purchase never checks
+`APPLE_APP_ID`; Apple's *Request a Test Notification* in Production does,
+with `APPLE_BUNDLE_ID`, before release: *Get Test Notification Status*
+says `SUCCESS`, and the server log has no line beginning
+`apple/notifications: refused (INVALID_APP_IDENTIFIER)`. A line there
+naming `app id (none)` means Apple sent the test without the app's
+number: leave `APPLE_APP_ID` as it is (that line's advice to change it
+does not hold), and only the purchase below checks it. Then, after your
+own first purchase from the released app, the log still has no such
+line, which confirms both (`rata-next/LAUNCH.md` §11, *How to tell it
+worked*).
 
 ## 10. Decisions only you can make
 

@@ -294,6 +294,20 @@ export default async function run(state) {
     const sold = [...new Set(Object.values(APPLE_PRODUCTS))];
     check(sold.length === 2 && sold.every(p => SELLABLE.includes(p)) && T.includes('RATA Base and RATA Pro are also sold in RATA\'s iPhone app, as App Store subscriptions'),
       `terms: both plans (${sold.join(', ')}) are also App Store subscriptions`);
+    /* What one bought in the app unlocks: RATA in the iPhone app, with what
+       of its plan that app has, never the desktop app downloaded from
+       mailrata.org. The App Store path takes only the App Store app's
+       bundle id, which the downloaded app's identifier is not (a purchase
+       signed for it is refused, tests/apple.test.mjs), its licence is never
+       shown as a key, and one plan on both is later, not now
+       (docs/APP-STORES.md). help.test.mjs pins the help page's sentence. */
+    const tauri = JSON.parse(readFileSync(join(REPO, 'desktop', 'rata-app', 'src-tauri', 'tauri.conf.json'), 'utf8'));
+    const stores = readFileSync(join(REPO, 'docs', 'APP-STORES.md'), 'utf8');
+    check(tauri.identifier === 'org.mailrata.desktop' && apple.APPLE_DEFAULT_BUNDLE_ID === 'org.mailrata.mail'
+      && /Later, not now: linking an App Store purchase to a mailrata\.org account\s+so the same plan works on a computer/.test(stores)
+      && T.includes('Such a subscription unlocks RATA in the iPhone app only, with the features of its plan that the iPhone app has: it comes with no licence key, and does not unlock the desktop app downloaded from mailrata.org.')
+      && T.indexOf('Such a subscription unlocks RATA in the iPhone app only') > T.indexOf('RATA Base and RATA Pro are also sold in RATA\'s iPhone app'),
+      `terms: an App Store subscription unlocks the iPhone app only, not the desktop app downloaded from mailrata.org (${tauri.identifier}, not ${apple.APPLE_DEFAULT_BUNDLE_ID}), and has no key`);
     check(T.includes('One bought in the app is billed, renewed, cancelled and refunded by Apple, under Apple\'s terms'),
       'terms: Apple bills, renews, cancels and refunds them, under Apple\'s terms');
     check(T.includes(plain(apple.APPLE_AUTO_RENEWAL)), `terms: the auto-renewal sentence, word for word: "${apple.APPLE_AUTO_RENEWAL.slice(0, 60)}…"`);

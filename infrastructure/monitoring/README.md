@@ -13,7 +13,7 @@ watches goes down with it.
 | The nightly backup ran | healthchecks.io, pinged by `backup.sh` | a failed night at once; a missed one after 2 hours |
 | The monthly restore drill was done | healthchecks.io, pinged by you | 37 days without one |
 | Payments reached RATA | Stripe's own emails, and its Event deliveries tab | a webhook endpoint keeps failing |
-| Apple's App Store notifications reached RATA | the server log (`apple/notifications:` lines), and Apple's *Get Notification History* | never by itself: look after an outage, after a change to the `APPLE_*` settings, and after the first App Store purchase ([below](#app-store-notifications-that-did-not-arrive)) |
+| Apple's App Store notifications reached RATA | the server log (`apple/notifications:` lines), and Apple's *Get Notification History* | never by itself: look after an outage, after a change to the `APPLE_*` settings (ask Apple for a Production `TEST`), and after the first App Store purchase ([below](#app-store-notifications-that-did-not-arrive)) |
 
 Send every alert to an inbox that does not depend on RATA's own servers (a
 personal Gmail or Outlook address, say), so the alert about the box is not
@@ -154,8 +154,11 @@ after it, unless the phone sends the extended purchase first.
     id …` (400): `APPLE_APP_ID` or `APPLE_BUNDLE_ID` is not the app's, and
     the line names which, with its value. A wrong `APPLE_APP_ID` refuses
     every Production notification and nothing else, so the phone's
-    purchases are still licensed and only this line shows it (LAUNCH.md
-    section 11, *How to tell it worked*).
+    purchases are still licensed and only this line shows it, at a
+    Production `TEST` (below) or a real notification (LAUNCH.md section
+    11, *How to tell it worked*). One naming `app id (none)` in Production
+    is a `TEST` Apple sent without the app's number: its advice to change
+    `APPLE_APP_ID` does not hold.
   - `a Production notification arrived and APPLE_APP_ID is not set` (500):
     section 11, step 7.
   - `refused (<status>)`, `its transaction was refused (<status>)`, `its
@@ -197,10 +200,17 @@ after it, unless the phone sends the extended purchase first.
   ordered by the period each statement is about, then by when Apple signed
   it, so one posted late, or twice, changes nothing a later one has already
   said. Then check the
-  subscription's row in `apple_subscriptions`. To check only that the
-  address answers again, Apple's *Request a Test Notification* sends a
-  `TEST`, which the route answers 200 and records nothing of, and *Get
-  Test Notification Status* says whether it arrived.
+  subscription's row in `apple_subscriptions`. To check the address and
+  both settings again, ask Apple's *Request a Test Notification* for a
+  Production `TEST` (section 11, *How to tell it worked*): the route checks
+  it against `APPLE_BUNDLE_ID` and `APPLE_APP_ID` as it checks every
+  notification, answers 200 and records nothing when both match, and
+  otherwise refuses it with the `refused (INVALID_APP_IDENTIFIER)` line
+  above; *Get Test Notification Status* says which (`SUCCESS`, or
+  `UNSUCCESSFUL_HTTP_RESPONSE_CODE`). A sandbox `TEST` is never checked
+  against `APPLE_APP_ID`, and a Production one that carries no app number
+  (`app id (none)`, which Apple may send before the app is on sale) cannot
+  check it.
 
 ## Supabase: "project paused", and what stands in for it here
 

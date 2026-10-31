@@ -96,12 +96,13 @@ function renewalInfo(t, over = {}) {
 
 /* A notification as Apple sends one: its transaction and renewal info
    signed inside it, the whole signed again. */
-function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(), environment, appAppleId, signer, bundleId = BUNDLE } = {}) {
+function notification(chain, type, t, { subtype, renewal, signedDate = Date.now(), environment, appAppleId, noAppId, signer, bundleId = BUNDLE } = {}) {
   const env = environment || (t ? t.environment : 'Production');
   const data = { bundleId, bundleVersion: '1', environment: env, status: 1 };
   /* Apple sends appAppleId only for an app downloaded from the App Store:
-     never in the sandbox. */
-  if (env === 'Production') data.appAppleId = appAppleId ?? APP_ID;
+     never in the sandbox, and perhaps not in a Production TEST for an app
+     not on sale yet (noAppId). */
+  if (env === 'Production' && !noAppId) data.appAppleId = appAppleId ?? APP_ID;
   if (t) data.signedTransactionInfo = signJws(t, chain);
   if (renewal) data.signedRenewalInfo = signJws(renewal, chain);
   return signJws({
@@ -1156,6 +1157,25 @@ export default async function run(state) {
       const calls = sbx.fake.calls.length;
       const test = await notify(notification(chain, 'TEST', null, { environment: 'Production' }));
       check(test.status === 200 && test.d.acted === false && sbx.fake.calls.length === calls, `TEST: 200, nothing written (${test.status})`);
+      /* A Production TEST (Apple's Request a Test Notification) is checked
+         as every notification is, before its type is read: against
+         APPLE_BUNDLE_ID and APPLE_APP_ID. So it is the earliest check of
+         both (LAUNCH.md section 11, *How to tell it worked*); one carrying
+         no app number, which Apple may send for an app not on sale yet, is
+         refused naming "app id (none)", and its advice about APPLE_APP_ID
+         is the one LAUNCH.md says not to follow. */
+      const testAt = s.log().length;
+      const testOther = await notify(notification(chain, 'TEST', null, { environment: 'Production', appAppleId: 42 }));
+      const testBundle = await notify(notification(chain, 'TEST', null, { environment: 'Production', bundleId: 'com.example.other' }));
+      const testBare = await notify(notification(chain, 'TEST', null, { environment: 'Production', noAppId: true }));
+      await new Promise((res) => setTimeout(res, 200));
+      const testLog = s.log().slice(testAt);
+      check([testOther, testBundle, testBare].every((r) => r.status === 400 && JSON.stringify(r.d) === JSON.stringify({ error: 'Bad request' })) && sbx.fake.calls.length === calls,
+        `a Production TEST for another app id, another bundle id or no app id: 400, nothing written (${testOther.status}, ${testBundle.status}, ${testBare.status})`);
+      check(testLog.includes('Apple signed it for bundle id org.mailrata.mail, app id 42, in Production, and APPLE_APP_ID is 1234567890; if that is RATA\'s app, set APPLE_APP_ID to match it')
+        && testLog.includes('Apple signed it for bundle id com.example.other, app id 1234567890, in Production, and APPLE_BUNDLE_ID is org.mailrata.mail; if that is RATA\'s app, set APPLE_BUNDLE_ID to match it')
+        && testLog.includes('Apple signed it for bundle id org.mailrata.mail, app id (none), in Production, and APPLE_APP_ID is 1234567890; if that is RATA\'s app, set APPLE_APP_ID to match it'),
+        'and the log names the setting each differs in, a TEST without an app number as "app id (none)"');
       const forged = await notify(notification(chain, 'DID_RENEW', txn(), { signer: stranger }));
       check(forged.status === 400 && JSON.stringify(forged.d) === JSON.stringify({ error: 'Bad request' }), `a signature that is not Apple's: 400, and no detail: ${JSON.stringify(forged.d)}`);
       check((await notify(null, 'not json')).status === 400 && (await notify(null, '{}')).status === 400, 'a body that is not a notification: 400');
@@ -2006,7 +2026,33 @@ export default async function run(state) {
       check(log.includes('apple/notifications: refused (INVALID_APP_IDENTIFIER): Apple signed it for bundle id org.mailrata.mail, app id 1234567890, in Production, and APPLE_APP_ID is 987654321; if that is RATA\'s app, set APPLE_APP_ID to match it')
         && !log.includes(t.originalTransactionId),
         'and the log names the app id Apple signed it for and the APPLE_APP_ID that differs, naming no transaction');
+      /* Before any purchase, and before release, Apple's Request a Test
+         Notification shows it: a Production TEST is refused the same way,
+         and a Sandbox one, never checked against APPLE_APP_ID, is answered
+         200 (LAUNCH.md section 11, *How to tell it worked*). */
+      const testAt = typo.log().length;
+      const test = (environment) => fetch(typo.url + '/api/apple/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signedPayload: notification(chain, 'TEST', null, { environment }) }) });
+      const prodTest = await test('Production');
+      const sandTest = await test('Sandbox');
+      const sandSaid = await sandTest.json();
+      await new Promise((res) => setTimeout(res, 200));
+      check(prodTest.status === 400 && typo.log().slice(testAt).includes('Apple signed it for bundle id org.mailrata.mail, app id 1234567890, in Production, and APPLE_APP_ID is 987654321;')
+        && sandTest.status === 200 && sandSaid.acted === false,
+        `so does a Production TEST, before any purchase (${prodTest.status}); a Sandbox TEST, which no app id is checked against, is answered ${sandTest.status}`);
     } finally { await typo.stop(); }
+    /* LAUNCH.md section 11 sends the owner to those two calls in Apple's
+       library, which rata-next has, and quotes what a TEST without the
+       app's number logs. */
+    {
+      const { AppStoreServerAPIClient } = await import('@apple/app-store-server-library');
+      const launch = readFileSync(join(SITE, 'LAUNCH.md'), 'utf8');
+      const ours = apple.appleOtherApp(notification(chain, 'TEST', null, { environment: 'Production', noAppId: true }), apple.appleSettings({ APPLE_APP_ID: String(APP_ID) }));
+      check(['requestTestNotification', 'getTestNotificationStatus'].every((f) => typeof AppStoreServerAPIClient.prototype[f] === 'function' && launch.includes('`' + f + '`'))
+        && launch.includes('*Request a Test Notification*') && launch.includes('*Get Test Notification Status*')
+        && ours.includes('app id (none), in Production') && launch.includes('`app id (none), in Production`'),
+        'LAUNCH.md names Request a Test Notification and Get Test Notification Status by the library\'s calls, and the line a TEST without the app\'s number logs');
+    }
 
     const local = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_ALLOW_LOCAL: '1' } });
     try {

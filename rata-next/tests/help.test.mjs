@@ -197,6 +197,11 @@ export default async function run(state) {
     check(html.includes('<a href="#iphone">') && /What it means/.test(part) && /Restore purchases/.test(part), 'it is in the contents, explained, and names Restore purchases');
     check(part.includes(`more than ${RENEW_GRACE_DAYS} days ago`), `a licence too old to renew itself: RENEW_GRACE_DAYS (${RENEW_GRACE_DAYS})`);
     check(!/\$\s?\d/.test(part) && /price the App Store shows/.test(part), 'no price but the App Store\'s own');
+    /* What the subscription unlocks, as the terms say it (legal.test.mjs):
+       the iPhone app only, never the desktop app downloaded from
+       mailrata.org, which an App Store purchase does not unlock. */
+    check(squash(entities(part)).includes('The subscription unlocks RATA in the iPhone app only, with the features of its plan that the iPhone app has: it does not unlock the desktop app downloaded from mailrata.org.'),
+      'it says the subscription unlocks the iPhone app only, not the desktop app downloaded from mailrata.org');
     check(!/sign in at mailrata|account\.html|auth\.html|on its way/i.test(part), 'no sign-in at mailrata.org, and nothing that dates it');
   }
 

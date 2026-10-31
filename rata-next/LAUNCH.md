@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1241 checks).
+the website's test suites pass with `npm test` after it (1247 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -592,15 +592,51 @@ every purchase then looks like another app's, and the phone is told
 "There is no active RATA subscription on this Apple account."
 
 `"configured": true` says `APPLE_APP_ID` is set, not that it is the app's
-own number, and nothing above can tell: a TestFlight or sandbox purchase
-is never checked against it, and the phone's purchases carry no app
-number, so they are licensed either way. A wrong one refuses only Apple's
-Production notifications, so no refund, revocation or billing grace
-period that Apple reports of an App Store purchase is ever recorded. So
-**after the first purchase from the App Store itself** (buy a subscription
-in the released app yourself, before customers do), look in the server
-log a few minutes later: there must be no line beginning
-`apple/notifications: refused (INVALID_APP_IDENTIFIER)`. Such a line names the bundle id and app
+own number, and a TestFlight purchase cannot tell either: a TestFlight or
+sandbox purchase is never checked against it, and the phone's purchases
+carry no app number, so they are licensed either way. A wrong one refuses
+only Apple's Production notifications, so no refund, revocation or
+billing grace period that Apple reports of an App Store purchase is ever
+recorded.
+
+**The earliest check of both settings is a Production `TEST`**, before
+release and before any customer. Once steps 5, 7 and 9 are done, ask
+Apple for one with *Request a Test Notification* at the App Store Server
+API's Production address (`POST /inApps/v1/notifications/test` at
+`api.storekit.apple.com`: `requestTestNotification` in Apple's library,
+which `rata-next` already has, with the In-App Purchase key of *When a
+subscriber asks about their record*, below, and environment Production).
+Apple posts a `TEST` to the Production URL of step 5, and the route
+checks it as it checks every notification, against `APPLE_BUNDLE_ID` and
+`APPLE_APP_ID`, before it reads its type: when both match it answers 200
+and records nothing; otherwise it answers 400 and logs the
+`refused (INVALID_APP_IDENTIFIER)` line below. A few minutes later,
+*Get Test Notification Status* (`GET
+/inApps/v1/notifications/test/<testNotificationToken>`:
+`getTestNotificationStatus`, with the token the first call answered)
+gives each attempt's `sendAttemptResult`: `SUCCESS` is the route's 200,
+`UNSUCCESSFUL_HTTP_RESPONSE_CODE` its 400, or a 500 whose log line names
+the step. Apple sends a refused Production `TEST` again as it does any
+notification, so after fixing a setting and redeploying, ask for a new
+one. Asked at the sandbox address (`api.storekit-sandbox.apple.com`),
+the `TEST` goes to the Sandbox URL, and is checked against
+`APPLE_BUNDLE_ID` but never `APPLE_APP_ID`.
+
+Apple names the app's number in a notification only "for apps that users
+download from the App Store" (App Store Server Notifications, *data*), so
+before the app is on sale a Production `TEST` may come without one. It is
+refused all the same, and its line reads `app id (none), in Production`
+and tells you to set `APPLE_APP_ID` to match it: there is nothing to
+match, so leave `APPLE_APP_ID` as step 3 gave it. Such a `TEST` has still
+checked the address and `APPLE_BUNDLE_ID` (the line names
+`APPLE_BUNDLE_ID` too when it differs), and only the first purchase
+below can check `APPLE_APP_ID`.
+
+So, to confirm both, **after the first purchase from the App Store
+itself** (buy a subscription in the released app yourself, before
+customers do), look in the server log a few minutes later: there must be
+no line beginning `apple/notifications: refused (INVALID_APP_IDENTIFIER)`.
+Such a line names the bundle id and app
 id Apple signed the notification for and each setting that differs
 (`APPLE_APP_ID is …`, `APPLE_BUNDLE_ID is …`); if the app it names is
 RATA's, set that setting to match (step 7) and redeploy (step 9). Apple
