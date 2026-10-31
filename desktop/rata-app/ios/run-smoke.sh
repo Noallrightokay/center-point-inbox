@@ -5,7 +5,10 @@
 # screenshot in OUT as NAME.smoke.json, NAME.stdout.log, NAME.stderr.log
 # and NAME.png. Exit 0 when every check passed, the page is shown in the
 # appearance the simulator is set to (light or dark: set it before this
-# runs, so RATA starts in it), and RATA is still running.
+# runs, so RATA starts in it), the screenshot shows something drawn below
+# the status bar (painted.py; while it does not, it is taken again, 2 s
+# apart, up to RATA_SMOKE_TAKES times, 15 unless set), and RATA is still
+# running.
 #
 # What the app is given at launch goes in SIMCTL_CHILD_ variables, which
 # simctl hands to it without the prefix:
@@ -31,6 +34,8 @@ out="${2:?give a folder for what the run leaves}"
 name="${3:?give the run a name}"
 bundle="${RATA_BUNDLE:-org.mailrata.desktop}"
 wait_for="${RATA_SMOKE_WAIT:-180}"
+takes="${RATA_SMOKE_TAKES:-15}"
+here="$(cd "$(dirname "$0")" && pwd)"
 safari="com.apple.mobilesafari"
 opens=0
 [ "${SIMCTL_CHILD_RATA_SMOKE_OPEN:-}" = "1" ] && opens=1
@@ -104,7 +109,29 @@ if [ "$opens" = 1 ]; then
 fi
 
 cp "$smoke" "$out/$name.smoke.json"
-xcrun simctl io "$sim" screenshot "$out/$name.png"
+# The screenshot, and whether anything is drawn in it. The self-test's
+# "page" check reads the DOM, which a page has whether or not a frame of
+# it reached the screen: on a cold runner WebKit's GPU process once went
+# unresponsive and the first screen's screenshot was plain white under
+# the status bar while that check passed (painted.py). So a screen still
+# one colour below the status bar is taken again, 2 s apart, which waits
+# out a slow first frame, and one never drawn fails the run. In a run
+# that opens a link the screen is Safari's.
+drawn=0
+for take in $(seq 1 "$takes"); do
+  rm -f "$out/$name.png"
+  xcrun simctl io "$sim" screenshot "$out/$name.png" >/dev/null 2>&1
+  said="$(python3 "$here/painted.py" "$out/$name.png" 2>&1)"
+  judged=$?
+  echo "$name: screenshot $take: $said"
+  if [ "$judged" = 0 ]; then drawn=1; break; fi
+  [ "$take" -lt "$takes" ] && sleep 2
+done
+if [ "$drawn" = 1 ]; then
+  echo "$name: pass: the screenshot shows something drawn below the status bar"
+else
+  echo "$name: FAIL: nothing drawn below the status bar in $takes screenshots, 2 s apart"
+fi
 cat "$out/$name.smoke.json"
 # light or dark; anything else (an older simctl) is not held to.
 appearance="$(xcrun simctl ui "$sim" appearance 2>/dev/null | tr -d '[:space:]')"
@@ -128,6 +155,7 @@ sys.exit(0 if ok else 1)
 PY
 verdict=$?
 [ "$safari_up" = 1 ] || verdict=1
+[ "$drawn" = 1 ] || verdict=1
 if ! running; then
   echo "$name: RATA is no longer running"
   verdict=1

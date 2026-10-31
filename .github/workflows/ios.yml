@@ -236,8 +236,10 @@ jobs:
   # the build trusts only that key's public half); the workspace again in
   # dark appearance; Settings; and RATA opening a web address, which must
   # bring Safari up. The job fails when a check fails, the page is not
-  # shown in the appearance the simulator is set to, RATA stops, or the
-  # build was not given the made-up client ids its phone answers refuse.
+  # shown in the appearance the simulator is set to, a screenshot shows
+  # nothing drawn below the status bar (ios/painted.py; it is taken again,
+  # 2 s apart, for a slow first frame), RATA stops, or the build was not
+  # given the made-up client ids its phone answers refuse.
   simulator:
     name: iOS app in the Simulator
     runs-on: macos-latest
@@ -320,6 +322,12 @@ jobs:
       # desktop's artwork, by its pixels.
       - name: The app icon is made from RATA's artwork
         run: python3 desktop/rata-app/ios/make-icon.py --check
+
+      # What judges each run's screenshot below: it reads every kind of
+      # PNG row back exactly, and tells a window that drew nothing under
+      # the status bar from a screen with a form or a line of words on it.
+      - name: The screenshot judge's own tests
+        run: python3 desktop/rata-app/ios/painted.py --test
 
       - name: RATA's changes to it
         run: bash desktop/rata-app/ios/prepare.sh

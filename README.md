@@ -97,7 +97,7 @@ Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
 
-A second suite, `tests/loopback.rs` (16 tests), runs the engine against a
+A second suite, `tests/loopback.rs` (17 tests), runs the engine against a
 real Dovecot (IMAP) and GreenMail (SMTP, and IMAPS for a server that
 declares no special-use folders) on 127.0.0.1. CI runs it on every PR as
 *Mail layer against real servers*. Locally (needs `dovecot-imapd`, Java and

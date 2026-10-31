@@ -179,9 +179,13 @@ of the release gate, and nothing of it is a release.
   smoke self-test, checks the app with `ios/check-app.sh`, and runs it
   five times with a screenshot each (`ios/run-smoke.sh`): the first
   screen, the workspace licensed by a throwaway key made in the job, the
-  workspace in dark, Settings, and a web address opened in Safari. Its
-  artifact `ios-simulator` holds the screenshots, `smoke.json`, the
-  device's log and the app.
+  workspace in dark, Settings, and a web address opened in Safari. Each
+  screenshot must show something drawn below the status bar
+  (`ios/painted.py`, which has its own tests in the job): the self-test's
+  page check reads the DOM, which passes on a window that never drew, so
+  a screen still one colour there is taken again, 2 s apart, and then
+  fails the run. The job's artifact `ios-simulator` holds the screenshots,
+  `smoke.json`, the device's log and the app.
 - **iOS app for a device, unsigned** builds RATA for a phone, release and
   unsigned, as a store's build is made, and checks the app, its privacy
   manifest against the program's required-reason APIs, and that the
