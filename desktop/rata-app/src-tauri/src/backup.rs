@@ -71,7 +71,13 @@ use std::path::PathBuf;
 /// and one per site, `<identifier>/WebsiteData/Default/<site>/<site>/
 /// IndexedDB` (smoke.json, 2026-10). Older iOS is not seen here; the
 /// per-site layout is said to date from iOS 17, and every IndexedDB folder
-/// within this depth is found whichever layout a phone has.
+/// within this depth is found whichever layout a phone has. WebKit makes
+/// the old layout's folder at the first launch, before any page opens a
+/// database (the first screen's smoke.json lists it), so a folder found
+/// says nothing of where the page's databases are. The Simulator's
+/// self-test (smoke.rs, `store_files`) therefore finds the databases
+/// themselves, by their names, under any folder's name and deeper than
+/// this, and fails when one lies outside every folder found here.
 #[cfg(any(target_os = "ios", feature = "smoke", test))]
 const WEBKIT_DEPTH: usize = 7;
 

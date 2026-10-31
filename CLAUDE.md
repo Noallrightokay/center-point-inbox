@@ -26,10 +26,10 @@ convenient.
 | Path | What |
 |---|---|
 | `desktop/rata-mail/` | Mail engine: DNS discovery, IMAP, SMTP, outbound guard (which judges a NAT64 address by the IPv4 address inside, since #164; first in the next release), server-side message actions, paging back through history, what a reply needs, decoding message bodies and attachments, sending with attachments, sanitising HTML, the Sent, Archive, Spam and Drafts folders and the customer's own, saving RATA's drafts to Drafts, Gmail's archive, refreshing only what is new, Cc and Bcc and named addresses (`"Name" <addr>`), a list's unsubscribe address (`List-Unsubscribe`), the last id of `References` (for the conversation view), being told of new mail (IDLE), signing in with a password or an OAuth token (XOAUTH2), judging a sender's file names (`names.rs`), and on iOS looking names up through the system's own resolver instead of hickory (`dns_sd.rs` asks, `records.rs` reads the answers; *Name lookups on iOS*, below). Standalone, knows nothing about the app. 344 tests, plus 16 loopback tests against real Dovecot and GreenMail (`tests/loopback.rs`, `--features loopback-tests`, CI job *Mail layer against real servers*). CI job *Mail layer on macOS* (`.github/workflows/mail-apple.yml`, workflow *Mail on Apple systems*, on every change to the engine or that file; not part of the release gate) runs the 344 with hickory, as the macOS app has it; again with `--features system-dns`, as iOS looks names up (338: the six tests that need hickory do not exist in that build; and 12 that exist only in such a build, ignored there and run in a step of their own, one at a time, since ten of them ask real DNS); clippy with that feature and for `aarch64-apple-ios`; checks with `cargo tree` that neither iOS target builds hickory, System Configuration or resolv-conf; builds and links the tests for iOS and the iOS Simulator; and runs the library's tests in an iOS Simulator (338, then the 12) as a bare process (`xcrun simctl spawn`), outside any app's sandbox. Linux CI never compiles the iOS code: check it here with `cargo clippy --all-targets -- --cfg system_dns -D warnings` (*Name lookups on iOS*). |
-| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`lib.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 334 tests on Linux (331 without the `self-update` feature, and 17 of the iOS self-test with `smoke`). The program, `main.rs`, only calls the library's `run` (`lib.rs`), where the tests are. On Windows CI runs only the keychain, list and start tests (`cargo test --lib -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*; `--bin rata-app` finds no tests and passes), two of them Windows-only and run against the real Credential Manager. |
+| `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`lib.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 334 tests on Linux (331 without the `self-update` feature, and 20 of the iOS self-test with `smoke`). The program, `main.rs`, only calls the library's `run` (`lib.rs`), where the tests are. On Windows CI runs only the keychain, list and start tests (`cargo test --lib -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*; `--bin rata-app` finds no tests and passes), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (584 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (583 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -87,13 +87,16 @@ Windows*, step for step. The first real run of the gate is v0.1.43's;
 has run on every change to the app since #160.
 
 apt never waits on a stalled download (#111, first released in v0.1.44).
-Before each of the seven steps that install with apt (`apt-get install`,
+Before each of the eight steps that install with apt (`apt-get install`,
 or `playwright install --with-deps`: three in `desktop-ci.yml`, one in
-`rata-next-ci.yml`, three in `release.yml`, on Linux runners only), a step
+`rata-next-ci.yml`, three in `release.yml` and one in `ios.yml`, its Linux
+job *Without self-update, no updater*; on Linux runners only), a step
 *Make apt retry a stalled download instead of hanging* writes
 `/etc/apt/apt.conf.d/80-rata-retries` (`Acquire::Retries "3"`, 30 s http
-and https timeouts), and each of those seven has `timeout-minutes: 8`, so
-a real hang fails under its own name instead of using up the job. The
+and https timeouts), and each of those eight has `timeout-minutes: 15`
+(8 until a slow mirror, about 100 KB/s, needed minutes for the webview's
+100 MB; `115f894`), so a real hang fails under its own name instead of
+using up the job. The
 installed-app smoke's install of `xvfb`, `xdotool` and `dbus` runs later in
 the same installers job, so the settings cover it too, under that step's
 own 10 minutes. On #110 two
@@ -2046,12 +2049,15 @@ RATA panic at every start, so `single_instance_here` asks
 `zbus::Address::session()` first and leaves the plugin out then; with no
 address set zbus tries `$XDG_RUNTIME_DIR/bus`, and no bus there leaves the
 plugin without a guard, not a panic. Either way the lock still guards.
-Trap for mobile: the plugin is a dependency on every OS but macOS
-(`cfg(not(target_os = "macos"))`, so Android and iOS too, where
-`single_instance_here` does not exist), and `Hold::Taken` exits the
-process, which an iOS app must never do; a mobile build limits single
-instance to Windows and Linux and starts a phone without the lock instead
-(#166, in review; `docs/APP-STORES.md`). **Where the list
+On a phone (#166): the plugin is a dependency on Windows and
+Linux only (`cfg(any(target_os = "linux", windows))`), and `Hold::Taken`
+exits the process only on a computer (`cfg(desktop)`), since an iOS app
+must never quit by itself (to its owner it looks like a crash). A phone
+takes the list's lock as a computer does, whenever it can (the
+Simulator's self-test reports `lock at start: held`), and starts
+unguarded, as with `Hold::Unguarded`, only when something else holds it:
+a phone runs one copy of an app at a time, so that is no RATA the
+customer could switch to (`lib.rs` setup; `docs/APP-STORES.md`). **Where the list
 lives (R13).** Setup opens `app_local_data_dir()/mailboxes.json`: on
 Windows Local AppData (`%LOCALAPPDATA%\org.mailrata.desktop`), which a
 roaming profile never copies to its share and which already holds the

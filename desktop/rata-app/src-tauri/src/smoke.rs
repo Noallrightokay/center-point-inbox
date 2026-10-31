@@ -11,10 +11,11 @@
 //! Create file, updates, Microsoft sign-in, the system's opener); the
 //! folder saves go to; the page itself; once the page has opened its mail
 //! store, that the list's folder and the mail are kept out of the phone's
-//! backups; and, when asked at launch, that a web address the page asks
-//! RATA to open, through the very command bridge.js calls for every link
-//! (`open_link`), is handed to the system, and off the window's thread
-//! (`links::open_aside`).
+//! backups (each file of the page's databases, found by its name, inside a
+//! folder kept out); and, when asked at launch, that a web address the
+//! page asks RATA to open, through the very command bridge.js calls for
+//! every link (`open_link`), is handed to the system, and off the window's
+//! thread (`links::open_aside`).
 //! Each answer goes into `smoke.json` in the app's cache
 //! folder (never its data folder, which the list must be the first to
 //! make), written once and whole when the last check is done, for the job
@@ -887,48 +888,113 @@ fn judge_saves(folder: Option<&Path>, home: Option<&Path>, wrote: Result<(), Str
 
 // ------------------------------------------------------------- backups
 
+/// The page's own IndexedDB databases, by how their names begin: app.html's
+/// mail (`MS_DB`: every message and its text), what else of the workspace
+/// came from mail (`WK_DB`) and the Files view's files (`FV_DB`). WebKit
+/// writes each database's name into that database's own files (the
+/// `DatabaseName` row of its `IDBDatabaseInfo` table), so a file holding one
+/// of these names is a file of that store, wherever WebKit keeps it. A test
+/// reads app.html, so the two cannot part.
+const STORES: [&str; 3] = ["rata-mail-", "rata-work-", "rata-files"];
+/// The one a page that has opened its mail store must have on disk.
+const MAIL_STORE: &str = STORES[0];
+/// How deep under `Library/WebKit` the stores' files are looked for. Deeper
+/// than `backup` looks for IndexedDB folders (a store's file is eight levels
+/// down in the per-site layout iOS 26 keeps the page's databases in,
+/// `<identifier>/WebsiteData/Default/<site>/<site>/IndexedDB/<database>/
+/// IndexedDB.sqlite3`, and as deep in WebKit's older one, under
+/// `<identifier>/WebsiteData/IndexedDB/v1`), and under any folder's name,
+/// so that a store kept where `backup` does not look is still found here,
+/// and fails the check.
+const STORE_DEPTH: usize = 12;
+/// How much of each file is read for the names: a database's name is
+/// written as the database is made, so near the start of its file (or of
+/// the write-ahead log beside it), and the Simulator's stores hold no mail.
+const STORE_READ: u64 = 8 << 20;
+/// How many files are read at most.
+const STORE_FILES: usize = 4000;
+/// How deep the listing of WebKit's folder goes when the check fails: to
+/// the stores' own files in both layouts.
+const LISTING_DEPTH: usize = 9;
+
 /// Once the page has opened its mail store: RATA's folder and each folder
 /// WebKit keeps IndexedDB in, as `backup` finds them, each read back from
-/// the system as kept out of backups. Read only: what this checks is what
-/// RATA's start and the page's licence question already did.
+/// the system as kept out of backups, and every file of the page's stores
+/// inside one of them. Read only: what this checks is what RATA's start
+/// and the page's licence question already did.
 fn backups(handle: &tauri::AppHandle, page: Option<&Page>) -> Check {
     use tauri::Manager;
     let paths = handle.path();
     let (Ok(app), Ok(home)) = (paths.app_local_data_dir(), paths.home_dir()) else {
         return Check::new("backups", false, json!({ "error": "no folders" }));
     };
-    let webkit = crate::backup::webkit_in(&home);
-    let found: Vec<(String, Result<bool, String>)> = crate::backup::folders(&app, &webkit)
-        .iter()
-        .map(|f| {
-            let shown = f.strip_prefix(&home).unwrap_or(f).display().to_string();
-            (shown, crate::backup::excluded(f))
-        })
-        .collect();
     let mail_open = page.is_some_and(|p| p.path == "app.html");
-    let mut check = judge_backups(&found, mail_open);
-    if found.len() < 2 {
-        check.detail["webkit holds"] = json!(listing(&webkit, &home, 5));
+    backups_in(&app, &home, mail_open, crate::backup::excluded)
+}
+
+/// [`backups`] in the container at `home`, with RATA's folder at `app` and
+/// each folder read back by `excluded`. Paths are shown from `home`.
+fn backups_in(
+    app: &Path,
+    home: &Path,
+    mail_open: bool,
+    excluded: impl Fn(&Path) -> Result<bool, String>,
+) -> Check {
+    let webkit = crate::backup::webkit_in(home);
+    let shown = |p: &Path| p.strip_prefix(home).unwrap_or(p).to_path_buf();
+    let found: Vec<(PathBuf, Result<bool, String>)> = crate::backup::folders(app, &webkit)
+        .iter()
+        .map(|f| (shown(f), excluded(f)))
+        .collect();
+    let stores: Vec<(PathBuf, Vec<&'static str>)> = store_files(&webkit)
+        .into_iter()
+        .map(|(f, names)| (shown(&f), names))
+        .collect();
+    let mut check = judge_backups(&found, &stores, mail_open);
+    if !check.ok {
+        check.detail["webkit holds"] = json!(listing(&webkit, home, LISTING_DEPTH));
     }
     check
 }
 
-/// RATA's folder (first) is kept out, and so is each IndexedDB folder;
-/// where the page has opened its mail store, there is one at least.
-fn judge_backups(found: &[(String, Result<bool, String>)], mail_open: bool) -> Check {
+/// RATA's folder (first) is kept out, and so is each IndexedDB folder; each
+/// file of the page's stores lies inside one of those kept out; and where
+/// the page has opened its mail store, a file of it is there. So the mail
+/// kept in a folder `backup` never found fails, whatever else it found.
+fn judge_backups(
+    found: &[(PathBuf, Result<bool, String>)],
+    stores: &[(PathBuf, Vec<&'static str>)],
+    mail_open: bool,
+) -> Check {
     let mut wrong: Vec<String> = Vec::new();
     if found.is_empty() {
         wrong.push("RATA's folder was not found".into());
     }
-    if mail_open && found.len() < 2 {
-        wrong.push("no folder of WebKit's holds the mail".into());
-    }
     for (folder, excluded) in found {
         match excluded {
             Ok(true) => {}
-            Ok(false) => wrong.push(format!("{folder} is backed up")),
-            Err(e) => wrong.push(format!("{folder}: {e}")),
+            Ok(false) => wrong.push(format!("{} is backed up", folder.display())),
+            Err(e) => wrong.push(format!("{}: {e}", folder.display())),
         }
+    }
+    let kept_out = |file: &Path| {
+        found
+            .iter()
+            .any(|(folder, excluded)| matches!(excluded, Ok(true)) && file.starts_with(folder))
+    };
+    for (file, names) in stores {
+        if !kept_out(file) {
+            wrong.push(format!(
+                "{} holds {} and is in no folder kept out",
+                file.display(),
+                names.join(", ")
+            ));
+        }
+    }
+    if mail_open && !stores.iter().any(|(_, names)| names.contains(&MAIL_STORE)) {
+        wrong.push(format!(
+            "no file of WebKit's holds the mail store ({MAIL_STORE}…)"
+        ));
     }
     Check::new(
         "backups",
@@ -936,11 +1002,15 @@ fn judge_backups(found: &[(String, Result<bool, String>)], mail_open: bool) -> C
         json!({
             "kept out": found
                 .iter()
-                .map(|(f, e)| format!("{f}: {}", match e {
+                .map(|(f, e)| format!("{}: {}", f.display(), match e {
                     Ok(true) => "kept out".to_string(),
                     Ok(false) => "BACKED UP".to_string(),
                     Err(why) => why.clone(),
                 }))
+                .collect::<Vec<_>>(),
+            "the page's stores": stores
+                .iter()
+                .map(|(f, names)| format!("{}: {}", f.display(), names.join(", ")))
                 .collect::<Vec<_>>(),
             "mail store open": mail_open,
             "problems": wrong,
@@ -948,8 +1018,69 @@ fn judge_backups(found: &[(String, Result<bool, String>)], mail_open: bool) -> C
     )
 }
 
-/// The folders under `dir`, no deeper than `depth`, relative to `home`, at
-/// most 80: what WebKit made, when no mail store was found in it.
+/// Each file under `dir`, no deeper than [`STORE_DEPTH`] and never through
+/// a link, that holds the name of one of [`STORES`], with the names it
+/// holds, in name order.
+fn store_files(dir: &Path) -> Vec<(PathBuf, Vec<&'static str>)> {
+    fn walk(
+        dir: &Path,
+        depth: usize,
+        read: &mut usize,
+        out: &mut Vec<(PathBuf, Vec<&'static str>)>,
+    ) {
+        if depth == 0 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            // The entry's own type: a link is neither a folder nor a file.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                walk(&entry.path(), depth - 1, read, out);
+            } else if kind.is_file() && *read < STORE_FILES {
+                *read += 1;
+                let names = names_in(&entry.path());
+                if !names.is_empty() {
+                    out.push((entry.path(), names));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, STORE_DEPTH, &mut 0, &mut out);
+    out
+}
+
+/// Which of [`STORES`] the start of `file` names, as UTF-8 (SQLite's text
+/// in a database made as WebKit makes them) or UTF-16 (in one made so).
+fn names_in(file: &Path) -> Vec<&'static str> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let Ok(f) = std::fs::File::open(file) else {
+        return Vec::new();
+    };
+    if f.take(STORE_READ).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let holds = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    STORES
+        .into_iter()
+        .filter(|name| {
+            let utf16: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            holds(name.as_bytes()) || holds(&utf16)
+        })
+        .collect()
+}
+
+/// The folders and files under `dir`, no deeper than `depth`, relative to
+/// `home`, each file with its size, at most 80: what WebKit made, when the
+/// check fails.
 fn listing(dir: &Path, home: &Path, depth: usize) -> Vec<String> {
     fn walk(dir: &Path, home: &Path, depth: usize, out: &mut Vec<String>) {
         if depth == 0 || out.len() >= 80 {
@@ -964,10 +1095,17 @@ fn listing(dir: &Path, home: &Path, depth: usize) -> Vec<String> {
             if out.len() >= 80 {
                 return;
             }
-            if e.file_type().is_ok_and(|t| t.is_dir()) {
-                let p = e.path();
-                out.push(p.strip_prefix(home).unwrap_or(&p).display().to_string());
+            let Ok(kind) = e.file_type() else {
+                continue;
+            };
+            let p = e.path();
+            let shown = p.strip_prefix(home).unwrap_or(&p).display().to_string();
+            if kind.is_dir() {
+                out.push(shown);
                 walk(&p, home, depth - 1, out);
+            } else if kind.is_file() {
+                let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                out.push(format!("{shown} ({size} bytes)"));
             }
         }
     }
@@ -1516,26 +1654,214 @@ mod tests {
     }
 
     /// RATA's folder must be kept out of backups, and so must every folder
-    /// WebKit keeps IndexedDB in; once the page has opened its mail store,
-    /// there must be one.
+    /// WebKit keeps IndexedDB in; every file of the page's stores must lie
+    /// in one of those; and once the page has opened its mail store, a file
+    /// of it must be there.
     #[test]
     fn the_list_and_the_mail_are_kept_out_of_backups() {
         let ours = (
-            "Library/Application Support/org.mailrata.desktop".to_string(),
+            PathBuf::from("Library/Application Support/org.mailrata.desktop"),
             Ok(true),
         );
-        let mail = ("Library/WebKit/WebsiteData/IndexedDB".to_string(), Ok(true));
-        assert!(judge_backups(&[ours.clone(), mail.clone()], true).ok);
-        // The first screen opens no mail store.
-        assert!(judge_backups(std::slice::from_ref(&ours), false).ok);
-        let c = judge_backups(std::slice::from_ref(&ours), true);
-        assert!(!c.ok && c.detail["problems"].to_string().contains("holds the mail"));
-        let backed = (mail.0.clone(), Ok(false));
-        let c = judge_backups(&[ours.clone(), backed], true);
-        assert!(!c.ok && c.detail["problems"].to_string().contains("is backed up"));
-        let unread = (ours.0.clone(), Err("the system would not say".into()));
-        assert!(!judge_backups(&[unread, mail], true).ok);
-        assert!(!judge_backups(&[], false).ok);
+        let data = Path::new("Library/WebKit/org.mailrata.desktop/WebsiteData");
+        let root = data.join("IndexedDB");
+        let site = data.join("Default/s/s/IndexedDB");
+        let mail = (site.join("d1/IndexedDB.sqlite3"), vec![MAIL_STORE]);
+        let work = (site.join("d2/IndexedDB.sqlite3-wal"), vec!["rata-work-"]);
+        let all = [
+            ours.clone(),
+            (root.clone(), Ok(true)),
+            (site.clone(), Ok(true)),
+        ];
+        let c = judge_backups(&all, &[mail.clone(), work.clone()], true);
+        assert!(c.ok, "{c:?}");
+        assert_eq!(
+            c.detail["the page's stores"][0],
+            format!("{}: rata-mail-", mail.0.display())
+        );
+        // The first screen opens no mail store, and WebKit has made only
+        // the old layout's IndexedDB folder, which holds none of the page's.
+        let first = [ours.clone(), (root.clone(), Ok(true))];
+        assert!(judge_backups(&first, &[], false).ok);
+        // With the mail store open, those same two folders, both kept out,
+        // are not enough (they passed before): the mail must be in one.
+        let c = judge_backups(&first, &[], true);
+        assert!(
+            !c.ok
+                && c.detail["problems"]
+                    .to_string()
+                    .contains("holds the mail store"),
+            "{c:?}"
+        );
+        let c = judge_backups(&first, std::slice::from_ref(&mail), true);
+        assert!(
+            !c.ok
+                && c.detail["problems"]
+                    .to_string()
+                    .contains("in no folder kept out"),
+            "{c:?}"
+        );
+        // Every store counts, not the mail's alone.
+        let some = [
+            ours.clone(),
+            (root.clone(), Ok(true)),
+            (site.join("d1"), Ok(true)),
+        ];
+        let c = judge_backups(&some, &[mail.clone(), work.clone()], true);
+        assert!(
+            !c.ok && c.detail["problems"].to_string().contains("rata-work-"),
+            "{c:?}"
+        );
+        // The mail's folder found, but backed up.
+        let backed = [
+            ours.clone(),
+            (root.clone(), Ok(true)),
+            (site.clone(), Ok(false)),
+        ];
+        let c = judge_backups(&backed, std::slice::from_ref(&mail), true);
+        let problems = c.detail["problems"].to_string();
+        assert!(
+            !c.ok
+                && problems.contains("is backed up")
+                && problems.contains("in no folder kept out")
+        );
+        let unread = [
+            (ours.0.clone(), Err("the system would not say".into())),
+            (site.clone(), Ok(true)),
+        ];
+        assert!(!judge_backups(&unread, std::slice::from_ref(&mail), true).ok);
+        assert!(!judge_backups(&[], &[], false).ok);
+    }
+
+    /// The whole check, on a container laid out as iOS 26 lays it out and
+    /// read back as kept out wherever RATA marks: the mail in WebKit's
+    /// per-site folder passes. The same mail where `backup` does not look
+    /// (a folder of another name, or deeper than it looks) fails, although
+    /// every folder it found is kept out, and so does a page whose mail
+    /// store is on disk nowhere. A link is never followed.
+    #[test]
+    fn the_mail_is_found_by_its_name_wherever_webkit_keeps_it() {
+        let home = tmpdir("backups");
+        let app = home.join("Library/Application Support/org.mailrata.desktop");
+        std::fs::create_dir_all(&app).unwrap();
+        let webkit = crate::backup::webkit_in(&home);
+        let data = webkit.join("org.mailrata.desktop/WebsiteData");
+        std::fs::create_dir_all(data.join("IndexedDB")).unwrap();
+        let local = data.join("Default/s/s/LocalStorage");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(
+            local.join("localstorage.sqlite3"),
+            b"SQLite format 3\0centra",
+        )
+        .unwrap();
+        let marked = |_: &Path| Ok(true);
+
+        // The first screen: no store yet, none needed.
+        assert!(backups_in(&app, &home, false, marked).ok);
+        // The mail store open, and on disk nowhere.
+        let c = backups_in(&app, &home, true, marked);
+        assert!(!c.ok, "{c:?}");
+        let held = c.detail["webkit holds"].to_string();
+        assert!(
+            held.contains("LocalStorage/localstorage.sqlite3 (22 bytes)"),
+            "{held}"
+        );
+
+        let put = |folder: &Path| {
+            let db = folder.join("5f3a");
+            std::fs::create_dir_all(&db).unwrap();
+            let info = b"SQLite format 3\0\x07DatabaseName\x17rata-mail-u1".as_slice();
+            std::fs::write(db.join("IndexedDB.sqlite3"), info).unwrap();
+            let wal: Vec<u8> = "rata-work-u1"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            std::fs::write(db.join("IndexedDB.sqlite3-wal"), wal).unwrap();
+        };
+        let site = data.join("Default/s/s/IndexedDB");
+        put(&site);
+        #[cfg(unix)]
+        {
+            let outside = home.join("elsewhere");
+            put(&outside);
+            std::os::unix::fs::symlink(&outside, data.join("Default/linked")).unwrap();
+            std::os::unix::fs::symlink(
+                outside.join("5f3a/IndexedDB.sqlite3"),
+                data.join("linked.sqlite3"),
+            )
+            .unwrap();
+        }
+        let c = backups_in(&app, &home, true, marked);
+        assert!(c.ok, "{c:?}");
+        let stores = c.detail["the page's stores"].as_array().unwrap().clone();
+        assert_eq!(stores.len(), 2, "{c:?}");
+        assert!(
+            stores[0]
+                .as_str()
+                .unwrap()
+                .ends_with("IndexedDB.sqlite3: rata-mail-")
+        );
+        assert!(
+            stores[1]
+                .as_str()
+                .unwrap()
+                .ends_with("IndexedDB.sqlite3-wal: rata-work-")
+        );
+        // Only what reads back as kept out counts.
+        let c = backups_in(&app, &home, true, |f: &Path| {
+            Ok(!f.ends_with("s/s/IndexedDB"))
+        });
+        assert!(!c.ok, "{c:?}");
+
+        // A folder of another name.
+        let other = data.join("Default/s/s/IDB");
+        std::fs::rename(&site, &other).unwrap();
+        let c = backups_in(&app, &home, true, marked);
+        let problems = c.detail["problems"].to_string();
+        assert!(
+            !c.ok && problems.contains("IDB/5f3a/IndexedDB.sqlite3 holds rata-mail-"),
+            "{c:?}"
+        );
+        // Deeper than `backup` looks: eight folders down.
+        std::fs::remove_dir_all(&other).unwrap();
+        let deep = data.join("Default/s/s/t/u/IndexedDB");
+        put(&deep);
+        assert!(!crate::backup::folders(&app, &webkit).contains(&deep));
+        let c = backups_in(&app, &home, true, marked);
+        assert!(
+            !c.ok && c.detail["problems"].to_string().contains("t/u/IndexedDB"),
+            "{c:?}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The names are the page's own databases', as app.html names them.
+    #[test]
+    fn the_stores_looked_for_are_the_pages_own() {
+        let page = include_str!("../../../../rata-next/public/app.html");
+        assert!(page.contains("const MS_DB='rata-mail-'+"));
+        assert!(page.contains("const WK_DB='rata-work-'+"));
+        assert!(page.contains("const FV_DB='rata-files',"));
+        assert_eq!(MAIL_STORE, "rata-mail-");
+    }
+
+    /// A name is found as UTF-8 or UTF-16, and only one of the page's.
+    #[test]
+    fn a_stores_name_is_read_from_its_file() {
+        let dir = tmpdir("names");
+        let file = dir.join("db");
+        std::fs::write(&file, b"\0\0rata-files\0rata-work-a").unwrap();
+        assert_eq!(names_in(&file), vec!["rata-work-", "rata-files"]);
+        let utf16: Vec<u8> = "rata-mail-b"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        std::fs::write(&file, utf16).unwrap();
+        assert_eq!(names_in(&file), vec![MAIL_STORE]);
+        std::fs::write(&file, b"rata-mail rata-workspace rata_files").unwrap();
+        assert!(names_in(&file).is_empty());
+        assert!(names_in(&dir.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1543,15 +1869,17 @@ mod tests {
         let home = tmpdir("listing");
         let webkit = crate::backup::webkit_in(&home);
         std::fs::create_dir_all(webkit.join("WebsiteData/Default/a")).unwrap();
-        std::fs::write(webkit.join("WebsiteData/file"), b"").unwrap();
+        std::fs::write(webkit.join("WebsiteData/file"), b"four").unwrap();
         assert_eq!(
             listing(&webkit, &home, 5),
             vec![
                 "Library/WebKit/WebsiteData",
                 "Library/WebKit/WebsiteData/Default",
                 "Library/WebKit/WebsiteData/Default/a",
+                "Library/WebKit/WebsiteData/file (4 bytes)",
             ]
         );
+        assert_eq!(listing(&webkit, &home, 2).len(), 3);
         for n in 0..100 {
             std::fs::create_dir_all(webkit.join(format!("many/{n:03}"))).unwrap();
         }

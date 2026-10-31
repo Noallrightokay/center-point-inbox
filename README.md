@@ -84,7 +84,7 @@ those tests open no socket beyond a scripted server of their own, with one
 exception (below). A resolver that answers MX questions with no records
 fails those two (`a_domain_at_microsoft_365_is_found_by_its_mx` and
 `a_real_business_domain_resolves_through_its_mx`). The container this
-project's assistant sessions run in has one (341 of 343 pass there): its
+project's assistant sessions run in has one (342 of 344 pass there): its
 resolvers answer only A questions, and MX, AAAA, TXT, SRV and CNAME
 questions all come back with no records, so an empty SRV, SPF or
 autodiscover answer there says nothing about the domain. CI has real
@@ -193,7 +193,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (579 checks, among them axe-core accessibility scans of the inbox, an
+policy (583 checks, among them axe-core accessibility scans of the inbox, an
 open message, the composer, Settings and the dialogs, in light and dark,
 failing on any serious or critical rule). CI runs it as *Desktop interface,
 driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the

@@ -329,11 +329,11 @@ jobs:
       # and no other, and the real key is never involved. mint.sh signs it
       # exactly as it signs a customer's, with OpenSSL 3.
       #
-      # The public half reaches the Rust build as Cargo's own [env], where
+      # The public half reaches the Rust build as Cargo [env], where
       # licence.rs's option_env! reads it (ios/cargo-env.py says why only
       # that way arrives), with the made-up client ids above, which the
-      # self-test's "phone answers" must find refused. The runner's Cargo
-      # home is thrown away with it.
+      # self-test's "phone answers" must find refused. The file it is in,
+      # src-tauri/.cargo/config.toml, is thrown away with the runner.
       - name: A throwaway licence key, and a Pro licence signed with it
         run: |
           openssl_bin="$(brew --prefix openssl@3)/bin"
@@ -533,7 +533,9 @@ jobs:
         run: bash desktop/rata-app/ios/prepare.sh
 
       # The made-up client ids (top of this file), and a throwaway licence
-      # key, as the build's Cargo [env] (ios/cargo-env.py). The key is the
+      # key, as the build's Cargo [env] (ios/cargo-env.py, which writes them
+      # to src-tauri/.cargo/config.toml, never to the runner's Cargo home's
+      # config, which every Cargo build on a computer reads). The key is the
       # proof that [env] reached the program, which keeps it whole (licence.rs
       # reads it as it runs); a phone's program must then hold none of the
       # values `desktop_only` keeps from it (the step after the build).
