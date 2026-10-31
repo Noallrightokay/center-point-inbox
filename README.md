@@ -53,7 +53,7 @@ press Summarize, Translate or Run briefing on.
 | `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
 | `infrastructure/licence/` | `mint.sh`, which mints a tester's licence on the VPS and checks the signing key against the one the released app trusts. |
-| `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries) and how. |
+| `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries, App Store notifications that did not arrive) and how. |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's OneDrive, Slack and Google Drive registrations), `OWNER-CHECKLIST.md` (every step only the owner can take), `APP-STORES.md` (RATA on the iOS App Store and Google Play: decisions, rules and stages), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 
 There is no `src/`. An earlier version of this product was nine .NET
@@ -208,7 +208,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 1240 checks, no network, no database required
+npm test 2>&1 | cat # 1241 checks, no network, no database required
 npm run dev
 ```
 

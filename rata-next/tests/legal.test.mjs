@@ -320,6 +320,19 @@ export default async function run(state) {
       && P.includes('A refund stops AI at once, and mail keeps working until that licence\'s end')
       && P.includes('For a subscription bought in the iPhone app, the relay also checks the App Store subscription record above that the subscription has not been refunded or revoked'),
       'both pages: a refund or a revocation stops AI at once (app/api/ai, appleAiLive), and mail runs to the licence\'s end');
+    /* The relay holds the month's allowance under the licence's subject
+       (ai_reserve's p_email): an account's address, or apple:<original
+       transaction id> for an App Store subscription, which needs no
+       account; Family Sharing gives each member transactions of their own,
+       so a subject and an allowance of their own (LAUNCH.md section 11,
+       step 4). So the terms do not say the allowance is only an account's. */
+    const relay = readFileSync(join(SITE, 'app', 'api', 'ai', 'route.js'), 'utf8');
+    check(relay.includes('const who = String(seen.licence.sub).toLowerCase();') && relay.includes("call('ai_reserve', { p_email: who,")
+      && apple.appleSub('2000000123456789') === 'apple:2000000123456789'
+      && /each family member who restores the subscription\s+transactions of their own[\s\S]{0,140}?a licence, and an AI allowance, of their own/.test(launch)
+      && T.includes('Each account has a monthly AI allowance, and so does each subscription bought in the iPhone app, which needs no account; each family member it is shared with through Family Sharing has an allowance of their own. When an allowance is used up, the AI features stop')
+      && !/Each account has a monthly AI allowance\. When it is used up/.test(T),
+      'terms: the AI allowance is each account\'s, each App Store subscription\'s and each Family Sharing member\'s, as the relay keeps it (under the licence\'s subject)');
     /* claude/iap-native sends only `transactions` so far, so the page says
        the renewal information comes from a version that sends it
        (LAUNCH.md section 11, step 4). */
