@@ -5301,6 +5301,20 @@ console.log('\n— the linked mailboxes: one line that opens a card where one is
   s = await state();
   check(!split.shown && JSON.stringify(split.col) === JSON.stringify(ME) && split.eyebrow === 'Every mailbox' && JSON.stringify(s.list) === JSON.stringify(WORK) && s.what === 'work@example.net' && s.eyebrow === 'work@example.net',
     `Side by side ignores the choice (its first column is me@example.com's, the top bar says every mailbox) and hides the line; back to one inbox, work@example.net is still chosen: ${JSON.stringify({ split, list: s.list, eyebrow: s.eyebrow })}`);
+  /* A refresh redraws the line whichever view is open (every five minutes,
+     or on new mail): in Settings the top bar still says Settings' own
+     words, and back in the inbox the chosen address. */
+  const elsewhere = await pg.evaluate(async () => {
+    go('set');
+    const before = document.querySelector('#tb-eyebrow').textContent;
+    await serverSync('mail');
+    const r = { before, after: document.querySelector('#tb-eyebrow').textContent, title: document.querySelector('#tb-title').textContent };
+    go('inbox');
+    return r;
+  });
+  s = await state();
+  check(elsewhere.before === 'Workspace' && elsewhere.after === 'Workspace' && elsewhere.title === 'Settings' && s.eyebrow === 'work@example.net' && s.what === 'work@example.net' && JSON.stringify(s.list) === JSON.stringify(WORK),
+    `a refresh while Settings is open leaves its top bar "Workspace / Settings", not the chosen address; back in the inbox it says work@example.net again: ${JSON.stringify({ elsewhere, eyebrow: s.eyebrow, what: s.what })}`);
 
   /* Load older mail, with a mailbox chosen, is that mailbox's: offered only
      while it has history or a gap of its own, and it asks its server alone.

@@ -29,7 +29,7 @@ convenient.
 | `desktop/rata-app/` | Tauri shell: keychain, store, licence verification, the bridge to the interface, saving attachments and marking them as downloads (`mark.rs`), updating itself, new-mail notifications, watching inboxes for new mail, Sign in with Microsoft (`oauth.rs`), Copy diagnostics (`diagnostics.rs`), telling a picture attachment by its bytes (`core::sniff_image`), connected iCloud Drive and Creative Cloud Files folders (`cloud.rs`, K5), files made by Create file (`created.rs`, K6), Share to Slack (`slack.rs`, K3), OneDrive (`onedrive.rs`, K2), Google Drive (`google.rs`, K4), one RATA at a time and the start-up pass over the list and keychain (`main.rs` `open_store`, `store::hold`, `vault::forget_unlinked`, `vault::settle_windows`; SEC-11). 326 tests on Linux. On Windows CI runs only the keychain, list and start tests (`cargo test --bin rata-app -- vault:: store:: tests::at_start`, job *Desktop shell on Windows*), two of them Windows-only and run against the real Credential Manager. |
 | `rata-next/` | The website: marketing, Stripe, licence issue and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`, the help page (`public/help.html`, served at `/help` through `proxy.js`), and the privacy policy and terms (`public/privacy.html`, `public/terms.html`). Next.js on Hostinger. 841 checks (`npm test`, after `npm run build`); `scripts/live-check.sh` checks a deploy from outside, with no credentials, and fails while a live privacy or terms page still shows an `[OWNER: …]` placeholder (`LAUNCH.md`, the step before §6). |
 | `rata-next/public/app.html` | The interface. **One copy.** The desktop app builds its own from this at build time. |
-| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (630 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
+| `desktop/rata-app/harness/` | `ui-harness.mjs` drives the real interface against a fake backend under the app's own CSP (631 checks, among them axe-core scans that fail on any serious or critical accessibility rule; CI job *Desktop interface, driven*); `feed.cjs` writes the update feed's files (its rules tested by `feed.test.cjs`, in Desktop CI and the release gate); `shots.mjs` takes the website's screenshots; `verify-release.sh` checks a published release (`--title <v>` prints the title it expects); `smoke-installed.sh`/`.ps1` install and launch an installer on its release runner. |
 | `desktop/rata-app/demo/` | A clickable demo: the real interface and `bridge.js` over a fake Rust side with invented sample mail (`demo-backend.js`: a doctor at two invented hospital networks, a personal mailbox and two side businesses, nine saved people, real PDF, Word and Excel attachments made by the Format Bridge's own writers, a Base/Pro switch). `build.sh [out]` assembles it from `sync-ui.sh`'s output and writes the vendored libraries' control characters and U+FFFD as escapes, which some hosts require. It sends nothing and opens no mailbox (the AI relay and renewal are answered in the page), clears only its own `centra_`/`rata_` storage, and uses only RFC 2606 addresses; no patient information. `build.sh` empties only an empty folder (a lone `.DS_Store` counts), the demo's own `out/` holding only build names, or an earlier demo build: a folder holding `demo-backend.js` and nothing at its top but what a build writes (whatever is inside its `fonts`, `icons` and `vendor` goes with it), and swaps app.html's Sign out and Delete account redirects to `auth.html` by exact text, failing when they change. `check.mjs` builds both forms and drives them in Chromium (CI step *The demo's rules*, job *Desktop interface, driven*), so an `app.html` change can fail there. `README.md` there is the guide for classmates and other contributors (running it, where the sample data lives, `DEMO_VERSION`, the rules). |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and `selftest.sh`. |
 | `infrastructure/licence/` | `mint.sh`: mints a licence on the VPS with OpenSSL alone, in exactly the format `lib/licence.js` issues; `mint.sh check` says whether the signing key is the one the released installers trust, and `new` never overwrites a key. |
@@ -255,8 +255,10 @@ and Apps' accounts kept per RATA account. On main and in no release yet,
 so first in the next one: the outbound guard judges a NAT64 address by
 the IPv4 address inside instead of refusing all of `64:ff9b::/32`
 (#164), refuses the zones `local`, `internal` and all of `arpa`
-themselves (#163), and the engine can look names up through the system
-on iOS (#163; no released build is for iOS). An
+themselves (#163), the engine can look names up through the system
+on iOS (#163; no released build is for iOS), and the inbox's row of
+linked-mailbox chips and its per-mailbox filter chips are one line whose
+card chooses the mailbox the list shows (#174). An
 upload that fails
 still leaves the installer on the run as an artifact, and the release is still
 published with whatever did attach.
@@ -1359,7 +1361,7 @@ licence dialogs, plus the inbox and a message in dark and the icons-only
 rail, and fails on any serious or critical rule; no rule or selector is
 excluded. Not seen in a packaged build (markup, CSS and page JS only, no
 new inline `style=`).
-**The mailboxes line, and choosing one (#174).** Above the category and
+**The mailboxes line, and choosing one (#174; on main, in no release yet).** Above the category and
 filter chips the inbox has one line (`#sources`, `renderSources`), as tall
 as a chip: a dot, what the list shows ("N mailboxes", the one address
 when one is linked, or the address chosen, cut with an ellipsis) and "·
@@ -1383,7 +1385,8 @@ are a mailbox each and where the line is hidden. Inside it: the list
 through `linkedOf`, Side by side columns too), Unread, Starred, Sent, the
 categories and their counts, the Drafts, Archive and Spam chips (offered
 only when that mailbox has some), the digest strip, the top bar's eyebrow
-(its address), Folders (`boxShown`: only its folders are asked for, a
+(its address, set by `renderEyebrow` only while the inbox is the view,
+since every refresh redraws the line whichever view is open), Folders (`boxShown`: only its folders are asked for, a
 sign-in each; drawing the panel asks any mailbox it lists and has not
 asked since it opened, `BOX_ASKED`, such as another one chosen while it is
 open or the rest when the chosen one is removed; a folder of another
