@@ -56,6 +56,9 @@ const SOURCES = [
   'desktop/rata-app/src-tauri/src/cloud.rs',
   'desktop/rata-app/src-tauri/src/created.rs',
   'rata-next/public/app.html',
+  /* What mailrata.org answers about an App Store purchase (APPLE_SAID),
+     which the iPhone app shows. */
+  'rata-next/lib/apple.js',
 ];
 
 const squash = s => s.replace(/\s+/g, ' ').trim();
@@ -174,6 +177,27 @@ export default async function run(state) {
       const part = at < 0 ? '' : html.slice(at, next < 0 ? undefined : next);
       check(/class="said"/.test(part) && /What it means/.test(part), `${what}: quoted and explained`);
     }
+  }
+
+  console.log('\n— the iPhone app: what mailrata.org answers about an App Store purchase —');
+  {
+    /* Each sentence the iPhone app can be shown about its purchase, or
+       about renewing its licence, is quoted and explained, from
+       lib/apple.js as it is now; the part quotes no price, which only the
+       App Store may show; and it sends nobody to sign in at mailrata.org,
+       where an App Store subscription has no account. */
+    const { APPLE_SAID } = await import('../lib/apple.js');
+    const { RENEW_GRACE_DAYS } = await import('../lib/licence.js');
+    const at = html.indexOf('<section id="iphone"');
+    const part = at < 0 ? '' : html.slice(at, html.indexOf('</section>', at));
+    const quoted = [...part.matchAll(/<blockquote class="said">([\s\S]*?)<\/blockquote>/g)].map(m => squash(entities(m[1])));
+    for (const key of ['nothingLive', 'unverified', 'busy', 'off', 'renewBusy', 'tooOld', 'unreadable']) {
+      check(quoted.includes(APPLE_SAID[key]), `#iphone quotes APPLE_SAID.${key}: "${APPLE_SAID[key]}"`);
+    }
+    check(html.includes('<a href="#iphone">') && /What it means/.test(part) && /Restore purchases/.test(part), 'it is in the contents, explained, and names Restore purchases');
+    check(part.includes(`more than ${RENEW_GRACE_DAYS} days ago`), `a licence too old to renew itself: RENEW_GRACE_DAYS (${RENEW_GRACE_DAYS})`);
+    check(!/\$\s?\d/.test(part) && /price the App Store shows/.test(part), 'no price but the App Store\'s own');
+    check(!/sign in at mailrata|account\.html|auth\.html|on its way/i.test(part), 'no sign-in at mailrata.org, and nothing that dates it');
   }
 
   console.log('\n— Files: what Pro makes and connects, and nothing a release cannot do —');

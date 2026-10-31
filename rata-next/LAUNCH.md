@@ -2,11 +2,13 @@
 
 What the website does now: the landing page, sign-up and sign-in, the
 licence page (`/account`), the Stripe webhook that records who paid, licence
-issue (`/api/licence`) and renewal (`/api/licence/renew`), the AI relay
+issue (`/api/licence`) and renewal (`/api/licence/renew`), licences for
+subscriptions bought in the iPhone app (`/api/licence/apple`, and Apple's
+notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (841 checks).
+the website's test suites pass with `npm test` after it (1241 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -56,9 +58,28 @@ retry hours later. **Re-run `database.sql` before deploying the build that
 carries it.** Without the table nothing breaks, but a first card checkout
 waits for that retry again, and the server log says to run section 6.
 
+Section 7 adds `apple_subscriptions`: the App Store's record of each
+subscription bought in the iPhone app (§11). Nothing reads it until the
+iPhone app is out, and nothing breaks without it, but `/api/licence/apple`
+answers 503 "App Store purchases are not switched on for RATA yet." and
+the server log says to run section 7. Run it before the first TestFlight
+purchase. Each row records one period of a subscription, from when it
+began, or when Apple reported it if that was earlier, as for a renewal
+Apple charges ahead of time (`period_from`), with its own stamp for the
+grace period
+(`grace_signed_at`); run again over a table made by an earlier copy of
+section 7, it adds both. The rows already there are kept as they were,
+with the new columns set to 1970-01-01, which is not what Apple said of
+them. **Such a table can hold only sandbox purchases: delete its rows
+before going live** (Table Editor →
+`apple_subscriptions` → select all → Delete, or `delete from
+public.apple_subscriptions;` in the SQL Editor). Each TestFlight
+subscription's row comes back with its next purchase, restore or
+notification.
+
 **Check:** Table Editor → `subscriptions` shows both new columns, and
-`ai_usage` and `pending_subscriptions` exist; Database → Functions lists
-`ai_reserve` and `ai_settle`.
+`ai_usage`, `pending_subscriptions` and `apple_subscriptions` exist;
+Database → Functions lists `ai_reserve` and `ai_settle`.
 
 ## 2. The licence signing key
 
@@ -147,6 +168,8 @@ hPanel → the site → Environment. Server-only — these must never reach a br
 | `STRIPE_PRICE_BASE` | the Base `price_…` |
 | `STRIPE_PRICE_PRO` | the Pro `price_…` |
 | `STRIPE_PRICE_DOMAIN` | **leave unset** — there is no domain add-on to sell (step 3) |
+| `APPLE_APP_ID` | the App Store app's numeric Apple ID (one app record for the iPhone and the Mac), from App Store Connect once it exists (§11). Without it only sandbox purchases (TestFlight, App Review) are accepted; a real one is answered "not switched on" |
+| `APPLE_BUNDLE_ID` | optional; the bundle id of RATA's App Store app, which the iPhone and Mac App Store apps share (Universal Purchase), so one subscription covers both. Default `org.mailrata.mail`; set it only if the app record uses another. (The desktop app downloaded from mailrata.org stays `org.mailrata.desktop` and has nothing to do with this.) |
 
 Public — these are emitted to every visitor, which is correct for all of them:
 
@@ -161,6 +184,11 @@ Public — these are emitted to every visitor, which is correct for all of them:
 `SUPABASE_ANON_KEY` by mistake — the two look alike and sit on the same page —
 and logs why. That refusal is covered by a test, but check the browser console
 after deploying anyway.
+
+Never set `APPLE_TEST_ROOT` or `APPLE_ALLOW_LOCAL` on the live site: they
+are for the tests. The first replaces Apple's root certificates, so no real
+purchase verifies; the second accepts purchases made in Xcode, which nobody
+signs. The server log says so when either is set.
 
 Leave unset unless you mean them: `STRIPE_ENTERPRISE` /
 `STRIPE_PRICE_ENTERPRISE` (Enterprise is not for sale), and `REDIRECT_TO`,
@@ -234,7 +262,8 @@ they are written to be true, not as legal advice. Three statements rest on
 things only you can confirm. The privacy policy says backups are deleted
 90 days after they are made (the lifecycle rule in
 `infrastructure/backup/README.md`, step 1), and names Hostinger as the host
-and Anthropic and Stripe as the other companies that handle data. It says
+and Anthropic, Stripe and Apple (for a subscription bought in the iPhone
+app, §11) as the other companies that handle data. It says
 what RATA keeps of an AI request (nothing but the count) and points to
 Anthropic's own terms for what Anthropic keeps; if you have a
 zero-retention agreement with Anthropic, say so there. Refunds, price
@@ -412,6 +441,215 @@ each customer's keychain.
 ＋ Email account with an `@outlook.com` address shows **Sign in with
 Microsoft** instead of a password box, and signing in links the mailbox
 (`docs/SMOKE.md`, the Outlook column).
+
+## 11. App Store subscriptions (the iPhone app)
+
+App Store guideline 3.1.1 forbids unlocking an iPhone app with a licence
+key, so the iPhone app sells Base and Pro itself, through Apple's In-App
+Purchase. Apple takes the money; mailrata.org turns a purchase into the same
+licence a Stripe subscription gets, whose subject is
+`apple:<original transaction id>` instead of an address. Buying needs no
+mailrata.org account, and Apple tells mailrata.org nothing personal. Three
+routes do it:
+
+- `POST /api/licence/apple`: the app sends the purchases StoreKit holds,
+  each signed by Apple, with each subscription's signed renewal info
+  (which says when a billing grace period ends), and gets a licence back.
+  The site checks Apple's signature with Apple's own library
+  (`@apple/app-store-server-library`) against Apple's root certificates in
+  `lib/apple-roots`, offline: no call to Apple per request.
+- `POST /api/apple/notifications`: Apple's App Store Server Notifications
+  V2, which keep the record current when a subscription renews, fails to
+  renew, expires, has its renewal date extended or is refunded.
+- `/api/licence/renew` renews an `apple:` licence from that record.
+
+An App Store licence lasts until the end of the subscription's current
+period as Apple last reported it (or of its billing grace period), plus 3
+days (1 hour in Apple's test environment), and never more than 30 days;
+the app renews it as the subscription renews. A refund does not shorten a
+licence already issued: mail keeps working until its end, about 30 days
+after a refund on a period's first day. What a refund stops at once, as
+soon as Apple's notification of it reaches mailrata.org (step 5), is AI:
+the relay reads the subscription's record before each request and refuses
+one that is refunded or revoked (`LICENSING.md`, *Refunds, cancellations
+and revocation*).
+
+Desktop builds and the Stripe checkout do not change. The steps, in order:
+
+1. **Apple Developer Program**, enrolled as Account Holder, and in App
+   Store Connect → Business, the **Paid Apps agreement** accepted with its
+   banking and tax forms filled in. Until it is active, no product can be
+   bought, even in the sandbox.
+2. **App Store Small Business Program**: apply (developer.apple.com →
+   App Store Small Business Program), so Apple's commission is 15% rather
+   than 30% while proceeds stay under its limit.
+3. **The app record**: App Store Connect → Apps → New App, with the bundle
+   id `org.mailrata.mail`, for iOS and macOS alike: the iPhone and Mac App
+   Store apps share it (Universal Purchase), so one subscription covers
+   both and purchases from either reach the site the same way. Its
+   **Apple ID**, a number under App Information, is `APPLE_APP_ID`.
+4. **The subscriptions**: the app → Monetization → Subscriptions → one
+   subscription group named **RATA**, with two auto-renewable subscriptions,
+   each one month long:
+
+   | Product ID | Reference name | Level in the group |
+   |---|---|---|
+   | `org.mailrata.pro.monthly` | RATA Pro | 1 (highest) |
+   | `org.mailrata.base.monthly` | RATA Base | 2 |
+
+   The ids must be exactly these: `APPLE_PRODUCTS` in `lib/plan.js` names
+   them, and a product it does not name unlocks nothing. For each: a price,
+   a display name and description in every language you sell in (the plan
+   blurbs, which name no price, will do), and the review screenshot App
+   Review asks for (the purchase screen). Add no free trial. Introductory
+   offers and Family Sharing are your choice and need no code. With Family
+   Sharing, Apple gives each family member who restores the subscription
+   transactions of their own (up to five besides the buyer), so each gets
+   a licence, and an AI allowance, of their own: one subscription can cost
+   up to six times `AI_MONTHLY_CAP_USD` in AI. Turn on
+   **Billing Grace Period** (on the same Subscriptions page): RATA then
+   keeps renewing the licence until it ends. The notifications of step 5
+   tell the record of the grace period, even when the phone has not been
+   opened. An app build that sends each subscription's signed renewal info
+   beside its purchases (`renewalInfos`) also reports it from the phone, so
+   with such a build a grace period is recorded without step 5 too, from
+   whichever of the customer's devices sends it (refunds still need step
+   5). The StoreKit code (`claude/iap-native`) does not send renewal info
+   yet: until a build that does is in the App Store, a customer in a grace
+   period is licensed past 3 days after their period's end only through
+   step 5.
+5. **Server notifications**: the app → App Information → App Store Server
+   Notifications. Version 2, the URL
+   `https://mailrata.org/api/apple/notifications`, for **both** Production
+   and Sandbox. The phone alone renews a licence correctly (a grace period
+   too, with a build that sends renewal info: step 4), but this URL is the
+   only thing that records a refund or a revocation: StoreKit stops listing
+   a refunded purchase rather than sending it, and mailrata.org ignores a
+   purchase the phone sends that says it was refunded. So without the
+   notifications the record stays live to the end of the refunded period:
+   the licence renews until then, one renewed at that end lasts 3 days
+   past it, and the AI relay answers until 3 days past it too (an hour, in
+   the sandbox). This URL is also what records a renewal date you extend
+   (the App Store Server API's *Extend a Subscription Renewal Date*, for
+   one subscriber, or *Extend Subscription Renewal Dates for All Active
+   Subscribers*, to make up for an outage, say): Apple sends no renewal at
+   the old date, only a `RENEWAL_EXTENDED` notification, which moves the
+   record's expiry on. Without the notifications the record keeps the old
+   date until the phone sends the extended purchase: renewal is refused
+   from the old date, and the licence, and AI, end 3 days after it. Types
+   RATA has no use for are answered 200 and change nothing,
+   among them `RESCIND_CONSENT` (a parent withdrew consent under the age
+   laws Apple applies in Texas; Apple then stops the app launching on that
+   child's device by itself).
+6. **A sandbox tester**: Users and Access → Sandbox → Testers, with an
+   address that is not an Apple Account already.
+7. **The settings**: in hPanel, `APPLE_APP_ID` (step 3), and
+   `APPLE_BUNDLE_ID` only if the bundle id is not `org.mailrata.mail`
+   (§4).
+8. **The database**: run `database.sql` again (§1); section 7 adds
+   `apple_subscriptions`.
+9. **Redeploy** (§5).
+10. **The App Privacy answers** (the "nutrition label"): App Store Connect
+    → the app → App Privacy. For the purchases this server records:
+    *Purchases → Purchase History* is collected, for *App Functionality*,
+    not used for tracking. It is keyed by Apple's transaction id, which
+    only Apple can tie to a person; answer *linked to the user* unless you
+    are sure it is not. The privacy policy (§5) already says what is kept,
+    under *Subscribing in the iPhone app*. That is not the whole form, so
+    do not fill it in from this step alone: the same server also passes
+    the text of a message to Anthropic when the customer asks the iPhone
+    app for a summary, a translation or a briefing (the AI relay, §4), and
+    keeps each month's AI request count and cost under the purchase's
+    number (the AI usage record in the privacy policy). The count is kept,
+    so it is collected too. Whether the message text counts as collected
+    (*User Content → Emails or Text Messages*) depends on what Anthropic
+    keeps of it, which is decision D5: `docs/APP-STORES.md`, *Store
+    privacy forms* and D5, has the drafts of the answers and what each
+    waits on.
+11. **Test from TestFlight** with your own Apple Account (TestFlight
+    purchases cost nothing), or with the step-6 sandbox tester on a
+    development build: buy Base, upgrade to Pro, restore purchases on a
+    second device, and cancel. After each, Supabase → Table Editor →
+    `apple_subscriptions` shows the subscription's row with `environment`
+    Sandbox and the plan you expect; a cancelled one stays live until its
+    `expires_at`. A subscription bought in TestFlight renews once a day, up
+    to six times a week (App Store Connect Help, *Subscription renewal rate
+    in TestFlight*); only the step-6 Sandbox Apple Account, signed in on a
+    device with a development build, renews every few minutes.
+
+**How to tell it worked:** `https://mailrata.org/api/apple/notifications`
+in a browser answers `"configured": true` once Apple's root certificates
+are readable and `APPLE_APP_ID` is set (step 7), so the App Store's own
+purchases and notifications can be checked; a TestFlight purchase writes
+its row within seconds; and the iPhone app opens its workspace after
+buying. The server log names the missing step otherwise: `APPLE_APP_ID is
+not set` (a real purchase before step 7), `run section 7 of
+rata-next/database.sql`, or a refused signature by Apple's library status
+name, never the purchase itself. A line `licence/apple: N transaction(s)
+were for another app (INVALID_APP_IDENTIFIER)` after your own purchase
+means `APPLE_BUNDLE_ID` does not match the app's bundle id (steps 3 and 7):
+every purchase then looks like another app's, and the phone is told
+"There is no active RATA subscription on this Apple account."
+
+`"configured": true` says `APPLE_APP_ID` is set, not that it is the app's
+own number, and nothing above can tell: a TestFlight or sandbox purchase
+is never checked against it, and the phone's purchases carry no app
+number, so they are licensed either way. A wrong one refuses only Apple's
+Production notifications, so no refund, revocation or billing grace
+period that Apple reports of an App Store purchase is ever recorded. So
+**after the first purchase from the App Store itself** (buy a subscription
+in the released app yourself, before customers do), look in the server
+log a few minutes later: there must be no line beginning
+`apple/notifications: refused (INVALID_APP_IDENTIFIER)`. Such a line names the bundle id and app
+id Apple signed the notification for and each setting that differs
+(`APPLE_APP_ID is …`, `APPLE_BUNDLE_ID is …`); if the app it names is
+RATA's, set that setting to match (step 7) and redeploy (step 9). Apple
+sends a refused notification again only five times, the last about six
+and a half days after the first, and a sandbox one never, so check within
+those days: anything refused before then does not come back by itself
+(Apple's *Get Notification History* still lists it; RATA has no code that
+replays one).
+
+**When a subscriber asks about their record** (the privacy policy's *Your
+rights*): someone who subscribed in the iPhone app has no account here,
+so the policy asks them for the order ID from any of Apple's receipts
+for it (Apple's email receipt, or their purchase history in the App
+Store). Apple's App Store Server API turns an order ID into the
+subscription's transactions (*Look Up Order ID*, `lookUpOrderId` in
+Apple's library, which `rata-next` already has; Production only). It
+needs an In-App Purchase key: App Store Connect → Users and Access →
+Integrations → In-App Purchase. Keep its private key on your own computer, never in the
+repository or on the site. Each transaction's `originalTransactionId` is
+the `original_transaction_id` of the record in `apple_subscriptions`, and
+its AI usage record is the `ai_usage` rows whose `email` is
+`apple:<that number>`. A record deleted while the subscription is live
+does not stay deleted: it is made again the next time the app sends its
+purchases or Apple sends a notification. And deleting this month's AI
+usage row lets the month's AI allowance be spent again.
+
+Two choices are made for you, and are yours to revisit:
+
+- **Online revocation checks are off.** Apple's library can also ask
+  Apple's certificate service (OCSP) on each request whether the
+  certificate that signed a purchase has been revoked, and check its dates
+  against today. It keeps a good answer for 15 minutes and a failure not at
+  all, so while that service is slow every licence request would wait up
+  to 30 seconds and call out again, and a flood of requests would become a
+  flood of calls to Apple. A refunded or revoked *purchase* is not what
+  that check is for: it reaches RATA through step 5's REFUND or REVOKE
+  notification, and only that way, online checks or not. Only a revoked
+  Apple *signing certificate*, which Apple would announce, goes
+  unchecked. The `false` passed as `enableOnlineChecks` in
+  `lib/apple.js` is the switch.
+- **Sandbox purchases are accepted**, because App Review and TestFlight buy
+  there. A sandbox purchase costs nothing. Its licence lasts only an hour
+  past the end of its period, so it lasts as long as the subscription keeps
+  renewing: in TestFlight once a day, up to six times a week, and with a
+  Sandbox Apple Account on a device every few minutes. Everyone you let
+  into TestFlight still uses RATA free while they test, with an AI
+  allowance per sandbox subscription. Keep TestFlight to people you would
+  give a licence to: a public TestFlight link gives one to anyone who
+  opens it.
 
 ---
 

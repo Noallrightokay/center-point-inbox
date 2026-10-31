@@ -48,12 +48,12 @@ press Summarize, Translate or Run briefing on.
 | `desktop/rata-app/` | The desktop application. Tauri shell, keychain, licence verification, Sign in with Microsoft, and the glue to the interface. |
 | `desktop/rata-app/harness/` | The interface driven in a browser against a fake backend (`ui-harness.mjs`), the website's screenshots (`shots.mjs`), the update feed's rules (`feed.cjs`, tested by `feed.test.cjs`), the release check (`verify-release.sh`; `--title <version>` prints the window title it expects, "beta" for 0.x only) and the installed-app smoke test the release workflow runs (`smoke-installed.sh`, `.ps1`). |
 | `desktop/rata-app/demo/` | The clickable demo: the real interface over a fake backend in plain JavaScript (`demo-backend.js`) with invented sample mail. Its `README.md` is the guide for anyone who wants to change it, and needs no Rust. |
-| `rata-next/` | The website: marketing pages, the help page (`public/help.html`, at `/help`), the privacy policy and terms (`public/privacy.html`, `public/terms.html`), Stripe checkout, licence issuing and renewal, the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger's Node.js hosting. The help page quotes the app's error sentences, and a test checks each quote is still in the code, so rewording an error means updating the page. |
+| `rata-next/` | The website: marketing pages, the help page (`public/help.html`, at `/help`), the privacy policy and terms (`public/privacy.html`, `public/terms.html`), Stripe checkout, licence issuing and renewal, subscriptions bought in the iPhone app through the App Store (`/api/licence/apple` for the phone's purchases, `/api/apple/notifications` for Apple's, both kept in `apple_subscriptions` and renewed through `/api/licence/renew`; `rata-next/LAUNCH.md` §11), the AI relay (`/api/ai`), account deletion and `/api/health`. Next.js on Hostinger's Node.js hosting. The help page quotes the app's error sentences, and a test checks each quote is still in the code, so rewording an error means updating the page. |
 | `rata-next/public/app.html` | The interface. One copy, shared: the desktop app builds its own from this file. |
 | `DESIGN.md` | How RATA looks: colour, type, shape and copy rules for the app and the website. Read it before changing either. |
 | `infrastructure/backup/` | Nightly encrypted Postgres backup for the VPS, the restore drill, and a self-test. |
 | `infrastructure/licence/` | `mint.sh`, which mints a tester's licence on the VPS and checks the signing key against the one the released app trusts. |
-| `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries) and how. |
+| `infrastructure/monitoring/` | Uptime and alerting: what to watch (`/api/health`, the backup's heartbeat, Stripe's failed deliveries, App Store notifications that did not arrive) and how. |
 | `docs/` | `MVP-PLAN.md` (the plan to MVP), `SECURITY-REVIEW-2026-09.md`, `SMOKE.md` (the live-provider checklist) and `MVP-EVIDENCE.md` (its results), `WINDOWS-SIGNING.md`, `CONNECTIONS-SETUP.md` (the owner's OneDrive, Slack and Google Drive registrations), `OWNER-CHECKLIST.md` (every step only the owner can take), `APP-STORES.md` (RATA on the iOS App Store and Google Play: decisions, rules and stages), `hostinger-mcp.md` (managing the VPS and DNS from the repo). |
 
 There is no `src/`. An earlier version of this product was nine .NET
@@ -208,7 +208,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 841 checks, no network, no database required
+npm test 2>&1 | cat # 1241 checks, no network, no database required
 npm run dev
 ```
 

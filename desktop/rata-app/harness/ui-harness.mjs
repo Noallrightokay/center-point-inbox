@@ -2572,6 +2572,31 @@ console.log('\n— the licence renews while RATA is open (BUG-L) —');
   asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
   check(asked.join(',') === 'v1.second.sig,v1.third.sig', `and only once: ${JSON.stringify(asked)}`);
   await pg.close();
+
+  /* An App Store subscription refunded while its licence still runs: the
+     relay reads its record and answers as it does an expired licence
+     (rata-next/app/api/ai), the renewal is refused, and so the relay is
+     asked once, the licence here is kept, and the customer reads the App
+     Store's sentence beside a summary made on this computer. */
+  const NOTHING = 'There is no active RATA subscription on this Apple account.';
+  pg = await open(true, { lic: { token: 'v1.first.sig', now: T0, genuine: genuine() },
+    renew: () => ({ body: { licensed: false, reason: 'no-subscription', message: NOTHING } }),
+    ai: () => ({ status: 401, body: { error: NOTHING, reason: 'expired' } }) });
+  await pg.evaluate(async (m) => {
+    S.settings.aiOk = true;
+    __mock.refresh = { messages: [m], flags: [], problems: [], skipped: [] };
+    await serverSync('mail', true); __mock.refresh = null;
+    go('inbox'); openMail(m.id);
+    await new Promise((r) => setTimeout(r, 300));
+    OPENED.set(m.id, { text: 'Dear reader, the news of the week.', truncated: false, attachments: [] });
+    await summarizeMessage(m.id);
+  }, mk(8));
+  asked = pg.__ai.map((raw) => JSON.parse(raw).licence);
+  const after = await pg.evaluate(() => ({ note: document.querySelector('#md-summary .md-ai-note')?.textContent || '', licensed: !!(LIC && LIC.licensed),
+    token: LIC && LIC.token, box: !!document.getElementById('rata-licence') }));
+  check(pg.__renewals === 1 && asked.join(',') === 'v1.first.sig' && after.note.startsWith(NOTHING) && after.licensed && after.token === 'v1.first.sig' && !after.box,
+    `a refunded App Store subscription: one renewal, refused; the relay asked once; the licence kept; the App Store's sentence shown: ${JSON.stringify({ renewals: pg.__renewals, asked, ...after })}`);
+  await pg.close();
 }
 
 console.log('\n— the AI relay is sent the start of a long message, never all of it —');

@@ -3,6 +3,7 @@ import { admin } from '../../../lib/server';
 import { check } from '../../../lib/licence';
 import { planDef } from '../../../lib/plan';
 import { corsHeaders, preflight } from '../../../lib/cors';
+import { APPLE_SAID, appleIdOf, appleSubject, appleRow, appleLive, appleAiLive, appleAiPlan, appleTableBehind } from '../../../lib/apple';
 import { API_URL, LIMITS, MODEL, MONTHLY_CAP_MICRO, costMicro, monthOf, parseTasks, prompt, tooFast, validate, worstCaseMicro } from '../../../lib/ai';
 
 export const dynamic = 'force-dynamic';
@@ -49,7 +50,7 @@ export async function POST(req) {
   }
   const who = String(seen.licence.sub).toLowerCase();
 
-  const asked = validate(body, planDef(seen.licence.plan));
+  let asked = validate(body, planDef(seen.licence.plan));
   if (asked.error) return reply({ error: asked.error, reason: asked.reason }, asked.status);
 
   const key = process.env.ANTHROPIC_API_KEY;
@@ -57,6 +58,57 @@ export async function POST(req) {
   if (!key || !sb) return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
 
   if (tooFast(who)) return reply({ error: 'Too many AI requests at once — try again in a minute.', reason: 'rate' }, 429);
+
+  /* Apple grants refunds by itself, at any time, so for a licence from the
+     App Store (sub apple:<id>) the relay, whose answers cost money, also
+     reads the subscription's record before anything is held against the
+     allowance or sent. (A Stripe licence is not asked; its subscription is
+     checked at renewal, LICENSING.md.)
+
+     It refuses a record that is refunded or revoked, and a licence with no
+     record at all: a licence still running after a refund gets no AI. A
+     record that has only expired is still answered until the end a licence
+     issued from it would have (appleAiLive): its period's end, or its
+     billing grace period's, and the margin. So between a period's end and
+     its renewal reaching the record (Apple's DID_RENEW delivered late, or
+     the phone not opened yet), a paying customer is not refused, and AI
+     never outlasts what the licence itself may. Refused is answered as an
+     expired licence is (reason `expired`), which the app already handles:
+     it renews once and asks again. A refunded or revoked record refuses
+     that renewal too (/api/licence/renew), so the app keeps the licence it
+     has and the customer reads the App Store's sentence beside the summary
+     or translation made on the device.
+
+     The plan is the lower of the licence's and the record's
+     (appleAiPlan). When the record's is lower (Pro changed to Base since
+     the licence was issued) and the record is live, the answer is
+     `expired` too, so the app renews to the record's plan and asks again
+     with it. When the record is only inside its margin, renewal refuses
+     (no-subscription) and the app keeps the licence it has, so `expired`
+     would refuse every request until the next period reached the record;
+     the request is judged by the record's plan instead, and what that
+     plan allows is answered. Otherwise the lower is the licence's own,
+     which `validate` has checked above. A record that cannot be read
+     refuses, as the cap does. */
+  if (appleSubject(who)) {
+    const id = appleIdOf(who);
+    const held = id ? await appleRow(sb, id) : { row: null };
+    if (held.error) {
+      if (appleTableBehind(held.error)) {
+        console.warn('ai: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
+        return reply({ error: 'AI is not switched on for RATA yet.', reason: 'not-configured' }, 503);
+      }
+      console.warn('ai: could not read an App Store subscription', held.error.code || held.error.message);
+      return reply({ error: 'AI is unavailable right now.' }, 503);
+    }
+    if (!appleAiLive(held.row)) return reply({ error: APPLE_SAID.nothingLive, reason: 'expired' }, 401);
+    const plan = appleAiPlan(seen.licence.plan, held.row);
+    if (plan !== seen.licence.plan) {
+      if (appleLive(held.row)) return reply({ error: 'Your licence needs renewing — RATA does this itself when it is online.', reason: 'expired' }, 401);
+      asked = validate(body, planDef(plan));
+      if (asked.error) return reply({ error: asked.error, reason: asked.reason }, asked.status);
+    }
+  }
 
   /* The month's allowance. The most this request could cost is held against
      it before anything is sent, in one statement that refuses when the hold

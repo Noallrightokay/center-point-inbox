@@ -132,6 +132,11 @@ nothing here holds that launch up. The iPhone app and its purchase
 screen are still being built (`docs/APP-STORES.md`), so steps 1, 2 and the
 trader details can start now; the rest wait for the app.
 
+Steps: `rata-next/LAUNCH.md` §11 (the agreement, the app record, the
+subscriptions, the notifications address, the settings, the database and
+the TestFlight test, and how to tell they worked); `docs/APP-STORES.md`
+for the trader details and step 10's answers.
+
 1. The Apple Developer Program (the same membership as macOS signing in
    §7), then in App Store Connect the Paid Apps agreement, banking and
    tax, and the Digital Services Act trader details (an address, phone and
@@ -153,12 +158,15 @@ trader details can start now; the rest wait for the app.
    subscription since 16 September 2026 (organisations buying seats in
    bulk from 22 October, groups "this winter"), and the purchase server
    (#167) gives one licence per purchase, not one per seat
-   (`docs/APPLE-REVIEW-2026-10.md`, section (j)).
+   (`docs/APPLE-REVIEW-2026-10.md`, section (j)). Turn on **Billing
+   Grace Period** on the same Subscriptions page: the terms promise RATA
+   keeps working while Apple gives a billing grace period, and without
+   the switch Apple gives none.
 5. App Store Server Notifications, version 2, for Production and Sandbox,
    both to `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester account.
-7. On the server: `APPLE_APP_ID` (`rata-next/LAUNCH.md` will list it
-   once the in-app purchase server, #167, has merged). `APPLE_BUNDLE_ID`
+7. On the server: `APPLE_APP_ID`, the app record's numeric App ID from
+   step 3 (`rata-next/LAUNCH.md` §4 and §11, step 7). `APPLE_BUNDLE_ID`
    is optional: it defaults to `org.mailrata.mail`.
 8. Run `database.sql` §7 (it arrives with the same change).
 9. Redeploy mailrata.org.
@@ -176,7 +184,11 @@ trader details can start now; the rest wait for the app.
 
 **Worked when:** a TestFlight build buys Pro in the sandbox, Settings →
 Current plan says it is licensed for Pro, and Restore purchases on a
-second device brings the same plan back.
+second device brings the same plan back. Then, after your own first
+purchase from the released app, the server log has no line beginning
+`apple/notifications: refused (INVALID_APP_IDENTIFIER)`: a sandbox
+purchase never checks `APPLE_APP_ID`, so only that shows it is the app's
+(`rata-next/LAUNCH.md` §11, *How to tell it worked*).
 
 ## 10. Decisions only you can make
 
