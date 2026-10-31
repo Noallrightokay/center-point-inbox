@@ -384,7 +384,10 @@
              disguised program without it (kind needs-confirmation). */
           confirmed: b.confirmed === true,
         });
-        return { ok: true, path: saved.path, name: saved.name };
+        /* place: the folder in the customer's words (core::save_place), as
+           for /api/file/save, so a phone never names Downloads or the path
+           inside the app's container. */
+        return { ok: true, path: saved.path, name: saved.name, place: saved.place };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e), kind: e && e.kind };
       }
@@ -428,7 +431,9 @@
       const b = body(opts);
       try {
         const saved = await invoke('save_file', { name: String(b.name || 'file'), data: String(b.data || '') });
-        return { ok: true, path: saved.path, name: saved.name };
+        /* place: the folder in the customer's words (core::save_place), so
+           a phone never says Downloads. */
+        return { ok: true, path: saved.path, name: saved.name, place: saved.place };
       } catch (e) {
         return { ok: false, error: e && e.error ? e.error : String(e) };
       }

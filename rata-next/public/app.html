@@ -1732,6 +1732,131 @@ function msFlush(){
   }catch(e){return msLast=Promise.reject(e).catch(undo)}
 }
 function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb';return o}
+/* ---------------- WHAT MAIL LEAVES IN THE WORKSPACE ----------------
+   Three parts of the workspace come from the mailbox, and are kept beside
+   the mail in IndexedDB (WK_DB), not in the localStorage entry: the audit
+   trail (the subject, or the start of the text, of each unread message
+   opened, and the names of attachments saved or converted), the Files view's
+   documents (each with the text the Bridge read from it, attachments
+   converted from a message included; their bytes were in IndexedDB
+   already, FV_DB), and each mailbox's folder names (S.boxes). On an
+   iPhone the app's IndexedDB is kept out of the phone's backups and its
+   LocalStorage is not (backup.rs), so this keeps them on the phone with
+   the mail; the rest of the entry (settings, People, signatures, the
+   mailboxes linked) stays as it was.
+
+   The entry still carries each part, empty, so a build from before this
+   finds an empty list rather than none. Anything an entry does hold in one
+   is newer than the database: the entry of a build from before this, or
+   of a session the database would not open. It is merged in at start
+   (wkMerge), and the entry is written empty again only once the database
+   has it. Where the database will not open, the parts stay in the entry
+   the old way. */
+const WK_DB='rata-work-'+(SESSION?SESSION.uid:'anon'),WK_STORE='parts';
+const WK_PARTS=['audit','documents','boxes'];
+let WK=null;              /* the open database, or null: the old way */
+const WK_HELD=new Map();  /* part → its JSON as last written */
+let wkQueued=false,wkWarned=false,wkLast=Promise.resolve();
+function wkOpen(name=WK_DB){
+  return new Promise((res,rej)=>{
+    /* As msOpen: an open() left pending must not stop the app starting. */
+    const t=setTimeout(()=>rej(new Error('IndexedDB did not open')),5000);
+    let rq;try{rq=indexedDB.open(name,1)}catch(e){clearTimeout(t);rej(e);return}
+    rq.onupgradeneeded=()=>{if(!rq.result.objectStoreNames.contains(WK_STORE))rq.result.createObjectStore(WK_STORE)};
+    rq.onsuccess=()=>{clearTimeout(t);const db=rq.result;db.onversionchange=()=>db.close();res(db)};
+    rq.onerror=()=>{clearTimeout(t);rej(rq.error)};
+  });
+}
+/* part → its value, for each part the database holds and can read. */
+function wkAll(db){
+  return new Promise((res,rej)=>{
+    const tx=db.transaction(WK_STORE,'readonly'),st=tx.objectStore(WK_STORE);
+    const ks=st.getAllKeys(),vs=st.getAll();
+    tx.oncomplete=()=>{
+      const out=new Map();
+      ks.result.forEach((k,i)=>{
+        if(!WK_PARTS.includes(k))return;
+        /* What cannot be read, or is not the part's shape, is remembered as
+           something no part matches, so the next write replaces it. */
+        WK_HELD.set(k,'');
+        let v;try{v=JSON.parse(vs.result[i])}catch(e){return}
+        const list=k!=='boxes';
+        if(list?!Array.isArray(v):!(v&&typeof v==='object'&&!Array.isArray(v)))return;
+        out.set(k,v);WK_HELD.set(k,vs.result[i]);
+      });
+      res(out);
+    };
+    tx.onerror=tx.onabort=()=>rej(tx.error);
+  });
+}
+const wkHolds=v=>Array.isArray(v)?v.length>0:!!(v&&typeof v==='object'&&Object.keys(v).length);
+/* The database's parts, with whatever the entry holds merged in (it is the
+   newer): documents by id and folder lists by mailbox, the entry's winning;
+   audit entries the database lacks go on the end of its chain, linked
+   afresh, so the chain still verifies. Answers whether the entry held any. */
+async function wkMerge(held){
+  let fromEntry=false;
+  for(const k of WK_PARTS){
+    const db=held.get(k),ent=S[k];
+    if(!wkHolds(ent)){if(db!==undefined)S[k]=db;continue}
+    fromEntry=true;
+    if(db===undefined||!wkHolds(db))continue;
+    if(k==='documents'){const ids=new Set(ent.map(d=>d&&d.id));S[k]=ent.concat(db.filter(d=>!ids.has(d&&d.id)))}
+    else if(k==='boxes')S[k]=Object.assign({},db,ent);
+    else{
+      const known=new Set(db.map(e=>e&&e.hash)),chain=db.slice();
+      for(const e of ent.filter(e=>e&&!known.has(e.hash)).sort((a,b)=>(a.ts||0)-(b.ts||0))){
+        const last=chain[chain.length-1],prev=last?last.hash:'0'.repeat(64),i=last?last.i+1:0;
+        const entry={i,ts:e.ts,action:e.action,detail:e.detail,prev};
+        entry.hash=await sha256(prev+JSON.stringify({i,ts:e.ts,action:e.action,detail:e.detail}));
+        chain.push(entry);
+      }
+      S[k]=chain.slice(-200);
+    }
+  }
+  return fromEntry;
+}
+/* Writes each part that changed since it was last written, and returns
+   when that and every earlier write is on disk. A part the workspace no
+   longer has (a reset) is removed. */
+function wkFlush(){
+  wkQueued=false;
+  if(!WK)return wkLast;
+  const put=[],del=[];
+  for(const k of WK_PARTS){
+    if(S[k]===undefined){if(WK_HELD.has(k))del.push(k);continue}
+    const j=JSON.stringify(S[k]);
+    if(WK_HELD.get(k)!==j)put.push([k,j]);
+  }
+  if(!put.length&&!del.length)return wkLast;
+  for(const [k,j] of put)WK_HELD.set(k,j);
+  for(const k of del)WK_HELD.delete(k);
+  /* A write that fails sends the parts back to the entry, the old way, for
+     the rest of this session; the next start moves them across again. */
+  const undo=e=>{
+    try{if(WK)WK.close()}catch(err){}
+    WK=null;WK_HELD.clear();
+    if(!wkWarned){wkWarned=true;toast('RATA could not save its Files list and audit trail beside your mail'+(e&&e.name==='QuotaExceededError'?': the disk is full.':'.')+' They are kept the old way for now.')}
+    saveLocal();
+    throw e;
+  };
+  try{
+    const tx=WK.transaction(WK_STORE,'readwrite'),st=tx.objectStore(WK_STORE);
+    for(const [k,j] of put)st.put(j,k);
+    for(const k of del)st.delete(k);
+    return wkLast=new Promise((res,rej)=>{
+      tx.oncomplete=()=>{wkWarned=false;res()};
+      tx.onerror=tx.onabort=()=>rej(tx.error||new Error('aborted'));
+    }).catch(undo);
+  }catch(e){return wkLast=Promise.reject(e).catch(undo)}
+}
+/* The localStorage entry: without the messages where IndexedDB holds them,
+   and with the parts above empty where the work database holds them. */
+function entryOf(st){
+  const o=MS?metaOf(st):Object.assign({},st);
+  if(WK)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
+  return o;
+}
 /* Before anything is shown: the small entry from localStorage, the messages
    (without their text) from IndexedDB. Mail an older build kept in the
    localStorage entry moves into IndexedDB here, and the entry is only
@@ -1739,10 +1864,23 @@ function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb'
 async function load(){
   let st=null;
   try{const raw=localStorage.getItem(LS_KEY);st=raw?JSON.parse(raw):null}catch(e){st=null}
-  let held=[];
-  try{MS=await msOpen();held=await msAll(MS)}catch(e){console.warn('message store unavailable, keeping mail in localStorage',e);MS=null;held=[]}
+  let held=[],parts=new Map();
+  /* The two databases open together, so a webview whose open() never
+     settles keeps the first screen waiting one timeout, not one for each. */
+  const [mail,work]=await Promise.allSettled([msOpen().then(db=>{MS=db;return msAll(db)}),wkOpen().then(db=>{WK=db;return wkAll(db)})]);
+  if(mail.status==='fulfilled')held=mail.value;else{console.warn('message store unavailable, keeping mail in localStorage',mail.reason);MS=null;held=[]}
+  if(work.status==='fulfilled')parts=work.value;else{console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',work.reason);WK=null;WK_HELD.clear();parts=new Map()}
   const inBlob=!!(st&&Array.isArray(st.messages)&&st.messages.length);
   try{S=migrate(st)}catch(e){S=seed()}
+  /* The audit trail, the Files list and the folder names, from beside the
+     mail; one the entry still holds moves across, and the entry is written
+     without it once the database has it, after the mail is settled. */
+  let moved=false;
+  if(WK){try{moved=await wkMerge(parts)}catch(e){moved=false}}
+  await loadMail(held,inBlob);
+  if(moved&&WK){try{await wkFlush();saveLocal()}catch(e){}}
+}
+async function loadMail(held,inBlob){
   const byId=new Map();
   for(const [id,j] of held){
     /* Unreadable, or filed under a key that is not its id: remembered as
@@ -1767,7 +1905,8 @@ async function load(){
 }
 function saveLocal(){
   if(MS&&!msQueued){msQueued=true;queueMicrotask(()=>{msFlush().catch(()=>{})})}
-  try{localStorage.setItem(LS_KEY,JSON.stringify(MS?metaOf(S):S))}catch(e){toast('Storage full — export and reset')}
+  if(WK&&!wkQueued){wkQueued=true;queueMicrotask(()=>{wkFlush().catch(()=>{})})}
+  try{localStorage.setItem(LS_KEY,JSON.stringify(entryOf(S)))}catch(e){toast('Storage full — export and reset')}
 }
 function save(){saveLocal();scheduleCloudSync()}
 /* Deleting a message has to survive the next sync. Sync adds anything it has
@@ -2066,8 +2205,15 @@ window.addEventListener('keydown',e=>{
   if(!WARN_DONE)return;
   if(e.key==='Escape'||(e.key==='Enter'&&document.activeElement!==$('#warn-go'))){e.preventDefault();e.stopPropagation();closeWarn(false)}
 },true);
-/* An attachment goes to the Downloads folder and is never opened by RATA:
-   it is a stranger's file, and running it is the customer's decision. */
+/* Where the app saves, in Rust's words (core::save_place): the Downloads
+   folder on a computer, the app's own folder in the Files app on an
+   iPhone. Rust sets it as the page starts, for what is said before a save
+   (an attachment's button); each save's answer names it again (place). */
+const savePlace=()=>typeof window.__RATA_SAVE_PLACE__==='string'&&window.__RATA_SAVE_PLACE__||'your Downloads folder';
+/* An attachment goes there and is never opened by RATA: it is a
+   stranger's file, and running it is the customer's decision. Where it
+   went is said as the folder and the name it was saved under, never the
+   path, which on an iPhone is the inside of the app's container. */
 async function saveAttachment(m,a,btn,confirmed){
   if(!a)return;
   if(a.disguised&&!confirmed){if(!await askDisguised(a,true))return;confirmed=true}
@@ -2078,7 +2224,7 @@ async function saveAttachment(m,a,btn,confirmed){
   if(btn&&btn.isConnected)btn.disabled=false;
   /* Listed by a build that did not mark disguises: Rust knows, so ask now. */
   if(r&&!r.ok&&r.kind==='needs-confirmation'&&!confirmed){a.disguised=true;return saveAttachment(m,a,btn)}
-  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path+(confirmed?' (a program named as a document, saved after asking)':''));toast('Saved to '+r.path)}
+  if(r&&r.ok){audit('attachment.save',a.n+' \u2192 '+r.path+(confirmed?' (a program named as a document, saved after asking)':''));toast('Saved to '+(r.place?r.place+' as '+r.name:r.path))}
   else toast('Could not save '+a.n+' \u2014 '+((r&&r.error)||'try again'));
 }
 /* An attachment straight into the Format Bridge: the app fetches it from the
@@ -3879,7 +4025,7 @@ function openMail(id){
     ${m.lang?`<div class="md-atts" style="align-items:center"><span class="badge trans">⇄ Translated from ${m.lang}</span><button class="btn" id="md-orig">Show original</button></div>`:``}
     <section class="md-convo" id="md-convo" hidden></section>
     ${atts.length?`<div class="md-atts">${picsHTML}${atts.map((a,k)=>savable&&a.i!==undefined
-      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to your Downloads folder"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}${clouds?`<button class="att-conv" data-cloud="${k}" aria-haspopup="true" aria-expanded="false" title="Save ${esc(a.n)} to a connected cloud">Save to \u25be</button>`:''}</span>`
+      ?`<span class="att-wrap"><button class="att-card" data-att="${k}" title="Save to ${esc(savePlace())}"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span><span class="sz">⤓</span></button>${bridgeable(a)?`<button class="att-conv" data-conv="${k}" title="Convert ${esc(a.n)} to another format">\u21c4 Convert</button>`:''}${clouds?`<button class="att-conv" data-cloud="${k}" aria-haspopup="true" aria-expanded="false" title="Save ${esc(a.n)} to a connected cloud">Save to \u25be</button>`:''}</span>`
       :`<div class="att-card"><span class="fmt">${esc(a.f)}</span><span>${esc(a.n)}</span>${a.disguised?`<span class="att-warn">${esc(disguiseLabel(a))}</span>`:''}<span class="sz">${esc(a.s||'')}</span></div>`).join('')}</div>`:''}
   </div>`;
   $('#md-back')&&($('#md-back').onclick=()=>d.classList.remove('open'));
@@ -6297,6 +6443,11 @@ async function wipeThisDevice(){
   /* And the mail. This page's own connection would hold the deletion open. */
   try{if(MS){MS.close();MS=null}}catch(e){}
   try{await new Promise(res=>{const r=indexedDB.deleteDatabase(MS_DB);r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
+  /* And what mail left in the workspace: the audit trail, the Files list,
+     the folder names. */
+  try{if(WK){WK.close();WK=null}}catch(e){}
+  WK_HELD.clear();
+  try{await new Promise(res=>{const r=indexedDB.deleteDatabase(WK_DB);r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
 }
 
 async function deleteAccount(){
@@ -7816,14 +7967,15 @@ async function brLib(k,globalName){
 /* A file RATA made — a conversion, an export — handed to the customer. In a
    browser that is a download. In the app the webview drops a page's
    downloads without a word, so the app writes the file into Downloads itself
-   (save_file) and says where; it cleans the name and never overwrites. */
+   (save_file; on an iPhone the app's own folder in the Files app) and says
+   where, in Rust's words (place); it cleans the name and never overwrites. */
 async function brDownload(blob,fname){
   if(window.__RATA_NATIVE__){
     let r;
     try{r=await apiFetch('/api/file/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fname,data:await fileBase64(blob)})})}
     catch(e){r={error:String(e&&e.message||e)}}
     if(!r||!r.ok){toast('Could not save '+fname+' \u2014 '+((r&&r.error)||'no answer'));return false}
-    toast('Saved to your Downloads folder as '+r.name);
+    toast('Saved to '+(r.place||savePlace())+' as '+r.name);
     return true;
   }
   const u=URL.createObjectURL(blob);

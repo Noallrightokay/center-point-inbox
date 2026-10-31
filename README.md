@@ -69,7 +69,7 @@ an API gateway, or a translation worker, it is a ghost: report it.
 
 ```bash
 cd desktop/rata-mail
-cargo test --all-targets   # 343 tests; a few ask real DNS (below)
+cargo test --all-targets   # 344 tests; a few ask real DNS (below)
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -84,7 +84,7 @@ those tests open no socket beyond a scripted server of their own, with one
 exception (below). A resolver that answers MX questions with no records
 fails those two (`a_domain_at_microsoft_365_is_found_by_its_mx` and
 `a_real_business_domain_resolves_through_its_mx`). The container this
-project's assistant sessions run in has one (341 of 343 pass there): its
+project's assistant sessions run in has one (342 of 344 pass there): its
 resolvers answer only A questions, and MX, AAAA, TXT, SRV and CNAME
 questions all come back with no records, so an empty SRV, SPF or
 autodiscover answer there says nothing about the domain. CI has real
@@ -97,7 +97,7 @@ Protocol handling is tested against recorded server dialogue, which means the
 suite is fast and honest about what it proves, and about what it does not.
 See *What has never been tested* below.
 
-A second suite, `tests/loopback.rs` (16 tests), runs the engine against a
+A second suite, `tests/loopback.rs` (17 tests), runs the engine against a
 real Dovecot (IMAP) and GreenMail (SMTP, and IMAPS for a server that
 declares no special-use folders) on 127.0.0.1. CI runs it on every PR as
 *Mail layer against real servers*. Locally (needs `dovecot-imapd`, Java and
@@ -126,18 +126,20 @@ answer reader (`records.rs`) and the getaddrinfo half
 (`resolve::system_addresses`) are compiled into every test build and
 tested on Linux too, but dns_sd cannot run on Linux, so the workflow
 *Mail on Apple systems* (`mail-apple.yml`, job *Mail layer on macOS*)
-runs on every change to the engine: the 343 tests with hickory as the
-macOS app has it; again with `--features system-dns`, which runs 337 of
-the 343 (the six that need a scripted hickory resolver do not exist in
+runs on every change to the engine: the 344 tests with hickory as the
+macOS app has it; again with `--features system-dns`, which runs 338 of
+the 344 (the six that need a scripted hickory resolver do not exist in
 that build), plus 12 that exist only there, ignored and run in a step of
 their own, one at a time, since ten of them ask real DNS; clippy for iOS,
 a check that hickory is not in the iOS build, a build for iOS and the iOS
 Simulator and a link of the tests for both, and the library's tests in an
-iOS Simulator (the same 337, then the 12). It is not part of the release
+iOS Simulator (the same 338, then the 12). It is not part of the release
 gate. The Simulator runs the test program as a bare process (`xcrun
 simctl spawn`), outside any app's sandbox, so it does not show the
-lookups working from a sandboxed app (#166's Simulator smoke does, once
-it merges), and nobody has seen iOS's Local Network prompt. Nothing of it
+lookups working from a sandboxed app (the app's own self-test does, in
+`ios.yml`'s *iOS app in the Simulator*: MX, SRV and L1's records,
+discovery and a TLS greeting), and nobody has seen iOS's Local Network
+prompt. Nothing of it
 has run on a phone or on a real IPv6-only network.
 
 Linux CI never compiles that code, and an assistant session sees the
@@ -159,9 +161,13 @@ To link anything holding the engine for an iOS device by hand (its tests,
 or an app), set `IPHONEOS_DEPLOYMENT_TARGET` as the workflow does: without
 it the link targets rustc's default, iOS 10, and fails on
 `___chkstk_darwin`, which aws-lc-sys's C calls. Building the engine alone
-links nothing and does not need it. The workflow uses 14.0; keep it equal
-to the app's `bundle.iOS.minimumSystemVersion`, which is 15.0 in #166 and
-in Tauri's own default, so raise it when #166 merges.
+links nothing and does not need it. Use 16.4, as the workflow does: the
+app's `bundle.iOS.minimumSystemVersion` in
+`desktop/rata-app/src-tauri/tauri.ios.conf.json`, the oldest WebKit that
+runs the page's script. A test of the shell
+(`an_ios_build_merges_its_own_config_and_a_computers_does_not`, in
+`src/lib.rs`) fails when the workflow's value and the app's differ, so
+change the two together.
 
 ### The desktop app
 
@@ -169,7 +175,7 @@ in Tauri's own default, so raise it when #166 merges.
 cd desktop/rata-app
 ./sync-ui.sh        # MUST run first: see the trap below
 cd src-tauri
-cargo test          # 326 tests on Linux
+cargo test          # 334 tests on Linux
 ```
 
 On Linux you need the system webview first:
@@ -187,7 +193,7 @@ before packaging anything.
 
 `desktop/rata-app/harness/ui-harness.mjs` drives the real interface in
 Chromium against a fake backend, under the app's own content security
-policy (633 checks, among them axe-core accessibility scans of the inbox, an
+policy (637 checks, among them axe-core accessibility scans of the inbox, an
 open message, the composer, Settings and the dialogs, in light and dark,
 failing on any serious or critical rule). CI runs it as *Desktop interface,
 driven*, together with the update feed's rules (`node --test desktop/rata-app/harness/feed.test.cjs`). From the
@@ -208,7 +214,7 @@ It exits non-zero on any FAIL.
 cd rata-next
 npm ci
 npm run build       # npm test reads the build
-npm test 2>&1 | cat # 841 checks, no network, no database required
+npm test 2>&1 | cat # 849 checks, no network, no database required
 npm run dev
 ```
 

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  RATA's privacy manifest for iOS, put in the app by prepare.sh.
+
+  No tracking and no tracking domains: RATA has neither. The data types it
+  collects are the owner's answers in App Store Connect, and go in
+  NSPrivacyCollectedDataTypes once given.
+
+  The required-reason APIs are the ones the built program calls, found by
+  required-reasons.sh from its undefined symbols and the class and method
+  names it asks for, in the device's release build (ios.yml): a debug
+  build keeps bindings nothing calls. The iOS job fails when they and this
+  list differ. Not here, because nothing in RATA calls them: system boot
+  time (Rust's clocks read clock_gettime, which is not on Apple's list, and
+  nothing asks for mach_absolute_time or systemUptime), disk space, active
+  keyboards and user defaults.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!-- C617.1: the size, times and kind of files inside the app's own
+		     container (the mailbox list, its lock, saved files). -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -221,6 +221,30 @@ jobs:
         run: cargo test --all-targets
         working-directory: desktop/rata-app/src-tauri
 
+      # The same shell without self-update (--no-default-features): the
+      # build an app store or a phone gets, with no updater in it
+      # (update.rs, build.rs). Its page asks the same questions about
+      # updates, and is answered as a build without the key is.
+      - name: Clippy, without self-update
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Tests, without self-update
+        run: cargo test --all-targets --no-default-features
+        working-directory: desktop/rata-app/src-tauri
+
+      # The self-test a Simulator build runs as it starts (src/smoke.rs, the
+      # `smoke` feature), built as the iOS job builds it: without
+      # self-update. Never in a release: build.rs refuses one, and ios.yml
+      # and verify-release.sh check. release.yml's gate runs these tests too.
+      - name: Clippy, with the smoke self-test
+        run: cargo clippy --all-targets --no-default-features --features smoke -- -D warnings
+        working-directory: desktop/rata-app/src-tauri
+
+      - name: Tests of the smoke self-test
+        run: cargo test --lib --no-default-features --features smoke -- "smoke::"
+        working-directory: desktop/rata-app/src-tauri
+
   # The keychain on Windows, on Windows. RATA writes its Windows keychain
   # entries itself, CRED_PERSIST_LOCAL_MACHINE, because keyring writes every
   # one to roam with the profile (vault.rs, review R6), and Credential
@@ -250,9 +274,19 @@ jobs:
         shell: bash
         working-directory: desktop/rata-app
 
+      # In the library since RATA became one (lib.rs, for iOS): `--bin
+      # rata-app` would now find no tests at all, and pass.
       - name: Keychain, list and start tests
         run: |
-          cargo test --bin rata-app -- vault:: store:: tests::at_start
+          cargo test --lib -- vault:: store:: tests::at_start
+        working-directory: desktop/rata-app/src-tauri
+
+      # The tests above build only the library's test program. This builds
+      # and links what an installer is made from: rata-app.exe, and the
+      # library in each of its kinds (a .dll and a static library too,
+      # which iOS needs), as a release build compiles them all.
+      - name: The program and the library build
+        run: cargo build --lib --bins
         working-directory: desktop/rata-app/src-tauri
 
   # The interface, driven. ui-harness.mjs opens ui/ exactly as sync-ui.sh

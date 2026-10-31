@@ -81,6 +81,25 @@ pub const NEED_PRO_FILES: &str = "Create file comes with RATA Pro. Upgrade at ma
 /// The folder inside Documents that Create file uses.
 pub const DOCUMENTS_FOLDER: &str = "RATA";
 
+/// Said where Create file is not offered (`offered`).
+pub const NO_CREATE: &str = "Create file is not switched on in this copy of RATA yet.";
+
+/// Whether this copy offers Create file: on a computer only. A phone has
+/// no app RATA could hand the file to from here, nor a folder another app
+/// opens it from, until the share sheet comes (STAGE 3 items 5 and 7).
+const HERE: bool = cfg!(desktop);
+
+/// Create file where it is not offered: every part refused, the list
+/// included, which the page reads as Create file not being there at all
+/// (bridge.js, `/api/created`).
+fn offered(here: bool) -> Result<(), FileRefusal> {
+    if here {
+        Ok(())
+    } else {
+        Err(refuse("unavailable", NO_CREATE))
+    }
+}
+
 /// RATA's blank Office files, written by `templates/make.py` and checked
 /// by the tests below (`check_body`, nothing that reaches outside the file).
 const BLANK_DOCX: &[u8] = include_bytes!("../templates/blank.docx");
@@ -301,14 +320,26 @@ pub type Opener<'a> = dyn Fn(&Path) -> std::io::Result<()> + Sync + 'a;
 /// Windows (no shell string), `xdg-open` and its kin on Linux, each given
 /// the path as one argument. Only ever called with a recorded path that has
 /// just passed `checked`.
+#[cfg(desktop)]
 pub fn system_open(path: &Path) -> std::io::Result<()> {
     open::that_detached(for_opener(path))
+}
+
+/// A phone has no Create file (`offered`), so nothing it made is ever
+/// asked to open there.
+#[cfg(mobile)]
+pub fn system_open(_: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        NO_CREATE,
+    ))
 }
 
 /// The path as a program expects it. On Windows a canonical path is a
 /// verbatim one (`\\?\C:\…`), which not every launcher takes; the plain
 /// form names the same file, since RATA's names never need the verbatim
 /// form (`safe_file_name`).
+#[cfg(any(desktop, test))]
 fn for_opener(path: &Path) -> PathBuf {
     #[cfg(windows)]
     if let Some(plain) = path.to_str().and_then(unverbatim) {
@@ -674,7 +705,9 @@ impl Rata {
     /// making a file, opening one and reading one for Send with RATA. No
     /// licence at all says what the licence box says. Listing and
     /// forgetting are not asked, so a lapsed licence can still tidy up.
+    /// Where Create file is not offered at all (`offered`), nothing is.
     fn may_create(&self) -> Result<(), FileRefusal> {
+        offered(HERE)?;
         let standing = self.standing();
         match standing.plan {
             Some(p) if p.connect => Ok(()),
@@ -820,6 +853,14 @@ impl Rata {
             place: shown(&rec.place),
             name: rec.name,
         })
+    }
+
+    /// What the page lists: [`Rata::created_list`] where Create file is
+    /// offered, refused where it is not (`offered`), so that the page
+    /// shows none of it there.
+    pub fn created_listing(&self) -> Result<Vec<Listed>, FileRefusal> {
+        offered(HERE)?;
+        Ok(self.created_list())
     }
 
     /// Every file RATA made and remembers, newest first, with whether it is
@@ -1910,6 +1951,23 @@ mod tests {
             .unwrap();
         a.open_created(&made.id, &|_| Ok(())).unwrap();
         a.created_read(&made.id).unwrap();
+    }
+
+    /// Where Create file is not offered (a phone, STAGE 3 items 5 and 7),
+    /// every part is refused with one sentence, the page's list included,
+    /// so the page shows none of it. On a computer the list answers.
+    #[test]
+    fn where_create_file_is_not_offered_every_part_is_refused() {
+        let refused = offered(false).unwrap_err();
+        assert_eq!(refused.kind, "unavailable");
+        assert_eq!(
+            refused.error,
+            "Create file is not switched on in this copy of RATA yet."
+        );
+        assert_eq!(offered(true), Ok(()));
+        let s = Scratch::new();
+        let (a, _, _) = one(&s);
+        assert_eq!(a.created_listing().map(|l| l.len()), Ok(1));
     }
 
     #[test]

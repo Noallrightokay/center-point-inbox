@@ -78,8 +78,13 @@ pub async fn discover_mailbox(app: App<'_>, email: String) -> Result<Found, Stri
 
 /// Whether this copy is paid for. Checked locally against the key compiled
 /// into the build — no network, so it answers on a train.
+///
+/// The page asks this once its mail store is open and before any mail is
+/// fetched, so on a phone it is also when that store, new on a first run,
+/// is kept out of the phone's backups (`backup`). Nothing anywhere else.
 #[tauri::command]
-pub fn licence_status(app: App<'_>) -> Standing {
+pub fn licence_status(handle: AppHandle, app: App<'_>) -> Standing {
+    crate::backup::keep_out(&handle);
     app.standing()
 }
 
@@ -361,15 +366,16 @@ pub async fn save_attachment(
         .await
 }
 
-/// The Downloads folder. On Linux Tauri only finds it through the desktop's
-/// `user-dirs.dirs`, which not every system has — without it, every save
-/// failed there — so the conventional `~/Downloads` stands in.
-fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
+/// Where saves go (`core::save_folder`): the Downloads folder on a
+/// computer, the app's own Documents folder on iOS.
+pub(crate) fn downloads(handle: &AppHandle) -> Option<std::path::PathBuf> {
     let paths = handle.path();
-    paths
-        .download_dir()
-        .ok()
-        .or_else(|| paths.home_dir().ok().map(|h| h.join("Downloads")))
+    crate::core::save_folder(
+        cfg!(target_os = "ios"),
+        paths.document_dir().ok(),
+        paths.download_dir().ok(),
+        paths.home_dir().ok(),
+    )
 }
 
 /// An attachment's bytes, for the Format Bridge to convert or for the page to
@@ -485,10 +491,15 @@ pub fn save_file(
 /// A web address from the interface — a link in the text of a message, or
 /// one the customer confirmed — for the browser. Anything that is not http
 /// or https is refused here, whatever the page asked.
+///
+/// Async, and the opening itself off the window's thread (`open_aside`): a
+/// command that is not async runs on the thread the page's call arrives
+/// on, which on a phone is the main thread, and there the wait for the
+/// system's answer could hold up the thread the opening needs.
 #[tauri::command]
-pub fn open_link(url: String) -> Result<(), String> {
+pub async fn open_link(handle: AppHandle, url: String) -> Result<(), String> {
     match crate::links::classify(&url) {
-        Some(crate::links::Link::Web(u)) => crate::links::open_in_browser(&u),
+        Some(crate::links::Link::Web(u)) => crate::links::open_aside(handle, u).await,
         _ => Err("RATA only opens web addresses (http and https).".into()),
     }
 }
@@ -860,7 +871,7 @@ pub async fn open_created(app: App<'_>, id: String) -> Result<Reopened, FileRefu
 #[tauri::command]
 pub async fn created_list(app: App<'_>) -> Result<Vec<Listed>, FileRefusal> {
     let rata = app.inner().clone();
-    off_window(move || Ok(rata.created_list())).await
+    off_window(move || rata.created_listing()).await
 }
 
 /// A file RATA made, as it is on disk now, as base64 for Send with RATA.

@@ -221,7 +221,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'save_file':
         M.files = (M.files || []).concat([args]);
         if (M.saveFails) throw 'It could not be saved in /home/me/Downloads (disk full).';
-        return { path: '/home/me/Downloads/' + args.name, name: args.name, size: atob(args.data).length };
+        /* place is core::save_place's: Downloads on a computer, the app's
+           own folder in the Files app on an iPhone (M.savePlace). */
+        return { path: '/home/me/Downloads/' + args.name, name: args.name, size: atob(args.data).length, place: M.savePlace || 'your Downloads folder' };
       case 'list_folders':
         if (M.foldersFail) throw { email: args.email, kind: 'net', error: 'imap.example.com could not be reached: its folders could not be listed' };
         return M.folders || [];
@@ -256,7 +258,9 @@ const MOCK = ({ licensed, ms, old, lic }) => {
         const name = (M.openAtts || []).find((a) => a.index === args.index)?.name;
         if ((M.disguisedAt || []).includes(args.index) && args.confirmed !== true)
           throw { email: args.email, kind: 'needs-confirmation', error: name + ' is a program (.exe) named to look like a document. RATA saves it only after you say so.' };
-        return name ? { path: '/home/me/Downloads/' + name, name, size: 4 } : { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760 };
+        /* place is core::save_place's, as for save_file. */
+        const place = M.savePlace || 'your Downloads folder';
+        return name ? { path: '/home/me/Downloads/' + name, name, size: 4, place } : { path: '/home/me/Downloads/Q3 figures.pdf', name: 'Q3 figures.pdf', size: 245760, place };
       }
       /* F1: as core::save_draft. A new UID for every save; the copy before
          is "replaced" whenever the page names one. */
@@ -2005,7 +2009,7 @@ console.log('\n— a program named to look like a document is labelled, and aske
   await pg.waitForFunction(() => window.__toasts.some((t) => /^Saved to /.test(t)), null, { timeout: 3000 }).catch(() => {});
   let s = await saves();
   check(s.length === 1 && s[0].index === 1 && s[0].confirmed === true, `"Save anyway" saves, saying the customer confirmed: ${JSON.stringify(s)}`);
-  check((await toasts(pg)).includes('Saved to /home/me/Downloads/invoice.pdf.exe'), 'and says where it went');
+  check((await toasts(pg)).includes('Saved to your Downloads folder as invoice.pdf.exe'), 'and says where it went');
   // A document and a program that says what it is: no question.
   await pg.click('#mail-detail [data-att="1"]');
   await pg.click('#mail-detail [data-att="2"]');
@@ -2014,6 +2018,30 @@ console.log('\n— a program named to look like a document is labelled, and aske
   const asked = await pg.evaluate(() => document.querySelector('#warn-ov').classList.contains('open'));
   check(!asked && s.length === 3 && s[1].index === 2 && s[1].confirmed === false && s[2].index === 3 && s[2].confirmed === false,
     `invoice.pdf and setup.exe save without asking: ${JSON.stringify(s)}`);
+  /* Where it will go and where it went, in Rust's words (core::save_place:
+     set as the page starts, and in each save's answer), as for a file from
+     Files: an iPhone never hears of Downloads, nor of the path inside the
+     app's container. */
+  const attWhere = async (place) => {
+    await pg.evaluate((p) => {
+      __mock.savePlace = p; window.__toasts = [];
+      if (p) window.__RATA_SAVE_PLACE__ = p; else delete window.__RATA_SAVE_PLACE__;
+      openMail(S.messages.find((x) => x.uid === 90).id);
+    }, place);
+    await pg.waitForSelector('#mail-detail [data-att="1"]', { timeout: 3000 }).catch(() => {});
+    const title = await pg.evaluate(() => document.querySelector('#mail-detail [data-att="1"]').title);
+    await pg.click('#mail-detail [data-att="1"]');
+    await pg.waitForFunction(() => window.__toasts.some((t) => /^Saved to /.test(t)), null, { timeout: 3000 }).catch(() => {});
+    return { title, said: await toasts(pg) };
+  };
+  const attComputer = await attWhere(undefined);
+  check(attComputer.title === 'Save to your Downloads folder' && attComputer.said.includes('Saved to your Downloads folder as invoice.pdf'),
+    `an attachment's button says it goes to Downloads, and saving it says it went there under its name: ${JSON.stringify(attComputer)}`);
+  const attPhone = await attWhere("RATA's folder in the Files app");
+  check(attPhone.title === "Save to RATA's folder in the Files app" && attPhone.said.includes("Saved to RATA's folder in the Files app as invoice.pdf")
+    && !attPhone.said.some((t) => /Downloads|\/home\//.test(t)),
+    `on an iPhone both name the folder Rust names, never Downloads or a path: ${JSON.stringify(attPhone)}`);
+  await pg.evaluate(() => { delete __mock.savePlace; delete window.__RATA_SAVE_PLACE__; });
   if (process.env.UI1_SHOTS) {
     await pg.evaluate(() => { __mock.calls.length = 0; });
     await pg.screenshot({ path: process.env.UI1_SHOTS + '/ui1-label.png' });
@@ -4846,6 +4874,21 @@ console.log('\n— SEC-10: only what this build connects is named, no disguised 
   await pg.click('#doc-grid [data-dl]');
   await pg.waitForFunction(() => (__mock.files || []).length === 1, null, { timeout: 3000 }).catch(() => {});
   check(await pg.evaluate(() => !document.querySelector('#warn-ov').classList.contains('open') && __mock.files.length === 1 && __mock.files[0].name === 'Rota.txt'), 'a document saves without a question');
+  /* Where it went is said in Rust's words (core::save_place), so an
+     iPhone, whose saves go to the app's folder in the Files app, never
+     hears of a Downloads folder. */
+  const saidWhere = async (place) => {
+    await pg.evaluate((p) => { __mock.files = []; __mock.savePlace = p; window.__toasts = []; }, place);
+    await pg.click('#doc-grid [data-dl]');
+    await pg.waitForFunction(() => window.__toasts.some((t) => /^Saved to /.test(t)), null, { timeout: 3000 }).catch(() => {});
+    return toasts(pg);
+  };
+  const onComputer = await saidWhere(undefined);
+  check(onComputer.includes('Saved to your Downloads folder as Rota.txt'), `and says it went to Downloads: ${JSON.stringify(onComputer)}`);
+  const onPhone = await saidWhere("RATA's folder in the Files app");
+  check(onPhone.includes("Saved to RATA's folder in the Files app as Rota.txt") && !onPhone.some((t) => /Downloads/.test(t)),
+    `on an iPhone it names the folder Rust names, never Downloads: ${JSON.stringify(onPhone)}`);
+  await pg.evaluate(() => { delete __mock.savePlace; __mock.files = []; });
 
   /* 3. Share to Slack: once Send is pressed, Cancel, ✕, Escape and the
      backdrop do nothing until Slack answers, and the answer is said. */

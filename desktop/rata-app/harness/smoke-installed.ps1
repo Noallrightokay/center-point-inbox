@@ -72,7 +72,7 @@ $null = $app.Handle
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
 # The title of the process's main window. The window is built in setup
-# (main.rs), and the webview draws inside it from msedgewebview2.exe, which
+# (lib.rs), and the webview draws inside it from msedgewebview2.exe, which
 # owns no top-level window of its own. Single instance's own window,
 # "org.mailrata.desktop-siw", is made earlier, in the plugin's setup, unowned
 # and marked visible so that it gets messages; .NET can take it for the main
@@ -104,7 +104,7 @@ if (-not $title) {
   Write-Output "RATA's window: `"$title`"."
 }
 
-# Single instance (main.rs, review R5): RATA started again while it is open
+# Single instance (lib.rs, review R5): RATA started again while it is open
 # finds the first (a named mutex and a hidden window, per sign-in session),
 # hands over to it and exits 0 at once, and the first stays up; the list's
 # own lock stops any copy that gets past that. A second copy still running

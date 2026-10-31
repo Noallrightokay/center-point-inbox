@@ -314,10 +314,13 @@ Sent has it too.
 1. Open the message from row 7.
 2. Click the PDF's card under the message (the one with ⤓).
 
-**Pass:** a message starting "Saved to" and a path in Downloads. The file
-opens in your usual PDF app and matches the one you sent. RATA does not
-open it for you; that is by design.
-**Record:** write `Downloads`, not the full path.
+**Pass:** the message "Saved to your Downloads folder as" and the file's
+name (with ` (2)` before the extension if a file of that name was already
+there); up to v0.1.52 it is "Saved to" and the file's whole path in
+Downloads. The file is in Downloads, opens in your usual PDF app and
+matches the one you sent. RATA does not open it for you; that is by
+design.
+**Record:** write `Downloads`, not the file's name or a path.
 **Webmail:** nothing changes.
 
 ### Row 9. Reply
