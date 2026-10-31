@@ -4952,7 +4952,7 @@ console.log('\n— the linked mailboxes: one line that opens a card where one is
   };
   const LONG = 'a.very.long.address.for.the.front.desk.team@saltmarsh-regional-medical-centre.example.org';
   /* Everything about the line, its card and the list, as drawn. */
-  const state = () => pg.evaluate(() => {
+  const state = (page = pg) => page.evaluate(() => {
     const src = document.querySelector('#sources'), btn = document.querySelector('#src-btn'), panel = document.querySelector('#src-panel');
     const pill = document.querySelector('#cat-tabs .pill'), side = document.querySelector('#view-inbox .side-list').getBoundingClientRect();
     const r = btn && btn.getBoundingClientRect(), what = btn && btn.querySelector('.src-what');
@@ -5387,6 +5387,16 @@ console.log('\n— the linked mailboxes: one line that opens a card where one is
   const wide = await pg.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - document.documentElement.clientWidth);
   check(s.what === LONG && s.cut && s.h <= s.pillH + 2 && wide <= 0 && JSON.stringify(s.list) === JSON.stringify(DESK),
     `375 px, the long address chosen: the button names it, cut with an ellipsis on one line, its mail alone, nothing scrolls sideways: ${JSON.stringify({ what: s.what, cut: s.cut, h: s.h, wide, list: s.list })}`);
+  /* The top bar names it too, cut, and keeps Search and the account button
+     inside the window (#main hides what overflows, so a page that does not
+     scroll sideways can still have pushed them off it). */
+  const bar = await pg.evaluate(() => {
+    const at = (sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right), w: Math.round(r.width) }; };
+    const eb = document.querySelector('#tb-eyebrow');
+    return { width: innerWidth, eyebrow: eb.textContent, cut: eb.scrollWidth > eb.clientWidth, search: at('#top-search-btn'), acct: at('#acct-btn') };
+  });
+  check(bar.eyebrow === LONG && bar.cut && [bar.search, bar.acct].every((b) => b.w > 0 && b.left >= 0 && b.right <= bar.width) && bar.search.right <= bar.acct.left,
+    `375 px, the long address chosen: the top bar names it, cut, and Search and the account button stay inside the window: ${JSON.stringify(bar)}`);
   /* Beside the rail's icons (901 to 1200 px) the list is 340 px wide: the
      card lies over it and may reach past it, up to 440 px, inside the
      window, so an address keeps to one line. */
@@ -5461,6 +5471,35 @@ console.log('\n— the linked mailboxes: one line that opens a card where one is
   check(!s.shown && s.btns === 0 && s.panels === 0, `with no mailbox linked, nothing is shown: ${JSON.stringify({ shown: s.shown, btns: s.btns, panels: s.panels })}`);
   await pg.close();
   await ctx.close();
+
+  /* A mailbox new to RATA, linked while another is chosen: the list shows
+     every mailbox again, so the new one's mail is in it. */
+  const lp = await open(true);
+  const TWO = MAIL.filter((m) => m.acct !== LONG);
+  await lp.evaluate(async (msgs) => {
+    __mock.mailboxes.push({ email: 'work@example.net', host: 'imap.example.net', port: 993, label: 'Work' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    await serverSync('mail');
+    go('inbox'); mailFilter = 'all'; catFilter = 'all'; renderMailFilters(); renderMail();
+    chooseScope(S.linked.find((l) => l.label === 'work@example.net').id);
+  }, TWO);
+  const workOnly = await state(lp);
+  await lp.evaluate((msgs) => {
+    __mock.mailboxes.push({ email: 'new@example.org', host: 'imap.example.org', port: 993, label: 'New' });
+    __mock.refresh = { messages: msgs, flags: [], problems: [], skipped: [] };
+    go('set'); openMailForm();
+  }, [...TWO, mk('new@example.org', 801, 0, 'di@example.org', 'Welcome aboard', 'Hello', true)]);
+  await lp.fill('#lf-input', 'new@example.org');
+  await lp.fill('#lf-pass', 'abcd efgh ijkl mnop');
+  await lp.click('#lf-save');
+  await lp.waitForFunction(() => $('#lf-save').textContent === 'Link' && !SYNCING, null, { timeout: 5000 }).catch(() => {});
+  await lp.evaluate(() => go('inbox'));
+  s = await state(lp);
+  const linkedScope = await lp.evaluate(() => mailScope());
+  check(workOnly.scoped && JSON.stringify(workOnly.list) === JSON.stringify(WORK) && linkedScope === '' && !s.scoped && s.what === '3 mailboxes' && s.eyebrow === 'Every mailbox'
+    && JSON.stringify(s.list) === JSON.stringify(['new@example.org_801', ...ME, ...WORK]),
+  `a mailbox linked while work@example.net is chosen: every mailbox shows again, the new one's mail with them: ${JSON.stringify({ before: workOnly.list, scope: linkedScope, what: s.what, eyebrow: s.eyebrow, list: s.list })}`);
+  await lp.close();
 }
 
 await browser.close();

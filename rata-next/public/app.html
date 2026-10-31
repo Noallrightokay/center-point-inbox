@@ -6057,12 +6057,16 @@ async function mailLink(email,pass,host){
    the list, the form closed, and its mail fetched. */
 async function linkedOk(res){
   $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
-  let l=linkedFind('mail',res.email)||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
+  const known=linkedFind('mail',res.email);
+  let l=known||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
   if(l){
     l.status='live';l.host=res.host;l.provLabel=res.label;
     if(res.auth==='oauth')l.auth='oauth';else delete l.auth;
     delete l.needsRelink;delete l.signIn;delete l.lastError;save();
   }
+  /* A mailbox new to RATA shows with the others: a mailbox chosen before
+     (SCOPE) would keep its mail out of the list, with nothing to say why. */
+  if(!known&&SCOPE)chooseScope('');
   LF_FOUND=null;
   $('#linkform').style.display='none';
   renderLinked();refreshQuota();
