@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1230 checks).
+the website's test suites pass with `npm test` after it (1240 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -460,7 +460,7 @@ routes do it:
   `lib/apple-roots`, offline: no call to Apple per request.
 - `POST /api/apple/notifications`: Apple's App Store Server Notifications
   V2, which keep the record current when a subscription renews, fails to
-  renew, expires or is refunded.
+  renew, expires, has its renewal date extended or is refunded.
 - `/api/licence/renew` renews an `apple:` licence from that record.
 
 An App Store licence lasts until the end of the subscription's current
@@ -529,7 +529,15 @@ Desktop builds and the Stripe checkout do not change. The steps, in order:
    notifications the record stays live to the end of the refunded period:
    the licence renews until then, one renewed at that end lasts 3 days
    past it, and the AI relay answers until 3 days past it too (an hour, in
-   the sandbox). Types RATA has no use for are answered 200 and change nothing,
+   the sandbox). This URL is also what records a renewal date you extend
+   (the App Store Server API's *Extend a Subscription Renewal Date*, for
+   one subscriber, or *Extend Subscription Renewal Dates for All Active
+   Subscribers*, to make up for an outage, say): Apple sends no renewal at
+   the old date, only a `RENEWAL_EXTENDED` notification, which moves the
+   record's expiry on. Without the notifications the record keeps the old
+   date until the phone sends the extended purchase: renewal is refused
+   from the old date, and the licence, and AI, end 3 days after it. Types
+   RATA has no use for are answered 200 and change nothing,
    among them `RESCIND_CONSENT` (a parent withdrew consent under the age
    laws Apple applies in Texas; Apple then stops the app launching on that
    child's device by itself).

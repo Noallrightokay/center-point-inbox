@@ -10,9 +10,9 @@ export const dynamic = 'force-dynamic';
 /* App Store Server Notifications, version 2.
 
    Apple tells mailrata.org when a subscription bought in the iPhone app
-   renews, fails to renew, expires, is refunded or is revoked, so the row
-   /api/licence/renew reads stays true even when the phone has not been
-   opened. The owner points App Store Connect here, for Production and
+   renews, fails to renew, expires, has its renewal date extended, is
+   refunded or is revoked, so the row /api/licence/renew reads stays true
+   even when the phone has not been opened. The owner points App Store Connect here, for Production and
    Sandbox (LAUNCH.md section 11).
 
    The notification is signed like a transaction, and the transaction and

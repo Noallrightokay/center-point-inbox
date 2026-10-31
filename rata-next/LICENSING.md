@@ -236,6 +236,20 @@ before beside the row until the new one begins would answer both; it
 needs columns of its own and a choice of which plan a licence issued in
 those hours carries.
 
+**A renewal date extended.** The owner can extend a subscription's
+renewal date through the App Store Server API (*Extend a Subscription
+Renewal Date*, or *Extend Subscription Renewal Dates for All Active
+Subscribers*), to make up for an outage, say. Apple then sends no renewal
+at the old date, only a `RENEWAL_EXTENDED` notification, whose
+transaction is the current period with the later expiry and the same
+`purchaseDate`. It is written as `DID_RENEW` is (`lib/apple.js`,
+`CURRENT`): placed as that period and signed later, so it moves the
+row's expiry on, and a copy with the old expiry, signed before it,
+changes nothing. Without the notifications (`LAUNCH.md` §11, step 5) the
+row keeps the old expiry until the phone sends the extended transaction:
+renewal is refused from the old date, and the licence and AI end the
+margin after it.
+
 At the end of a period, nothing shows. The licence then has less than a
 week left, so the app renews it at launch, every six hours and when the
 connection comes back (bridge.js, `settleLicence`), and on the iPhone also

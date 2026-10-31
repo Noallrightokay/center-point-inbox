@@ -95,8 +95,21 @@ export const APPLE_AUTO_RENEWAL = 'Payment is charged to your Apple Account when
 /* The notification types that change a row (appleChange). Each states the
    whole of what it knows; only REFUND and REVOKE, and REFUND_REVERSED, also
    say by their type whether the subscription is revoked. Anything else is
-   answered 200 and left alone. */
-const CURRENT = ['SUBSCRIBED', 'DID_RENEW', 'DID_CHANGE_RENEWAL_PREF', 'OFFER_REDEEMED'];
+   answered 200 and left alone.
+
+   RENEWAL_EXTENDED is Apple's word that a subscription's renewal date was
+   extended, which the owner asks for through the App Store Server API
+   (Extend a Subscription Renewal Date, or Extend Subscription Renewal
+   Dates for All Active Subscribers, which sends one for each subscription
+   it extends). Its transaction is the current period with the later
+   expiresDate and the same purchaseDate, so it is placed as that period
+   and, signed later, moves its expiry on; a copy with the old expiry was
+   signed before it and changes nothing. No DID_RENEW comes at the old
+   date, so without it the row would keep the old expiry until the phone
+   sent the extended transaction. RENEWAL_EXTENSION, the summary of an
+   extension for all subscribers or a failure to extend one, changes no
+   subscription, and is left alone. */
+const CURRENT = ['SUBSCRIBED', 'DID_RENEW', 'DID_CHANGE_RENEWAL_PREF', 'OFFER_REDEEMED', 'RENEWAL_EXTENDED'];
 const DATES = ['DID_FAIL_TO_RENEW', 'EXPIRED', 'GRACE_PERIOD_EXPIRED'];
 const REVOKED = ['REFUND', 'REVOKE'];
 export const APPLE_ACTED = Object.freeze([...CURRENT, ...DATES, ...REVOKED, 'REFUND_REVERSED']);

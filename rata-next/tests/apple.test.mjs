@@ -1635,6 +1635,63 @@ export default async function run(state) {
           && (await renew(lic)).d.licensed === true,
           'DID_FAIL_TO_RENEW for the period after a refunded one, signed before the refund, records the grace period and renews');
       }
+      {
+        /* A renewal date extended (RENEWAL_EXTENDED): the owner moves a
+           subscription's end on through the App Store Server API, to make
+           up for an outage, say, and Apple sends no DID_RENEW at the old
+           date, only this. Its transaction is the period with the later
+           expiry and the same purchaseDate. P1, Pro, was bought 34 days
+           ago and was due to end 4 days ago; the extension moves its end
+           to 10 days from now. */
+        const isoOf = (ms) => new Date(ms).toISOString();
+        const near = (a, b) => Math.abs(a - b) <= 2000;
+        const reserved = (from) => sbx.fake.calls.slice(from).some((c) => c.endsWith('/rest/v1/rpc/ai_reserve'));
+        const ask = async (licence) => {
+          const r = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'translate', subject: 'Hi', text: 'Hello there', to: 'fr', licence }) });
+          return { status: r.status, d: await r.json().catch(() => ({})) };
+        };
+        const p1 = txn({ purchaseDate: Date.now() - 34 * DAY, expiresDate: Date.now() - 4 * DAY, signedDate: Date.now() - 34 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', p1, { subtype: 'INITIAL_BUY', signedDate: p1.signedDate }));
+        const lic = issue({ email: apple.appleSub(p1.originalTransactionId), plan: 'pro' }, keys.privateKey);
+        let at = sbx.fake.calls.length;
+        const before = await ask(lic);
+        check(refusal((await renew(lic)).d, 'no-subscription', NOTHING_LIVE) && before.status === 401 && before.d.reason === 'expired' && !reserved(at),
+          'a period that ended 4 days ago, not yet extended: renewal refused, and AI 401');
+        const extendedAt = Date.now() - 60e3;
+        const extended = { ...p1, expiresDate: Date.now() + 10 * DAY, signedDate: extendedAt };
+        const ext = await notify(notification(chain, 'RENEWAL_EXTENDED', extended, { renewal: renewalInfo(extended), signedDate: extendedAt }));
+        const row = rowOf(p1);
+        check(ext.status === 200 && ext.d.acted === true && row.expires_at === isoOf(extended.expiresDate) && row.period_from === isoOf(p1.purchaseDate)
+          && row.plan === 'pro' && row.revoked_at === null && row.signed_at === isoOf(extendedAt),
+          `RENEWAL_EXTENDED moves the period's expiry on, placed as that period and stamped when Apple signed it (${ext.status} ${JSON.stringify(ext.d)})`);
+        const renewed = await renew(lic);
+        check(renewed.d.licensed === true && renewed.d.plan === 'pro' && near(subOf(renewed.d).licence.exp * 1000, extended.expiresDate + 3 * DAY),
+          `and /api/licence/renew renews Pro, to 3 days past the new end (${renewed.d.reason || renewed.d.plan})`);
+        at = sbx.fake.calls.length;
+        const after = await ask(lic);
+        check(reserved(at) && after.status !== 401, `and the AI relay answers that licence (${after.status}, here a stand-in with no ai_reserve)`);
+        const held = JSON.stringify(rowOf(p1));
+        const again = await notify(notification(chain, 'SUBSCRIBED', p1, { subtype: 'INITIAL_BUY', signedDate: p1.signedDate }));
+        const old = await post([signJws({ ...p1, signedDate: extendedAt - DAY }, chain)]);
+        check(again.d.acted === false && old.d.licensed === true && old.d.expires === isoOf(extended.expiresDate) && JSON.stringify(rowOf(p1)) === held,
+          `a copy with the old expiry, signed before the extension, from Apple or the phone, changes nothing (${old.d.reason || old.d.expires})`);
+
+        /* A period still running, extended: the phone's copy of it from
+           before the extension, live and with the old expiry, arrives
+           after and changes nothing; the extended copy is recorded. */
+        const q = txn({ purchaseDate: Date.now() - 20 * DAY, expiresDate: Date.now() + 10 * DAY, signedDate: Date.now() - 20 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', q, { subtype: 'INITIAL_BUY', signedDate: q.signedDate }));
+        const qExtended = { ...q, expiresDate: Date.now() + 25 * DAY, signedDate: extendedAt };
+        await notify(notification(chain, 'RENEWAL_EXTENDED', qExtended, { renewal: renewalInfo(qExtended), signedDate: extendedAt }));
+        const qHeld = JSON.stringify(rowOf(q));
+        const stale = await post([signJws({ ...q, signedDate: extendedAt - DAY }, chain)]);
+        check(stale.d.licensed === true && stale.d.expires === isoOf(qExtended.expiresDate) && JSON.stringify(rowOf(q)) === qHeld
+          && near(subOf(stale.d).licence.exp * 1000, qExtended.expiresDate + 3 * DAY),
+          `a running period extended: the phone's live copy with the old expiry, signed before the extension, leaves the new expiry, and its licence follows it (${stale.d.expires})`);
+        const fresh = await post([signJws({ ...qExtended, signedDate: Date.now() }, chain)]);
+        check(fresh.d.licensed === true && rowOf(q).expires_at === isoOf(qExtended.expiresDate) && Date.parse(rowOf(q).signed_at) > extendedAt,
+          'and its extended copy, signed after, is recorded');
+      }
 
       const fam = txn({ inAppOwnershipType: 'FAMILY_SHARED' });
       await notify(notification(chain, 'SUBSCRIBED', fam, { signedDate: Date.now() - DAY }));

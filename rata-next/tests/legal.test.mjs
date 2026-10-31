@@ -228,9 +228,13 @@ export default async function run(state) {
 
   console.log('\n— the iPhone app\'s subscriptions, as lib/apple.js and database.sql keep them —');
   {
-    /* apple_subscriptions (database.sql §7): every column the code writes is
-       one the privacy policy names, in the policy's words. A column added
-       to the table without words on the page fails here. */
+    /* apple_subscriptions (database.sql §7): every column the table keeps
+       is one the privacy policy names, in the policy's words, but the two
+       nothing writes yet (app_account_token and email, checked below);
+       updated_at among them, which the touch trigger sets on each update,
+       so it says when the app or Apple last sent something about the
+       subscription. A column added to the table without words on the page
+       fails here. */
     const sql = readFileSync(join(SITE, 'database.sql'), 'utf8');
     const table = (sql.match(/create table if not exists public\.apple_subscriptions \(([\s\S]*?)\n\);/) || ['', ''])[1];
     const cols = [...table.matchAll(/^\s*(\w+)\s+(?:text|bigint|integer|timestamptz|uuid)/gm)].map(m => m[1]);
@@ -248,7 +252,11 @@ export default async function run(state) {
       revoked_at: 'when it was refunded or revoked',
       signed_at: 'when Apple signed what it last told us about the subscription',
       grace_signed_at: 'and about a grace period',
+      updated_at: 'and when mailrata.org last updated the record, which is most often the last time the app or Apple sent us something about the subscription',
     };
+    const UNWRITTEN = ['app_account_token', 'email'];
+    const wordless = cols.filter((c) => !SAID[c] && !UNWRITTEN.includes(c));
+    check(cols.length > 0 && wordless.length === 0, `every column of the table but the two nothing writes has words on the page (${wordless.join(', ') || 'all'})`);
     const fact = (P.match(/Your App Store subscription record, if you subscribe in the iPhone app.*?No name, no email address and no Apple ID: Apple tells us none of them\./) || [''])[0];
     const unsaid = Object.entries(SAID).filter(([, words]) => !fact.includes(words)).map(([c]) => c);
     check(!!fact && unsaid.length === 0, `privacy names each column it keeps under "What mailrata.org keeps" (${unsaid.join(', ') || 'all'})`);

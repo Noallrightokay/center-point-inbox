@@ -15,9 +15,11 @@
      period starting, a change of renewal preference during it, the refund
      reversed, the grace period ending and the subscription expiring; each
      order then delivers its first and last events again;
-   - every order of fifteen small sets: two that cross from one period
+   - every order of seventeen small sets: two that cross from one period
      to the next (one of them an upgrade from a period paid for in
-     advance, which ends after the one that replaced it); one where the
+     advance, which ends after the one that replaced it); two where the
+     period's renewal date is extended, with the phone's copy of it from
+     before the extension and, in one, from after; one where the
      phone's purchase, signed after a grace notice, arrives before it;
      three where the phone sends its renewal info with its purchase,
      recording a grace period with no notification, then ended by one,
@@ -92,7 +94,11 @@ export async function deliveryOrders({ sb, check, label, width = 1 }) {
   let deliveries = 0;
   const deliver = async (id, e) => {
     deliveries += 1;
-    const w = await apple.appleWrite(sb, id, e.change(id));
+    /* What changes nothing RATA keeps is answered and left, as the
+       notifications route leaves it. */
+    const change = e.change(id);
+    if (!change) return;
+    const w = await apple.appleWrite(sb, id, change);
     if (w.error) throw new Error(`${e.name}: ${w.error.code || ''} ${w.error.message || ''}`);
   };
   const state = async (id) => {
@@ -273,9 +279,27 @@ export async function deliveryOrders({ sb, check, label, width = 1 }) {
     charged,
     note('B1 REFUND', 'REFUND', null, T0 + 30 * DAY - 2 * H, { ...B1, revocationDate: T0 + 30 * DAY - 2 * H, revocationReason: 0 }, null),
   ];
-  const cross = await settle([upgrade, recovered, resigned, alone, aloneEnded, aloneRecovered, lagging, laggingRecovered, oldInfo, aheadUpgrade, aheadGrace, aheadAlone, aheadTwoDevices, aheadRenewedLater, aheadRefund]);
+  /* A renewal date extended (RENEWAL_EXTENDED): on day 20 M1's end moves
+     from day 30 to day 40, and Apple's transaction is M1 with the later
+     expiry and the same purchaseDate. The phone's copy of M1 from before
+     the extension, signed on day 5, and in the second set its copy of
+     the extended M1, signed on day 21. */
+  const M1x = { ...M1, expiresDate: T0 + 40 * DAY };
+  const extended = [
+    note('M1 SUBSCRIBED', 'SUBSCRIBED', 'INITIAL_BUY', T0, M1, null),
+    phone('M1 phone', T0 + 5 * DAY, M1),
+    note('M1 RENEWAL_EXTENDED', 'RENEWAL_EXTENDED', null, T0 + 20 * DAY, M1x, null),
+  ];
+  const extendedPhone = [...extended, phone('M1 phone, extended', T0 + 21 * DAY, M1x)];
+  const cross = await settle([upgrade, recovered, extended, extendedPhone, resigned, alone, aloneEnded, aloneRecovered, lagging, laggingRecovered, oldInfo, aheadUpgrade, aheadGrace, aheadAlone, aheadTwoDevices, aheadRenewedLater, aheadRefund]);
   check(cross.wrong.length === 0,
-    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a re-signed purchase, the phone alone in a grace period, the phone's two halves of different moments and a renewal charged ahead of time (with two devices, and with a notice signed after the phone's copy), each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
+    `${label}across periods: all ${cross.count} orders of an upgrade, a recovery, a renewal date extended, a re-signed purchase, the phone alone in a grace period, the phone's two halves of different moments and a renewal charged ahead of time (with two devices, and with a notice signed after the phone's copy), each with two deliveries again, end as signing order does${cross.wrong.length ? `; not: ${cross.wrong.join(' | ')}` : ''}`);
+  const ex = cross.answers.get(extended);
+  check(!!ex && ex.period_from === M1.purchaseDate && ex.expires_at === M1x.expiresDate && ex.signed_at === T0 + 20 * DAY && ex.revoked_at === null,
+    `${label}a renewal date extended: the later expiry, which the phone's copy from before the extension does not undo (${shown(ex)})`);
+  const ep = cross.answers.get(extendedPhone);
+  check(!!ep && ep.period_from === M1.purchaseDate && ep.expires_at === M1x.expiresDate && ep.signed_at === T0 + 21 * DAY,
+    `${label}and the phone's copy of the extended period, signed after it, stamps it (${shown(ep)})`);
   const au = cross.answers.get(aheadUpgrade);
   check(!!au && au.plan === 'pro' && au.product_id === PRO && au.period_from === U.purchaseDate && au.expires_at === U.expiresDate && au.revoked_at === null
     && au.signed_at === T0 + 30 * DAY - 5 * H,
