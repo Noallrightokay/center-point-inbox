@@ -555,6 +555,40 @@ export default async function run(state) {
       'and one giving no grace period, though Apple signed it later, asks nothing of the grace fields and leaves them as they are');
   }
 
+  console.log('\n— a period is placed when it began, or when Apple reported it if that was earlier —');
+  {
+    /* Apple charges a renewal ahead of time and reports it then, with the
+       new period's purchaseDate still to come (lib/apple.js, periodFrom).
+       Such a statement is placed when Apple signed it: the phone's
+       transaction by its own signedDate, a notification by the
+       notification's, whatever the transaction inside it says. Anything
+       Apple signs once the period has begun is placed by purchaseDate, as
+       before. */
+    const H = 3600e3;
+    const iso = (ms) => new Date(ms).toISOString();
+    const ahead = txn({ purchaseDate: Date.now() + 6 * H, expiresDate: Date.now() + 30 * DAY, signedDate: Date.now() - 2 * H, transactionReason: 'RENEWAL' });
+    const phone = apple.applePurchase(ahead, 'Production');
+    const noticeAt = Date.now() - 3 * H;
+    const notice = apple.appleChange({ notificationType: 'DID_RENEW', signedDate: noticeAt }, ahead, null, 'Production');
+    check(phone.core.period_from === iso(ahead.signedDate) && phone.insert.period_from === phone.core.period_from && phone.core.signed_at === iso(ahead.signedDate),
+      `the phone's transaction of a renewal charged ahead: placed when StoreKit's copy was signed (${phone.core.period_from})`);
+    check(notice.core.period_from === iso(noticeAt) && notice.core.signed_at === iso(noticeAt) && notice.insert.period_from === iso(noticeAt),
+      `a notification of it: placed when Apple signed the notification, not the transaction inside it (${notice.core.period_from})`);
+    const t = txn();
+    const after = apple.applePurchase({ ...ahead, signedDate: ahead.purchaseDate + H }, 'Production');
+    const atStart = apple.applePurchase({ ...ahead, signedDate: ahead.purchaseDate }, 'Production');
+    const lateNotice = apple.appleChange({ notificationType: 'REFUND', signedDate: ahead.purchaseDate + DAY }, ahead, null, 'Production');
+    check(apple.appleRowOf(t, 'Production').period_from === iso(t.purchaseDate) && after.core.period_from === iso(ahead.purchaseDate)
+      && atStart.core.period_from === iso(ahead.purchaseDate) && lateNotice.core.period_from === iso(ahead.purchaseDate),
+      'anything signed once its period has begun, or as it begins, is placed by purchaseDate, as before');
+    const noSigned = apple.applePurchase({ ...ahead, signedDate: undefined }, 'Production');
+    const notFinite = apple.applePurchase({ ...ahead, signedDate: -Infinity }, 'Production');
+    const noPurchase = apple.applePurchase({ ...ahead, purchaseDate: undefined }, 'Production');
+    check(noSigned.core.period_from === iso(ahead.purchaseDate) && noSigned.core.signed_at === iso(0) && notFinite.core.period_from === iso(ahead.purchaseDate)
+      && noPurchase.core.period_from === iso(0),
+      'no signedDate, or one that is not a time: by purchaseDate alone; no purchaseDate: the earliest there is, as before');
+  }
+
   console.log('\n— every delivery order ends as signing order does —');
   {
     const sb = createClient('http://stand-in.invalid', fakeSupabaseKey('service_role'), { auth: { persistSession: false }, global: { fetch: sbx.fake.fetch } });
@@ -1296,6 +1330,55 @@ export default async function run(state) {
         const stale = await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', { ...tb, isUpgraded: true }, { subtype: 'DOWNGRADE', signedDate: Date.now() - 3 * DAY }));
         check(landed.d.acted === true && stale.d.acted === false && records(tb, tp) && rowOf(tb).revoked_at === null,
           'the upgrade then lands, and a later notification carrying the transaction upgraded from changes nothing');
+      }
+
+      for (const late of [false, true]) {
+        /* An upgrade made after Apple charged the next renewal ahead of
+           time. Base runs to P1's end, six hours from now. Apple charged
+           the Base renewal (P2) eight hours before that end and reported
+           it then, its purchaseDate P1's end, still to come; the phone got
+           P2 an hour later. Now the customer upgrades to Pro, which begins
+           at once and marks P2 upgraded. By purchaseDate alone P2 would
+           outrank the upgrade, every write of it would change nothing, and
+           a customer paying for Pro would have Base until the next Pro
+           renewal, a month on (lib/apple.js, periodFrom). With `late`,
+           P2's DID_RENEW is answered 500 and Apple sends it again after
+           the upgrade. */
+        const H = 3600e3;
+        const end = Date.now() + 6 * H;
+        const p1 = txn({ productId: BASE, purchaseDate: end - 30 * DAY, expiresDate: end, signedDate: end - 30 * DAY });
+        await notify(notification(chain, 'SUBSCRIBED', p1, { subtype: 'INITIAL_BUY', signedDate: p1.signedDate }));
+        const p2 = later(p1, { productId: BASE, purchaseDate: end, expiresDate: end + 30 * DAY, signedDate: end - 8 * H, transactionReason: 'RENEWAL' });
+        const renewal = notification(chain, 'DID_RENEW', p2, { signedDate: p2.signedDate });
+        if (late) sbx.fake.mode = 'broken';
+        const charged = await notify(renewal);
+        sbx.fake.mode = 'ok';
+        const p2Phone = signJws({ ...p2, signedDate: end - 7 * H }, chain);
+        const before = await post([p2Phone]);
+        const placed = rowOf(p1);
+        check((late ? charged.status === 500 : charged.d.acted === true) && before.d.licensed === true && before.d.plan === 'base'
+          && placed.plan === 'base' && placed.period_from === at(end - 7 * H) && placed.expires_at === at(p2.expiresDate),
+          `(${late ? 'its DID_RENEW lost' : 'its DID_RENEW recorded'}) P2, charged ahead, is recorded, placed when Apple reported it (${placed.period_from})`);
+        const u = later(p1, { productId: PRO, purchaseDate: Date.now(), expiresDate: Date.now() + 30 * DAY, signedDate: Date.now(), transactionReason: 'PURCHASE' });
+        const up = await notify(notification(chain, 'DID_CHANGE_RENEWAL_PREF', u, { subtype: 'UPGRADE', signedDate: u.signedDate }));
+        check(up.status === 200 && up.d.acted === true && records(p1, u) && rowOf(p1).plan === 'pro',
+          `(${late ? 'its DID_RENEW lost' : 'its DID_RENEW recorded'}) then the upgrade to Pro: recorded, Pro from now (${rowOf(p1).plan})`);
+        const phone = await post([signJws({ ...u, signedDate: u.signedDate + 1000 }, chain)]);
+        check(phone.d.licensed === true && phone.d.plan === 'pro' && subOf(phone.d).licence.plan === 'pro' && phone.d.expires === at(u.expiresDate),
+          'and the phone\'s Pro transaction is a Pro licence, to the upgrade\'s end');
+        if (late) {
+          const again = await notify(renewal);
+          check(again.status === 200 && again.d.acted === false && records(p1, u), 'Apple\'s retry of the Base renewal, after the upgrade, changes nothing');
+        }
+        const stale = await post([p2Phone]);
+        check(stale.d.licensed === true && stale.d.plan === 'pro' && records(p1, u),
+          'nor does the phone\'s Base renewal, which StoreKit signed before the upgrade: the answer follows the row, Pro');
+        const renewed = await renew(issue({ email: apple.appleSub(p1.originalTransactionId), plan: 'base', now: Date.now() - 27 * DAY }, keys.privateKey));
+        check(renewed.d.licensed === true && renewed.d.plan === 'pro', `/api/licence/renew renews it as Pro (${renewed.d.plan || renewed.d.reason})`);
+        const from = sbx.fake.calls.length;
+        const summary = await fetch(s.url + '/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'summarize', text: 'Hello there', licence: phone.d.licence }) });
+        check(summary.status !== 401 && summary.status !== 403 && sbx.fake.calls.slice(from).some((c) => c.endsWith('/rest/v1/rpc/ai_reserve')),
+          `and the AI relay takes a summary for that Pro licence, which Base does not include (${summary.status}, here a stand-in with no ai_reserve)`);
       }
 
       for (const lostRefund of [false, true]) {

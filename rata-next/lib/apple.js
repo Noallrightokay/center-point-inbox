@@ -374,16 +374,51 @@ export function applePreferred(list) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
+const known = (ms) => typeof ms === 'number' && Number.isFinite(ms);
 /* When Apple signed it, which orders what Apple says about one period of a
    subscription (appleWrite). Apple always says; something that does not is
    treated as signed at the oldest time there is: it loses to anything Apple
    signed about the same period, though, like anything about a later period,
    it still replaces a row recording an earlier one. */
-const signedAt = (o) => iso(o && typeof o.signedDate === 'number' && Number.isFinite(o.signedDate) ? o.signedDate : 0);
-/* When the period a transaction pays for began, its purchaseDate, which
-   orders the periods of a subscription (appleWrite). Treated as the
-   earliest there is when missing, as signedAt is. */
-const periodFrom = (t) => iso(t && typeof t.purchaseDate === 'number' && Number.isFinite(t.purchaseDate) ? t.purchaseDate : 0);
+const signedAt = (o) => iso(o && known(o.signedDate) ? o.signedDate : 0);
+/* Where a period stands among a subscription's periods (period_from, which
+   orders them in appleWrite): when it began, the transaction's
+   purchaseDate, or, when Apple said so before then, the moment it did
+   (`signed`, when Apple signed what says it).
+
+   Almost everything Apple signs about a period it signs once the period
+   has begun, and that is its purchaseDate. The exception is a renewal,
+   which Apple charges ahead of time, up to 24 hours before the period it
+   pays for begins ("Subscriptions renew before exact expiration time to
+   make sure service is uninterrupted"), and reports then: DID_RENEW, and
+   StoreKit's transaction, carry the new period's purchaseDate, still to
+   come. A customer who upgrades in between begins a period at once, which
+   replaces the one charged ahead: the Base renewal is marked upgraded, and
+   the Pro purchase's purchaseDate is now, earlier than the renewal's.
+   Placed by purchaseDate alone, the renewal would outrank the upgrade, and
+   nothing would move the row off it: a customer who paid for Pro would get
+   Base until the next Pro renewal, a month on. Placed by when Apple said
+   so, the renewal stands where Apple charged it, and the upgrade, begun
+   after that, is the later.
+
+   So two statements about a period charged ahead, when one of them was
+   signed before it began, are placed apart, as though of two periods: the
+   one placed later replaces the other, its grace fields starting afresh.
+   No grace period can be known of a period that has not begun (it starts
+   when the period ends), so nothing Apple's notifications say is lost.
+   What does change is the phone's renewal info, which is written with its
+   transaction (applePurchase) and so only where that transaction is
+   placed: beside a transaction StoreKit signed before its period began,
+   over a row that a later statement of that period wrote (a notification
+   signed once the period had begun), it changes nothing, and the grace
+   period reaches the row by Apple's DID_FAIL_TO_RENEW instead.
+
+   Treated as the earliest there is when purchaseDate is missing, as
+   signedAt is; with no signed time, by purchaseDate alone. */
+const periodFrom = (t, signed) => {
+  const began = t && known(t.purchaseDate) ? t.purchaseDate : 0;
+  return iso(known(signed) && signed < began ? signed : began);
+};
 /* The grace fields of a row that has heard of no grace period for its
    period: what a new row, and a later period replacing a row, starts
    with. */
@@ -398,17 +433,19 @@ function graceOf(r, at) {
 }
 
 /* A row's subscription fields as a transaction describes them: the
-   product, the plan, the period and its expiry, whether the transaction is
-   revoked, and when Apple signed it. Everything but the grace period. */
-export function appleRowOf(t, environment) {
+   product, the plan, the period (periodFrom) and its expiry, whether the
+   transaction is revoked, and when Apple signed what says it (`signed`:
+   the transaction's own signedDate, or a notification's). Everything but
+   the grace period. */
+export function appleRowOf(t, environment, signed = t && t.signedDate) {
   return {
     product_id: t.productId,
     plan: APPLE_PRODUCTS[t.productId],
     environment,
-    period_from: periodFrom(t),
+    period_from: periodFrom(t, signed),
     expires_at: iso(t.expiresDate),
     revoked_at: typeof t.revocationDate === 'number' ? iso(t.revocationDate) : null,
-    signed_at: signedAt(t),
+    signed_at: signedAt({ signedDate: signed }),
   };
 }
 
@@ -447,7 +484,7 @@ export function appleChange(n, t, r, environment) {
   let revoked = own;
   if (REVOKED.includes(type) && own === null) revoked = typeof n.signedDate === 'number' && Number.isFinite(n.signedDate) ? n.signedDate : Date.now();
   if (type === 'REFUND_REVERSED') revoked = null;
-  const core = { ...appleRowOf(t, environment), revoked_at: revoked === null ? null : iso(revoked), signed_at: at };
+  const core = { ...appleRowOf(t, environment, n.signedDate), revoked_at: revoked === null ? null : iso(revoked) };
   const grace = r && typeof r === 'object' ? graceOf(r, at) : null;
   return { core, grace, insert: { ...core, ...(grace || NO_GRACE) } };
 }
@@ -512,14 +549,17 @@ export function applePurchase(t, environment, r = null) {
    often, the row ends as it would had each arrived once, in the order
    Apple signed them.
 
-   A row records one period, the one that began at its period_from: the
-   transaction's purchaseDate. Renewals, upgrades, downgrades,
+   A row records one period, placed among the subscription's periods by
+   its period_from: when the period began, the transaction's purchaseDate,
+   or when Apple said so if that was earlier, as it is for a renewal Apple
+   charges ahead of time (periodFrom). Renewals, upgrades, downgrades,
    resubscriptions and offers each begin a period later than the one
-   before, however long each lasts; the expiry would not do, since a
-   period paid for in advance (an introductory offer of several months, an
-   offer code) can end after the one that replaced it. Within one period,
-   what Apple signed later wins, in two groups of fields, each with its
-   own stamp:
+   before, however long each lasts, and an upgrade made after a renewal
+   was charged ahead is later than that renewal; the expiry would not do,
+   since a period paid for in advance (an introductory offer of several
+   months, an offer code) can end after the one that replaced it. Within
+   one period, what Apple signed later wins, in two groups of fields, each
+   with its own stamp:
 
    - the subscription fields (`core`), stamped signed_at. Written over a
      row recording an earlier period, which this one replaces, its grace

@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1105 checks).
+the website's test suites pass with `npm test` after it (1200 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -64,7 +64,9 @@ iPhone app is out, and nothing breaks without it, but `/api/licence/apple`
 answers 503 "App Store purchases are not switched on for RATA yet." and
 the server log says to run section 7. Run it before the first TestFlight
 purchase. Each row records one period of a subscription, from when it
-began (`period_from`), with its own stamp for the grace period
+began, or when Apple reported it if that was earlier, as for a renewal
+Apple charges ahead of time (`period_from`), with its own stamp for the
+grace period
 (`grace_signed_at`); run again over a table made by an earlier copy of
 section 7, it adds both. The rows already there are kept as they were,
 with the new columns set to 1970-01-01, which is not what Apple said of

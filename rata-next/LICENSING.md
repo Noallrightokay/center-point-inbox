@@ -195,6 +195,39 @@ day, up to six times a week (App Store Connect Help, *Subscription renewal
 rate in TestFlight*); only one bought with a Sandbox Apple Account signed in
 on a device has periods minutes long. The one-hour margin is for both.
 
+**A renewal charged ahead of time.** Apple charges a renewal before the
+period it pays for begins, up to 24 hours before ("Subscriptions renew
+before exact expiration time to make sure service is uninterrupted"), and
+reports it then: `DID_RENEW`, and StoreKit's transaction, carry the new
+period's `purchaseDate`, still to come. The row records it at once, placed
+among the periods by when Apple reported it rather than by when it begins
+(`period_from`, `lib/apple.js` `periodFrom`). So a customer who upgrades
+from Base to Pro in those hours, which begins a Pro period at once and
+marks the Base renewal upgraded, is recorded on the upgrade, from both
+Apple's notification and the phone's Pro transaction. Placed by
+`purchaseDate` alone, the Base renewal would have outranked the upgrade,
+and a customer who paid for Pro would have had Base until the next Pro
+renewal, a month on. The cost is small: two statements about a period
+charged ahead, one signed before it began, are placed as though of two
+periods, and the later replaces the other with its grace fields afresh.
+No grace period can be known of a period that has not begun, so nothing
+Apple's notifications say is lost; the phone's renewal info, beside a
+transaction StoreKit signed before its period began, counts only over a
+row placed no later than that transaction, so over one a later
+notification of that period wrote, the grace period waits for Apple's
+`DID_FAIL_TO_RENEW`.
+
+Two things the early charge still does, each for at most the hours
+before the period ends, and each left for the owner to decide: a Pro
+subscriber who chose to move down to Base is recorded on Base from the
+moment Apple charges it, so a licence issued then, and AI, are Base for
+those hours of the Pro period; and a refund of that charge before its
+period begins revokes the row while the period before it, paid for,
+still runs, so AI stops then rather than at its end. Keeping the period
+before beside the row until the new one begins would answer both; it
+needs columns of its own and a choice of which plan a licence issued in
+those hours carries.
+
 At the end of a period, nothing shows. The licence then has less than a
 week left, so the app renews it at launch, every six hours and when the
 connection comes back (bridge.js, `settleLicence`), and on the iPhone also

@@ -261,8 +261,11 @@ create trigger pending_subscriptions_touch
 --    Notifications (app/api/apple/notifications) keep up to date,
 --    and what /api/licence/renew reads to renew a licence whose
 --    subject is apple:<original_transaction_id>. A row records one
---    period of the subscription, the one that began at period_from
---    (the transaction's purchaseDate). Its fields are written in two
+--    period of the subscription, placed by period_from: when it
+--    began (the transaction's purchaseDate), or, for a renewal Apple
+--    charged and reported before its period began, when Apple signed
+--    that, so an upgrade made in between is the later (lib/apple.js,
+--    periodFrom). Its fields are written in two
 --    groups, each ordered by period_from and then by its own stamp of
 --    when Apple signed what it says: the subscription's (signed_at)
 --    and the grace period's (grace_until, grace_signed_at, which only
@@ -291,7 +294,7 @@ create table if not exists public.apple_subscriptions (
   product_id text not null,                 -- APPLE_PRODUCTS in lib/plan.js
   plan text not null,                       -- 'base' | 'pro'
   environment text not null,                -- 'Production' | 'Sandbox'
-  period_from timestamptz not null,         -- when the period it records began
+  period_from timestamptz not null,         -- when that period began, or was reported if earlier
   expires_at timestamptz not null,
   grace_until timestamptz,                  -- null unless Apple reported a grace period
   grace_signed_at timestamptz not null,     -- when Apple signed what last told us of it

@@ -296,7 +296,7 @@ export default async function run(state) {
       'privacy: the same, under Subscribing in the iPhone app');
     check([T, P].every((page) => page.includes('(or of its billing grace period)')), 'both pages count a billing grace period in it');
     check(!/past the end of the period Apple has been paid for/.test(T + P), 'and neither says a licence ends with what Apple has been paid for');
-    check(P.includes('Each purchase names the product') && P.indexOf('Each purchase names the product') < P.indexOf(`The licence ${until}`),
+    check(P.includes('Each purchase names the app, the product') && P.indexOf('Each purchase names the app, the product') < P.indexOf(`The licence ${until}`),
       'privacy: what each purchase names comes straight after the purchases, before the licence\'s lifetime');
     check(T.includes('AI features stop as soon as Apple refunds or revokes the subscription; mail keeps working until that licence\'s end')
       && P.includes('A refund stops AI at once, and mail keeps working until that licence\'s end')
@@ -310,6 +310,60 @@ export default async function run(state) {
     check(['whether it will renew and when', 'whether Apple is still retrying a failed payment', 'when the subscription most recently began',
       'Apple\'s numbers for it, and when Apple signed it'].every((w) => P.includes(w)),
       'privacy: the renewal information is described whole: when it renews, a payment Apple is retrying, when it began, Apple\'s numbers and its signing date');
+    /* Every field Apple's library reads from a signed transaction and from
+       a renewal info (JWSTransactionDecodedPayload and
+       JWSRenewalInfoDecodedPayload, in the version package.json pins) is
+       named on the page, under what the app sends, so a field a new
+       version adds fails here until the page says it. Two are left out,
+       each for its reason: appAccountToken, which the app never sets
+       (claude/iap-native buys with no purchase options), and
+       advancedCommerceInfo, which only an Advanced Commerce product
+       carries, and RATA sells none. */
+    const sends = (P.match(/When you subscribe or restore a purchase.*?Apple does not tell us them\./) || [''])[0];
+    const NOT_SENT = ['appAccountToken', 'advancedCommerceInfo'];
+    const fieldsOf = (model) => [...readFileSync(join(SITE, 'node_modules', '@apple', 'app-store-server-library', 'dist', 'models', `${model}.d.ts`), 'utf8')
+      .matchAll(/^ {4}(\w+)\?: /gm)].map((m) => m[1]);
+    const purchase = (sends.match(/Each purchase names (.*?)\. With them/) || ['', ''])[1];
+    const renewalInfo = (sends.match(/renewal information for each subscription: (.*?)\. Apple also tells/) || ['', ''])[1];
+    const TRANSACTION_SAID = {
+      originalTransactionId: 'Apple\'s numbers for the purchase', transactionId: 'Apple\'s numbers for the purchase', webOrderLineItemId: 'Apple\'s numbers for the purchase',
+      bundleId: 'the app', productId: 'the product', subscriptionGroupIdentifier: 'its subscription group',
+      purchaseDate: 'when it was bought', originalPurchaseDate: 'when it was bought', expiresDate: 'when it renews or expires',
+      quantity: 'how many were bought', type: 'what kind of purchase it is', inAppOwnershipType: 'Family Sharing', signedDate: 'when Apple signed it',
+      revocationReason: 'why and how much of it was refunded or revoked', revocationDate: 'refunded or revoked', revocationType: 'why and how much of it was refunded',
+      revocationPercentage: 'how much of it was refunded', isUpgraded: 'whether it was upgraded',
+      offerType: 'any offer applied to it', offerIdentifier: 'any offer applied to it', offerDiscountType: 'any offer applied to it', offerPeriod: 'and for how long',
+      environment: 'whether it was made in Apple\'s test environment', storefront: 'the country of the App Store', storefrontId: 'the country of the App Store',
+      transactionReason: 'whether it was a renewal', currency: 'in its currency', price: 'and the price', appTransactionId: 'for the app\'s download',
+      billingPlanType: 'its billing plan', commitmentInfo: 'any commitment to pay for several periods',
+    };
+    const RENEWAL_SAID = {
+      expirationIntent: 'why it expired if it has', originalTransactionId: 'Apple\'s numbers for it', autoRenewProductId: 'to which product', productId: 'to which product',
+      autoRenewStatus: 'whether it will renew', isInBillingRetryPeriod: 'whether Apple is still retrying a failed payment',
+      priceIncreaseStatus: 'whether a price increase was agreed to', gracePeriodExpiresDate: 'when a billing grace period ends',
+      offerType: 'any offer that applies', offerIdentifier: 'any offer that applies', offerDiscountType: 'any offer that applies', offerPeriod: 'any offer that applies',
+      signedDate: 'when Apple signed it', environment: 'whether it is in Apple\'s test environment', recentSubscriptionStartDate: 'when the subscription most recently began',
+      renewalDate: 'whether it will renew and when', currency: 'in which currency', renewalPrice: 'at what price', eligibleWinBackOfferIds: 'any Apple may make to win it back',
+      appTransactionId: 'Apple\'s numbers for it', commitmentInfo: 'any commitment to pay for several periods', renewalBillingPlanType: 'on which billing plan',
+    };
+    const unnamed = (model, said, words) => fieldsOf(model).filter((f) => !NOT_SENT.includes(f) && !(said[f] && words.includes(said[f])));
+    const txUnnamed = unnamed('JWSTransactionDecodedPayload', TRANSACTION_SAID, purchase);
+    const riUnnamed = unnamed('JWSRenewalInfoDecodedPayload', RENEWAL_SAID, renewalInfo);
+    check(fieldsOf('JWSTransactionDecodedPayload').length >= 30 && fieldsOf('JWSRenewalInfoDecodedPayload').length >= 20 && txUnnamed.length === 0 && riUnnamed.length === 0,
+      `privacy: every field of a signed purchase and of its renewal information (the library's models) is named where the page lists what the app sends${txUnnamed.length || riUnnamed.length ? `; not: ${[...txUnnamed, ...riUnnamed].join(', ')}` : ''}`);
+    /* And what StoreKit adds on the phone, outside the library's models: a
+       transaction's deviceVerification and deviceVerificationNonce, a value
+       tied to the device (Apple's identifierForVendor) and its nonce. */
+    check(purchase.includes('a value StoreKit uses to check that the purchase belongs to your device')
+      && P.includes('the device value or anything else a purchase names that the record does not list'),
+      'privacy: and StoreKit\'s device value, which is sent and not kept');
+    /* When the app sends them: not only at a purchase or a restore, but by
+       itself while its licence is due (claude/iap-native, appstore.rs: at
+       launch and every six hours) and on each transaction StoreKit hands
+       over (a renewal, or a purchase on another device). */
+    check(sends.startsWith('When you subscribe or restore a purchase, and by itself while your licence is due to be renewed and whenever Apple tells the app of a renewal or of a purchase made on another device, the app sends mailrata.org the purchases')
+      && P.includes('The app sends mailrata.org the purchases Apple signed, for your licence, then, and by itself while the licence is due to be renewed.'),
+      'privacy: the app sends its purchases when it subscribes or restores, and by itself while the licence is due and when Apple renews the subscription');
     check(T.includes('for a subscription bought in the iPhone app, press Restore purchases there'),
       'terms: a key too old to renew itself comes back, for the iPhone app, with Restore purchases (APPLE_SAID.tooOld)');
   }

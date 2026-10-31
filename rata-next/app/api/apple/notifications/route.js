@@ -21,7 +21,9 @@ export const dynamic = 'force-dynamic';
    signed it (appleChange): the subscription's fields from its
    transaction, and the grace period from its renewal info when it carries
    one. Each of the two is ordered by when the period the transaction pays
-   for began, then by when Apple signed the notification (appleWrite), so
+   for began (or when Apple signed the notification, if that was earlier:
+   a renewal Apple charges ahead of time, lib/apple.js periodFrom), then
+   by when Apple signed the notification (appleWrite), so
    one delivered late or twice never undoes a later one: a renewal
    delivered after a refund of the period before it still lands, a refund
    is not lost behind a later grace notice, nor a grace period behind a
