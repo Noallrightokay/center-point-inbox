@@ -268,6 +268,16 @@ export default async function run(state) {
     check(P.includes('Apple takes the payment and handles billing, renewal, cancellation and refunds'), 'privacy: Apple handles the payment');
     check(P.includes('we keep it, and an AI usage record kept under its number, for as long as RATA sells subscriptions in the iPhone app'),
       'privacy: and how long the record is kept');
+    /* A subscriber has no account here and is never shown Apple's
+       transaction id, which keys the record, so the rights the page lists
+       say how one asks: with the order ID on Apple's receipt, which
+       LAUNCH.md section 11 turns into the record through Apple's Look Up
+       Order ID. */
+    const rights = visible((privacy.match(/<section id="rights"[\s\S]*?<\/section>/) || [''])[0]);
+    const launch = readFileSync(join(SITE, 'LAUNCH.md'), 'utf8');
+    check(rights.includes('If you subscribed in the iPhone app, you have no account here: write instead with the order ID from any of Apple\'s receipts for your subscription (in Apple\'s email receipt, or your purchase history in the App Store)')
+      && /\*\*When a subscriber asks about their record\*\*[\s\S]*?\*Look Up Order ID\*[\s\S]*?`original_transaction_id`[\s\S]*?`apple:<that number>`/.test(launch),
+      'privacy: a subscriber in the iPhone app is told how to ask about their record (the order ID), and LAUNCH.md section 11 how to find it');
     check(P.includes('Deleting an account does not cancel it') && T.includes('deleting an account here does not cancel it'),
       'both pages: deleting an account does not cancel an App Store subscription');
 

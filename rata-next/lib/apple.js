@@ -297,6 +297,49 @@ export function verifyAppleIn(environment, kind, jws, made) {
   return attempt(made, environment, kind, jws);
 }
 
+/* The app a notification names, read the way the library reads it (its
+   data, summary, externalPurchaseToken or appData), for the server log
+   alone. Only for a notification the library refused as another app's
+   (INVALID_APP_IDENTIFIER): the library says that only once the
+   signature has verified, so what it names is what Apple signed. A
+   bundle id and Apple's number for an app are the app's, never a
+   customer's; each is kept only in the form Apple writes it (letters,
+   digits, dots and hyphens; a whole number), else null. */
+export function appleNamedApp(jws) {
+  let p = null;
+  try { p = JSON.parse(Buffer.from(String(jws).split('.')[1] || '', 'base64url').toString('utf8')); } catch { /* nothing named */ }
+  const d = (p && typeof p === 'object' && (p.data || p.summary || p.externalPurchaseToken || p.appData)) || {};
+  return {
+    bundleId: typeof d.bundleId === 'string' && /^[A-Za-z0-9.-]{1,155}$/.test(d.bundleId) ? d.bundleId : null,
+    appId: Number.isSafeInteger(d.appAppleId) && d.appAppleId > 0 ? d.appAppleId : null,
+    environment: Object.values(Environment).includes(d.environment) ? d.environment : null,
+  };
+}
+
+/* The log line for a notification refused as another app's. An
+   APPLE_APP_ID that is not the app's own number refuses every Production
+   notification this way and nothing else: a purchase the phone sends
+   carries no app number, so it is still licensed, and the Sandbox, where
+   TestFlight buys, is never checked against the number at all. So the
+   line names the bundle id and app id Apple signed, and each setting
+   that differs from them, with its value; if the app named is RATA's,
+   that setting is wrong (LAUNCH.md section 11, *How to tell it
+   worked*). */
+export function appleOtherApp(jws, settings) {
+  const named = appleNamedApp(jws);
+  const head = 'apple/notifications: refused (INVALID_APP_IDENTIFIER): Apple signed it for '
+    + `bundle id ${named.bundleId || '(none readable)'}, app id ${named.appId ?? '(none)'}, in ${named.environment || '(no environment)'}`;
+  const sandboxed = [Environment.SANDBOX, Environment.XCODE, Environment.LOCAL_TESTING].includes(named.environment);
+  const differs = [];
+  if (named.bundleId !== settings.bundleId) differs.push(['APPLE_BUNDLE_ID', settings.bundleId]);
+  if (!sandboxed && settings.appId !== null && named.appId !== settings.appId) differs.push(['APPLE_APP_ID', settings.appId]);
+  const tail = '(rata-next/LAUNCH.md section 11)';
+  if (!differs.length) return `${head}; if that is RATA's app, APPLE_APP_ID or APPLE_BUNDLE_ID does not match it ${tail}`;
+  return `${head}, and ${differs.map(([k, v]) => `${k} is ${v}`).join(' and ')}; if that is RATA's app, set `
+    + `${differs.map(([k]) => k).join(' and ')} to match it: until then Apple's notifications for it are refused, `
+    + `and no refund, revocation or billing grace period they report is recorded ${tail}`;
+}
+
 /* ---- reading a request ---------------------------------------------------- */
 
 /* /api/licence/apple's body:

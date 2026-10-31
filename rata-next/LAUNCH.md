@@ -8,7 +8,7 @@ notifications at `/api/apple/notifications`; §11), the AI relay
 (`/api/ai`), account deletion, and `/api/health`. Mailboxes are linked and
 read only in the desktop app; the site holds no mail password and has no
 route that reads anybody's mail. The code builds with `npm run build`, and
-the website's test suites pass with `npm test` after it (1216 checks).
+the website's test suites pass with `npm test` after it (1230 checks).
 What is left is configuration, and all of it needs credentials only you hold.
 
 Work top to bottom. Each step has a way to tell whether it worked; do not move
@@ -582,6 +582,42 @@ were for another app (INVALID_APP_IDENTIFIER)` after your own purchase
 means `APPLE_BUNDLE_ID` does not match the app's bundle id (steps 3 and 7):
 every purchase then looks like another app's, and the phone is told
 "There is no active RATA subscription on this Apple account."
+
+`"configured": true` says `APPLE_APP_ID` is set, not that it is the app's
+own number, and nothing above can tell: a TestFlight or sandbox purchase
+is never checked against it, and the phone's purchases carry no app
+number, so they are licensed either way. A wrong one refuses only Apple's
+Production notifications, so no refund, revocation or billing grace
+period that Apple reports of an App Store purchase is ever recorded. So
+**after the first purchase from the App Store itself** (buy a subscription
+in the released app yourself, before customers do), look in the server
+log a few minutes later: there must be no line beginning
+`apple/notifications: refused (INVALID_APP_IDENTIFIER)`. Such a line names the bundle id and app
+id Apple signed the notification for and each setting that differs
+(`APPLE_APP_ID is …`, `APPLE_BUNDLE_ID is …`); if the app it names is
+RATA's, set that setting to match (step 7) and redeploy (step 9). Apple
+sends a refused notification again only five times, the last about six
+and a half days after the first, and a sandbox one never, so check within
+those days: anything refused before then does not come back by itself
+(Apple's *Get Notification History* still lists it; RATA has no code that
+replays one).
+
+**When a subscriber asks about their record** (the privacy policy's *Your
+rights*): someone who subscribed in the iPhone app has no account here,
+so the policy asks them for the order ID from any of Apple's receipts
+for it (Apple's email receipt, or their purchase history in the App
+Store). Apple's App Store Server API turns an order ID into the
+subscription's transactions (*Look Up Order ID*, `lookUpOrderId` in
+Apple's library, which `rata-next` already has; Production only). It
+needs an In-App Purchase key: App Store Connect → Users and Access →
+Integrations → In-App Purchase. Keep its private key on your own computer, never in the
+repository or on the site. Each transaction's `originalTransactionId` is
+the `original_transaction_id` of the record in `apple_subscriptions`, and
+its AI usage record is the `ai_usage` rows whose `email` is
+`apple:<that number>`. A record deleted while the subscription is live
+does not stay deleted: it is made again the next time the app sends its
+purchases or Apple sends a notification. And deleting this month's AI
+usage row lets the month's AI allowance be spent again.
 
 Two choices are made for you, and are yours to revisit:
 

@@ -370,6 +370,31 @@ export default async function run(state) {
     check(sn.ok && sn.environment === 'Sandbox', `a sandbox notification, which carries no appAppleId, verifies: ${sn.ok ? sn.environment : sn.status}`);
     const wrongApp = await apple.verifyApple('notification', notification(chain, 'TEST', null, { environment: 'Production', appAppleId: 42 }), made);
     check(!wrongApp.ok && wrongApp.status === 'INVALID_APP_IDENTIFIER', `a Production notification for another app id is refused: ${wrongApp.status}`);
+
+    /* What the log says of a notification refused as another app's
+       (appleOtherApp): the bundle id and app id Apple signed, and each
+       setting that differs from them, with its value. */
+    const settings = made.settings;
+    const appIdLine = apple.appleOtherApp(notification(chain, 'TEST', null, { environment: 'Production', appAppleId: 42 }), settings);
+    check(appIdLine.startsWith('apple/notifications: refused (INVALID_APP_IDENTIFIER): Apple signed it for bundle id org.mailrata.mail, app id 42, in Production, and APPLE_APP_ID is 1234567890;')
+      && appIdLine.includes('set APPLE_APP_ID to match it') && !appIdLine.includes('APPLE_BUNDLE_ID') && appIdLine.endsWith('(rata-next/LAUNCH.md section 11)'),
+      `another app id in Production: the line names it, and that APPLE_APP_ID differs: ${appIdLine}`);
+    const desktopLine = apple.appleOtherApp(notification(chain, 'DID_RENEW', txn({ environment: 'Sandbox', bundleId: 'org.mailrata.desktop' }), { environment: 'Sandbox', bundleId: 'org.mailrata.desktop' }), settings);
+    check(desktopLine.includes('Apple signed it for bundle id org.mailrata.desktop, app id (none), in Sandbox, and APPLE_BUNDLE_ID is org.mailrata.mail;')
+      && desktopLine.includes('set APPLE_BUNDLE_ID to match it') && !desktopLine.includes('APPLE_APP_ID'),
+      `another bundle id in the sandbox, where the app id is never checked: only APPLE_BUNDLE_ID (${desktopLine})`);
+    const both = apple.appleOtherApp(notification(chain, 'TEST', null, { environment: 'Production', appAppleId: 42, bundleId: 'com.example.other' }), settings);
+    check(both.includes('bundle id com.example.other, app id 42, in Production, and APPLE_BUNDLE_ID is org.mailrata.mail and APPLE_APP_ID is 1234567890;')
+      && both.includes('set APPLE_BUNDLE_ID and APPLE_APP_ID to match it'), `both differ: both named (${both})`);
+    const odd = apple.appleNamedApp(notification(chain, 'TEST', null, { environment: 'Production', appAppleId: '42', bundleId: 'org.example.x\nforged line' }));
+    check(odd.bundleId === null && odd.appId === null && odd.environment === 'Production',
+      `a bundle id that is not in Apple's form, and an app id that is not a number, are not repeated: ${JSON.stringify(odd)}`);
+    check(JSON.stringify(apple.appleNamedApp('not.a.jws')) === JSON.stringify({ bundleId: null, appId: null, environment: null })
+      && apple.appleOtherApp('x', settings).includes('bundle id (none readable), app id (none), in (no environment), and APPLE_BUNDLE_ID is org.mailrata.mail'),
+      'what cannot be read names nothing');
+    const noIdLine = apple.appleOtherApp(notification(chain, 'TEST', null, { environment: 'Production', appAppleId: 42, bundleId: 'com.example.other' }), noId.settings);
+    check(noIdLine.includes('and APPLE_BUNDLE_ID is org.mailrata.mail;') && !noIdLine.includes('APPLE_APP_ID is'),
+      'with no APPLE_APP_ID, nothing was checked against one, so only the bundle id is said to differ');
   }
 
   console.log('\n— what counts as live, and which wins —');
@@ -1136,6 +1161,15 @@ export default async function run(state) {
       check((await notify(null, 'not json')).status === 400 && (await notify(null, '{}')).status === 400, 'a body that is not a notification: 400');
       const other = await notify(notification(chain, 'DID_RENEW', txn(), { appAppleId: 42 }));
       check(other.status === 400, `a notification for another app: 400 (${other.status})`);
+      /* The log names the app Apple signed it for, and the setting that
+         differs, but only once Apple's signature has verified: a forgery
+         naming another app id is only a refused signature. */
+      const forgedOther = await notify(notification(chain, 'DID_RENEW', txn(), { appAppleId: 77, signer: stranger }));
+      await new Promise((res) => setTimeout(res, 200));
+      const otherLog = s.log();
+      check(otherLog.includes('apple/notifications: refused (INVALID_APP_IDENTIFIER): Apple signed it for bundle id org.mailrata.mail, app id 42, in Production, and APPLE_APP_ID is 1234567890;'),
+        'and the log names the app id Apple signed it for, and that APPLE_APP_ID differs');
+      check(forgedOther.status === 400 && !otherLog.includes('app id 77'), 'a forged one naming another app id is logged as a refused signature, naming nothing');
       /* org.mailrata.desktop is the downloaded desktop app's id, which sells
          nothing through Apple: a notification for it, or one for RATA's App
          Store app carrying a transaction signed for it, is another app's. */
@@ -1891,6 +1925,31 @@ export default async function run(state) {
       check(/1 transaction\(s\) were for another app \(INVALID_APP_IDENTIFIER\).*APPLE_BUNDLE_ID does not match the app/.test(log) && !log.includes(t.originalTransactionId),
         'and the log says APPLE_BUNDLE_ID does not match the app, naming no transaction');
     } finally { await wrong.stop(); }
+
+    /* An APPLE_APP_ID that is not the app's own number. The phone's
+       purchases carry no app number, so they are licensed, and the address
+       a browser visits says it is configured; only Apple's Production
+       notifications are refused, a refund among them, and the log is what
+       says why (LAUNCH.md section 11, *How to tell it worked*). */
+    const typo = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_APP_ID: '987654321' } });
+    try {
+      const g = await (await fetch(typo.url + '/api/apple/notifications')).json();
+      const t = txn();
+      const r = await fetch(typo.url + '/api/licence/apple', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactions: [signJws(t, chain)] }) });
+      const d = await r.json();
+      const before = JSON.stringify(sbx.fake.rows.get(t.originalTransactionId));
+      const refunded = { ...t, revocationDate: Date.now(), revocationReason: 0 };
+      const n = await fetch(typo.url + '/api/apple/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signedPayload: notification(chain, 'REFUND', refunded) }) });
+      await new Promise((res) => setTimeout(res, 200));
+      const log = typo.log();
+      check(g.configured === true && d.licensed === true && !!before,
+        `with APPLE_APP_ID not the app's, the address still says configured (${g.configured}) and the phone's purchase is licensed (${d.licensed})`);
+      check(n.status === 400 && JSON.stringify(sbx.fake.rows.get(t.originalTransactionId)) === before && sbx.fake.rows.get(t.originalTransactionId).revoked_at === null,
+        `but Apple's Production refund is refused (${n.status}) and nothing is recorded`);
+      check(log.includes('apple/notifications: refused (INVALID_APP_IDENTIFIER): Apple signed it for bundle id org.mailrata.mail, app id 1234567890, in Production, and APPLE_APP_ID is 987654321; if that is RATA\'s app, set APPLE_APP_ID to match it')
+        && !log.includes(t.originalTransactionId),
+        'and the log names the app id Apple signed it for and the APPLE_APP_ID that differs, naming no transaction');
+    } finally { await typo.stop(); }
 
     const local = await startServer({ env: { ...base, APPLE_TEST_ROOT: chain.rootBase64, APPLE_ALLOW_LOCAL: '1' } });
     try {

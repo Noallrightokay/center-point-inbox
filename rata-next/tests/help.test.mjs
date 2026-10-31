@@ -191,7 +191,7 @@ export default async function run(state) {
     const at = html.indexOf('<section id="iphone"');
     const part = at < 0 ? '' : html.slice(at, html.indexOf('</section>', at));
     const quoted = [...part.matchAll(/<blockquote class="said">([\s\S]*?)<\/blockquote>/g)].map(m => squash(entities(m[1])));
-    for (const key of ['nothingLive', 'unverified', 'busy', 'off', 'tooOld', 'unreadable']) {
+    for (const key of ['nothingLive', 'unverified', 'busy', 'off', 'renewBusy', 'tooOld', 'unreadable']) {
       check(quoted.includes(APPLE_SAID[key]), `#iphone quotes APPLE_SAID.${key}: "${APPLE_SAID[key]}"`);
     }
     check(html.includes('<a href="#iphone">') && /What it means/.test(part) && /Restore purchases/.test(part), 'it is in the contents, explained, and names Restore purchases');
