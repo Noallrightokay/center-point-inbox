@@ -224,7 +224,8 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
    2026-10-17), and its numeric App ID for `APPLE_APP_ID`.
 4. The subscription group "RATA" and the two products above, with prices,
    names and descriptions in each language, and the review screenshot
-   each product needs.
+   each product needs; Billing Grace Period turned on, and multiseat
+   purchasing turned off, on the group's subscriptions page.
 5. App Store Server Notifications V2, for Production and Sandbox, to
    `https://mailrata.org/api/apple/notifications`.
 6. A sandbox tester.
@@ -235,8 +236,8 @@ In order (also `docs/OWNER-CHECKLIST.md` §9):
 10. The App Privacy ("nutrition label") answers.
 11. From TestFlight: a purchase, a restore, an upgrade and a cancellation.
 
-Steps 7 to 9 wait for the in-app purchase server (#167) to merge; its
-`LAUNCH.md` steps are then the full ones. Before the
+`rata-next/LAUNCH.md` §11 has the full steps 4 to 9, with what each
+variable and section does. Before the
 first submission, also: the Digital Services Act trader details (shown
 publicly; without them RATA is not on the EU store), the age-rating
 questionnaire, the encryption questions, the privacy policy and support

@@ -12,6 +12,7 @@
     "preview": "node scripts/build-preview.mjs"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "3.1.0",
     "@supabase/supabase-js": "^2.45.0",
     "next": "^16.4.1",
     "react": "^19.3.0",

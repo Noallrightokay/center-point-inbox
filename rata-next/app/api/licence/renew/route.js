@@ -3,6 +3,7 @@ import { admin } from '../../../../lib/server';
 import { entitlementsForUser, planDef } from '../../../../lib/plan';
 import { check, issue, renewable, LICENCE_DAYS, RENEW_GRACE_DAYS } from '../../../../lib/licence';
 import { corsHeaders, preflight } from '../../../../lib/cors';
+import { APPLE_SAID, appleIdOf, appleSubject, appleClaimed, appleRow, appleLive, appleLicenceUntil, appleTableBehind } from '../../../../lib/apple';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,7 +59,13 @@ async function renew(req) {
        saying which of the two it is helps a support conversation. The app
        keeps the licence it has whatever this says (bridge.js renew()) and
        shows the sentence, so each one is for the customer: a deployment
-       with no public key is our fault, named in the server log only. */
+       with no public key is our fault, named in the server log only.
+
+       Signing in at mailrata.org gives a new licence only for a purchase
+       made there. One that says it is from the App Store (read without its
+       signature, which did not verify, for the wording alone) is told to
+       restore its purchase in the iPhone app instead: it has no account
+       here, and that app must not send anyone to the website that sells. */
     if (seen.reason === 'no-public-key') {
       console.warn('licence/renew: LICENCE_PUBLIC_KEY is not set or cannot be read, so no licence can be renewed; see rata-next/LAUNCH.md section 2');
     }
@@ -67,20 +74,25 @@ async function renew(req) {
       reason: seen.reason,
       message: seen.reason === 'no-public-key'
         ? 'mailrata.org cannot check licences at the moment, so RATA keeps the licence it has and tries again later.'
-        : seen.reason === 'bad-signature'
-          ? 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'
-          : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
+        : appleClaimed(presented)
+          ? APPLE_SAID.unreadable
+          : seen.reason === 'bad-signature'
+            ? 'mailrata.org did not recognise the signature on this licence. Sign in at mailrata.org to get a new one.'
+            : 'That licence could not be read. Sign in at mailrata.org to get a new one.',
     }, seen.reason === 'no-public-key' ? { status: 500 } : undefined);
   }
 
   if (!renewable(seen)) {
     /* Genuine, but expired too long ago to renew itself (lib/licence.js):
        asked before the database, like a forgery. The customer still gets a
-       new one by signing in. */
+       new one by signing in, or, for an App Store subscription, by
+       subscribing again or restoring the purchase in the iPhone app. */
     return NextResponse.json({
       licensed: false,
       reason: 'too-old',
-      message: `This licence expired more than ${RENEW_GRACE_DAYS} days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.`,
+      message: appleSubject(licence.sub)
+        ? APPLE_SAID.tooOld
+        : `This licence expired more than ${RENEW_GRACE_DAYS} days ago, so it cannot renew itself. Sign in at mailrata.org to get a new one.`,
     });
   }
 
@@ -89,6 +101,11 @@ async function renew(req) {
   if (!sb) {
     return NextResponse.json({ error: 'The licence service is not configured.' }, { status: 500 });
   }
+
+  /* A licence from a purchase in the iPhone app names the purchase
+     (apple:<originalTransactionId>), not an address, and is renewed from
+     the App Store's record, never from Stripe's. */
+  if (appleSubject(email)) return renewApple(sb, email);
 
   const { plan, pending } = await entitlementsForUser(sb, email);
   if (!plan && pending) {
@@ -142,5 +159,56 @@ async function renew(req) {
     email,
     renewWithinDays: LICENCE_DAYS,
     message: `Renewed for ${def.label}. Good for another ${LICENCE_DAYS} days offline.`,
+  });
+}
+
+/* Renewing a licence bought in the iPhone app (sub apple:<id>).
+
+   The iPhone app renews through /api/licence/apple first, with fresh
+   entitlements from StoreKit, and comes here only when StoreKit has
+   nothing; so this reads what the App Store's notifications last recorded.
+   Live is: not revoked, and not expired or inside a billing grace period
+   Apple reported (lib/apple.js, appleLive). Then it reissues as a live
+   Stripe subscription does, except that the licence lasts no longer than
+   what the row pays for and a margin (appleLicenceUntil), at most
+   LICENCE_DAYS. The answers carry no `email`: an App Store subject is not
+   an address and is never shown as one. */
+async function renewApple(sb, sub) {
+  const id = appleIdOf(sub);
+  const held = id ? await appleRow(sb, id) : { row: null };
+  if (held.error) {
+    if (appleTableBehind(held.error)) {
+      console.warn('licence/renew: the database has no apple_subscriptions table, or one without a column section 7 now adds; run section 7 of rata-next/database.sql');
+      return NextResponse.json({ licensed: false, reason: 'not-configured', message: APPLE_SAID.off }, { status: 503 });
+    }
+    console.warn('licence/renew: could not read an App Store subscription', held.error.code || held.error.message);
+    return NextResponse.json({ licensed: false, reason: 'unavailable', message: APPLE_SAID.renewBusy }, { status: 503 });
+  }
+  if (!appleLive(held.row)) {
+    return NextResponse.json({ licensed: false, reason: 'no-subscription', message: APPLE_SAID.nothingLive });
+  }
+
+  const plan = held.row.plan;
+  const now = Date.now();
+  const until = appleLicenceUntil(held.row, now);
+  let renewed;
+  try {
+    renewed = issue({ email: sub, plan, until, now });
+  } catch (e) {
+    console.error(`licence/renew: no licence could be issued: ${e.message}`);
+    return NextResponse.json({
+      licensed: false,
+      reason: 'not-configured',
+      message: 'mailrata.org cannot issue licences at the moment, so RATA keeps the licence it has and tries again later.',
+    }, { status: 500 });
+  }
+  const def = planDef(plan);
+  return NextResponse.json({
+    licensed: true,
+    licence: renewed,
+    plan,
+    planLabel: def.label,
+    renewWithinDays: LICENCE_DAYS,
+    message: `Renewed for ${def.label}. Good offline until ${new Date(until).toISOString().slice(0, 10)}.`,
   });
 }

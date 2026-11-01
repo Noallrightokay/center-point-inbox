@@ -100,6 +100,56 @@ An older one is refused with `reason: 'too-old'` before the database is
 asked, and the app shows the server's sentence: sign in at mailrata.org to
 get a new one. So a token that leaked long ago cannot be revived.
 
+**A licence from the App Store.** Since subscriptions are sold in the iPhone
+app, `sub` may instead be `apple:<originalTransactionId>`, Apple's number for
+the purchase, never an address. Such a licence renews from the
+`apple_subscriptions` row Apple's signed purchases and notifications keep,
+not from `subscriptions`, and its refusals never send anyone to sign in at
+mailrata.org, where a purchase on the phone has no account: one too old to
+renew itself, or one that cannot be read, is told to press Restore
+purchases (`APPLE_SAID`), which sends the phone's purchases to
+`/api/licence/apple` for a new one. See `LAUNCH.md` §11 and `lib/apple.js`.
+
+Such a licence is also shorter (below, *Why 30 days*), and the AI relay
+reads its row before each request (*Refunds, cancellations and
+revocation*).
+
+The phone sends `/api/licence/apple` the transactions StoreKit holds and,
+beside them, each subscription's signed renewal info (`renewalInfos`, the
+jwsRepresentation of StoreKit 2's `Product.SubscriptionInfo.RenewalInfo`),
+which says when a billing grace period ends. A renewal info is used only
+with a transaction of the same request that has the same original
+transaction id and was verified in the same environment, and only when it
+states a grace period for that transaction's period: one ending after the
+transaction's expiry (`appleGraceFor`). Neither half names a period, and
+they come from different places (the transactions from StoreKit's own
+copy, the renewal info from Apple), so after billing recovers the phone
+can send the lapsed transaction beside a fresh renewal info that gives no
+grace period because the next period already runs. Such a renewal info,
+or one from an earlier grace period, is left out as though not sent: the
+phone never ends a grace period, which Apple's notifications do and which
+ends at the time Apple gave for it in any case. The grace period a used
+one states is recorded under the same guard as a notification's, stamped
+with when Apple signed it, onto the period its transaction pays for
+however the row placed that period (*A renewal charged ahead of time*,
+below); of several, the one Apple signed last. So a phone that sends it
+keeps a customer in Apple's billing grace period licensed by itself,
+even when no notification reaches mailrata.org, and whichever of the
+customer's devices, or Apple's notifications, recorded the period
+first. Refunds still need the notifications (*Refunds, cancellations
+and revocation*). The StoreKit code (`claude/iap-native`) sends only
+`transactions` so far: until a build sends `renewalInfos` too, a grace
+period reaches the row only through Apple's notifications (`LAUNCH.md`
+§11, steps 4 and 5).
+
+**Before the Mac App Store build ships:** the App Store app's bundle id,
+`org.mailrata.mail`, is shared by the iPhone and Mac apps (Universal
+Purchase), so this path already takes a purchase made on a Mac. The words do
+not yet: the privacy policy, the terms, the help page, `LAUNCH.md` §11 and
+`APPLE_SAID` say "the iPhone app" throughout, and a test or two pins those
+words (`tests/legal.test.mjs`, `tests/help.test.mjs`). Widen them, and the
+tests with them, as a step of that release, not before.
+
 The worst somebody with a stolen token can do is obtain a copy of a token they
 already have — the endpoint returns a licence for the address inside the licence
 presented, and nothing else. Asking a customer to type an email and password
@@ -116,6 +166,105 @@ stops mattering within a billing cycle or two.
 
 `LICENCE_DAYS` in `lib/licence.js` is the one place to change it.
 
+**An App Store licence is shorter.** A licence for an address lasts 30
+days from the day it is issued, so one renewed on the last day of a period
+runs nearly a whole period past it; and a purchase in Apple's test
+environment costs nothing, so a 30-day licence from one would be a month
+of RATA for nothing, as often as anyone liked. So a licence for
+`apple:<id>` lasts until the end of the subscription's current period as
+Apple last reported it when the licence is issued (or of its billing grace
+period), plus a margin, and never more than `LICENCE_DAYS`: the margin is
+`APPLE_MARGIN_DAYS` (3) for the App Store and `APPLE_SANDBOX_MARGIN_HOURS`
+(1) in the test environment (`lib/apple.js`, `appleLicenceUntil`). For a
+monthly subscription bought today that is still 30 days; it is shorter
+when it is issued later in a period, and much shorter in the test
+environment. A subscription that is cancelled, or stops renewing, stops
+unlocking RATA within 3 days of its end.
+
+It is not shorter after a refund. Apple reports a refund as a revocation,
+not as an earlier end of the period, so a licence issued before it keeps
+unlocking mail until its own end: after a refund on the first day of a
+monthly period, about 30 days. What a refund stops at once is AI (below,
+*Refunds, cancellations and revocation*), and the next renewal, but only
+once Apple's REFUND or REVOKE notification for the period the row records
+has reached mailrata.org. Nothing else records a refund: StoreKit stops
+listing a refunded purchase, and `/api/licence/apple` drops one the phone
+sends with a `revocationDate` (`appleIgnored`, `revoked`). Without the
+notifications (`LAUNCH.md` §11, step 5) the row stays live to the end of
+the refunded period: the licence renews until then, one renewed at that
+end lasts the margin past it (3 days; an hour in the test environment),
+and the AI relay answers to the same end.
+
+In the test environment, a subscription bought in TestFlight renews once a
+day, up to six times a week (App Store Connect Help, *Subscription renewal
+rate in TestFlight*); only one bought with a Sandbox Apple Account signed in
+on a device has periods minutes long. The one-hour margin is for both.
+
+**A renewal charged ahead of time.** Apple charges a renewal before the
+period it pays for begins, up to 24 hours before ("Subscriptions renew
+before exact expiration time to make sure service is uninterrupted"), and
+reports it then: `DID_RENEW`, and StoreKit's transaction, carry the new
+period's `purchaseDate`, still to come. The row records it at once, placed
+among the periods by when Apple reported it rather than by when it begins
+(`period_from`, `lib/apple.js` `periodFrom`). So a customer who upgrades
+from Base to Pro in those hours, which begins a Pro period at once and
+marks the Base renewal upgraded, is recorded on the upgrade, from both
+Apple's notification and the phone's Pro transaction. Placed by
+`purchaseDate` alone, the Base renewal would have outranked the upgrade,
+and a customer who paid for Pro would have had Base until the next Pro
+renewal, a month on. Two statements about a period charged ahead, one
+signed before it began and one after, are placed apart, and the
+subscription fields of the one placed later win. They are still one
+period, with one product and one expiry, and the grace period belongs
+to the period rather than to where a statement placed it: a move to a
+later placement of the same period keeps its grace fields, and a grace
+period, from Apple's notification or the phone's renewal info, is
+written onto the period wherever the row placed it (`appleWrite`). So
+the phone's renewal info beside the iPhone's copy of a renewal, signed
+before its period began, still records the grace period after the Mac's
+copy (Universal Purchase), or Apple's `DID_RENEW`, signed later, has
+placed the row later.
+
+Two things the early charge still does, each for at most the hours
+before the period ends, and each left for the owner to decide: a Pro
+subscriber who chose to move down to Base is recorded on Base from the
+moment Apple charges it, so a licence issued then, and AI, are Base for
+those hours of the Pro period; and a refund of that charge before its
+period begins revokes the row while the period before it, paid for,
+still runs, so AI stops then rather than at its end. Keeping the period
+before beside the row until the new one begins would answer both; it
+needs columns of its own and a choice of which plan a licence issued in
+those hours carries.
+
+**A renewal date extended.** The owner can extend a subscription's
+renewal date through the App Store Server API (*Extend a Subscription
+Renewal Date*, or *Extend Subscription Renewal Dates for All Active
+Subscribers*), to make up for an outage, say. Apple then sends no renewal
+at the old date, only a `RENEWAL_EXTENDED` notification, whose
+transaction is the current period with the later expiry and the same
+`purchaseDate`. It is written as `DID_RENEW` is (`lib/apple.js`,
+`CURRENT`): placed as that period and signed later, so it moves the
+row's expiry on, and a copy with the old expiry, signed before it,
+changes nothing. Without the notifications (`LAUNCH.md` §11, step 5) the
+row keeps the old expiry until the phone sends the extended transaction:
+renewal is refused from the old date, and the licence and AI end the
+margin after it.
+
+At the end of a period, nothing shows. The licence then has less than a
+week left, so the app renews it at launch, every six hours and when the
+connection comes back (bridge.js, `settleLicence`), and on the iPhone also
+on each transaction StoreKit hands over, a renewal included
+(`claude/iap-native`). Once Apple has renewed the subscription, through its
+notification or the phone's own transaction, the next renewal brings a
+licence for the new period. A customer offline for more than the margin
+across the boundary finds the licence expired. The app then renews it by
+itself as soon as it is online: at launch, when the connection comes back,
+or when a refresh finds it unlicensed. Until then the licence box says so.
+AI keeps answering across the boundary too, to the same margin (below). A
+customer whose subscription ended, or was refunded, keeps working until
+the licence's own end, and is then told "There is no active RATA
+subscription on this Apple account."
+
 ## Refunds, cancellations and revocation
 
 There is no revocation list, and adding one would undo the reason for signing:
@@ -130,6 +279,30 @@ working because of something at our end.
 
 If that ever becomes too generous, shorten `LICENCE_DAYS` rather than adding a
 callback. Fifteen days halves the exposure and still covers a normal holiday.
+
+An App Store subscription refunded or revoked keeps the licence it has to
+that licence's end (above, *Why 30 days*): mail keeps working, and the
+licence is not renewed. The AI relay, whose answers cost money, does ask:
+for an `apple:` licence it reads the subscription's row before anything is
+reserved (`app/api/ai`, `appleAiLive`), and refuses at once a row that is
+refunded or revoked (which only Apple's notification records, above), and
+a licence with no row. A row that has only
+expired is still answered until the end a licence issued from it would
+have, its period's end (or its billing grace period's) and the margin, so
+a paying customer is not refused between a period's end and its renewal
+reaching the row (Apple's `DID_RENEW` delivered late, or the phone not
+opened yet), and AI never outlasts what the licence itself may. A refusal
+is answered as an expired licence is (`reason: 'expired'`): the app renews
+once and asks again, the renewal of a refunded row is refused too, and the
+customer reads the App Store's sentence beside the summary or translation
+made on the device. The relay also validates the request against the lower
+of the licence's plan and the row's. When the row's is lower (Pro changed
+to Base) and the row is live, it answers `expired`, so the app renews to
+Base and asks again. When the row is only inside its margin, renewal is
+refused and the app keeps the Pro licence, so `expired` would refuse every
+request until the next period reached the row; the relay then answers what
+Base allows and refuses the rest (403 `plan`). A row that cannot be read
+refuses (503), as the AI cap does.
 
 ## What this does *not* protect against
 
