@@ -676,6 +676,84 @@ export default async function run(state) {
         && reopened.stored.length === 2 && reopened.msg,
       `after a session neither store opened for, the next start writes the entry without the parts only once the work store has them, and the mail moves too: ${JSON.stringify({ refused, reopened })}`);
 
+      /* While start merges the entry's parts with the work store's (one
+         SHA-256 for each audit entry chained on again), a save must neither
+         empty the entry's nor write the workspace's parts from before the
+         merge over the store's own: a start ended there lost the store's
+         Files list and audit trail for good. And a merge that fails leaves
+         the store alone for that session. The store holds wk-d1 and an
+         audit entry; the entry holds wk-e1 and another, as a session the
+         store did not open for leaves it. */
+      await p2.reload(); await boot(p2);
+      await p2.evaluate(async () => {
+        S.documents.unshift({ id: 'wk-d1', name: 'In the store.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 4, content: 'wk-secret-9', hasFile: false });
+        await audit('msg.read', 'wk-secret-10');
+        save(); await wkFlush();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        meta.documents = [{ id: 'wk-e1', name: 'In the entry.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 5, content: 'wk-secret-11', hasFile: false }];
+        meta.audit = [{ i: 0, ts: Date.now() + 1000, action: 'msg.read', detail: 'wk-secret-12', prev: '0'.repeat(64), hash: 'e'.repeat(64) }];
+        localStorage.setItem(LS_KEY, JSON.stringify(meta));
+      });
+      /* What the entry and the store each hold, read past the page's own
+         handles. */
+      const bothNow = (pg) => pg.evaluate(async () => {
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        const db = await new Promise((res, rej) => { const rq = indexedDB.open(WK_DB, 1); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+        const got = await new Promise((res) => { const tx = db.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(Object.fromEntries(k.result.map((x, i) => [x, JSON.parse(v.result[i])]))); });
+        db.close();
+        const ids = (l) => (l || []).map(d => d.id).filter(x => /^wk-[de]1$/.test(x)).sort();
+        const said = (l) => (l || []).map(e => e.detail).filter(x => /^wk-secret-1[02]$/.test(x));
+        return { hit: !!(window.__wkHold && window.__wkHold.hit), entry: { docs: ids(meta.documents), audit: said(meta.audit) }, store: { docs: ids(got.documents), audit: said(got.audit) } };
+      });
+      /* The merge's first digest saves, as an event could, and never ends,
+         as an app ended in the background does; or it is refused. */
+      const hold = (refuse) => {
+        const w = window.__wkHold = { hit: false };
+        const digest = SubtleCrypto.prototype.digest;
+        SubtleCrypto.prototype.digest = function (...a) {
+          let started = false; try { started = !!S; } catch (e) {}
+          if (started && !w.hit) { w.hit = true; if (refuse) return Promise.reject(new Error('no digest here')); saveLocal(); return new Promise(() => {}); }
+          return digest.apply(this, a);
+        };
+      };
+      const p9 = await ctx.newPage();
+      p9.on('pageerror', e => errs.push('merge held page: ' + e.message));
+      await p9.addInitScript(hold, false);
+      await p9.goto(s.url + '/app.html');
+      await p9.waitForFunction(() => window.__wkHold && window.__wkHold.hit, null, { timeout: 25000 }).catch(() => {});
+      await p9.waitForTimeout(500);
+      const midMerge = await bothNow(p9);
+      await p9.close();
+      const p10 = await ctx.newPage();
+      p10.on('pageerror', e => errs.push('merge refused page: ' + e.message));
+      await p10.addInitScript(hold, true);
+      await p10.goto(s.url + '/app.html'); await boot(p10);
+      await p10.waitForFunction(() => window.__wkHold && window.__wkHold.hit, null, { timeout: 10000 }).catch(() => {});
+      await p10.waitForTimeout(300);
+      const afterRefused = await p10.evaluate(async () => {
+        const open = !!WK;
+        S.documents.unshift({ id: 'wk-later', name: 'Later.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 6, content: 'x', hasFile: false });
+        save(); await new Promise(r => setTimeout(r, 300));
+        S.documents = S.documents.filter(d => d.id !== 'wk-later'); save();
+        return open;
+      });
+      const refusedMerge = Object.assign(await bothNow(p10), { open: afterRefused });
+      await p10.close();
+      const store = { docs: ['wk-d1'], audit: ['wk-secret-10'] }, entry = { docs: ['wk-e1'], audit: ['wk-secret-12'] };
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      await p2.reload(); await boot(p2);
+      const mergedAfter = await p2.evaluate(async () => {
+        await wkFlush();
+        const out = { docs: S.documents.map(d => d.id).filter(x => /^wk-[de]1$/.test(x)).sort(), tail: S.audit.slice(-2).map(e => e.detail) };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(midMerge.hit && refusedMerge.hit && same(midMerge.entry, entry) && same(midMerge.store, store) && same(refusedMerge.entry, entry) && same(refusedMerge.store, store) && !refusedMerge.open
+        && same(mergedAfter.docs, ['wk-d1', 'wk-e1']) && same(mergedAfter.tail, ['wk-secret-10', 'wk-secret-12']) && /\bok\b/.test(mergedAfter.chain),
+      `a save while start merges the entry's parts into the work store keeps the entry's and leaves the store's alone, a merge that fails leaves the store alone for that session, and the next start merges both: ${JSON.stringify({ midMerge, refusedMerge, mergedAfter })}`);
+      await p2.evaluate(async () => { S.documents = S.documents.filter(d => !/^wk-[de]1$/.test(d.id)); save(); await wkFlush(); });
+
       await p2.evaluate(async () => {
         S.documents = S.documents.filter(d => !/^wk-/.test(d.id));
         S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^(wk|old)@example\.com$/.test(k)));

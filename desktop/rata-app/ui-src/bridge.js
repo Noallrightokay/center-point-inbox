@@ -289,6 +289,12 @@
            deleted or moved on another device leaves RATA too. */
         present: res.present || [],
         accounts,
+        /* Every mailbox RATA here has, whichever were asked about. One the
+           page lists that is not among them is not linked on this device
+           (a phone restored from a backup, which keeps the page's list but
+           not RATA's, backup.rs), and refresh_mail passes over it without
+           a word, so the page says so instead (absorbMail). */
+        listed: boxes.map((x) => x.email),
         ...(failures.length ? { partial: failures } : {}),
       };
     },

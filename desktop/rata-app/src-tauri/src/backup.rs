@@ -23,6 +23,10 @@
 //! the mail is fetched again from the mailboxes, the licence again from
 //! mailrata.org, and the mailboxes linked again, which a new phone needs
 //! anyway, since their passwords never leave the old one (vault.rs). The
+//! page's own list of the mailboxes is in LocalStorage, which a restore
+//! brings back, so its first refresh finds each one missing from RATA's
+//! list (bridge.js `listed`) and says it needs linking again (app.html,
+//! `absorbMail`), rather than listing it as synced days ago for good. The
 //! Files view's documents are copies of attachments, of what the Bridge
 //! made from them, and of files the customer picked from elsewhere; the
 //! audit trail starts again.

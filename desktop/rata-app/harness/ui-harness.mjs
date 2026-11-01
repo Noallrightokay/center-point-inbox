@@ -98,6 +98,8 @@ const MOCK = ({ licensed, ms, old, lic }) => {
       case 'list_mailboxes':
         if (M.listThrows) throw M.listThrows;
         if (M.listFails) throw M.listFails;
+        /* The list as it was read before a link landed, once. */
+        if (M.listStale) { const was = M.listStale; M.listStale = null; return was; }
         return M.mailboxes;
       /* I7: as core::forget_everything. Every mailbox and its keychain
          entries, then the licence; a keychain that refuses stops it with
@@ -1773,6 +1775,71 @@ console.log('\n— a message\'s identity: a removed mailbox, a rebuilt folder, f
   t = await toasts(pg);
   check(t.length === 1 && t[0] === 'RATA could not link new@example.org: The password could not be stored in this computer’s keychain' && !/download/.test(t[0]),
     `linking that fails in the app says what failed: ${JSON.stringify(t)}`);
+  await pg.close();
+}
+
+console.log('\n— a mailbox the page lists that RATA here does not have, as on a restored phone, needs linking again —');
+{
+  const NOT_HERE_WORDS = 'This mailbox is not linked in RATA on this device, as happens on a new or restored one. Link it again to read its mail here.';
+  const pg = await open(true);
+  /* A phone restored from a backup: the page's list of mailboxes came back
+     with LocalStorage, RATA's own did not (backup.rs). refresh_mail passes
+     over an address it does not list without a word. */
+  const st = () => pg.evaluate(() => {
+    const l = S.linked.find((x) => x.label === 'gone@example.net'), me = S.linked.find((x) => x.label === 'me@example.com'), chat = S.linked.find((x) => x.type === 'chat');
+    const e = document.querySelector('#mail-scroll .empty'), fix = document.getElementById('empty-relink');
+    return { gone: l && { needs: !!l.needsRelink, status: l.status, error: l.lastError || null }, me: { needs: !!me.needsRelink, status: me.status },
+      chat: chat && { needs: !!chat.needsRelink, status: chat.status },
+      empty: e && { text: e.textContent, fix: fix && fix.textContent } };
+  });
+  await pg.evaluate(async () => {
+    S.linked.push({ id: 'lk_restored', type: 'mail', label: 'gone@example.net', status: 'live', lastSync: Date.now() - 12 * 864e5, addedAt: Date.now() - 90 * 864e5, host: 'imap.example.net', provLabel: 'Example' });
+    S.linked.push({ id: 'lk_chat', type: 'chat', label: 'Team chat', status: 'pending', addedAt: Date.now() });
+    S.messages = []; window.__toasts = []; go('inbox');
+    await serverSync('mail', true);
+  });
+  let s = await st();
+  check(s.gone.needs && s.gone.status === 'error' && s.gone.error === NOT_HERE_WORDS && !s.me.needs && s.me.status === 'live' && s.chat && !s.chat.needs && s.chat.status === 'pending'
+    && (await toasts(pg)).length === 0,
+    `after a refresh, a mailbox RATA here does not list needs linking again, saying why; the others are left alone, and the timer's refresh says nothing: ${JSON.stringify(s)}`);
+  check(s.empty && /gone@example\.net needs linking again before RATA can read its mail\./.test(s.empty.text) && !/connected/.test(s.empty.text) && s.empty.fix === 'Open Linked accounts',
+    `an empty inbox says so, offering Linked accounts, never "Your linked accounts are connected": ${JSON.stringify(s.empty)}`);
+  await pg.click('#empty-relink');
+  await pg.waitForTimeout(150);
+  const row = await pg.evaluate(() => {
+    const b = document.querySelector('[data-lkfix="lk_restored"]');
+    return { view: currentView, row: b && b.closest('.set-row').textContent, relink: b && b.textContent };
+  });
+  await pg.click('[data-lkfix="lk_restored"]');
+  const form = await pg.evaluate(() => ({ title: $('#lf-title').textContent, sub: $('#lf-sub').textContent, input: $('#lf-input').value, focus: document.activeElement && document.activeElement.id }));
+  check(row.view === 'set' && /NEEDS APP PASSWORD/.test(row.row) && row.row.includes(NOT_HERE_WORDS) && row.relink === 'Relink'
+    && form.title === 'Relink gone@example.net' && form.sub === NOT_HERE_WORDS && form.input === 'gone@example.net' && form.focus === 'lf-pass',
+    `it opens Settings, whose row says why and offers Relink, and Relink asks for its app password: ${JSON.stringify({ row, form })}`);
+  await pg.evaluate(async () => { window.__toasts = []; await serverSync('mail'); });
+  const said = await toasts(pg);
+  check(said.length === 1 && said[0] === 'gone@example.net is not linked on this device. Link it again in Settings',
+    `Sync now says it is not linked on this device: ${JSON.stringify(said)}`);
+  /* Linked again: RATA has it, and the next refresh keeps it live. */
+  await pg.evaluate(async () => {
+    __mock.mailboxes.push({ email: 'gone@example.net', host: 'imap.example.net', port: 993, label: 'Example' });
+    await mailLink('gone@example.net', 'abcd efgh ijkl mnop');
+    await serverSync('mail', true);
+  });
+  s = await st();
+  check(!s.gone.needs && s.gone.status === 'live' && !s.gone.error && (await pg.evaluate(() => S.linked.filter((l) => l.label === 'gone@example.net').length)) === 1,
+    `linked again, it is live, one entry, and stays so after the next refresh: ${JSON.stringify(s.gone)}`);
+  /* A mailbox linked while a refresh is under way: that refresh read
+     RATA's list before the link was in it. */
+  await pg.evaluate(async () => {
+    __mock.refreshDelay = 400; __mock.listStale = __mock.mailboxes.slice();
+    const under = serverSync('mail', true);
+    __mock.mailboxes.push({ email: 'new@example.net', host: 'imap.example.net', port: 993, label: 'Example' });
+    await mailLink('new@example.net', 'abcd efgh ijkl mnop');
+    await under; __mock.refreshDelay = 0;
+  });
+  const fresh = await pg.evaluate(() => { const l = S.linked.find((x) => x.label === 'new@example.net'); return l && { needs: !!l.needsRelink, status: l.status, stale: __mock.listStale }; });
+  check(fresh && !fresh.needs && fresh.status === 'live' && fresh.stale === null,
+    `a mailbox linked while a refresh is under way is not taken for one RATA does not have: ${JSON.stringify(fresh)}`);
   await pg.close();
 }
 

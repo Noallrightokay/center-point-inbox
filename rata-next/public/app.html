@@ -1750,12 +1750,16 @@ function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb'
    is newer than the database: the entry of a build from before this, or
    of a session the database would not open. It is merged in at start
    (wkMerge), and the entry is written empty again only once the database
-   has it: until then every write of the entry keeps them (WK_MOVING),
-   the mail's own rewrite of it at start among them. Where the database
-   will not open, the parts stay in the entry the old way. */
+   has it. While that merge runs (WK_MERGING) nothing is written to the
+   database and every write of the entry keeps the parts; after it, until
+   the database's write of them has committed, every write of the entry
+   still keeps them (WK_MOVING), the mail's own rewrite of it at start
+   among them. Where the database will not open, or the merge fails, the
+   parts stay in the entry the old way for that session. */
 const WK_DB='rata-work-'+(SESSION?SESSION.uid:'anon'),WK_STORE='parts';
 const WK_PARTS=['audit','documents','boxes'];
 let WK=null;              /* the open database, or null: the old way */
+let WK_MERGING=false;     /* at start: its parts not merged with the entry's yet */
 let WK_MOVING=false;      /* at start: parts the entry held, not yet written there */
 const WK_HELD=new Map();  /* part → its JSON as last written */
 let wkQueued=false,wkWarned=false,wkLast=Promise.resolve();
@@ -1823,7 +1827,9 @@ async function wkMerge(held){
    longer has (a reset) is removed. */
 function wkFlush(){
   wkQueued=false;
-  if(!WK)return wkLast;
+  /* Until start has merged them, the workspace's parts are not the
+     database's: written now, they would replace its own. */
+  if(!WK||WK_MERGING)return wkLast;
   const put=[],del=[];
   for(const k of WK_PARTS){
     if(S[k]===undefined){if(WK_HELD.has(k))del.push(k);continue}
@@ -1856,7 +1862,7 @@ function wkFlush(){
    and with the parts above empty where the work database holds them. */
 function entryOf(st){
   const o=MS?metaOf(st):Object.assign({},st);
-  if(WK&&!WK_MOVING)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
+  if(WK&&!WK_MOVING&&!WK_MERGING)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
   return o;
 }
 /* Before anything is shown: the small entry from localStorage, the messages
@@ -1869,21 +1875,34 @@ async function load(){
   let held=[],parts=new Map();
   /* The two databases open together, so a webview whose open() never
      settles keeps the first screen waiting one timeout, not one for each. */
-  const [mail,work]=await Promise.allSettled([msOpen().then(db=>{MS=db;return msAll(db)}),wkOpen().then(db=>{WK=db;return wkAll(db)})]);
+  /* Until its parts are merged below, nothing is written to the work
+     database and the entry keeps them (WK_MERGING): a save meanwhile
+     would have emptied the entry's, and written the workspace's from
+     before the merge over the database's own. */
+  const [mail,work]=await Promise.allSettled([msOpen().then(db=>{MS=db;return msAll(db)}),wkOpen().then(db=>{WK_MERGING=true;WK=db;return wkAll(db)})]);
   if(mail.status==='fulfilled')held=mail.value;else{console.warn('message store unavailable, keeping mail in localStorage',mail.reason);MS=null;held=[]}
-  if(work.status==='fulfilled')parts=work.value;else{console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',work.reason);WK=null;WK_HELD.clear();parts=new Map()}
+  if(work.status==='fulfilled')parts=work.value;else{console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',work.reason);try{if(WK)WK.close()}catch(e){}WK=null;WK_HELD.clear();parts=new Map()}
   const inBlob=!!(st&&Array.isArray(st.messages)&&st.messages.length);
   try{S=migrate(st)}catch(e){S=seed()}
   /* The audit trail, the Files list and the folder names, from beside the
      mail; one the entry still holds moves across, and the entry is written
      without it once the database has it, after the mail is settled. */
   let moved=false;
-  if(WK){try{moved=await wkMerge(parts)}catch(e){moved=false}}
+  if(WK){
+    try{moved=await wkMerge(parts)}
+    catch(e){
+      /* What was merged so far is not the database's whole: written over
+         it, its own parts would be lost. The old way, for this session. */
+      console.warn('work store could not be merged, keeping the Files list and audit trail in localStorage',e);
+      try{WK.close()}catch(err){}
+      WK=null;WK_HELD.clear();moved=false;
+    }
+  }
   /* An entry that also holds mail (one the mail store would not open for)
      is rewritten by loadMail once the mail is in IndexedDB, before the
      parts are: written empty then, a start ended between the two would
      lose them. */
-  WK_MOVING=moved;
+  WK_MOVING=moved;WK_MERGING=false;
   try{
     await loadMail(held,inBlob);
     if(moved&&WK){try{await wkFlush();WK_MOVING=false;saveLocal()}catch(e){}}
@@ -3340,6 +3359,18 @@ function renderMail(){
     /* It goes with the press: the focus goes to the line that now says so. */
     all.onclick=()=>{chooseScope('');const s=$('#src-btn');if(s)s.focus({preventScroll:true})};
     act.append(all);e.append(b,who,act);sc.replaceChildren(e);
+    return}
+  /* Nothing at all, and a mailbox that needs linking again (its password
+     refused, or not linked on this device): never "connected". */
+  const relink=!pool.length&&S.linked.filter(l=>l.type==='mail'&&l.needsRelink);
+  if(relink&&relink.length){
+    const e=document.createElement('div'),b=document.createElement('b'),who=document.createElement('span'),act=document.createElement('div'),fix=document.createElement('button');
+    e.className='empty';b.textContent='No messages yet';
+    who.className='empty-who';who.textContent=relink.length===1?relink[0].label+' needs linking again before RATA can read its mail.'
+      :relink.length+' of your mailboxes need linking again before RATA can read their mail.';
+    act.className='empty-act';fix.type='button';fix.className='btn';fix.id='empty-relink';fix.textContent='Open Linked accounts';
+    fix.onclick=()=>{go('set');setTimeout(()=>$('#linked-list')?.scrollIntoView({behavior:glide(),block:'center'}),60)};
+    act.append(fix);e.append(b,who,act);sc.replaceChildren(e);
     return}
   if(!pool.length){
     const linked=S.linked.length;
@@ -6211,6 +6242,8 @@ async function mailLink(email,pass,host){
 /* A mailbox the app has linked, by password or by Microsoft sign-in: into
    the list, the form closed, and its mail fetched. */
 async function linkedOk(res){
+  /* A refresh under way read RATA's list before this link (absorbMail). */
+  LINKS++;
   $('#lf-pass').value='';$('#lf-host').value='';$('#lf-host').style.display='none';
   const known=linkedFind('mail',res.email);
   let l=known||addLinked('mail',res.email,{host:res.host,provLabel:res.label});
@@ -7600,6 +7633,11 @@ function notifyNew(ids){
    that one rather than signing in to every mailbox again. `quiet` is the
    automatic refresh, which speaks only when there is new mail. */
 let SYNCING=null,lastSync=0,lastFull=0,MAIL_WAKE=null,MAIL_AGAIN=false;
+/* How many mailboxes have been linked in this session: a refresh that
+   began before one was read RATA's list before it was there. */
+let LINKS=0;
+/* A mailbox the page lists that RATA here does not have (absorbMail). */
+const NOT_HERE='This mailbox is not linked in RATA on this device, as happens on a new or restored one. Link it again to read its mail here.';
 /* What a command the app refused said, as one line (I6). */
 function failedSaying(e){
   const t=String((e&&typeof e==='object'?e.error||e.message:e)||'').replace(/\s+/g,' ').trim();
@@ -7613,6 +7651,7 @@ function serverSync(p,quiet,only){
   if(p!=='mail')return Promise.resolve();
   if(SYNCING)return SYNCING;
   SYNCING=(async()=>{
+    const links=LINKS;
     lastSync=Date.now();if(!(only&&only.length))lastFull=lastSync;
     for(const e of (only&&only.length?only:mailAddrs()))LAST_TRY.set(String(e).toLowerCase(),lastSync);
     try{
@@ -7624,7 +7663,7 @@ function serverSync(p,quiet,only){
          leave mail stopped with no word, unless the licence box is already
          saying so. */
       if(res.error){if(!quiet||(res.unlicensed&&!document.getElementById('rata-licence')))toast(res.error);return}
-      await absorbMail(res,quiet);
+      await absorbMail(res,quiet,links);
     }catch(e){
       /* In the app a refresh that fails is the app's own failure (I6), not
          a page asking to be installed. */
@@ -7817,7 +7856,7 @@ function settlePresent(list,fresh){
 /* Take in a multi-mailbox sync. Each account keeps its own linked entry so it
    can be synced, removed, or filtered on its own, and a mailbox that failed
    says so by name rather than sinking the whole refresh. */
-async function absorbMail(res,quiet){
+async function absorbMail(res,quiet,links){
   const newIds=[];let added=0;
   for(const a of (res.accounts||[])){
     let l=linkedFind('mail',a.email)||addLinked('mail',a.email,{host:a.host||'',provLabel:a.label||''});
@@ -7839,6 +7878,25 @@ async function absorbMail(res,quiet){
     /* Not reached this time is not an error: nothing is wrong with it, and
        marking it would have the row claim a problem it does not have. */
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
+  }
+  /* A mailbox the page lists that RATA here does not have: a phone
+     restored or replaced from a backup, which keeps the page's list of
+     mailboxes but not RATA's own (backup.rs), or a computer that got the
+     list from the online account or from another PC's roaming profile.
+     RATA reads nothing for it and says nothing of it, so it went on
+     saying it synced days ago, for good. It needs linking again, as a
+     mailbox whose password was refused does. `listed` is every mailbox
+     RATA has (the app's bridge only). Not after a mailbox was linked
+     while this refresh ran: RATA's list may have been read before that
+     link was in it, and the next refresh judges. */
+  const unlisted=[];
+  if(Array.isArray(res.listed)&&links===LINKS){
+    const here=new Set(res.listed.map(e=>String(e).toLowerCase()));
+    for(const l of S.linked){
+      if(l.type!=='mail'||here.has(String(l.label).toLowerCase()))continue;
+      l.status='error';l.needsRelink=true;l.lastError=NOT_HERE;
+      unlisted.push(l.label);
+    }
   }
   tidyAccts();
   /* Folders rebuilt on the server since (I6): their old generation goes
@@ -7905,7 +7963,9 @@ async function absorbMail(res,quiet){
   renderLinked();renderSyncAll();renderMailFilters();renderMail();renderSplit();
   if(quiet){if(added){toast(`${added} new message${added===1?'':'s'}`);notifyNew(newIds)}return}
   const later=(res.deferred||[]).length;
-  toast(again.length
+  toast(unlisted.length
+    ? `${unlisted.join(', ')} ${unlisted.length===1?'is':'are'} not linked on this device. Link ${unlisted.length===1?'it':'them'} again in Settings`
+    : again.length
     ? `Sign in to Microsoft again for ${again.join(', ')} in Settings`
     : stuck.length
     ? `${stuck.join(', ')} needs its app password again — relink it in Settings`
