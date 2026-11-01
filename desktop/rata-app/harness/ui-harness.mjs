@@ -2107,7 +2107,11 @@ console.log('\n— picture attachments are shown in the message, by what their b
   check((await reads()).length === 0, 'nothing is fetched for pictures until the message is opened');
   await pg.evaluate(() => { __mock.calls.length = 0; openMail('me@example.com_95'); });
   await pg.waitForFunction(() => document.querySelectorAll('#mail-detail [data-att]').length === 11
-    && document.querySelectorAll('#mail-detail .md-pics img').length === 5 && !document.querySelector('#mail-detail .pic-wait'), null, { timeout: 8000 }).catch(() => {});
+    && document.querySelectorAll('#mail-detail .md-pics img').length === 5 && !document.querySelector('#mail-detail .pic-wait')
+    /* and every thumbnail decoded: the img elements are there before their
+       pictures are, and on a slow runner the checks below once measured
+       five undecoded 0 x 0 thumbnails (CI on 40b8cb7) */
+    && [...document.querySelectorAll('#mail-detail .md-pics img')].every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 8000 }).catch(() => {});
   const seen = await pg.evaluate(() => [...document.querySelectorAll('#mail-detail .md-pics img')].map((i) => ({
     alt: i.alt, kind: (i.src.match(/^data:image\/([a-z]+);base64,/) || [])[1] || i.src.slice(0, 30), lazy: i.loading, ok: i.complete && i.naturalWidth > 0,
     w: Math.round(i.getBoundingClientRect().width), h: Math.round(i.getBoundingClientRect().height) })));
