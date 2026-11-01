@@ -7,9 +7,8 @@
    gets past the gate — and, against a stand-in Supabase, that every table
    keyed to the person is emptied, ai_usage included, even on a deploy that
    has not created it yet. */
-import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { startServer, makeChecker, fakeSupabaseKey } from './helpers.mjs';
+import { startServer, makeChecker, fakeSupabaseKey, fakeSupabase } from './helpers.mjs';
 import { blocksDeletion, DELETION_REMOVES, DELETION_KEEPS } from '../lib/account.js';
 
 export default async function run(state) {
@@ -138,53 +137,22 @@ export default async function run(state) {
   await everythingGoes(check);
 }
 
-function listen(handler) {
-  return new Promise((res) => {
-    const srv = createServer(handler);
-    srv.listen(0, '127.0.0.1', () => res({ srv, url: `http://127.0.0.1:${srv.address().port}` }));
-  });
-}
-
-/* A stand-in for the three Supabase services the route talks to — GoTrue for
-   the session and the login, PostgREST for the tables — which records every
-   request so the test can see what was deleted. `aiUsage` decides how the
-   ai_usage table answers: 'rows' (it exists and holds two months), 'missing'
-   (database.sql §5 never ran: PostgREST's PGRST205, a 404), 'old-missing'
-   (Postgres's 42P01 from an older PostgREST) or 'broken' (any other failure). */
+/* Against the stand-in Supabase in helpers.mjs, which records every
+   request so the test can see what was deleted. */
 async function everythingGoes(check) {
-  const USER = { id: '0b5c1f7e-8a8b-4b8e-9c55-3f1d2a6b7c80', email: 'Leaver@Example.com', aud: 'authenticated' };
-  const fake = { aiUsage: 'rows', sub: null, calls: [] };
-  const supabase = await listen((req, res) => {
-    const url = new URL(req.url, 'http://x');
-    fake.calls.push(`${req.method} ${url.pathname}${url.search}`);
-    const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
-    req.resume();
-    req.on('end', () => {
-      if (req.method === 'GET' && url.pathname === '/auth/v1/user') return json(200, USER);
-      if (req.method === 'DELETE' && url.pathname === `/auth/v1/admin/users/${USER.id}`) return json(200, USER);
-      if (req.method === 'GET' && url.pathname === '/rest/v1/subscriptions') return json(200, fake.sub ? [fake.sub] : []);
-      if (req.method === 'DELETE' && url.pathname === '/rest/v1/workspaces') return json(200, [{ id: USER.id }]);
-      if (req.method === 'DELETE' && url.pathname === '/rest/v1/subscriptions') return json(200, []);
-      if (req.method === 'DELETE' && url.pathname === '/rest/v1/ai_usage') {
-        if (fake.aiUsage === 'missing') return json(404, { code: 'PGRST205', details: null, hint: null, message: "Could not find the table 'public.ai_usage' in the schema cache" });
-        if (fake.aiUsage === 'old-missing') return json(404, { code: '42P01', details: null, hint: null, message: 'relation "public.ai_usage" does not exist' });
-        if (fake.aiUsage === 'broken') return json(500, { code: 'XX000', details: null, hint: null, message: 'disk on fire' });
-        return json(200, [{ email: 'leaver@example.com' }, { email: 'leaver@example.com' }]);
-      }
-      json(404, { message: 'not in the stand-in' });
-    });
-  });
+  const supabase = await fakeSupabase();
+  const { USER, fake } = supabase;
 
   const s = await startServer({ env: {
     SUPABASE_URL: supabase.url,
     SUPABASE_SERVICE_ROLE_KEY: fakeSupabaseKey('service_role'),
   } });
-  const del = async () => {
+  const del = async (extra = {}) => {
     fake.calls = [];
     const r = await fetch(s.url + '/api/account', {
       method: 'DELETE',
       headers: { Authorization: 'Bearer a-session', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: 'leaver@example.com' }),
+      body: JSON.stringify({ confirm: 'leaver@example.com', ...extra }),
     });
     return { status: r.status, d: await r.json(), calls: fake.calls };
   };
@@ -237,6 +205,22 @@ async function everythingGoes(check) {
       fake.sub = null;
     }
 
+    console.log('\n— a live subscription: refused in the website\'s words, or the store\'s when the deletion page asks —');
+    {
+      /* The deletion page a store build opens (/in-app/delete-account) may
+         not name the billing portal or Stripe; the rule is the same. */
+      fake.sub = { plan: 'pro', status: 'active', event_at: null, updated_at: new Date().toISOString() };
+      const site = await del();
+      check(site.status === 409 && site.d.error === blocksDeletion(fake.sub) && /billing portal/.test(site.d.error),
+        `asked plainly: the website's sentence, "${site.d.error}"`);
+      const store = await del({ words: 'store' });
+      check(store.status === 409 && store.d.error === blocksDeletion(fake.sub, Date.now(), { store: true })
+        && !/billing portal|stripe/i.test(store.d.error) && /where you subscribed/.test(store.d.error),
+        `asked for the store's words: "${store.d.error}"`);
+      check(!store.calls.some(c => c.startsWith('DELETE ')) && !site.calls.some(c => c.startsWith('DELETE ')), 'and nothing is deleted either way');
+      fake.sub = null;
+    }
+
     console.log('\n— any other failure on ai_usage stops before the login, as for the other tables —');
     {
       fake.aiUsage = 'broken';
@@ -247,6 +231,6 @@ async function everythingGoes(check) {
     }
   } finally {
     await s.stop();
-    supabase.srv.close();
+    await supabase.close();
   }
 }

@@ -32,6 +32,11 @@ const PUBLIC_CONFIG = [
   ['stripePortal',     'STRIPE_PORTAL'],
 ];
 
+/* /api/config?part=sign-in: only what signing in needs. The account
+   deletion page a store build opens (/in-app/delete-account) loads this, so
+   no payment link reaches it (lib/in-app.js). */
+const SIGN_IN = ['supabaseUrl', 'supabaseKey'];
+
 /* A service-role key in the public config would hand every visitor read/write
    over
    every user's workspace and subscription. It is an easy paste to get wrong
@@ -50,11 +55,13 @@ function isSecretKey(v) {
   } catch { return false; }
 }
 
-export async function GET() {
+export async function GET(req) {
   const cfg = {};
   const refused = [];
+  const signInOnly = new URL(req.url).searchParams.get('part') === 'sign-in';
 
   for (const [key, envName] of PUBLIC_CONFIG) {
+    if (signInOnly && !SIGN_IN.includes(key)) continue;
     const raw = (process.env[envName] || '').trim();
     if (envName === 'SUPABASE_ANON_KEY' && isSecretKey(raw)) {
       refused.push(envName);

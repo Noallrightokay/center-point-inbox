@@ -14,6 +14,7 @@ const SUITES = [
   ['privacy and terms',  './legal.test.mjs'],
   ['AI relay',           './ai.test.mjs'],
   ['help page',          './help.test.mjs'],
+  ['store-safe pages',   './in-app.test.mjs'],
   ['app (Chromium)',     './app.test.mjs'],
 ];
 

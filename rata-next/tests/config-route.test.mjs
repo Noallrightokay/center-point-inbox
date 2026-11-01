@@ -8,8 +8,8 @@ import { writeFile, rm } from 'node:fs/promises';
 
 export default async function run(state) {
   const check = makeChecker(state);
-  const load = async url => {
-    const body = await (await fetch(url + '/config.js')).text();
+  const load = async (url, path = '/config.js') => {
+    const body = await (await fetch(url + path)).text();
     const scope = {};
     new Function('window', body)(scope);
     return { body, cfg: scope.RATA_CONFIG };
@@ -45,6 +45,13 @@ export default async function run(state) {
          host's settings is not published. */
       check(!('googleClientId' in cfg) && !body.includes('leftover-client'),
         'a GOOGLE_CLIENT_ID left in the environment is not published');
+      /* The deletion page a store build opens asks for only what signing
+         in needs, so no payment link reaches it (lib/in-app.js). */
+      const part = await load(s.url, '/api/config?part=sign-in');
+      check(JSON.stringify(Object.keys(part.cfg)) === '["supabaseUrl","supabaseKey"]'
+        && part.cfg.supabaseUrl === 'https://demo.supabase.co' && part.cfg.supabaseKey === anon,
+        `?part=sign-in: the Supabase URL and anon key and nothing else (${Object.keys(part.cfg).join(', ')})`);
+      check(!/stripe/i.test(part.body), '?part=sign-in: no Stripe link anywhere in it');
     } finally { await s.stop(); }
   }
 
@@ -81,6 +88,9 @@ export default async function run(state) {
       check(cfg.supabaseKey === '', `${label}: not published`);
       check(!body.includes(key), `${label}: the key appears nowhere in the response body`);
       check(/service role/i.test(body), `${label}: the reason is logged to the console`);
+      const part = await load(s.url, '/api/config?part=sign-in');
+      check(part.cfg.supabaseKey === '' && !part.body.includes(key) && /service role/i.test(part.body),
+        `${label}: refused in ?part=sign-in too`);
     } finally { await s.stop(); }
   }
 }
