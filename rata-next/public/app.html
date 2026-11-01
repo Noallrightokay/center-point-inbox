@@ -1987,7 +1987,10 @@ async function load(){
   if(st)delete st.wkWhole;
   const whole={parts:new Set(ww&&Array.isArray(ww.parts)?ww.parts.filter(k=>WK_PARTS.includes(k)):[]),
     rev:ww&&Number.isSafeInteger(ww.rev)&&ww.rev>0?ww.rev:0};
-  try{S=migrate(st)}catch(e){S=seed();whole.parts.clear()}
+  try{S=migrate(st)}catch(e){S=seed()}
+  /* A workspace started afresh in place of the entry holds none of its
+     parts. */
+  if(S!==st)whole.parts.clear();
   for(const k of whole.parts)WK_WHOLE.add(k);
   WK_REV=whole.rev;
   /* The audit trail, the Files list and the folder names, from beside the
