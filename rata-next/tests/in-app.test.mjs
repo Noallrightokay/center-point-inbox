@@ -10,9 +10,12 @@
    them, or in a script they load, leads to the prices, the licence page,
    the app, the sign-in, Stripe or the releases page, and nothing on them,
    in their text or an attribute, sells (BUYING: a price, Stripe, the
-   billing portal and the rest). The copies must say everything their pages
+   billing portal and the rest), nor anywhere in their HTML calls RATA a
+   beta (Apple's 2.2). The copies must say everything their pages
    say but what each page marks for the store, from the page as it is now,
-   keeping every paragraph that sells nothing, so the help page's and the
+   keeping every paragraph that sells nothing and says "beta" nowhere, and
+   in the store's words what an App Store subscriber needs of #167's
+   sentences, so the help page's and the
    privacy policy's own tests keep covering them. And the deletion page must
    say what deletion removes and keeps as lib/account.js decides it, how
    long the backups hold it and where to write without a sign-in as the
@@ -90,15 +93,24 @@ const BUYING = [
 ];
 const sellsIn = text => BUYING.filter(([, re]) => re.test(text)).map(([what]) => what);
 
+/* Nor may any of them call RATA a beta, anywhere in its HTML, an id or a
+   link to a place on the page included: Apple's 2.2 keeps betas off the
+   App Store. Written here as well as in lib/in-app.js (UNFINISHED). */
+const BETA = /\bbeta/i;
+const betaAt = html => {
+  const m = entities(html).match(BETA);
+  return m ? JSON.stringify(entities(html).slice(Math.max(0, m.index - 40), m.index + m[0].length + 20)) : '';
+};
+
 /* Every cut and every piece of store wording, by page, as lib/in-app.js's
    STORE_CUTS names them; a new one is added here too, by somebody deciding
    the store copy may say those words differently. */
 const CUTS = {
-  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'write'],
-  privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
-    'how', 'records', 'live', 'pending'],
-  terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
-    'new-key', 'stop', 'unsigned'],
+  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'version', 'template', 'write'],
+  privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'upgraded', 'github',
+    'payment', 'how', 'records', 'live', 'pending'],
+  terms: ['footer', 'as-is-toc', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes',
+    'also-sold', 'licence-page', 'new-key', 'stop', 'as-is-ids', 'as-is-head', 'in-beta', 'unsigned'],
 };
 
 /* Where nothing on these pages may lead, written as URL strings, wherever
@@ -408,6 +420,24 @@ export default async function run(state) {
         "and they are the website's refusals, by the same rules, in other words only where those name the billing portal or Stripe");
     }
 
+    console.log('\n— nothing on them calls RATA a beta, anywhere in their HTML —');
+    {
+      /* Apple's 2.2: "Demos, betas, and trial versions of your app don't
+         belong on the App Store". The website's pages do say it (help's
+         install steps and version, its bug template, the terms' "A beta,
+         as it is"), so this fails on any copy still made from those words. */
+      for (const [path, html] of pages) {
+        const said = betaAt(html);
+        check(html.length > 1000 && !said, `${path} says "beta" nowhere, in its text, an attribute, an id or a link${said ? `: ${said}` : ''}`);
+      }
+      const js = [...scripts].filter(([h]) => h.includes('/in-app/')).map(([, j]) => j || '').join('\n');
+      const rows = [{ status: 'active', plan: 'pro' }, { status: 'incomplete' }, { status: 'canceled', updated_at: new Date().toISOString() }];
+      const said = betaAt([js, ...rows.map(r => blocksDeletion(r, Date.now(), { store: true }))].join('\n'));
+      check(js.length > 0 && !said, `nor does the deletion page's script, or a refusal it can show${said ? `: ${said}` : ''}`);
+      check(['help.html', 'terms.html'].every(f => BETA.test(visible(read(f)))),
+        'while the website\'s help page and terms still say it, so what the copies leave out is decided by their store wording');
+    }
+
     console.log('\n— the copies say everything their pages say, from the page as it is now —');
     for (const [name, file] of Object.entries(IN_APP_PAGES)) {
       const source = read(file);
@@ -428,16 +458,18 @@ export default async function run(state) {
         `${file}: its cuts and store wording are the ${CUTS[name].length} named here and in lib/in-app.js: ${ids.join(', ')}`);
       /* A cut in the page's text takes out something that sells (or, as
          before, only a link's few words), and store wording replaces words
-         that sell with words that do not. */
+         that sell, or that call RATA a beta (in their text or a tag's
+         attributes), with words that do neither. */
       const cuts = [...mainOf(source).matchAll(CUT)].map(m => [m[1], m[2]]);
       const badCuts = cuts.filter(([, c]) => !sellsIn(visible(c)).length && !(/<a\b/i.test(c) && visible(c).length <= 40));
       check(badCuts.length === 0, `${file}: what it leaves out of its text sells${badCuts.length ? `, but not ${badCuts.map(([id]) => id).join(', ')}` : ''}`);
-      const badWords = wording.filter(w => !w.id || !sellsIn(visible(w.old)).length || sellsIn(visible(w.now)).length);
+      const badWords = wording.filter(w => !w.id || (!sellsIn(visible(w.old)).length && !BETA.test(entities(w.old)))
+        || sellsIn(visible(w.now)).length || BETA.test(entities(w.now)));
       check(wording.length > 0 && badWords.length === 0,
-        `${file}: each of its ${wording.length} pieces of store wording replaces words that sell with words that do not${badWords.length ? `: ${badWords.map(w => w.id || w.old).join(', ')}` : ''}`);
+        `${file}: each of its ${wording.length} pieces of store wording replaces words that sell or say "beta" with words that do neither${badWords.length ? `: ${badWords.map(w => w.id || w.old).join(', ')}` : ''}`);
       /* Words, or a stylesheet (the help page's gutter on a phone), whose
-         own text sells nothing either. */
-      const badAdds = added.filter(([, put]) => (/^<style\b[^>]*>[^<]*<\/style>$/i.test(put.trim())
+         own text sells nothing either, and that say "beta" nowhere. */
+      const badAdds = added.filter(([, put]) => BETA.test(entities(put)) || (/^<style\b[^>]*>[^<]*<\/style>$/i.test(put.trim())
         ? sellsIn(put).length : !visible(put) || sellsIn(visible(put)).length));
       check(badAdds.length === 0, `${file}: what its store copy adds (${added.length}) sells nothing${badAdds.length ? `, but ${badAdds.map(([id]) => id).join(', ')} does` : ''}`);
       /* What a reader of the page's main part sees is the same, word for
@@ -450,13 +482,13 @@ export default async function run(state) {
         `/in-app/${name} says all ${want.length} characters of ${file}'s text, with its store wording` +
         (want === got ? '' : `\n         first difference: ${JSON.stringify(want.slice(at, at + 60))} became ${JSON.stringify(got.slice(at, at + 60))}`));
       /* And every paragraph, list item and heading of the page that sells
-         nothing is in the copy whole, so store wording can only ever change
-         what sells. */
+         nothing and says "beta" nowhere is in the copy whole, so store
+         wording can only ever change what sells or says it. */
       const blocks = blocksOf(mainOf(source.replace(CUT, '')));
-      const clean = blocks.filter(b => !sellsIn(b).length);
+      const clean = blocks.filter(b => !sellsIn(b).length && !BETA.test(b));
       const lost = clean.filter(b => !got.includes(b));
       check(clean.length > 20 && lost.length === 0,
-        `/in-app/${name} keeps all ${clean.length} of ${file}'s paragraphs, items and headings that sell nothing` +
+        `/in-app/${name} keeps all ${clean.length} of ${file}'s paragraphs, items and headings that neither sell nor say "beta"` +
         (lost.length ? `:\n         ${lost.slice(0, 3).map(b => JSON.stringify(b.slice(0, 90))).join('\n         ')}` : ''));
     }
     {
@@ -482,6 +514,45 @@ export default async function run(state) {
       check(/By creating an account or using RATA, you agree to them\./.test(terms) && /mailrata\.org issues the licence that unlocks the app/.test(terms)
         && !/buying a plan|sells the plans|Pay with the same address|matched by that address|licence page|Paste it/i.test(terms),
         '/in-app/terms says nothing of buying at mailrata.org, of paying with the account\'s address, or of pasting a key from a page');
+      /* What an App Store subscriber needs, in the store's words for the
+         sentences #167 added and changed: the plans with no price, what an
+         App Store subscription is for, that Apple bills, renews, cancels
+         and refunds it, and where to manage it. Each check fails on the
+         words its store wording replaces, the website's and this copy's
+         earlier ones alike. */
+      check(/Both are subscriptions, and renew each month until you cancel\. Both include every new version for as long as you subscribe\./.test(terms)
+        && /In RATA’s iPhone app, RATA Base and RATA Pro are App Store subscriptions, at the price the App Store shows there\. Such a subscription is for RATA in the iPhone app only, with the features of its plan that the iPhone app has/.test(terms)
+        && /billed, renewed, cancelled and refunded by Apple/.test(terms) && /Manage or cancel it in your Apple Account settings\./.test(terms)
+        && !/Bought here|billed monthly|also sold|by the store or service you subscribed through|That store or service handles/i.test(terms),
+        '/in-app/terms#plans: both plans renew each month with no price, and in the iPhone app they are App Store subscriptions, for the iPhone app only, billed by Apple and managed in the Apple Account settings');
+      check(/A key that expired more than 90 days ago cannot renew itself\. RATA then says how to get a new one: for a subscription bought in the iPhone app, press Restore purchases there\./.test(terms)
+        && !/Sign in at mailrata\.org|how to get a new one, or,/i.test(terms),
+        '/in-app/terms#licence: a key too old to renew itself sends an App Store subscriber to Restore purchases, and nobody to sign in at mailrata.org');
+      /* Apple's 2.2: no beta. The terms keep what "A beta, as it is" means,
+         as it is: not tested against every provider, changing, provided as
+         it is, mail at the provider. */
+      const termsCopy = pages.get('/in-app/terms') || '';
+      check(/<li><a href="#as-is">Provided as it is<\/a><\/li>/.test(termsCopy) && /<section id="as-is" aria-labelledby="as-is-h">\s*<h2 id="as-is-h">Provided as it is<\/h2>/.test(termsCopy)
+        && /Provided as it is RATA has not yet been tested against every mail provider, and it changes as it improves\. It is provided as it is\. Your mail stays at your provider/.test(terms)
+        && !/A beta, as it is|RATA is in beta|code-signed/i.test(terms),
+        '/in-app/terms#as-is says what "A beta, as it is" says on the website, without the word: not yet tested against every provider, changing, provided as it is');
+      const privacyText = visible(pages.get('/in-app/privacy') || '');
+      check(/Your card\. Our payment processor takes the payment, or Apple in the iPhone app; we never see the card number\./.test(privacyText)
+        && !/Stripe takes|The store or payment processor you pay through takes the payment/.test(privacyText),
+        '/in-app/privacy#never: the card is taken by the payment processor, or by Apple in the iPhone app');
+      check(/its billing plan and any commitment to pay for several periods, whether a higher plan replaced it, whether, why and how much of it was refunded or revoked/.test(privacyText)
+        && !/upgrad/i.test(privacyText),
+        '/in-app/privacy#app-store names what each App Store purchase says, "whether it was upgraded" as whether a higher plan replaced it');
+      /* Help's version is in Copy diagnostics, under Help & diagnostics in
+         Settings, both named as the app names them; a phone has no title
+         bar, and the website's says "beta". */
+      const app = read('app.html');
+      check(/Your version is in what Copy diagnostics copies, in Settings under Help & diagnostics\. Put it in every bug report\./.test(visible(help))
+        && app.includes('<div class="sec-label">Help &amp; diagnostics</div>') && app.includes('<b>Copy diagnostics</b>')
+        && !/title bar, as RATA <version>/.test(visible(help)),
+        '/in-app/help#install says the version is in Copy diagnostics, in Settings under Help & diagnostics, as app.html names them');
+      check(/Open an issue with the bug report template on GitHub\. It asks for everything below\./.test(visible(help)) && !/Beta bug/i.test(visible(help)),
+        '/in-app/help#report names GitHub\'s bug report template without "Beta bug"');
       /* A store build's Report a bug opens /in-app/help#report, where the
          website's link to GitHub is only words. The copy names where to
          write instead, the privacy policy's own address, as a mailto: link
@@ -563,10 +634,10 @@ export default async function run(state) {
          whatever the sentence says now. */
       const card = [...privacy.matchAll(WORDS)].flatMap(m => wordingOf(m[2])).find(w => w.id === 'card');
       check(!!card && privacy.split(card.old).length === 3, `privacy.html has its "card" store wording: ${card && card.old}`);
-      /* As claude/iap-server did to this sentence ("…, or Apple in the
-         iPhone app;"): the website's words change, so the store's must be
-         decided again. Only the page's own sentence changes, not the mark. */
-      threw = refused('privacy', privacy.replace(card.old, card.old.replace(/;$/, ', or Apple in the iPhone app;').replace(/payment$/, 'payment, or Apple')));
+      /* As #167 did to this sentence (", or Apple in the iPhone app"): the
+         website's words change, so the store's must be decided again. Only
+         the page's own sentence changes, not the mark. */
+      threw = refused('privacy', privacy.replace(card.old, card.old.replace(/;$/, ', as it always has;')));
       check(/"card" finds its words 0 times[\s\S]*decide what the store copy says now/.test(threw), `nor one whose sentence changed under its store wording: "${threw}"`);
       threw = refused('privacy', privacy.replace('  card: ', '  kard: '));
       check(/"kard" is not in STORE_CUTS/.test(threw), `nor one with a mark nobody named: "${threw}"`);
@@ -597,21 +668,36 @@ export default async function run(state) {
       check(!threw && !sellsIn(asks).length, `while "${asks}" sells nothing${threw ? `: "${threw}"` : ''}`);
       threw = refused('help', read('help.html').replace('with the same details.</p>\n  -->', 'with the same details, or buy RATA Pro.</p>\n  -->'));
       check(/adds as "write" names Buy/.test(threw), `nor what a store copy adds, when it sells: "${threw}"`);
-      /* claude/iap-server adds a sentence to the licence paragraph and to
-         the 90-day line. Their store wording still finds its words, so the
-         copy is still made, with what was added; its other changes need
-         store wording of their own, and make no copy until they have it.
-         (Once it is merged the page says these already, and the
-         replacements below change nothing.) */
-      const iap = read('terms.html')
-        .replace('so RATA works offline.</p>', 'so RATA works offline. In the iPhone app there is no key to paste.</p>')
-        .replace('Sign in at mailrata.org to get a new one.</li>', 'Sign in at mailrata.org to get a new one, or, for a subscription bought in the iPhone app, press Restore purchases there.</li>');
-      let made = '';
-      try { made = visible(storeSafe('terms', iap)); } catch (e) { made = e.message; }
-      const licence = made.slice(Math.max(0, made.indexOf('Once your payment')), made.indexOf('Without a current licence'));
-      check(/^Once your payment is confirmed, RATA gets a licence key for your plan\. The app checks it on your computer, so RATA works offline\. In the iPhone app there is no key to paste[.:]/.test(licence)
-        && /RATA then says how to get a new one, or, for a subscription bought in the iPhone app, press Restore purchases there\./.test(licence),
-        `claude/iap-server's additions to the licence section keep their store wording: ${JSON.stringify(licence.slice(0, 160) || made.slice(0, 160))}`);
+      /* The store wording is for #167's sentences as they are: the
+         website's words before #167, put back, make no copy, since each
+         wording looks for the new ones. */
+      for (const [page, id, now, before] of [
+        ['privacy', 'card', 'Stripe takes the payment, or Apple in the iPhone app;', 'Stripe takes the payment;'],
+        ['terms', 'billing', 'Bought here, both are billed monthly by Stripe', 'Both are billed monthly by Stripe'],
+        ['terms', 'new-key', ', or, for a subscription bought in the iPhone app, press Restore purchases there.</li>', '.</li>'],
+        ['terms', 'also-sold', 'RATA Base and RATA Pro are also sold in RATA&rsquo;s iPhone app', 'RATA Base and RATA Pro are sold in RATA&rsquo;s iPhone app'],
+        ['privacy', 'upgraded', 'whether it was upgraded, whether, why', 'whether, why'],
+      ]) {
+        const html = read(`${page}.html`);
+        threw = refused(page, html.replace(now, before));
+        check(html.includes(now) && new RegExp(`"${id}" finds its words 0 times`).test(threw),
+          `${page}.html as it read before #167 there makes no copy, its "${id}" store wording being for the new sentence: "${threw}"`);
+      }
+      /* Nor is a copy made that says "beta" (Apple's 2.2): not when its
+         page gains the word in its text or in an id, nor when store wording
+         or what a copy adds says it. */
+      const terms = read('terms.html');
+      for (const [what, html, why] of [
+        ['in its text', terms.replace('<h1>Terms of service</h1>', '<h1>Terms of service</h1><p>RATA is in public beta.</p>'), /the in-app copy still names a beta/],
+        ['in an id', terms.replace('<section id="law" aria-labelledby="law-h">', '<section id="law-beta" aria-labelledby="law-h">'), /the in-app copy still names a beta/],
+        ['in store wording', terms.replace('=> RATA has not yet been tested', '=> RATA, a beta, has not yet been tested'), /"in-beta" still names a beta/],
+        ['in an id its store wording gives', terms.replace('=> <section id="as-is"', '=> <section id="beta"'), /"as-is-ids" still names a beta/],
+      ]) {
+        threw = refused('terms', html);
+        check(html !== terms && why.test(threw), `nor one that says "beta" ${what}: "${threw}"`);
+      }
+      threw = refused('help', read('help.html').replace('with the same details.</p>\n  -->', 'with the same details, as a beta tester.</p>\n  -->'));
+      check(/adds as "write" names a beta/.test(threw), `nor what a store copy adds, when it says "beta": "${threw}"`);
     }
 
     console.log('\n— the website\'s service worker leaves them to the network —');
@@ -646,8 +732,11 @@ export default async function run(state) {
         && /this device/.test(DELETION_KEEPS.at(-1)) && keeps.length === DELETION_KEEPS.length
         && /^what the RATA app holds on your device, until you uninstall it$/.test(keeps.at(-1) || ''),
         `what it keeps is DELETION_KEEPS, the billing records as the privacy policy's store copy says them and the last as on a web page: ${JSON.stringify(keeps)}`);
-      check(/does not cancel/.test(text) && /App Store/.test(text) && /Google Play/.test(text),
-        'it says deleting the account does not cancel a subscription paid through Apple or Google');
+      /* Apple's copy names the App Store only (2.3.10: no other platform);
+         the Google Play build is later and gets words of its own. */
+      check(/A subscription bought in RATA’s app through the App Store is not part of an account here, so deleting an account does not cancel it\. Cancel it in the store, or the store keeps charging you\./.test(text)
+        && !/Google|Play Store|Android/.test(text),
+        'it says deleting the account does not cancel a subscription bought through the App Store, and names no other store');
       /* Google Play asks a deletion page for any further time the data is
          kept: the backups. Said in the privacy policy's own sentence, word
          for word, and every number of days on the page is the policy's,

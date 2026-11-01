@@ -23,9 +23,10 @@
          ID: OLD => NEW
        -->
          The store's own wording: in what the marks hold, each OLD, the
-         source's own HTML, which must be there exactly once, becomes NEW (or
-         nothing). A sentence that changes on the website stops matching, and
-         no copy is made until somebody decides what the store copy says
+         source's own HTML, which must be there exactly once and must say
+         something a copy may not (below), becomes NEW (or nothing). A
+         sentence that changes on the website stops matching, and no copy
+         is made until somebody decides what the store copy says
          instead. The marks can stand at a section's edges, away from the
          sentences they change.
        <!-- in-app:add ID
@@ -48,6 +49,11 @@
      one of these and its NEW none, what a store copy adds carries none, and
      a copy that still carries one anywhere, in its text, in an attribute
      or in a quoted string of its stylesheet, is not made.
+   - Nor does a copy call RATA a beta (UNFINISHED), anywhere in its HTML:
+     Apple's 2.2 keeps betas off the App Store. An OLD may carry the word
+     instead of one that sells, its text or a tag's attributes (an id, or a
+     link to a place on the page) alike, and its NEW, what a copy adds and
+     the copy itself carry it nowhere.
    - Every link is judged, its attributes read as a browser reads them, and
      only these stay links: a place on the same page, another in-app page
      (sent to /in-app/<name>), mailto:, an outside service's policy page in
@@ -80,11 +86,11 @@ export const DELETE_PAGE = 'delete-account';
 /* Every cut and every piece of store wording, by page. A mark whose ID is not
    here makes no copy, and nor does an ID here that its page has lost. */
 export const STORE_CUTS = {
-  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'write'],
-  privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'github', 'payment',
-    'how', 'records', 'live', 'pending'],
-  terms: ['footer', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes', 'licence-page',
-    'new-key', 'stop', 'unsigned'],
+  help: ['gutter', 'footer', 'get', 'install-steps', 'key', 'version', 'template', 'write'],
+  privacy: ['footer', 'card', 'record', 'record-early', 'processor', 'processor-records', 'upgraded', 'github',
+    'payment', 'how', 'records', 'live', 'pending'],
+  terms: ['footer', 'as-is-toc', 'agree', 'sells', 'pay-with', 'base-price', 'pro-price', 'billing', 'changes',
+    'also-sold', 'licence-page', 'new-key', 'stop', 'as-is-ids', 'as-is-head', 'in-beta', 'unsigned'],
 };
 
 /* What a store build may never show, in a page's text or its attributes:
@@ -116,6 +122,15 @@ export const SELLING = [
      deletion page asks for the account it deletes. */
   ['Subscribe at mailrata.org', /\bsubscri(?:be|bes|bed|bing|ption)\b[^.]{0,40}?\b(?:at|on|to|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
   ['Sign in at mailrata.org', /\b(?:sign|log)(?:s|ed|ged|ing|ging)?[ -]?(?:in|on)\b[^.]{0,20}?\b(?:at|to|on|into|through|via)\s+(?:https?:\/\/)?(?:www\.)?mailrata\.org\b/i],
+];
+
+/* And what a store build may never call RATA. Apple's 2.2: "Demos, betas,
+   and trial versions of your app don't belong on the App Store – use
+   TestFlight instead." A store build is the finished app, so its copies
+   say "beta" nowhere in their HTML: not in the text, and not in an id or a
+   link to a place on the page, which a browser's address bar shows. */
+export const UNFINISHED = [
+  ['a beta', /\bbeta/i],
 ];
 
 /* Outside pages a copy may still link to. https only; the host exactly, and
@@ -309,6 +324,12 @@ export function sells(text) {
   return hit ? hit[0] : null;
 }
 
+/* What in a piece of HTML, anywhere in it, calls RATA unfinished, or null. */
+export function unfinished(html) {
+  const hit = UNFINISHED.find(([, re]) => re.test(readable(html)));
+  return hit ? hit[0] : null;
+}
+
 /* ---- the marks ------------------------------------------------------------ */
 
 const MARK = '<!-- in-app:';
@@ -337,7 +358,7 @@ function applyMarks(name, file, html) {
       const put = html.slice(s + add[0].length, close).trim();
       if (!put) throw new Error(`${file}: the in-app addition "${add[1]}" adds nothing`);
       if (put.includes(MARK)) throw new Error(`${file}: an in-app mark inside another`);
-      const said = sells(textOf(put));
+      const said = sells(textOf(put)) || unfinished(put);
       if (said) throw new Error(`${file}: what the store copy adds as "${add[1]}" names ${said}: ${put}`);
       out += html.slice(at, s) + put;
       at = close + 3;
@@ -369,8 +390,10 @@ function applyMarks(name, file, html) {
           throw new Error(`${file}: the store wording "${id}" finds its words ${found} times in what its marks hold, not once. `
             + `The page changed there: decide what the store copy says now. It looked for: ${old}`);
         }
-        if (!sells(textOf(old))) throw new Error(`${file}: the store wording "${id}" changes words that sell nothing: ${old}`);
-        const still = sells(textOf(now));
+        if (!sells(textOf(old)) && !unfinished(old)) {
+          throw new Error(`${file}: the store wording "${id}" changes words that sell nothing and call RATA no beta: ${old}`);
+        }
+        const still = sells(textOf(now)) || unfinished(now);
         if (still) throw new Error(`${file}: the store wording "${id}" still names ${still}: ${now}`);
         body = body.replace(old, () => now);
       }
@@ -470,7 +493,7 @@ export function storeSafe(name, html) {
   out += marked.slice(at);
   out = out.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, css => css.replace(/\/\*[\s\S]*?\*\//g, ''));
 
-  const said = sells(wordsOf(out));
+  const said = sells(wordsOf(out)) || unfinished(out);
   if (said) throw new Error(`${file}: the in-app copy still names ${said}; mark it in the page (STORE_CUTS)`);
 
   const head = out.replace(/<meta charset="UTF-8">/i, m => `${m}\n<meta name="robots" content="noindex">`);

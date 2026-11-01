@@ -116,7 +116,9 @@ footer a:hover{color:var(--ink)}
       <li><a href="#ai">AI features</a></li>
       <li><a href="#use">Using RATA</a></li>
       <li><a href="#ending">Ending</a></li>
-      <li><a href="#beta">A beta, as it is</a></li>
+      <!-- in-app:words --><li><a href="#beta">A beta, as it is</a></li><!-- in-app:end
+        as-is-toc: <li><a href="#beta">A beta, as it is</a></li> => <li><a href="#as-is">Provided as it is</a></li>
+      -->
       <li><a href="#law">Law, changes and contact</a></li>
     </ol>
   </aside>
@@ -159,8 +161,9 @@ footer a:hover{color:var(--ink)}
     </section><!-- in-app:end
       base-price: , $12.99 a month =>
       pro-price: , $23.99 a month =>
-      billing: Both are billed monthly by Stripe, and renew each month until you cancel. => Both are subscriptions, billed by the store or service you subscribed through, and renew until you cancel.
-      changes: You can change plan or cancel at any time in the billing portal, which you reach from Settings when signed in at mailrata.org. If a payment fails, RATA keeps working while Stripe retries the card. => That store or service handles changes, cancellation and refunds under its own terms.
+      billing: Bought here, both are billed monthly by Stripe, and renew each month until you cancel. => Both are subscriptions, and renew each month until you cancel.
+      changes: You can change plan or cancel at any time in the billing portal, which you reach from Settings when signed in at mailrata.org. If a payment fails, RATA keeps working while Stripe retries the card. =>
+      also-sold: RATA Base and RATA Pro are also sold in RATA&rsquo;s iPhone app, as App Store subscriptions, at the price the App Store shows there. => In RATA&rsquo;s iPhone app, RATA Base and RATA Pro are App Store subscriptions, at the price the App Store shows there.
     -->
 
     <!-- in-app:words --><section id="licence" aria-labelledby="licence-h">
@@ -176,7 +179,7 @@ footer a:hover{color:var(--ink)}
       </ul>
     </section><!-- in-app:end
       licence-page: Once your payment is confirmed, your licence page at mailrata.org shows a licence key. Paste it into RATA once. => Once your payment is confirmed, RATA gets a licence key for your plan.
-      new-key: Sign in at mailrata.org to get a new one => RATA then says how to get a new one
+      new-key: Sign in at mailrata.org to get a new one, or, for a subscription bought in the iPhone app, press Restore purchases there. => RATA then says how to get a new one: for a subscription bought in the iPhone app, press Restore purchases there.
     -->
 
     <section id="ai" aria-labelledby="ai-h">
@@ -213,6 +216,9 @@ footer a:hover{color:var(--ink)}
       <p>RATA is in beta. It has not yet been tested against every mail provider, its installers are not yet code-signed, and it changes as it improves. It is provided as it is. Your mail stays at your provider, so nothing RATA does on your computer is the only copy of it; keep your own copies of any files that matter.</p>
       <p>Nothing in these terms takes away rights you have by law that cannot be taken away.</p>
     </section><!-- in-app:end
+      as-is-ids: <section id="beta" aria-labelledby="beta-h"> => <section id="as-is" aria-labelledby="as-is-h">
+      as-is-head: <h2 id="beta-h">A beta, as it is</h2> => <h2 id="as-is-h">Provided as it is</h2>
+      in-beta: RATA is in beta. It has not yet been tested => RATA has not yet been tested
       unsigned: , its installers are not yet code-signed =>
     -->
 
