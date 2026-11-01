@@ -75,7 +75,8 @@ OneDrive.
 
 Steps: `docs/CONNECTIONS-SETUP.md` → Slack. Register all three redirect
 addresses exactly (`http://localhost:28417`, `:28418`, `:28419`), turn on
-PKCE, add the seven user scopes. One **Variable**: `RATA_SLACK_CLIENT_ID`.
+PKCE, add the six user scopes (RATA no longer asks for `im:read`; an app
+that already has it can drop it). One **Variable**: `RATA_SLACK_CLIENT_ID`.
 Never copy the client secret anywhere.
 
 **Worked when:** Settings → Connected accounts lists Slack, and Connect opens
@@ -120,7 +121,82 @@ a file from Files → Create file in Word, Excel and PowerPoint (and Pages,
 Numbers, Keynote on a Mac) and say if any complains, and try Convert on a
 PDF on a Mac.
 
-## 9. Decisions only you can make
+## 9. RATA on the iPhone App Store (weeks, mostly Apple's waiting)
+
+**Unlocks:** selling RATA in the iOS App Store, with Base and Pro as Apple
+subscriptions (`org.mailrata.pro.monthly`, `org.mailrata.base.monthly`),
+the In-App Purchase model you chose on 2026-10-15. As you decided on
+2026-10-17, the first public launch is the desktop direct download, sold
+through Stripe on mailrata.org, and the App Store comes after it, so
+nothing here holds that launch up. The iPhone app and its purchase
+screen are still being built (`docs/APP-STORES.md`), so steps 1, 2 and the
+trader details can start now; the rest wait for the app.
+
+Steps: `rata-next/LAUNCH.md` §11 (the agreement, the app record, the
+subscriptions, the notifications address, the settings, the database and
+the TestFlight test, and how to tell they worked); `docs/APP-STORES.md`
+for the trader details and step 10's answers.
+
+1. The Apple Developer Program (the same membership as macOS signing in
+   §7), then in App Store Connect the Paid Apps agreement, banking and
+   tax, and the Digital Services Act trader details (an address, phone and
+   email that Apple shows publicly; without them RATA is not sold in the
+   EU).
+2. The App Store Small Business Program, for the lower commission.
+3. The app record, with the bundle id `org.mailrata.mail` (decision D9,
+   2026-10-17: the iPhone and Mac App Store builds share it, so one
+   subscription covers both; the direct download keeps
+   `org.mailrata.desktop`). It is permanent once the first build is
+   uploaded. Note the record's numeric App ID.
+4. One subscription group, "RATA", with the two monthly subscriptions:
+   `org.mailrata.pro.monthly` at level 1 and `org.mailrata.base.monthly` at
+   level 2. Each needs its prices, a name and description in each
+   language, and the review screenshot Apple asks for. No free trial;
+   introductory offers and Family Sharing are your choice and need no
+   code. **Turn multiseat purchasing off** in each subscription's
+   purchase options: Apple has switched it on by default for every
+   subscription since 16 September 2026 (organisations buying seats in
+   bulk from 22 October, groups "this winter"), and the purchase server
+   (#167) gives one licence per purchase, not one per seat
+   (`docs/APPLE-REVIEW-2026-10.md`, section (j)). Turn on **Billing
+   Grace Period** on the same Subscriptions page: the terms promise RATA
+   keeps working while Apple gives a billing grace period, and without
+   the switch Apple gives none.
+5. App Store Server Notifications, version 2, for Production and Sandbox,
+   both to `https://mailrata.org/api/apple/notifications`.
+6. A sandbox tester account.
+7. On the server: `APPLE_APP_ID`, the app record's numeric App ID from
+   step 3 (`rata-next/LAUNCH.md` §4 and §11, step 7). `APPLE_BUNDLE_ID`
+   is optional: it defaults to `org.mailrata.mail`.
+8. Run `database.sql` §7 (it arrives with the same change).
+9. Redeploy mailrata.org.
+10. The App Privacy answers ("nutrition label"), the age rating (since
+    September 2026 it also asks about social media: RATA has none), the
+    encryption questions, the privacy policy and support addresses, and
+    Notes for Review: a test mailbox with an app password (not Outlook or
+    Microsoft 365, which a phone cannot link yet), and the reviewer
+    subscribing in the sandbox rather than pasting a licence key, since
+    Apple names licence keys as a banned unlock (`docs/APP-STORES.md` says
+    what each depends on; `docs/APPLE-REVIEW-2026-10.md` checks the build
+    against every rule and lists what would most likely be rejected).
+11. From TestFlight: a purchase, a restore, an upgrade from Base to Pro,
+    and a cancellation.
+
+**Worked when:** a TestFlight build buys Pro in the sandbox, Settings →
+Current plan says it is licensed for Pro, and Restore purchases on a
+second device brings the same plan back. A sandbox purchase never checks
+`APPLE_APP_ID`; Apple's *Request a Test Notification* in Production does,
+with `APPLE_BUNDLE_ID`, before release: *Get Test Notification Status*
+says `SUCCESS`, and the server log has no line beginning
+`apple/notifications: refused (INVALID_APP_IDENTIFIER)`. A line there
+naming `app id (none)` means Apple sent the test without the app's
+number: leave `APPLE_APP_ID` as it is (that line's advice to change it
+does not hold), and only the purchase below checks it. Then, after your
+own first purchase from the released app, the log still has no such
+line, which confirms both (`rata-next/LAUNCH.md` §11, *How to tell it
+worked*).
+
+## 10. Decisions only you can make
 
 - **Sent copies.** Some providers do not file mail sent over SMTP into Sent
   (Gmail and Outlook do). Should RATA put a copy there itself?
@@ -129,3 +205,10 @@ PDF on a Mac.
 - **Renewals inside the 90-day window** (security review row 15): a copy
   that keeps renewing is not stopped. A business decision.
 - **More extensions in the disguised-program lists** (security review P3-4).
+- **The app stores** (`docs/APP-STORES.md`, where each is set out):
+  deleting an account while a subscription is live (D4), what Anthropic
+  keeps of AI text (D5), new mail in the background on phones (D7), phone
+  backups (D8), a store version without "beta" (D9; its identifiers you
+  decided on 2026-10-17), when the Mac App Store build ships (D10), and
+  the legal entity, address and contact for the privacy policy and terms
+  (D11).

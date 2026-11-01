@@ -9,6 +9,7 @@ const SUITES = [
   ['domain redirect',    './redirect.test.mjs'],
   ['health endpoint',    './health.test.mjs'],
   ['licences',           './licence.test.mjs'],
+  ['App Store',          './apple.test.mjs'],
   ['licence page',       './account.test.mjs'],
   ['privacy and terms',  './legal.test.mjs'],
   ['AI relay',           './ai.test.mjs'],

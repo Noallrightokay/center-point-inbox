@@ -186,6 +186,8 @@ fn guard_admits_only_the_literal_loopback_address() {
         "[::1]",
         "::ffff:127.0.0.1",
         "::ffff:7f00:1",
+        "64:ff9b::7f00:1",
+        "64:ff9b::127.0.0.1",
         "localhost",
         "a.localhost",
         "10.0.0.1",
@@ -199,11 +201,15 @@ fn guard_admits_only_the_literal_loopback_address() {
             "{still_refused} must stay refused with loopback-tests on"
         );
     }
-    // A name answering with 127.0.0.1 is still a name pointing inside.
-    assert_eq!(
-        check_resolved(&["127.0.0.1".parse().unwrap()]),
-        HostVerdict::NotPublic
-    );
+    // A name answering with 127.0.0.1 is still a name pointing inside, and so
+    // is one answering with it as DNS64 would write it.
+    for inside in ["127.0.0.1", "64:ff9b::7f00:1"] {
+        assert_eq!(
+            check_resolved(&[inside.parse().unwrap()]),
+            HostVerdict::NotPublic,
+            "{inside}"
+        );
+    }
 }
 
 // --------------------------------------------------------------------- link

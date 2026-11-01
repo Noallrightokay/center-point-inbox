@@ -78,18 +78,36 @@ function publicKeyFrom(pem) {
 }
 
 /* Issue a licence. Everything the app needs to decide what to unlock, and
-   nothing it does not: no name, no mailbox list, no card details. */
-export function issue({ email, plan, days = LICENCE_DAYS, now = Date.now() }, privatePem = process.env.LICENCE_PRIVATE_KEY) {
+   nothing it does not: no name, no mailbox list, no card details.
+
+   `email` is the licence's subject, `sub`: the address a Stripe subscription
+   is keyed on, or, for a subscription bought in the iPhone app,
+   `apple:<originalTransactionId>` (lib/apple.js, appleSub), which is not an
+   address and is never mailed or shown. The app needs only a subject that is
+   not empty; renewal and the AI relay read it back as it is written here.
+
+   `until`, when given, is a time (in milliseconds) the licence must not
+   outlive: it then expires at the earlier of `days` from now and `until`.
+   An App Store licence is cut so (lib/apple.js, appleLicenceUntil), and
+   one that would end before it began is refused, never issued. */
+export function issue({ email, plan, days = LICENCE_DAYS, until = null, now = Date.now() }, privatePem = process.env.LICENCE_PRIVATE_KEY) {
   const addr = String(email || '').trim().toLowerCase();
   if (!addr) throw new Error('a licence needs an address to be issued to');
   if (!plan) throw new Error('a licence needs a plan');
 
+  const iat = Math.floor(now / 1000);
+  let exp = iat + days * 86400;
+  if (until !== null && until !== undefined) {
+    const end = Math.floor(Number(until) / 1000);
+    if (!Number.isFinite(end) || end <= iat) throw new Error('a licence cannot end before it is issued');
+    exp = Math.min(exp, end);
+  }
   const payload = {
     v: 1,
     sub: addr,
     plan,
-    iat: Math.floor(now / 1000),
-    exp: Math.floor(now / 1000) + days * 86400,
+    iat,
+    exp,
   };
   const body = b64(JSON.stringify(payload));
   const sig = sign(null, Buffer.from(body, 'utf8'), privateKeyFrom(privatePem));

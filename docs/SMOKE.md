@@ -158,6 +158,35 @@ and a release built after it; until then write "not switched on".
 
 The steps are under *Files, Apps and connected accounts* in section 3.
 
+### An IPv6-only network (once, on a Mac; from the release after 0.1.52)
+
+The outbound guard judges NAT64 addresses by the IPv4 address inside, and
+refuses the zones `local`, `internal` and `arpa` themselves (#163, #164).
+Neither has been seen on a real IPv6-only network. A Mac can make one:
+Apple's *Supporting IPv6 DNS64/NAT64 Networks* describes Internet Sharing's
+NAT64 option (`docs/APP-STORES.md` links it). Join that network from the
+computer under test.
+
+| # | Row | Mac |
+|---|---|---|
+| N1 | Link a mailbox whose provider has only IPv4 on that network | ☐ |
+| N2 | A typed server of `local`, `printer.local`, `x.internal` or `1.0.254.169.in-addr.arpa` is refused | ☐ |
+
+N1 passes when the mailbox links and its first sync runs; 0.1.52 refuses it
+with "… points inside a private network". N2 passes when each is refused
+with the same sentence and nothing is dialled.
+
+### This computer's own (once per computer, v0.1.52 and later)
+
+| # | Row | Windows | Mac | Linux |
+|---|---|---|---|---|
+| P1 | Starting RATA again while it is open (§5) | ☐ | ☐ | ☐ |
+| P2 | A Windows profile that roams (§5, domain accounts only) | ☐ | | |
+
+P2 needs a Windows account on a company domain whose profile roams
+between computers, and a second computer to sign in to. Without one,
+write "no roaming profile".
+
 Where a step says **refresh**, press **⟳ Sync linked inboxes** above the
 mail list, or **Sync now** on the mailbox's row in Settings, Linked
 accounts.
@@ -524,23 +553,35 @@ folder; open a file in the Bridge. Save the same attachment to OneDrive
 twice: **Pass:** OneDrive (the website) shows two files, the second with
 a "1" added to its name; nothing was replaced. Try a work or school
 account too if you have one, and note any "needs admin approval" page
-word for word.
+word for word. **A dropped connection** (v0.1.52 and later): save a file
+of more than 10 MB to OneDrive and turn the Wi-Fi off for about five
+seconds while it goes up, then on again. **Pass:** the save finishes and
+OneDrive shows the file once; or RATA says OneDrive may have saved it,
+and OneDrive shows it once. A second copy with "1" added is a fail.
 
 **F7. Google Drive** (v0.1.51, needs the two Google variables). **Connect**
 opens Google's sign-in and then Google's file chooser in the browser:
 pick a Word file and a Google Doc. **Pass:** Files lists the two (the
 Google Doc as `.docx`) and nothing else from your Drive; open each in the
 Bridge. Save the same attachment twice: two files in Drive. Press
-**Choose files** and pick one more: it joins the list. **Disconnect**:
+**Choose files** and pick one more: it joins the list. **A dropped
+connection** (v0.1.52 and later): save a file of more than 5 MB and turn
+the Wi-Fi off for about five seconds while it goes up, then on again.
+**Pass:** Drive shows the file once, whether RATA says it was saved or
+that Google Drive may have saved it. **Disconnect**:
 https://myaccount.google.com/permissions no longer lists RATA within a
 minute.
 
 **F8. Share to Slack** (v0.1.50, needs `RATA_SLACK_CLIENT_ID`). **Connect**
 on the Slack row opens Slack in the browser; allow it. Open a message in
 RATA and press **Share to Slack**. **Pass:** the list holds your channels
-and people; send the text to yourself with `<b>&</b>` typed into it, and
-a file. **In Slack:** the text shows exactly `<b>&</b>` (not bold), and
-the file arrives. **Disconnect**: Slack's *Manage apps* page no longer
+and people, you first (labelled **You**), each person with their
+`@handle`; a guest, or a channel shared with another organization, says
+so on its row, and choosing one turns the line above the list amber. Send
+the text to yourself with `<b>&</b>` typed into it, a link, and a file.
+**In Slack:** the text shows exactly `<b>&</b>` (not bold), the link has
+no preview under it (v0.1.52 and later), and the file arrives after the
+text. **Disconnect**: Slack's *Manage apps* page no longer
 shows RATA's access for you.
 
 **F9. Delete account forgets every connection.** With at least one
@@ -608,7 +649,7 @@ your licence key.
 
 | OS | Folder |
 |---|---|
-| Windows | `%APPDATA%\org.mailrata.desktop\` (paste into Explorer's address bar) |
+| Windows | `%LOCALAPPDATA%\org.mailrata.desktop\` (paste into Explorer's address bar). Up to v0.1.51 it was `%APPDATA%\org.mailrata.desktop\`; a later version moves it on its first start. |
 | macOS | `~/Library/Application Support/org.mailrata.desktop/` (Finder → Go → Go to Folder) |
 | Linux | `~/.local/share/org.mailrata.desktop/` |
 
@@ -662,6 +703,58 @@ What to know per system:
 Notifications are never shown for mail you fetched by pressing a sync
 button, for Spam, or while RATA is in front. That is by design, not a
 fail.
+
+### Starting RATA again while it is open (row P1)
+
+*Proves: one RATA at a time, so two copies never write over each other's
+mailbox list (security review part 4, R5).* The release workflow checks
+this on its own runners; this row checks it on a real desktop.
+
+1. With RATA open, minimise it.
+2. Start it again the usual way: Windows, from the Start menu; Linux, from
+   the applications menu. If both the `.deb` and the AppImage are
+   installed, start the other one too.
+3. macOS: the Dock and Finder only bring the open RATA forward, so start a
+   second copy from Terminal: `open -n /Applications/RATA.app`.
+
+**Pass:** Windows and Linux: the open RATA window comes forward, and only
+one RATA is running afterwards (Windows: Task Manager lists one RATA;
+Linux: `pgrep -c rata-app` says 1). macOS: the second copy quits by itself
+within a few seconds and the first stays open. Nothing asks for the
+licence again.
+**Fail:** a second RATA window, or the first RATA closing. On Linux, also
+write down the desktop (GNOME, KDE…) and whether you are in a desktop
+session at all (an SSH or bare terminal session has no session bus, and
+then only the second check, the list's lock, stops the second copy).
+
+### A Windows profile that roams (row P2)
+
+*Proves: on a work network the mailbox list, the passwords and the
+sign-ins stay on the computer they were made on, and a roaming profile
+does not carry them to the company's file share (security review part 4,
+R6 and R13).* Only the owner, with a domain account, can run this.
+
+1. On the first PC, with v0.1.51 installed and a mailbox linked, install
+   the new version over it and start it once. Quit it, then sign out of
+   Windows.
+2. Still on the first PC, after signing in again: `mailboxes.json` is in
+   `%LOCALAPPDATA%\org.mailrata.desktop\`, and
+   `%APPDATA%\org.mailrata.desktop\` holds no `mailboxes.json`. RATA opens
+   with its mailboxes and licence. `cmdkey /list | findstr mailrata` still
+   lists the mailbox's entry.
+3. Sign in to the second PC with the same account. In Command Prompt,
+   `cmdkey /list | findstr mailrata` lists nothing. Start RATA there (the
+   new version).
+4. Back on the first PC, start RATA from the Start menu while it is open:
+   as row P1.
+
+**Pass:** steps 2 to 4 as written. **Expected, not a fail:** on the
+second PC RATA opens with no mailboxes and asks for the licence key, once;
+link the mailbox and paste the key there, and from then on each PC keeps
+its own. If the second PC still runs v0.1.51 or older, it may ask for that
+mailbox's password again after the first PC has started the new version.
+**Record:** which steps passed, and anything `cmdkey` listed in step 3
+(names only; it never shows a password).
 
 ---
 
@@ -718,7 +811,8 @@ the rows count towards these MVP rows in MVP-PLAN Part 1:
 | M11 | the password never leaves the machine | 5, 20 |
 
 Rows 5 and 20 are also the "OS keychains" line of MVP-PLAN Part 3, and row
-16 is its "OS notifications" line. Rows X1 to X7 map to no MVP row.
+16 is its "OS notifications" line. Rows X1 to X7, the F rows and the P
+rows map to no MVP row.
 
 Then:
 

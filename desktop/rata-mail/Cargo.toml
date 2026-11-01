@@ -18,6 +18,11 @@ serde = ["dep:serde"]
 # PROFILE is release, even with debug assertions forced on. A release build
 # cannot have it.
 loopback-tests = []
+# On a Mac, look names up the way an iOS build always does, through the
+# system's own resolver (src/dns_sd.rs) rather than hickory, so that path can
+# be tested on one (.github/workflows/mail-apple.yml). It does nothing on any
+# other system (build.rs), and the macOS app does not turn it on.
+system-dns = []
 
 [[test]]
 name = "loopback"
@@ -27,10 +32,16 @@ required-features = ["loopback-tests"]
 serde = { version = "1", features = ["derive"], optional = true }
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
 futures = "0.3.34"
-hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
 rustls-platform-verifier = "0.7.0"
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["rt", "macros", "net", "time", "io-util"] }
 tokio-rustls = "0.26.5"
 mail-parser = { version = "0.11.9", features = ["full_encoding"] }
 ammonia = "4.2.0"
+
+# iOS asks the system's own resolver instead (src/dns_sd.rs): its sandbox has
+# none of the settings hickory reads (/etc/resolv.conf, or on Apple systems
+# the System Configuration store), and nothing there uses hickory, so it is
+# not built for iOS at all.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
