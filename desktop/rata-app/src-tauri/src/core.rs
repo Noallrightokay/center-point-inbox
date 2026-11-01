@@ -434,12 +434,15 @@ pub struct Forgotten {
     pub mailboxes: usize,
 }
 
-/// Where an attachment was saved.
+/// Where an attachment, or a file the interface made, was saved.
 #[derive(Debug, Serialize)]
 pub struct Saved {
     pub path: String,
     pub name: String,
     pub size: u64,
+    /// The folder, in the customer's words (`save_place`), for the page to
+    /// say where the file went.
+    pub place: &'static str,
 }
 
 /// What doing something to messages on the server came to, in the shape the
@@ -2863,6 +2866,7 @@ fn save_fetched(
             .unwrap_or(name),
         path: path.display().to_string(),
         size: bytes.len() as u64,
+        place: save_place(cfg!(target_os = "ios")),
     })
 }
 
@@ -2900,6 +2904,47 @@ fn hand_fetched(
 /// a workspace export, never anything near this.
 pub const SAVE_MAX: usize = 100 * 1024 * 1024;
 
+/// Where a save goes (an attachment, a file the interface made), from the
+/// folders the system reports. On a computer, the Downloads folder: on
+/// Linux Tauri finds it only through the desktop's `user-dirs.dirs`, which
+/// not every system has (without it, every save failed there), so the
+/// conventional `~/Downloads` stands in. On iOS, the app's own Documents
+/// folder and nothing else: the one folder of an app's that the Files app
+/// shows, once Info.plist says it may (STAGE 3 item 7). A Downloads folder
+/// there is one nobody could ever open.
+pub fn save_folder(
+    ios: bool,
+    documents: Option<PathBuf>,
+    downloads: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if ios {
+        return documents;
+    }
+    downloads.or_else(|| home.map(|h| h.join("Downloads")))
+}
+
+/// The folder `save_folder` picks, as the page names it to the customer
+/// ("Saved to … as invoice.pdf"). On iOS the Files app shows the app's
+/// Documents folder as On My iPhone › RATA; there is no Downloads folder
+/// for a save to be in.
+pub fn save_place(ios: bool) -> &'static str {
+    if ios {
+        "RATA's folder in the Files app"
+    } else {
+        "your Downloads folder"
+    }
+}
+
+/// The same words for the page before any save answers (an attachment's
+/// button, "Save to …"): a script the window runs as each page starts
+/// (lib.rs), setting `window.__RATA_SAVE_PLACE__` to a JSON string, which
+/// a JavaScript string literal is, so nothing in it can become code.
+pub fn save_place_script(ios: bool) -> String {
+    let place = serde_json::to_string(save_place(ios)).unwrap_or_else(|_| "null".into());
+    format!("window.__RATA_SAVE_PLACE__={place};")
+}
+
 /// A file the interface made — a converted document, a workspace export —
 /// saved into `dir` (the Downloads folder). The webview does not save a
 /// page's downloads on its own, so without this "Convert & download" did
@@ -2921,6 +2966,7 @@ pub fn save_file(dir: &Path, name: &str, bytes: &[u8], avoid: &[PathBuf]) -> Res
             .unwrap_or(name),
         path: path.display().to_string(),
         size: bytes.len() as u64,
+        place: save_place(cfg!(target_os = "ios")),
     })
 }
 
@@ -3807,6 +3853,9 @@ mod tests {
         assert_eq!(a.name, "report.docx");
         assert_eq!(b.name, "report (2).docx");
         assert_eq!(std::fs::read(&a.path).unwrap(), b"one");
+        // What the page says of where it went, as this system's build has it.
+        assert_eq!(a.place, save_place(cfg!(target_os = "ios")));
+        assert_eq!(serde_json::to_value(&a).unwrap()["place"], a.place);
         let sly = save_file(&dir, "../../.bashrc", b"x", &[]).unwrap();
         assert!(
             std::path::Path::new(&sly.path).starts_with(&dir),
@@ -3816,6 +3865,53 @@ mod tests {
         let big = vec![0u8; SAVE_MAX + 1];
         assert!(save_file(&dir, "big.bin", &big, &[]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Saves go to Downloads on a computer (`~/Downloads` where the desktop
+    /// names none), and on iOS to the app's Documents folder, which the
+    /// Files app shows, never to a Downloads folder there.
+    #[test]
+    fn a_save_goes_to_downloads_and_on_ios_to_the_apps_documents() {
+        let p = |s: &str| Some(PathBuf::from(s));
+        let home = "/var/mobile/Containers/Data/Application/A1";
+        let docs = "/var/mobile/Containers/Data/Application/A1/Documents";
+        let down = "/var/mobile/Containers/Data/Application/A1/Downloads";
+        assert_eq!(save_folder(true, p(docs), p(down), p(home)), p(docs));
+        assert_eq!(save_folder(true, None, p(down), p(home)), None);
+        assert_eq!(
+            save_folder(
+                false,
+                p("/home/ann/Documents"),
+                p("/home/ann/Dl"),
+                p("/home/ann")
+            ),
+            p("/home/ann/Dl")
+        );
+        assert_eq!(
+            save_folder(false, p("/home/ann/Documents"), None, p("/home/ann")),
+            p("/home/ann/Downloads")
+        );
+        assert_eq!(save_folder(false, None, None, None), None);
+        // And the page names the folder each time it says where a file
+        // went: never Downloads on a phone.
+        assert_eq!(save_place(false), "your Downloads folder");
+        assert_eq!(save_place(true), "RATA's folder in the Files app");
+        assert!(!save_place(true).contains("Downloads"));
+        // And before any save, as each page starts (app.html's savePlace):
+        // the same words, as one string literal.
+        assert_eq!(
+            save_place_script(false),
+            r#"window.__RATA_SAVE_PLACE__="your Downloads folder";"#
+        );
+        assert_eq!(
+            save_place_script(true),
+            r#"window.__RATA_SAVE_PLACE__="RATA's folder in the Files app";"#
+        );
+        let page = include_str!("../../../../rata-next/public/app.html");
+        assert!(page.contains(
+            "const savePlace=()=>typeof window.__RATA_SAVE_PLACE__==='string'&&window.__RATA_SAVE_PLACE__||'your Downloads folder';"
+        ));
+        assert!(page.contains(r#"title="Save to ${esc(savePlace())}""#));
     }
 
     /// SEC-9 (F2): a name a file Create file made is recorded under is

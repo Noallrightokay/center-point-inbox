@@ -110,9 +110,12 @@ impl Service {
     }
 
     /// Whether every copy can connect it. Slack is not, as such: a copy can
-    /// when it was built with Slack's client id (`Rata::offers`).
+    /// when it was built with Slack's client id (`Rata::offers`). Nor are
+    /// the folders on a phone, whose apps keep none RATA could read (STAGE
+    /// 3 item 7): there they answer `available: false` and are refused, as
+    /// a service a build lacks.
     pub fn available(self) -> bool {
-        matches!(self, Service::Apple | Service::Adobe)
+        cfg!(desktop) && matches!(self, Service::Apple | Service::Adobe)
     }
 
     /// The folder's own name, which starts every path shown for it.

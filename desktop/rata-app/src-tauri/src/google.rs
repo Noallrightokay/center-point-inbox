@@ -88,7 +88,8 @@ use crate::vault::{self, Unreadable};
 /// The Desktop app client's id and secret, from the build. Both, or no
 /// Google Drive in this build.
 pub const CLIENT_ID: Option<&str> = option_env!("RATA_GOOGLE_CLIENT_ID");
-pub const CLIENT_SECRET: Option<&str> = option_env!("RATA_GOOGLE_CLIENT_SECRET");
+pub const CLIENT_SECRET: Option<&str> =
+    crate::desktop_only(option_env!("RATA_GOOGLE_CLIENT_SECRET"));
 
 /// Google's OAuth 2.0 endpoints for installed apps.
 pub const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";

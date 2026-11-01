@@ -519,6 +519,349 @@ export default async function run(state) {
         `and when it opens again, both halves are one inbox (${merged.bulk + 1} + legacy), nothing lost`);
 
       await p2.evaluate(async () => { S.messages = S.messages.filter(m => !String(m.id).startsWith('t6-')); save(); await msFlush(); });
+
+      /* ---- what mail leaves in the workspace is kept beside the mail ---- */
+      console.log('\n— the audit trail, the Files list and folder names are kept beside the mail, not in localStorage —');
+      /* An iPhone backs up an app's LocalStorage and not its IndexedDB
+         (backup.rs): a subject opened, a document's text or a folder's name
+         in the localStorage entry would go to Apple's servers. */
+      const work = await p2.evaluate(async () => {
+        S.documents.unshift({ id: 'wk-doc', name: 'Lab results.pdf', fmt: 'PDF', origin: 'mail', prov: 'imap', size: '1 KB', bytes: 9,
+          ts: Date.now(), content: 'Converted attachment text wk-secret-1', hasFile: true });
+        S.boxes = Object.assign({}, S.boxes, { 'wk@example.com': { at: 1, list: [{ name: 'Clients/wk-secret-2', label: 'Clients / wk-secret-2' }] } });
+        await audit('msg.read', 'Subject wk-secret-3');
+        save(); await wkFlush();
+        const raw = localStorage.getItem(LS_KEY), meta = JSON.parse(raw);
+        const db = new Map((await new Promise((res) => { const tx = WK.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(k.result.map((x, i) => [x, v.result[i]])); })));
+        return { open: !!WK, name: WK_DB, leaked: ['wk-secret-1', 'wk-secret-2', 'wk-secret-3'].filter(x => raw.includes(x)),
+          entry: { audit: meta.audit, documents: meta.documents, boxes: meta.boxes },
+          stored: ['wk-secret-1', 'wk-secret-2', 'wk-secret-3'].filter(x => [...db.values()].some(j => j.includes(x))),
+          parts: [...db.keys()].sort() };
+      });
+      check(work.open && /^rata-work-/.test(work.name), `the work store opens: ${work.name}`);
+      check(!work.leaked.length && Array.isArray(work.entry.audit) && !work.entry.audit.length && Array.isArray(work.entry.documents)
+        && !work.entry.documents.length && JSON.stringify(work.entry.boxes) === '{}',
+      `the localStorage entry holds no subject, document text or folder name, and carries each part empty for an older build: ${JSON.stringify(work)}`);
+      check(work.stored.length === 3 && JSON.stringify(work.parts) === '["audit","boxes","documents","rev"]',
+        `they are in IndexedDB instead, with the store's revision: ${JSON.stringify(work.stored)} in ${JSON.stringify(work.parts)}`);
+
+      await p2.reload(); await boot(p2);
+      const wkBack = await p2.evaluate(async () => {
+        const out = { doc: (S.documents.find(d => d.id === 'wk-doc') || {}).content, box: !!(S.boxes || {})['wk@example.com'],
+          last: S.audit[S.audit.length - 1].detail };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(wkBack.doc === 'Converted attachment text wk-secret-1' && wkBack.box && wkBack.last === 'Subject wk-secret-3' && /\bok\b/.test(wkBack.chain),
+        `and come back from there after a restart, the audit chain still whole: ${JSON.stringify(wkBack)}`);
+
+      /* A workspace an older build saved holds them in its entry: they move
+         across, merged with what the store has, and the entry is emptied. */
+      await p2.evaluate(() => {
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        meta.documents = [{ id: 'wk-old', name: 'From 0.1.52.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 1, content: 'wk-secret-4', hasFile: false }];
+        meta.boxes = { 'old@example.com': { at: 2, list: [{ name: 'wk-secret-5', label: 'wk-secret-5' }] } };
+        meta.audit = [{ i: 0, ts: Date.now() + 1000, action: 'msg.read', detail: 'wk-secret-6', prev: '0'.repeat(64), hash: 'f'.repeat(64) }];
+        localStorage.setItem(LS_KEY, JSON.stringify(meta));
+      });
+      await p2.reload(); await boot(p2);
+      const wkMoved = await p2.evaluate(async () => {
+        await wkFlush();
+        const raw = localStorage.getItem(LS_KEY);
+        const out = { docs: S.documents.filter(d => /^wk-/.test(d.id)).map(d => d.id), boxes: Object.keys(S.boxes || {}).filter(k => /example\.com/.test(k)).sort(),
+          tail: S.audit.slice(-2).map(e => e.detail), leaked: ['wk-secret-4', 'wk-secret-5', 'wk-secret-6'].filter(x => raw.includes(x)) };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(JSON.stringify(wkMoved.docs) === '["wk-old","wk-doc"]' && JSON.stringify(wkMoved.boxes) === '["old@example.com","wk@example.com"]'
+        && JSON.stringify(wkMoved.tail) === '["Subject wk-secret-3","wk-secret-6"]' && /\bok\b/.test(wkMoved.chain) && !wkMoved.leaked.length,
+      `an older build's entry moves into the store and out of localStorage, merged, its audit entries chained on: ${JSON.stringify(wkMoved)}`);
+
+      /* Where that store will not open, they stay in the entry the old way. */
+      const p5 = await ctx.newPage();
+      p5.on('pageerror', e => errs.push('work fallback page: ' + e.message));
+      await p5.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (String(name).startsWith('rata-work-')) throw new Error('no IndexedDB here'); return o.call(this, name, ...a); }; });
+      await p5.goto(s.url + '/app.html'); await boot(p5);
+      const wkFallback = await p5.evaluate(() => {
+        S.documents.unshift({ id: 'wk-fb', name: 'Fallback.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 2, content: 'kept the old way', hasFile: false });
+        save();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { open: !!WK, inEntry: (meta.documents || []).some(d => d.id === 'wk-fb') };
+      });
+      await p5.close();
+      check(!wkFallback.open && wkFallback.inEntry, `without that store, the Files list is kept in localStorage the old way: ${JSON.stringify(wkFallback)}`);
+      await p2.reload(); await boot(p2);
+      const wkAgain = await p2.evaluate(async () => {
+        await wkFlush();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { docs: S.documents.filter(d => /^wk-/.test(d.id)).map(d => d.id), entryDocs: meta.documents.length };
+      });
+      check(wkAgain.docs.includes('wk-fb') && wkAgain.docs.includes('wk-doc') && wkAgain.entryDocs === 0,
+        `and when it opens again, both halves are one list, out of the entry: ${JSON.stringify(wkAgain)}`);
+
+      /* Some webviews leave open() pending for ever. Each store gives up
+         after 5 s; asked one after the other, the first screen waited 10. */
+      const p6 = await ctx.newPage();
+      p6.on('pageerror', e => errs.push('hung stores page: ' + e.message));
+      await p6.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (/^rata-(mail|work)-/.test(String(name))) return {}; return o.call(this, name, ...a); }; });
+      const hungFrom = Date.now();
+      await p6.goto(s.url + '/app.html'); await boot(p6);
+      const hungFor = Date.now() - hungFrom;
+      const hung = await p6.evaluate(() => ({ mail: !!MS, work: !!WK }));
+      await p6.close();
+      check(!hung.mail && !hung.work && hungFor >= 4500 && hungFor < 8000,
+        `where IndexedDB's open never answers, start waits out one timeout for both stores together, not one each, and keeps them the old way (${hungFor} ms, ${JSON.stringify(hung)})`);
+
+      /* A session neither store opened for leaves the mail and the parts in
+         the entry. At the next start that opens them, the mail's own
+         rewrite of the entry comes first: written without the parts before
+         the work store has them, a start ended between the two loses the
+         audit trail, the Files list and the folder names. */
+      const p7 = await ctx.newPage();
+      p7.on('pageerror', e => errs.push('both refused page: ' + e.message));
+      await p7.addInitScript(() => { const o = IDBFactory.prototype.open; IDBFactory.prototype.open = function (name, ...a) { if (/^rata-(mail|work)-/.test(String(name))) throw new Error('no IndexedDB here'); return o.call(this, name, ...a); }; });
+      await p7.goto(s.url + '/app.html'); await boot(p7);
+      const refused = await p7.evaluate(async () => {
+        S.messages.push({ id: 'wk-both-msg', ch: 'email', prov: 'imap', subj: 'Kept the old way', prev: '', body: 'x', ts: 8, atts: [] });
+        S.documents.unshift({ id: 'wk-both', name: 'Both refused.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 3, content: 'wk-secret-7', hasFile: false });
+        await audit('msg.read', 'wk-secret-8');
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { mail: !!MS, work: !!WK, msg: (meta.messages || []).some(m => m.id === 'wk-both-msg'),
+          doc: (meta.documents || []).some(d => d.id === 'wk-both'), audit: (meta.audit || []).some(e => e.detail === 'wk-secret-8') };
+      });
+      await p7.close();
+      const p8 = await ctx.newPage();
+      p8.on('pageerror', e => errs.push('both open again page: ' + e.message));
+      /* Each write of the entry before the work store has committed the
+         parts must still hold them. */
+      await p8.addInitScript(() => {
+        const w = window.__wkOrder = { committed: false, early: [], puts: 0 };
+        const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (...a) {
+          if (this.name === 'parts') { w.puts++; this.transaction.addEventListener('complete', () => { w.committed = true; }); }
+          return put.apply(this, a);
+        };
+        const set = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          let ours = false; try { ours = this === localStorage && k === LS_KEY; } catch (e) {}
+          if (ours && !w.committed) {
+            const lost = ['wk-secret-7', 'wk-secret-8'].filter(x => !String(v).includes(x));
+            if (lost.length) w.early.push(lost);
+          }
+          return set.call(this, k, v);
+        };
+      });
+      await p8.goto(s.url + '/app.html'); await boot(p8);
+      const reopened = await p8.evaluate(async () => {
+        await wkFlush();
+        await new Promise(r => { const until = Date.now() + 8000; const t = setInterval(() => {
+          const meta = JSON.parse(localStorage.getItem(LS_KEY));
+          if ((window.__wkOrder.committed && !meta.documents.length && !('messages' in meta)) || Date.now() > until) { clearInterval(t); r(); }
+        }, 50); });
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        const db = new Map((await new Promise((res) => { const tx = WK.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(k.result.map((x, i) => [x, v.result[i]])); })));
+        const out = { mail: !!MS, work: !!WK, early: window.__wkOrder.early, puts: window.__wkOrder.puts, committed: window.__wkOrder.committed,
+          entry: { messages: 'messages' in meta, documents: meta.documents.length, audit: meta.audit.length },
+          stored: ['wk-secret-7', 'wk-secret-8'].filter(x => [...db.values()].some(j => j.includes(x))),
+          msg: S.messages.some(m => m.id === 'wk-both-msg') && MS_HELD.has('wk-both-msg') };
+        S.messages = S.messages.filter(m => m.id !== 'wk-both-msg'); S.documents = S.documents.filter(d => d.id !== 'wk-both');
+        save(); await msFlush(); await wkFlush();
+        return out;
+      });
+      await p8.close();
+      check(!refused.mail && !refused.work && refused.msg && refused.doc && refused.audit && reopened.mail && reopened.work
+        && !reopened.early.length && reopened.puts > 0 && reopened.committed && !reopened.entry.messages && !reopened.entry.documents && !reopened.entry.audit
+        && reopened.stored.length === 2 && reopened.msg,
+      `after a session neither store opened for, the next start writes the entry without the parts only once the work store has them, and the mail moves too: ${JSON.stringify({ refused, reopened })}`);
+
+      /* While start merges the entry's parts with the work store's (one
+         SHA-256 for each audit entry chained on again), a save must neither
+         empty the entry's nor write the workspace's parts from before the
+         merge over the store's own: a start ended there lost the store's
+         Files list and audit trail for good. And a merge that fails leaves
+         the store alone for that session. The store holds wk-d1 and an
+         audit entry; the entry holds wk-e1 and another, as a session the
+         store did not open for leaves it. */
+      await p2.reload(); await boot(p2);
+      await p2.evaluate(async () => {
+        S.documents.unshift({ id: 'wk-d1', name: 'In the store.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 4, content: 'wk-secret-9', hasFile: false });
+        await audit('msg.read', 'wk-secret-10');
+        save(); await wkFlush();
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        meta.documents = [{ id: 'wk-e1', name: 'In the entry.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 5, content: 'wk-secret-11', hasFile: false }];
+        meta.audit = [{ i: 0, ts: Date.now() + 1000, action: 'msg.read', detail: 'wk-secret-12', prev: '0'.repeat(64), hash: 'e'.repeat(64) }];
+        localStorage.setItem(LS_KEY, JSON.stringify(meta));
+      });
+      /* What the entry and the store each hold, read past the page's own
+         handles. */
+      const bothNow = (pg) => pg.evaluate(async () => {
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        const db = await new Promise((res, rej) => { const rq = indexedDB.open(WK_DB, 1); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+        const got = await new Promise((res) => { const tx = db.transaction(WK_STORE, 'readonly'), st = tx.objectStore(WK_STORE), k = st.getAllKeys(), v = st.getAll(); tx.oncomplete = () => res(Object.fromEntries(k.result.map((x, i) => [x, JSON.parse(v.result[i])]))); });
+        db.close();
+        const ids = (l) => (l || []).map(d => d.id).filter(x => /^wk-[de]1$/.test(x)).sort();
+        const said = (l) => (l || []).map(e => e.detail).filter(x => /^wk-secret-1[02]$/.test(x));
+        return { hit: !!(window.__wkHold && window.__wkHold.hit), entry: { docs: ids(meta.documents), audit: said(meta.audit) }, store: { docs: ids(got.documents), audit: said(got.audit) } };
+      });
+      /* The merge's first digest saves, as an event could, and never ends,
+         as an app ended in the background does; or it is refused. */
+      const hold = (refuse) => {
+        const w = window.__wkHold = { hit: false };
+        const digest = SubtleCrypto.prototype.digest;
+        SubtleCrypto.prototype.digest = function (...a) {
+          let started = false; try { started = !!S; } catch (e) {}
+          if (started && !w.hit) { w.hit = true; if (refuse) return Promise.reject(new Error('no digest here')); saveLocal(); return new Promise(() => {}); }
+          return digest.apply(this, a);
+        };
+      };
+      const p9 = await ctx.newPage();
+      p9.on('pageerror', e => errs.push('merge held page: ' + e.message));
+      await p9.addInitScript(hold, false);
+      await p9.goto(s.url + '/app.html');
+      await p9.waitForFunction(() => window.__wkHold && window.__wkHold.hit, null, { timeout: 25000 }).catch(() => {});
+      await p9.waitForTimeout(500);
+      const midMerge = await bothNow(p9);
+      await p9.close();
+      const p10 = await ctx.newPage();
+      p10.on('pageerror', e => errs.push('merge refused page: ' + e.message));
+      await p10.addInitScript(hold, true);
+      await p10.goto(s.url + '/app.html'); await boot(p10);
+      await p10.waitForFunction(() => window.__wkHold && window.__wkHold.hit, null, { timeout: 10000 }).catch(() => {});
+      await p10.waitForTimeout(300);
+      const afterRefused = await p10.evaluate(async () => {
+        const open = !!WK;
+        S.documents.unshift({ id: 'wk-later', name: 'Later.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 6, content: 'x', hasFile: false });
+        save(); await new Promise(r => setTimeout(r, 300));
+        S.documents = S.documents.filter(d => d.id !== 'wk-later'); save();
+        return open;
+      });
+      const refusedMerge = Object.assign(await bothNow(p10), { open: afterRefused });
+      await p10.close();
+      const store = { docs: ['wk-d1'], audit: ['wk-secret-10'] }, entry = { docs: ['wk-e1'], audit: ['wk-secret-12'] };
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      await p2.reload(); await boot(p2);
+      const mergedAfter = await p2.evaluate(async () => {
+        await wkFlush();
+        const out = { docs: S.documents.map(d => d.id).filter(x => /^wk-[de]1$/.test(x)).sort(), tail: S.audit.slice(-2).map(e => e.detail) };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(midMerge.hit && refusedMerge.hit && same(midMerge.entry, entry) && same(midMerge.store, store) && same(refusedMerge.entry, entry) && same(refusedMerge.store, store) && !refusedMerge.open
+        && same(mergedAfter.docs, ['wk-d1', 'wk-e1']) && same(mergedAfter.tail, ['wk-secret-10', 'wk-secret-12']) && /\bok\b/.test(mergedAfter.chain),
+      `a save while start merges the entry's parts into the work store keeps the entry's and leaves the store's alone, a merge that fails leaves the store alone for that session, and the next start merges both: ${JSON.stringify({ midMerge, refusedMerge, mergedAfter })}`);
+      await p2.evaluate(async () => { S.documents = S.documents.filter(d => !/^wk-[de]1$/.test(d.id)); save(); await wkFlush(); });
+
+      /* A write to the work store that fails puts the parts back in the
+         entry, while the session goes on holding the store's parts too: what
+         it removes from then on must stay removed. Merged with the store's
+         at the next start, as an entry of a session the store never opened
+         for is, rv-b and its folder list came back (with rv-b's file gone
+         from rata-files). So the entry says it holds them whole, and the
+         next start takes it in place of the store's own. */
+      const wkDoc = (id) => ({ id, name: id + '.txt', fmt: 'TXT', origin: 'rata', prov: 'rata', size: '1 KB', bytes: 3, ts: 7, content: 'x', hasFile: false });
+      await p2.evaluate(async (docs) => {
+        S.documents = docs.concat(S.documents.filter(d => !/^rv-/.test(d.id)));
+        S.boxes = Object.assign({}, S.boxes, { 'rv-a@example.com': { at: 1, list: [] }, 'rv-b@example.com': { at: 1, list: [] } });
+        save(); await wkFlush();
+      }, [wkDoc('rv-b'), wkDoc('rv-a')]);
+      const p11 = await ctx.newPage();
+      p11.on('pageerror', e => errs.push('work writes refused page: ' + e.message));
+      await p11.addInitScript(() => { const put = IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function (...a) { if (this.name === 'parts') throw new Error('refused'); return put.apply(this, a); }; });
+      await p11.goto(s.url + '/app.html'); await boot(p11);
+      const rvFailing = await p11.evaluate(async () => {
+        S.documents = S.documents.filter(d => d.id !== 'rv-b'); delete S.boxes['rv-b@example.com'];
+        save(); await wkFlush().catch(() => {});
+        await audit('msg.read', 'rv-secret-1'); await wkFlush().catch(() => {});
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        return { docs: (meta.documents || []).map(d => d.id).filter(x => /^rv-/.test(x)),
+          boxes: Object.keys(meta.boxes || {}).filter(k => /^rv-/.test(k)), audit: (meta.audit || []).some(e => e.detail === 'rv-secret-1'),
+          whole: meta.wkWhole ? meta.wkWhole.parts.slice().sort() : null };
+      });
+      await p11.close();
+      await p2.reload(); await boot(p2);
+      const rvAfter = await p2.evaluate(async () => {
+        await wkFlush();
+        /* Start empties the entry once the store has what it held. */
+        for (let i = 0; i < 100 && 'wkWhole' in JSON.parse(localStorage.getItem(LS_KEY)); i++) await new Promise(r => setTimeout(r, 50));
+        const meta = JSON.parse(localStorage.getItem(LS_KEY));
+        const out = { docs: S.documents.map(d => d.id).filter(x => /^rv-/.test(x)), boxes: Object.keys(S.boxes || {}).filter(k => /^rv-/.test(k)).sort(),
+          last: S.audit[S.audit.length - 1].detail, entry: meta.documents.length + meta.audit.length, whole: 'wkWhole' in meta };
+        await verifyChain();
+        out.chain = $('#verify-out').className;
+        return out;
+      });
+      check(same(rvFailing.docs, ['rv-a']) && same(rvFailing.boxes, ['rv-a@example.com']) && rvFailing.audit
+        && same(rvFailing.whole, ['audit', 'boxes', 'documents'])
+        && same(rvAfter.docs, ['rv-a']) && same(rvAfter.boxes, ['rv-a@example.com']) && rvAfter.last === 'rv-secret-1' && /\bok\b/.test(rvAfter.chain)
+        && !rvAfter.entry && !rvAfter.whole,
+      `after a failed write the entry holds the parts whole, so a document and a folder list removed in that session stay removed at the next start: ${JSON.stringify({ rvFailing, rvAfter })}`);
+
+      /* One failed write does not leave them in the entry for the rest of
+         the session, where an iPhone's backup takes it: the next save writes
+         them, on the store opened afresh, and empties the entry again. The
+         first write is refused as a full disk refuses it; then the page's
+         connection is closed, as WebKit drops one while the app is
+         suspended; then it is closed with the event that says so, and the
+         entry never holds them at all. */
+      const p12 = await ctx.newPage();
+      p12.on('pageerror', e => errs.push('work write refused once page: ' + e.message));
+      await p12.addInitScript(() => {
+        let n = 0; const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (...a) { if (this.name === 'parts' && window.__wkRefuse && !n++) throw new DOMException('no room', 'QuotaExceededError'); return put.apply(this, a); };
+      });
+      await p12.goto(s.url + '/app.html'); await boot(p12);
+      const rtRetried = await p12.evaluate(async (docs) => {
+        const inEntry = () => (JSON.parse(localStorage.getItem(LS_KEY)).documents || []).map(d => d.id).filter(x => /^rt-/.test(x));
+        const inStore = async () => {
+          const db = await new Promise((res, rej) => { const rq = indexedDB.open(WK_DB, 1); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+          const j = await new Promise((res) => { const tx = db.transaction(WK_STORE, 'readonly'), g = tx.objectStore(WK_STORE).get('documents'); tx.oncomplete = () => res(g.result); });
+          db.close();
+          return JSON.parse(j || '[]').map(d => d.id).filter(x => /^rt-/.test(x));
+        };
+        const add = (i) => { S.documents.unshift(docs[i]); save(); };
+        window.__wkRefuse = true;
+        add(0); await wkFlush().catch(() => {});
+        const refused = { entry: inEntry(), store: await inStore(), toast: window.__toasts.filter(t => /Files list/.test(t)) };
+        add(1); await wkFlush().catch(() => {});
+        const next = { entry: inEntry(), store: await inStore() };
+        const was = WK; if (WK) WK.close();
+        add(2); await wkFlush().catch(() => {});
+        const dropped = { entry: inEntry() };
+        add(3); await wkFlush().catch(() => {});
+        const reopened = { entry: inEntry(), store: await inStore(), fresh: !!WK && WK !== was };
+        const before = WK, seen = [];
+        const set = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) { if (this === localStorage && k === LS_KEY) seen.push(String(v).includes('rt-4')); return set.call(this, k, v); };
+        if (WK) { WK.dispatchEvent(new Event('close')); WK.close(); }
+        add(4); await wkFlush().catch(() => {});
+        Storage.prototype.setItem = set;
+        const closed = { entry: inEntry(), store: await inStore(), fresh: !!WK && WK !== before, everInEntry: seen.some(Boolean) };
+        S.documents = S.documents.filter(d => !/^rt-/.test(d.id)); save(); await wkFlush().catch(() => {});
+        return { refused, next, dropped, reopened, closed };
+      }, [0, 1, 2, 3, 4].map(i => wkDoc('rt-' + i)));
+      await p12.close();
+      const r = rtRetried;
+      check(same(r.refused.entry, ['rt-0']) && !r.refused.store.length && r.refused.toast.length === 1 && /disk is full/.test(r.refused.toast[0])
+        && !r.next.entry.length && same(r.next.store, ['rt-1', 'rt-0'])
+        && same(r.dropped.entry, ['rt-2', 'rt-1', 'rt-0'])
+        && !r.reopened.entry.length && same(r.reopened.store, ['rt-3', 'rt-2', 'rt-1', 'rt-0']) && r.reopened.fresh
+        && !r.closed.entry.length && r.closed.store[0] === 'rt-4' && r.closed.fresh && !r.closed.everInEntry,
+      `a failed write leaves the parts in the entry only until the next save's write has them, on the store opened afresh: ${JSON.stringify(r)}`);
+      await p2.reload(); await boot(p2);
+      await p2.evaluate(async () => {
+        S.documents = S.documents.filter(d => !/^(rv|rt)-/.test(d.id));
+        S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^rv-/.test(k)));
+        save(); await wkFlush();
+      });
+
+      await p2.evaluate(async () => {
+        S.documents = S.documents.filter(d => !/^wk-/.test(d.id));
+        S.boxes = Object.fromEntries(Object.entries(S.boxes || {}).filter(([k]) => !/^(wk|old)@example\.com$/.test(k)));
+        save(); await wkFlush();
+      });
       await p2.close();
     }
 

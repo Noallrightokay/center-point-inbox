@@ -40,8 +40,9 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 
 /// The Entra application's id, from the build. Empty or unset: no Microsoft
-/// sign-in in this build.
-pub const CLIENT_ID: Option<&str> = option_env!("RATA_MS_CLIENT_ID");
+/// sign-in in this build, for a mailbox or for OneDrive. None on a phone
+/// (`desktop_only`), where both answer as a build without it.
+pub const CLIENT_ID: Option<&str> = crate::desktop_only(option_env!("RATA_MS_CLIENT_ID"));
 
 /// `common`: personal Microsoft accounts and work or school ones alike.
 pub const AUTHORIZE_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";

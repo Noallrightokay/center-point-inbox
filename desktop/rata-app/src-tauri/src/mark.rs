@@ -58,7 +58,9 @@ pub fn from_internet(path: &Path) -> std::io::Result<()> {
 
 /// Linux (and anything else): nothing. No desktop acts on a mark the way
 /// Windows and macOS do, and the one that exists, `user.xdg.origin.url`,
-/// would record where the file came from, which is the sender.
+/// would record where the file came from, which is the sender. A phone
+/// (iOS is not `macos` here) has no such mark either, and runs no program
+/// from a saved file.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn from_internet(_path: &Path) -> std::io::Result<()> {
     Ok(())

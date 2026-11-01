@@ -7,3 +7,12 @@ src-tauri/target/
 
 # Written by tauri-build from tauri.conf.json on every build.
 src-tauri/gen/schemas/
+
+# Written by ios/cargo-env.py for an iOS build, with a throwaway licence key
+# or made-up client ids, and removed again by `cargo-env.py --remove`.
+src-tauri/.cargo/
+
+# The Xcode project `tauri ios init` makes. Not committed: the iOS job
+# (.github/workflows/ios.yml) makes it afresh from these sources on every
+# run, and ios/prepare.sh adds RATA's own changes to it.
+src-tauri/gen/apple/

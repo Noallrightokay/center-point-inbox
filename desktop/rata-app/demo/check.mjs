@@ -262,13 +262,36 @@ for (const form of FORMS) {
   check((await page.evaluate(() => S.documents.length)) >= 3, `with its sample documents in Files: ${await page.evaluate(() => S.documents.map((d) => d.name).join(', '))}`);
   check((await theirs()) === THEIRS, `and another page’s storage is still there: ${await theirs()}`);
 
-  /* Reset and the Base/Pro switch start the demo again. */
+  /* Reset and the Base/Pro switch start the demo again. Afresh: the sample
+     documents back in Files with their files behind them, and nothing of
+     the audit trail from before. app.html keeps both in IndexedDB as well
+     as the mail (rata-work-*, beside rata-mail-* and rata-files), so a
+     reset that leaves one of those brings the old list back over the
+     sample, with no files behind it. */
+  const afresh = async (since) => {
+    await page.waitForFunction(() => localStorage.getItem('rata_demo_files') !== null && S.documents.length >= 3, null, { timeout: 15000 }).catch(() => {});
+    return page.evaluate(async (since) => ({
+      docs: await Promise.all(S.documents.map(async (d) => ({ name: d.name, hasFile: !!d.hasFile, file: !!(await fvGet(d.id).catch(() => null)) }))),
+      audit: S.audit.length,
+      older: S.audit.filter((e) => e.ts < since).map((e) => e.action),
+    }), since);
+  };
+  const isAfresh = (f) => f.docs.length >= 3 && f.docs.every((d) => d.file || !d.hasFile) && !f.older.length;
   await page.evaluate(() => { localStorage.setItem('rata_demo_conn', '{}'); });
+  let since = await page.evaluate(() => Date.now());
   await page.click('#demo-reset');
   await page.waitForTimeout(800);
   await ready();
   check((await page.evaluate(() => localStorage.getItem('rata_demo_conn'))) === null && (await theirs()) === THEIRS,
     `Reset clears the demo’s own keys and only those: ${await theirs()}`);
+  let fresh = await afresh(since);
+  check(isAfresh(fresh), `and starts afresh: the sample documents with their files, no audit entry from before: ${JSON.stringify(fresh)}`);
+  /* A new DEMO_VERSION does the same for everyone who opened an older one. */
+  since = await page.evaluate(() => { localStorage.setItem('rata_demo_v', 'an older one'); return Date.now(); });
+  await page.reload();
+  await ready();
+  fresh = await afresh(since);
+  check(isAfresh(fresh) && (await theirs()) === THEIRS, `so does a new DEMO_VERSION, leaving another page’s storage alone: ${JSON.stringify(fresh)}`);
   await page.click('[data-plan="base"]');
   await page.waitForTimeout(800);
   await ready();

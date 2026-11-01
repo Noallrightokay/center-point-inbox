@@ -2,8 +2,9 @@
 # verify-release.sh TAG — download a published release and check every
 # shipped binary: the .deb, the .AppImage, the Windows -setup.exe and both
 # macOS .dmg files. In each: the licence public key (PEM or raw), the app id
-# org.mailrata.desktop, the window title, and no font CDN
-# (fonts.googleapis / fonts.gstatic). Then the .deb is launched under Xvfb
+# org.mailrata.desktop, the window title, no font CDN
+# (fonts.googleapis / fonts.gstatic), and none of the smoke self-test's
+# words. Then the .deb is launched under Xvfb
 # and its window title read. Nothing else is executed: the AppImage is
 # opened as the squashfs it carries after its ELF runtime, never run.
 #   PUB_PEM=path/to/licence.pub WORK=/some/scratch/dir ./verify-release.sh v0.1.44
@@ -18,6 +19,20 @@
 # from the release, so a partial run never reads as a pass.
 #   ./verify-release.sh --title v1.0.0   prints the window title that release
 #                                        must show, and nothing else.
+#   ./verify-release.sh --no-updater BIN [WITH]
+#                                        BIN, a program built without
+#                                        self-update (an app store's, a
+#                                        phone's), holds none of the
+#                                        updater; WITH, one built with it,
+#                                        holds every sign of it, so a sign
+#                                        that no longer means anything fails
+#                                        rather than passing for ever. Exit
+#                                        0 or 1; nothing is downloaded.
+#   ./verify-release.sh --no-smoke BIN [WITH]
+#                                        the same for the smoke self-test:
+#                                        BIN holds none of its words, WITH
+#                                        (a build with --features smoke)
+#                                        holds every one.
 set -u
 # The title a version's window carries, derived as release.yml's smoke
 # derives it: 0.x is a beta ("RATA 0.1.42 beta"), 1.x and on are not
@@ -27,6 +42,65 @@ title_for() {
   case "$v" in 0.*) echo "RATA $v beta" ;; *) echo "RATA $v" ;; esac
 }
 if [ "${1:-}" = "--title" ]; then title_for "${2:?give a version or tag}"; exit 0; fi
+# What only the updater puts in a program: the feed's address and a
+# setting of its config (both gone from a build without self-update by
+# build.rs), the plugin's own name and words, and RATA's sentence for a
+# feed it cannot reach (update.rs).
+UPDATER_SIGNS=(
+  'releases/download/updater/'
+  'requireSignedVersion'
+  'tauri-plugin-updater'
+  'Updater does not have any endpoints set'
+  'could not reach its update feed'
+)
+no_updater() {
+  local bin="$1" with="${2:-}" sign n w bad=0
+  [ -f "$bin" ] || { echo "no-updater: FAIL: no binary at $bin"; return 1; }
+  [ -z "$with" ] || [ -f "$with" ] || { echo "no-updater: FAIL: no binary at $with"; return 1; }
+  for sign in "${UPDATER_SIGNS[@]}"; do
+    n=$(grep -acF -- "$sign" "$bin")
+    if [ -n "$with" ]; then w=$(grep -acF -- "$sign" "$with"); else w="-"; fi
+    echo "\"$sign\": without=$n with=$w"
+    [ "$n" -eq 0 ] || bad=1
+    [ -z "$with" ] || [ "$w" -ge 1 ] || bad=1
+  done
+  if [ "$bad" -eq 0 ]; then echo "no-updater: pass"; return 0; fi
+  echo "no-updater: FAIL: the build without self-update holds the updater, or a sign above no longer marks it"
+  return 1
+}
+if [ "${1:-}" = "--no-updater" ]; then no_updater "${2:?give the program built without self-update}" "${3:-}"; exit $?; fi
+# What only a build with the `smoke` feature (src-tauri/src/smoke.rs, the
+# iOS Simulator job's self-test) puts in a program: its page script's
+# guard, its keychain service, the variable a licence is handed over in,
+# and the mark its smoke.json carries. A shipped binary holds none.
+SMOKE_SIGNS=(
+  'window.__rataSmoke'
+  'org.mailrata.desktop.smoke'
+  'RATA_SMOKE_LICENCE'
+  'rata-smoke-self-test'
+)
+# How many times the signs occur in a binary, all told.
+smoke_in() {
+  local sign n=0
+  for sign in "${SMOKE_SIGNS[@]}"; do n=$((n + $(grep -acF -- "$sign" "$1"))); done
+  echo "$n"
+}
+no_smoke() {
+  local bin="$1" with="${2:-}" sign n w bad=0
+  [ -f "$bin" ] || { echo "no-smoke: FAIL: no binary at $bin"; return 1; }
+  [ -z "$with" ] || [ -f "$with" ] || { echo "no-smoke: FAIL: no binary at $with"; return 1; }
+  for sign in "${SMOKE_SIGNS[@]}"; do
+    n=$(grep -acF -- "$sign" "$bin")
+    if [ -n "$with" ]; then w=$(grep -acF -- "$sign" "$with"); else w="-"; fi
+    echo "\"$sign\": without=$n with=$w"
+    [ "$n" -eq 0 ] || bad=1
+    [ -z "$with" ] || [ "$w" -ge 1 ] || bad=1
+  done
+  if [ "$bad" -eq 0 ]; then echo "no-smoke: pass"; return 0; fi
+  echo "no-smoke: FAIL: a build without the smoke feature holds its words, or a word above no longer marks it"
+  return 1
+}
+if [ "${1:-}" = "--no-smoke" ]; then no_smoke "${2:?give a program built without the smoke feature}" "${3:-}"; exit $?; fi
 PUB="${PUB_PEM:?set PUB_PEM to the licence public key (PEM) the release was built with}"
 case "$PUB" in /*) ;; *) PUB="$PWD/$PUB" ;; esac
 [ -r "$PUB" ] || { echo "PUB_PEM: cannot read $PUB"; exit 1; }
@@ -88,20 +162,22 @@ PY
 # third argument is a macOS Info.plist, whose CFBundleIdentifier must be
 # the app id too.
 judge() {
-  local label="$1" b="$2" plist="${3:-}" pem raw id title code="" fonts bundle=""
+  local label="$1" b="$2" plist="${3:-}" pem raw id title code="" fonts bundle="" smoke
   if [ ! -f "$b" ]; then bad "$label" "no binary at $b"; return; fi
   pem=$(grep -ac "$KEYB" "$b"); raw=$(grep -ac "$RAW" "$b")
   id=$(grep -ac org.mailrata.desktop "$b"); title=$(grep -acF "$TITLE" "$b")
   [ "$title" -ge 1 ] || code=$(title_in_code "$b" "$TITLE")
   fonts=$(grep -acE 'fonts\.(googleapis|gstatic)' "$b")
+  smoke=$(smoke_in "$b")
   [ -z "$plist" ] || bundle=$(bundle_id "$plist")
-  echo "$label: ${b#"$D"/} key-pem=$pem key-raw=$raw id=$id title=$title${code:+ title-in-code=$code} fonts=$fonts${plist:+ bundle-id=${bundle:-none}}"
+  echo "$label: ${b#"$D"/} key-pem=$pem key-raw=$raw id=$id title=$title${code:+ title-in-code=$code} fonts=$fonts smoke=$smoke${plist:+ bundle-id=${bundle:-none}}"
   local why=""
   [ $((pem + raw)) -ge 1 ] || why="$why; no licence key"
   [ "$id" -ge 1 ] || why="$why; no org.mailrata.desktop"
   [ -z "$plist" ] || [ "$bundle" = org.mailrata.desktop ] || why="$why; Info.plist bundle id is ${bundle:-missing}"
   [ "$title" -ge 1 ] || [ "${code:-0}" -ge 1 ] || why="$why; no \"$TITLE\""
   [ "$fonts" -eq 0 ] || why="$why; a font CDN address"
+  [ "$smoke" -eq 0 ] || why="$why; the smoke self-test's words (a build with --features smoke)"
   if [ -z "$why" ]; then echo "$label: pass"; PASS=$((PASS + 1)); else bad "$label" "${why#; }"; fi
 }
 # The one file of a kind in the release, or nothing.
