@@ -662,8 +662,21 @@ passes), and the entry is emptied only once the database has it: while
 the merge runs nothing is written to the database and every write of the
 entry keeps the parts (`WK_MERGING`), and after it they stay in the entry
 until the database's write of them has committed (`WK_MOVING`); where the
-database will not open, the merge fails or a write fails, the parts stay
-in the entry the old way for that session. **What an iPhone backup keeps
+database will not open or the merge fails, the parts stay in the entry
+the old way for that session. A write that fails (a full disk, or a
+connection WebKit dropped while the app was suspended) puts them back in
+the entry (`WK_DOWN`) only until a later save's write, on the database
+opened afresh (`wkReopen`; a connection whose `close` event says it was
+closed under the page is opened afresh before its next write, and the
+entry never takes them), has them all on disk; each save tries, and a
+database another page deletes is not opened again. An entry written while the page held the database's
+parts as well (after a failed write, or a merge that failed part way)
+says it holds them whole (`wkWhole`, with the database's revision,
+`WK_REV`, one more for each write begun), and the next start puts it in
+place of the database's parts instead of merging it, so a document or
+folder list removed meanwhile stays removed; a database written after
+that entry (a later revision) wins. Only a session the database never
+opened for leaves an entry that is merged. **What an iPhone backup keeps
 (`backup.rs`, D8).** RATA's own folder (`Library/Application
 Support/<identifier>`: the list, the licence token, the lock, Create
 file's records) and every IndexedDB folder under `Library/WebKit`
@@ -674,9 +687,11 @@ only and never synchronized (`vault.rs`, `ios::write_here`). A backup
 still takes, on purpose until the owner decides: WebKit's LocalStorage
 (this entry: settings with the signatures, People, rules, each linked
 address and its last error, deleted ids; the device account; Apps'
-entry; an Undo-send record while it waits) and the app's Documents
-folder (every save, Export workspace's full copy of the mail among
-them). So a restored or replaced iPhone lists the old mailboxes while
+entry; an Undo-send record while it waits; the audit trail, Files list
+and folder names whenever the entry holds them, as above; the messages
+only in a session the mail store did not open for or whose first write
+at start failed) and the app's Documents folder (every save, Export
+workspace's full copy of the mail among them). So a restored or replaced iPhone lists the old mailboxes while
 RATA's own list is empty, and `refresh_mail` passes over an address it
 does not list without a word: the bridge's `/api/sync/mail` answers
 `listed` (every address `list_mailboxes` has), and `absorbMail` marks
@@ -685,8 +700,12 @@ each mail entry it does not name as needing linking again (`NOT_HERE`,
 now says so), unless a mailbox was linked while that refresh ran
 (`LINKS`). An empty inbox with a mailbox to link again says so and
 offers Linked accounts, never "Your linked accounts are connected". The
-same covers a computer that got the list from the online account, and
-Windows' second PC on a roaming profile (R13). `S.messages`
+same covers Windows' second PC on a roaming profile, whose list moved to
+the other PC (R13), and a second device account on one computer, which
+shares RATA's list, once the other removed the mailbox or deleted its
+account; `NOT_HERE` names no cause, since it is said in all three. (The
+desktop build has no online account to bring a list from, and on the
+website no answer carries `listed`.) `S.messages`
 was still all in memory then (0.1.21 moved the text out — below). `save()` finds
 what changed by comparing each message with how it was last stored
 (`MS_HELD`: the body by identity — nearly all the bytes, almost never

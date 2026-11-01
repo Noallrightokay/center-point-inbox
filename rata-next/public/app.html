@@ -1755,25 +1755,58 @@ function metaOf(st){const o=Object.assign({},st);delete o.messages;o.store='idb'
    the database's write of them has committed, every write of the entry
    still keeps them (WK_MOVING), the mail's own rewrite of it at start
    among them. Where the database will not open, or the merge fails, the
-   parts stay in the entry the old way for that session. */
+   parts stay in the entry the old way for that session.
+
+   A write that fails (a full disk, or a connection WebKit dropped while
+   the app was suspended) puts the parts back in the entry (WK_DOWN), and
+   every save after it tries again, on the database opened afresh: the
+   first write that has every part on disk takes them out of the entry
+   again. A database another page deletes or upgrades (Delete account in
+   another tab, a demo's Reset) is let go and not opened again; the
+   parts stay in the entry for that session.
+
+   Whole, or only what was added. An entry written while the workspace
+   held the database's parts as well (after a failed write, or after a
+   merge that failed part way) holds those parts whole, and says so
+   (wkWhole: which parts, and the database's revision then, WK_REV): at
+   the next start each replaces the database's own, so what was removed
+   in the meantime stays removed; merged, it came back. The database is
+   the newer only once a write begun after that entry has reached it (a
+   later revision), and then it wins. Only a session the database never
+   opened for, which never had the database's parts, leaves an entry
+   that is merged. */
 const WK_DB='rata-work-'+(SESSION?SESSION.uid:'anon'),WK_STORE='parts';
 const WK_PARTS=['audit','documents','boxes'];
 let WK=null;              /* the open database, or null: the old way */
 let WK_MERGING=false;     /* at start: its parts not merged with the entry's yet */
 let WK_MOVING=false;      /* at start: parts the entry held, not yet written there */
-const WK_HELD=new Map();  /* part → its JSON as last written */
-let wkQueued=false,wkWarned=false,wkLast=Promise.resolve();
+let WK_DOWN=false;        /* a write failed: the parts are in the entry until one has them all on disk */
+let wkStale=false;        /* open it afresh before the next write */
+let wkEnded=false;        /* another page deleted or upgraded it: not opened again */
+const WK_WHOLE=new Set(); /* parts the workspace holds whole, the database's in them */
+let WK_REV=0;             /* the database's revision: one more for each write begun */
+const WK_HELD=new Map();  /* part → its JSON as last written ('' when not known to be on disk) */
+let wkQueued=false,wkWarned=false,wkLast=Promise.resolve(),wkRetry=null;
 function wkOpen(name=WK_DB){
   return new Promise((res,rej)=>{
     /* As msOpen: an open() left pending must not stop the app starting. */
     const t=setTimeout(()=>rej(new Error('IndexedDB did not open')),5000);
     let rq;try{rq=indexedDB.open(name,1)}catch(e){clearTimeout(t);rej(e);return}
     rq.onupgradeneeded=()=>{if(!rq.result.objectStoreNames.contains(WK_STORE))rq.result.createObjectStore(WK_STORE)};
-    rq.onsuccess=()=>{clearTimeout(t);const db=rq.result;db.onversionchange=()=>db.close();res(db)};
+    rq.onsuccess=()=>{
+      clearTimeout(t);const db=rq.result;
+      /* Another page deleting or upgrading it: let go, for good. */
+      db.onversionchange=()=>{db.close();if(name===WK_DB)wkEnded=true};
+      /* Closed under the page (WebKit loses its storage process): the next
+         write opens it afresh. */
+      db.onclose=()=>{if(db===WK)wkStale=true};
+      res(db);
+    };
     rq.onerror=()=>{clearTimeout(t);rej(rq.error)};
   });
 }
-/* part → its value, for each part the database holds and can read. */
+/* part → its value, for each part the database holds and can read, and
+   'rev' → its revision when it has one. */
 function wkAll(db){
   return new Promise((res,rej)=>{
     const tx=db.transaction(WK_STORE,'readonly'),st=tx.objectStore(WK_STORE);
@@ -1781,6 +1814,7 @@ function wkAll(db){
     tx.oncomplete=()=>{
       const out=new Map();
       ks.result.forEach((k,i)=>{
+        if(k==='rev'){const n=Number(vs.result[i]);if(Number.isSafeInteger(n)&&n>0)out.set('rev',n);return}
         if(!WK_PARTS.includes(k))return;
         /* What cannot be read, or is not the part's shape, is remembered as
            something no part matches, so the next write replaces it. */
@@ -1799,14 +1833,31 @@ const wkHolds=v=>Array.isArray(v)?v.length>0:!!(v&&typeof v==='object'&&Object.k
 /* The database's parts, with whatever the entry holds merged in (it is the
    newer): documents by id and folder lists by mailbox, the entry's winning;
    audit entries the database lacks go on the end of its chain, linked
-   afresh, so the chain still verifies. Answers whether the entry held any. */
-async function wkMerge(held){
+   afresh, so the chain still verifies. A part the entry holds whole
+   (`whole`, read from its wkWhole) replaces the database's instead, unless
+   the database's revision is the later. Answers whether the entry held
+   any. */
+async function wkMerge(held,whole){
   let fromEntry=false;
+  const rev=held.get('rev')||0;
+  /* The whole parts first, before anything waits: a save during the rest
+     writes them under a revision they include. Every write from here on
+     gets a later one than the entry's as well, so an entry left behind
+     (one localStorage would not let start empty) is never taken for the
+     newer once one has reached the database. */
   for(const k of WK_PARTS){
-    const db=held.get(k),ent=S[k];
-    if(!wkHolds(ent)){if(db!==undefined)S[k]=db;continue}
+    if(!whole.parts.has(k))continue;
     fromEntry=true;
-    if(db===undefined||!wkHolds(db))continue;
+    if(whole.rev<rev&&held.get(k)!==undefined)S[k]=held.get(k);
+    WK_WHOLE.add(k);
+  }
+  WK_REV=Math.max(rev,whole.rev);
+  for(const k of WK_PARTS){
+    if(whole.parts.has(k))continue;
+    const db=held.get(k),ent=S[k];
+    if(!wkHolds(ent)){if(db!==undefined)S[k]=db;WK_WHOLE.add(k);continue}
+    fromEntry=true;
+    if(db===undefined||!wkHolds(db)){WK_WHOLE.add(k);continue}
     if(k==='documents'){const ids=new Set(ent.map(d=>d&&d.id));S[k]=ent.concat(db.filter(d=>!ids.has(d&&d.id)))}
     else if(k==='boxes')S[k]=Object.assign({},db,ent);
     else{
@@ -1819,50 +1870,96 @@ async function wkMerge(held){
       }
       S[k]=chain.slice(-200);
     }
+    WK_WHOLE.add(k);
   }
   return fromEntry;
 }
 /* Writes each part that changed since it was last written, and returns
    when that and every earlier write is on disk. A part the workspace no
-   longer has (a reset) is removed. */
+   longer has (a reset) is removed. After a failed write, or a connection
+   closed under the page, the database is opened afresh first. */
 function wkFlush(){
   wkQueued=false;
   /* Until start has merged them, the workspace's parts are not the
      database's: written now, they would replace its own. */
   if(!WK||WK_MERGING)return wkLast;
+  /* One attempt at a time: its write, made once it is open, takes in
+     whatever changed while it waited. */
+  if(wkStale&&!wkEnded){
+    if(!wkRetry)wkRetry=wkLast=wkLast.catch(()=>{}).then(wkReopen).then(()=>wkBegin()).finally(()=>{wkRetry=null});
+    return wkRetry;
+  }
+  return wkBegin()||wkLast;
+}
+/* The database opened again, in place of a connection that failed. Until
+   it opens, the parts stay in the entry. */
+async function wkReopen(){
+  if(!wkStale||!WK||wkEnded)return;
+  const was=WK;
+  let db;
+  try{db=await wkOpen()}catch(e){wkDown(e);throw e}
+  /* Delete account here, or another page deleting it, meanwhile. */
+  if(WK!==was||wkEnded){try{db.close()}catch(err){}return}
+  try{was.close()}catch(err){}
+  WK=db;wkStale=false;
+  /* What it holds is not known now: every part is written again. */
+  for(const k of WK_PARTS)WK_HELD.set(k,'');
+}
+/* The parts go back into the entry, and stay there until a write has
+   them all on disk. */
+function wkDown(e){
+  WK_DOWN=true;
+  if(!wkWarned){wkWarned=true;toast('RATA could not save its Files list and audit trail beside your mail'+(e&&e.name==='QuotaExceededError'?': the disk is full.':'.')+' They are kept the old way for now.')}
+  saveEntry();
+}
+/* Begins the write of what changed, and answers it, or null when nothing
+   did. */
+function wkBegin(){
+  if(!WK||WK_MERGING)return null;
   const put=[],del=[];
   for(const k of WK_PARTS){
     if(S[k]===undefined){if(WK_HELD.has(k))del.push(k);continue}
     const j=JSON.stringify(S[k]);
     if(WK_HELD.get(k)!==j)put.push([k,j]);
   }
-  if(!put.length&&!del.length)return wkLast;
+  if(!put.length&&!del.length)return null;
+  const rev=++WK_REV;
   for(const [k,j] of put)WK_HELD.set(k,j);
   for(const k of del)WK_HELD.delete(k);
-  /* A write that fails sends the parts back to the entry, the old way, for
-     the rest of this session; the next start moves them across again. */
+  /* A write that fails sends the parts back to the entry, the old way,
+     until a later save's write has them all on disk; that write goes on
+     the database opened afresh, since WebKit drops a connection while the
+     app is suspended and every write on it fails from then on. */
   const undo=e=>{
-    try{if(WK)WK.close()}catch(err){}
-    WK=null;WK_HELD.clear();
-    if(!wkWarned){wkWarned=true;toast('RATA could not save its Files list and audit trail beside your mail'+(e&&e.name==='QuotaExceededError'?': the disk is full.':'.')+' They are kept the old way for now.')}
-    saveLocal();
+    for(const [k] of put)WK_HELD.set(k,'');
+    for(const k of del)WK_HELD.set(k,'');
+    wkStale=true;wkDown(e);
     throw e;
   };
   try{
     const tx=WK.transaction(WK_STORE,'readwrite'),st=tx.objectStore(WK_STORE);
     for(const [k,j] of put)st.put(j,k);
     for(const k of del)st.delete(k);
+    st.put(String(rev),'rev');
     return wkLast=new Promise((res,rej)=>{
-      tx.oncomplete=()=>{wkWarned=false;res()};
+      tx.oncomplete=()=>{
+        wkWarned=false;
+        /* The latest write, with nothing left that a failed one did not
+           write: the entry need not hold the parts any more. */
+        if(WK_DOWN&&rev===WK_REV&&![...WK_HELD.values()].includes('')){WK_DOWN=false;saveEntry()}
+        res();
+      };
       tx.onerror=tx.onabort=()=>rej(tx.error||new Error('aborted'));
     }).catch(undo);
   }catch(e){return wkLast=Promise.reject(e).catch(undo)}
 }
 /* The localStorage entry: without the messages where IndexedDB holds them,
-   and with the parts above empty where the work database holds them. */
+   and with the parts above empty where the work database holds them. Where
+   it carries them, it says which it carries whole (wkWhole). */
 function entryOf(st){
   const o=MS?metaOf(st):Object.assign({},st);
-  if(WK&&!WK_MOVING&&!WK_MERGING)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
+  if(WK&&!WK_MOVING&&!WK_MERGING&&!WK_DOWN)for(const k of WK_PARTS){if(Array.isArray(st[k]))o[k]=[];else if(st[k]&&typeof st[k]==='object')o[k]={}}
+  else if(WK_WHOLE.size)o.wkWhole={parts:[...WK_WHOLE],rev:WK_REV};
   return o;
 }
 /* Before anything is shown: the small entry from localStorage, the messages
@@ -1883,16 +1980,27 @@ async function load(){
   if(mail.status==='fulfilled')held=mail.value;else{console.warn('message store unavailable, keeping mail in localStorage',mail.reason);MS=null;held=[]}
   if(work.status==='fulfilled')parts=work.value;else{console.warn('work store unavailable, keeping the Files list and audit trail in localStorage',work.reason);try{if(WK)WK.close()}catch(e){}WK=null;WK_HELD.clear();parts=new Map()}
   const inBlob=!!(st&&Array.isArray(st.messages)&&st.messages.length);
-  try{S=migrate(st)}catch(e){S=seed()}
+  /* Which parts the entry holds whole, and from which revision of the
+     database (entryOf). Until the merge, those are the workspace's whole
+     parts, and an entry written meanwhile says so again. */
+  const ww=st&&st.wkWhole&&typeof st.wkWhole==='object'?st.wkWhole:null;
+  if(st)delete st.wkWhole;
+  const whole={parts:new Set(ww&&Array.isArray(ww.parts)?ww.parts.filter(k=>WK_PARTS.includes(k)):[]),
+    rev:ww&&Number.isSafeInteger(ww.rev)&&ww.rev>0?ww.rev:0};
+  try{S=migrate(st)}catch(e){S=seed();whole.parts.clear()}
+  for(const k of whole.parts)WK_WHOLE.add(k);
+  WK_REV=whole.rev;
   /* The audit trail, the Files list and the folder names, from beside the
      mail; one the entry still holds moves across, and the entry is written
      without it once the database has it, after the mail is settled. */
   let moved=false;
   if(WK){
-    try{moved=await wkMerge(parts)}
+    try{moved=await wkMerge(parts,whole)}
     catch(e){
       /* What was merged so far is not the database's whole: written over
-         it, its own parts would be lost. The old way, for this session. */
+         it, its own parts would be lost. The old way, for this session;
+         the parts merged before it failed are whole, and the entry says
+         so (wkWhole). */
       console.warn('work store could not be merged, keeping the Files list and audit trail in localStorage',e);
       try{WK.close()}catch(err){}
       WK=null;WK_HELD.clear();moved=false;
@@ -1934,8 +2042,10 @@ async function loadMail(held,inBlob){
 function saveLocal(){
   if(MS&&!msQueued){msQueued=true;queueMicrotask(()=>{msFlush().catch(()=>{})})}
   if(WK&&!wkQueued){wkQueued=true;queueMicrotask(()=>{wkFlush().catch(()=>{})})}
-  try{localStorage.setItem(LS_KEY,JSON.stringify(entryOf(S)))}catch(e){toast('Storage full — export and reset')}
+  saveEntry();
 }
+/* The localStorage entry alone. */
+function saveEntry(){try{localStorage.setItem(LS_KEY,JSON.stringify(entryOf(S)))}catch(e){toast('Storage full — export and reset')}}
 function save(){saveLocal();scheduleCloudSync()}
 /* Deleting a message has to survive the next sync. Sync adds anything it has
    not seen, and a deleted message is by definition not there any more — so
@@ -6488,7 +6598,7 @@ async function wipeThisDevice(){
   /* And what mail left in the workspace: the audit trail, the Files list,
      the folder names. */
   try{if(WK){WK.close();WK=null}}catch(e){}
-  WK_HELD.clear();
+  WK_HELD.clear();WK_WHOLE.clear();WK_DOWN=false;wkStale=false;
   try{await new Promise(res=>{const r=indexedDB.deleteDatabase(WK_DB);r.onsuccess=r.onerror=r.onblocked=()=>res()})}catch(e){}
 }
 
@@ -7636,8 +7746,9 @@ let SYNCING=null,lastSync=0,lastFull=0,MAIL_WAKE=null,MAIL_AGAIN=false;
 /* How many mailboxes have been linked in this session: a refresh that
    began before one was read RATA's list before it was there. */
 let LINKS=0;
-/* A mailbox the page lists that RATA here does not have (absorbMail). */
-const NOT_HERE='This mailbox is not linked in RATA on this device, as happens on a new or restored one. Link it again to read its mail here.';
+/* A mailbox the page lists that RATA here does not have (absorbMail).
+   It says no more than that, which is true however it came about. */
+const NOT_HERE='This mailbox is not linked in RATA on this device. Link it again to read its mail here.';
 /* What a command the app refused said, as one line (I6). */
 function failedSaying(e){
   const t=String((e&&typeof e==='object'?e.error||e.message:e)||'').replace(/\s+/g,' ').trim();
@@ -7879,16 +7990,20 @@ async function absorbMail(res,quiet,links){
        marking it would have the row claim a problem it does not have. */
     if(a.deferred){l.status=l.lastSync?'live':'pending';delete l.lastError}
   }
-  /* A mailbox the page lists that RATA here does not have: a phone
-     restored or replaced from a backup, which keeps the page's list of
-     mailboxes but not RATA's own (backup.rs), or a computer that got the
-     list from the online account or from another PC's roaming profile.
-     RATA reads nothing for it and says nothing of it, so it went on
-     saying it synced days ago, for good. It needs linking again, as a
-     mailbox whose password was refused does. `listed` is every mailbox
-     RATA has (the app's bridge only). Not after a mailbox was linked
-     while this refresh ran: RATA's list may have been read before that
-     link was in it, and the next refresh judges. */
+  /* A mailbox the page lists that RATA here does not have. That happens
+     to a phone restored or replaced from a backup, which keeps the page's
+     list of mailboxes but not RATA's own (backup.rs); to Windows' second
+     PC on a roaming profile, whose list moved to the other PC's Local
+     AppData (R13); and to a second device account on one computer, which
+     shares RATA's list, once the other removed the mailbox or deleted its
+     account. (The desktop build has no online account to bring a list
+     from, and on the website no answer carries `listed`.) RATA reads nothing
+     for it and says nothing of it, so it went on saying it synced days
+     ago, for good. It needs linking again, as a mailbox whose password was
+     refused does. `listed` is every mailbox RATA has (the app's bridge
+     only). Not after a mailbox was linked while this refresh ran: RATA's
+     list may have been read before that link was in it, and the next
+     refresh judges. */
   const unlisted=[];
   if(Array.isArray(res.listed)&&links===LINKS){
     const here=new Set(res.listed.map(e=>String(e).toLowerCase()));

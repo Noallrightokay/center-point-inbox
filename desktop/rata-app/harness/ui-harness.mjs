@@ -1780,7 +1780,7 @@ console.log('\n— a message\'s identity: a removed mailbox, a rebuilt folder, f
 
 console.log('\n— a mailbox the page lists that RATA here does not have, as on a restored phone, needs linking again —');
 {
-  const NOT_HERE_WORDS = 'This mailbox is not linked in RATA on this device, as happens on a new or restored one. Link it again to read its mail here.';
+  const NOT_HERE_WORDS = 'This mailbox is not linked in RATA on this device. Link it again to read its mail here.';
   const pg = await open(true);
   /* A phone restored from a backup: the page's list of mailboxes came back
      with LocalStorage, RATA's own did not (backup.rs). refresh_mail passes

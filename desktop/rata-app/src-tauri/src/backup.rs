@@ -53,10 +53,18 @@
 //! - the device account (`centra_session`, `centra_accounts`: the address
 //!   and its PBKDF2 verifier), and Apps' pins and the Google and Microsoft
 //!   addresses typed there (`rata_apps_*`);
-//! - mail, only in passing: a message waiting out Undo send (its text and
-//!   the files' base64, `rata_outbox_*`) until it has gone, and the whole
-//!   workspace, mail included, only in a session where IndexedDB would not
-//!   open (moved into IndexedDB at the next start that opens it).
+//! - what came from mail, only in passing: a message waiting out Undo send
+//!   (its text and the files' base64, `rata_outbox_*`) until it has gone;
+//!   the messages, text and all, only in a session where the mail store
+//!   (`rata-mail-*`) did not open or its first write at start failed; the
+//!   audit trail, the Files list and folder names in a session where the
+//!   work store (`rata-work-*`) did not open or its merge at start failed,
+//!   each moved into IndexedDB at the next start that opens it; and those
+//!   three after a write to the work store failed (a full disk, or a
+//!   connection WebKit dropped while the app was suspended), until a later
+//!   save's write, on the store opened afresh, has them all on disk (each
+//!   save tries: app.html `wkFlush`). A backup taken in between copies
+//!   what the entry held then.
 //!
 //! Marked at start (RATA's folder, and WebKit's from an earlier run), and
 //! each time the page asks for the licence (`commands::licence_status`):
