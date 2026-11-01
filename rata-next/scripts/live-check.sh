@@ -54,12 +54,18 @@ except Exception:
 EOF
 s=$(status "$BASE/api/licence/renew" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/licence/renew exists ($s)"
 s=$(status "$BASE/api/ai" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/ai exists ($s)"
+# The App Store routes (LAUNCH.md section 11). A body with no list of
+# purchases is refused (400) before anything is checked, and the
+# notifications address answers a browser (200); neither needs section 11
+# done to exist.
+s=$(status "$BASE/api/licence/apple" -X POST -H 'Content-Type: application/json' --data '{}'); [ "$s" != 404 ] && [ "$s" != 000 ]; check $? "/api/licence/apple exists ($s)"
+s=$(status "$BASE/api/apple/notifications"); [ "$s" = 200 ]; check $? "/api/apple/notifications exists ($s)"
 s=$(status "$BASE/shots/app-light.webp"); [ "$s" = 200 ]; check $? "landing page screenshot is served ($s)"
 s=$(status "$BASE/account"); [ "$s" = 200 ]; check $? "/account is served ($s)"
 
 echo "- the app may call it, strangers may not -"
 for o in tauri://localhost http://tauri.localhost https://tauri.localhost; do
-  for p in /api/ai /api/licence/renew; do
+  for p in /api/ai /api/licence/renew /api/licence/apple; do
     a=$(header "$BASE$p" access-control-allow-origin -X OPTIONS -H "Origin: $o" -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type')
     [ "$a" = "$o" ]; check $? "preflight from $o on $p is allowed"
   done

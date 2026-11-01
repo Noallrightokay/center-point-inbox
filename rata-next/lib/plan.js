@@ -150,6 +150,21 @@ export const DOMAIN_ADDON = {
 
 export const ORDER = ['base', 'pro', 'enterprise'];
 
+/* The iPhone app's subscriptions, sold through Apple's In-App Purchase:
+   App Store product id to plan. One subscription group in App Store
+   Connect, "RATA", Pro at level 1 and Base at level 2, so Apple treats
+   Base to Pro as an upgrade and Pro to Base as a downgrade.
+
+   The ids live in two places, kept equal by tests/apple.test.mjs: here,
+   which /api/licence/apple and the App Store's notifications read to name
+   a purchase's plan (lib/apple.js), and the const beside the iOS app's
+   StoreKit commands. A product not named here is not RATA's and unlocks
+   nothing. No price: the app shows the App Store's own, from StoreKit. */
+export const APPLE_PRODUCTS = Object.freeze({
+  'org.mailrata.pro.monthly': 'pro',
+  'org.mailrata.base.monthly': 'base',
+});
+
 /* The plans somebody can actually buy today, in order. Every price list,
    checkout button and "upgrade to…" sentence reads this rather than ORDER —
    pointing a customer at a plan with no way to buy it is worse than not
